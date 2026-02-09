@@ -28,6 +28,7 @@ const HEARTBEAT_CHK_MS    = 10_000;
 const RECONNECT_MAX_MS    = 30_000;
 const FLUSH_MS            = 500;
 const SUB_WATCHDOG_MS     = 8_000;  // If no data 8s after subscribe → reconnect
+const DATA_STALE_MS       = 45_000; // If no price data for 45s (even if PONG flows) → reconnect
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
@@ -83,6 +84,7 @@ export function usePolymarketClobStream() {
   const pingRef            = useRef(null);
   const hbRef              = useRef(null);
   const lastMsgRef         = useRef(Date.now());
+  const lastDataMsgRef     = useRef(0);        // Last REAL data event (not PONG)
   const tokenIdsRef        = useRef({ up: null, down: null });
   const subscribedRef      = useRef(false);
   const subWatchdogRef     = useRef(null);    // NEW: subscription health check
@@ -142,6 +144,7 @@ export function usePolymarketClobStream() {
   /* ── WS event handlers → write to REFS only ── */
   function handleBookEvent(data) {
     dataReceivedRef.current = true;
+    lastDataMsgRef.current = Date.now();
     stopWatchdog();
 
     const assetId = data.asset_id;
@@ -171,6 +174,7 @@ export function usePolymarketClobStream() {
 
   function handlePriceChange(data) {
     dataReceivedRef.current = true;
+    lastDataMsgRef.current = Date.now();
     stopWatchdog();
 
     const changes = Array.isArray(data.price_changes) ? data.price_changes : [];
@@ -199,6 +203,7 @@ export function usePolymarketClobStream() {
 
   function handleLastTradePrice(data) {
     dataReceivedRef.current = true;
+    lastDataMsgRef.current = Date.now();
     stopWatchdog();
 
     const assetId = data.asset_id;
@@ -264,11 +269,21 @@ export function usePolymarketClobStream() {
           }
         }, CONFIG.polymarket?.clobPingIntervalMs || 10_000);
 
-        // Heartbeat
+        // Heartbeat — checks BOTH message liveness AND data freshness
         stopHb();
         hbRef.current = setInterval(() => {
-          if (Date.now() - lastMsgRef.current > HEARTBEAT_DEAD_MS) {
+          const now = Date.now();
+          // Check 1: No messages at all (WS truly dead)
+          if (now - lastMsgRef.current > HEARTBEAT_DEAD_MS) {
             console.warn('[CLOB WS] ⚠️ Silent — forcing reconnect');
+            forceReconnect();
+            return;
+          }
+          // Check 2: PONG flowing but no REAL data for 45s (subscription silently dropped)
+          if (subscribedRef.current && lastDataMsgRef.current > 0 &&
+              now - lastDataMsgRef.current > DATA_STALE_MS) {
+            console.warn(`[CLOB WS] ⚠️ No price data for ${Math.round((now - lastDataMsgRef.current) / 1000)}s (PONG still alive) — forcing reconnect`);
+            lastDataMsgRef.current = now; // Prevent rapid re-triggers
             forceReconnect();
           }
         }, HEARTBEAT_CHK_MS);

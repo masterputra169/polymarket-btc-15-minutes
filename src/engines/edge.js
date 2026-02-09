@@ -91,6 +91,8 @@ export function countAgreement(breakdown, side) {
  * @param {number} params.modelDown
  * @param {Object} [params.breakdown] - scoring breakdown for agreement count
  * @param {boolean} [params.multiTfConfirmed] - whether 1m+5m agree
+ * @param {number|null} [params.mlConfidence] - ML model confidence (0-1)
+ * @param {boolean} [params.mlAgreesWithRules] - whether ML and rules agree on direction
  * @returns {{ action: string, side: string|null, confidence: string, phase: string, reason: string }}
  */
 export function decide({
@@ -101,6 +103,8 @@ export function decide({
   modelDown,
   breakdown = null,
   multiTfConfirmed = false,
+  mlConfidence = null,
+  mlAgreesWithRules = false,
 }) {
   // ═══ Phase thresholds v2 (stricter) ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
@@ -131,6 +135,14 @@ export function decide({
     preferMultiTf = false;
   }
 
+  // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= 0.40),
+  // the model's 75%+ accuracy justifies relaxing thresholds by 2%
+  const mlIsHighConf = mlConfidence !== null && mlConfidence >= 0.40;
+  if (mlIsHighConf && mlAgreesWithRules) {
+    minEdge = Math.max(minEdge - 0.02, 0.04);
+    minProb = Math.max(minProb - 0.02, 0.52);
+  }
+
   // Count agreements if breakdown available
   const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 99;
   const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 99;
@@ -151,18 +163,18 @@ export function decide({
 
   if (upPass && downPass) {
     if (edgeUp >= edgeDown) {
-      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb);
+      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
     } else {
-      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb);
+      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
     }
   }
 
   if (upPass) {
-    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb);
+    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
   }
 
   if (downPass) {
-    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb);
+    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
   }
 
   // No entry — explain why
@@ -186,19 +198,24 @@ export function decide({
   };
 }
 
-function makeEnter(side, edge, prob, agreement, phase, minEdge, minProb) {
+function makeEnter(side, edge, prob, agreement, phase, minEdge, minProb, mlHighConf = false, mlAgrees = false) {
   return {
     action: 'ENTER',
     side,
-    confidence: getConfidence(edge, prob, agreement),
+    confidence: getConfidence(edge, prob, agreement, mlHighConf, mlAgrees),
     phase,
-    reason: `${side} edge ${(edge * 100).toFixed(1)}%≥${(minEdge * 100).toFixed(0)}%, prob ${(prob * 100).toFixed(0)}%≥${(minProb * 100).toFixed(0)}%, ${agreement} indicators agree`,
+    reason: `${side} edge ${(edge * 100).toFixed(1)}%≥${(minEdge * 100).toFixed(0)}%, prob ${(prob * 100).toFixed(0)}%≥${(minProb * 100).toFixed(0)}%, ${agreement} indicators agree${mlHighConf ? ', ML high-conf' : ''}`,
   };
 }
 
-function getConfidence(edge, prob, agreement) {
+function getConfidence(edge, prob, agreement, mlHighConf = false, mlAgrees = false) {
+  // ML high-conf + rule agreement can boost by one tier
+  const mlBoost = mlHighConf && mlAgrees;
+
   if (edge >= 0.25 && prob >= 0.68 && agreement >= 5) return 'VERY_HIGH';
+  if (mlBoost && edge >= 0.15 && prob >= 0.60 && agreement >= 4) return 'VERY_HIGH';
   if (edge >= 0.18 && prob >= 0.62 && agreement >= 4) return 'HIGH';
+  if (mlBoost && edge >= 0.10 && prob >= 0.56 && agreement >= 3) return 'HIGH';
   if (edge >= 0.12 && prob >= 0.58 && agreement >= 3) return 'MEDIUM';
   return 'LOW';
 }

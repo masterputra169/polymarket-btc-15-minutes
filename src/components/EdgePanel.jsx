@@ -4,21 +4,64 @@ import { formatProbPct } from '../utils.js';
 function EdgePanel({ data }) {
   if (!data) return null;
 
-  const { edge, pLong, pShort, marketUp, marketDown } = data;
+  const { edge, pLong, pShort, ruleUp, marketUp, marketDown, rec, ml } = data;
 
   const edgeUpPct = edge?.edgeUp !== null ? (edge.edgeUp * 100).toFixed(1) : '-';
   const edgeDownPct = edge?.edgeDown !== null ? (edge.edgeDown * 100).toFixed(1) : '-';
+
+  // Quality gates
+  const isEnter = rec?.action === 'ENTER';
+  const confidence = rec?.confidence ?? 'NONE';
+  const phase = rec?.phase ?? '-';
+
+  // ML confidence
+  const mlConf = ml?.confidence;
+  const mlConfPct = mlConf !== null && mlConf !== undefined ? (mlConf * 100).toFixed(1) : null;
+  const mlConfColor = mlConf !== null
+    ? mlConf >= 0.4 ? 'c-green' : mlConf >= 0.2 ? 'c-yellow' : 'c-red'
+    : 'c-muted';
+
+  // Gate indicators — thresholds match edge.js decide()
+  const bestEdge = edge?.bestEdge ?? 0;
+  const bestProb = Math.max(pLong ?? 0, pShort ?? 0);
+  let edgePassThreshold = phase === 'EARLY' ? 0.08 : phase === 'MID' ? 0.10 : phase === 'LATE' ? 0.12 : 0.15;
+  let probPassThreshold = phase === 'EARLY' ? 0.60 : phase === 'MID' ? 0.58 : phase === 'LATE' ? 0.57 : 0.56;
+  const gateMlConf = mlConf !== null && mlConf >= 0.40;
+
+  // Mirror ML relaxation from edge.js: when ML high-conf + agrees with RULES, thresholds drop 2%
+  // Use ruleUp (pure rule-based prob) not pLong (ensemble) to match edge.js logic
+  const ruleSide = (ruleUp ?? pLong ?? 0) >= 0.5 ? 'UP' : 'DOWN';
+  const mlAgreesHere = gateMlConf && ml?.side === ruleSide;
+  if (mlAgreesHere) {
+    edgePassThreshold = Math.max(edgePassThreshold - 0.02, 0.04);
+    probPassThreshold = Math.max(probPassThreshold - 0.02, 0.52);
+  }
+
+  const gateEdge = bestEdge >= edgePassThreshold;
+  const gateProb = bestProb >= probPassThreshold;
 
   return (
     <div className="card" style={{ animationDelay: '0.25s' }}>
       <div className="card__header">
         <span className="card__title">⚖️ Edge Analysis</span>
+        {isEnter && (
+          <span
+            className="card__badge"
+            style={{
+              background: confidence === 'VERY_HIGH' || confidence === 'HIGH' ? 'var(--green-bg)' : 'var(--yellow-bg, rgba(255,193,7,0.1))',
+              color: confidence === 'VERY_HIGH' || confidence === 'HIGH' ? 'var(--green-bright)' : '#ffc107',
+              border: `1px solid ${confidence === 'VERY_HIGH' || confidence === 'HIGH' ? 'rgba(0,230,118,0.2)' : 'rgba(255,193,7,0.2)'}`,
+            }}
+          >
+            {confidence}
+          </span>
+        )}
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
-            Model
+            Ensemble
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <span className="c-green" style={{ fontWeight: 600 }}>
@@ -56,11 +99,43 @@ function EdgePanel({ data }) {
           {edgeDownPct !== '-' ? `${edge.edgeDown > 0 ? '+' : ''}${edgeDownPct}%` : '-'}
         </span>
       </div>
+
+      {/* ML Confidence */}
+      <div className="data-row">
+        <span className="data-row__label">ML Confidence</span>
+        <span className={`data-row__value ${mlConfColor}`} style={{ fontWeight: 600 }}>
+          {mlConfPct !== null ? `${mlConfPct}%` : 'N/A'}
+        </span>
+      </div>
+
+      {/* Quality Gates */}
+      <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-dim)' }}>
+        <div style={{ fontSize: '0.62rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+          Quality Gates ({phase})
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', fontSize: '0.7rem' }}>
+          <span style={{ color: gateEdge ? 'var(--green-bright)' : 'var(--red-bright)' }}>
+            {gateEdge ? '✓' : '✗'} Edge≥{(edgePassThreshold * 100).toFixed(0)}%
+          </span>
+          <span style={{ color: gateProb ? 'var(--green-bright)' : 'var(--red-bright)' }}>
+            {gateProb ? '✓' : '✗'} Prob≥{(probPassThreshold * 100).toFixed(0)}%
+          </span>
+          <span style={{ color: gateMlConf ? 'var(--green-bright)' : 'var(--text-dim)' }}>
+            {gateMlConf ? '✓' : '○'} ML HiConf
+          </span>
+        </div>
+      </div>
+
+      {/* Recommendation */}
+      {rec?.reason && (
+        <div style={{ marginTop: 8, fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+          {rec.reason}
+        </div>
+      )}
     </div>
   );
 }
 
-// ═══ React.memo with custom comparator ═══
 // Only re-render when edge-specific fields change
 export default memo(EdgePanel, (prev, next) => {
   const a = prev.data;
@@ -72,6 +147,11 @@ export default memo(EdgePanel, (prev, next) => {
     a.pLong === b.pLong &&
     a.pShort === b.pShort &&
     a.marketUp === b.marketUp &&
-    a.marketDown === b.marketDown
+    a.marketDown === b.marketDown &&
+    a.rec?.action === b.rec?.action &&
+    a.rec?.confidence === b.rec?.confidence &&
+    a.rec?.reason === b.rec?.reason &&
+    a.ml?.confidence === b.ml?.confidence &&
+    a.ruleUp === b.ruleUp
   );
 });

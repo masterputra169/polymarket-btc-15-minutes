@@ -1,29 +1,37 @@
 /**
- * ═══ ML Predictor (Browser) — XGBoost Inference v4 ═══
+ * ═══ ML Predictor (Browser) — XGBoost Inference v5 ═══
  *
  * Supports both model formats:
  *   v1: 42 base features (old model)
- *   v2: 58 features (42 base + 16 engineered interaction features)
+ *   v2: 74 features (49 base + 25 engineered interaction features)
+ *       49 base = 42 original + 2 time cyclical + 5 Polymarket features
  *
  * Auto-detects model version from xgboost_model.json.
  * Backward compatible — v1 models work without changes.
+ *
+ * v5 additions:
+ *   - 5 Polymarket features (market price, momentum, orderbook, spread, divergence)
+ *   - 3 new engineered features (crowd momentum, divergence×confidence, imbalance×vol)
+ *   - Platt calibration (sigmoid rescaling of raw probabilities)
+ *   - Time cyclical features (hour_sin, hour_cos)
  *
  * Performance optimizations:
  *   1. PRE-INDEXED TREES: Map<nodeid, node> for O(1) traversal
  *   2. PRE-ALLOCATED BUFFERS: Float64Array reused every prediction
  *   3. ITERATIVE TREE WALK: No recursion, no stack allocation
- *   4. IN-PLACE FEATURE ENGINEERING: 16 derived features computed in buffer
+ *   4. IN-PLACE FEATURE ENGINEERING: 25 derived features computed in buffer
  */
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
 // Feature counts
-const BASE_FEATURES = 42;
-const ENGINEERED_FEATURES = 16;
-const MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 58
+const BASE_FEATURES = 49; // 44 original + 5 Polymarket (market_yes_price, momentum, imbalance, spread, divergence)
+const ENGINEERED_FEATURES = 25; // 22 original + 3 new crowd/orderbook interactions
+const MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 74
 
 // ═══ Module state ═══
 let processedTrees = null;
+let numUsableTrees = 0;        // best_iteration+1 (excludes overfit trees)
 let normMeans = null;
 let normStds = null;
 let isLoading = false;
@@ -33,10 +41,12 @@ let modelVersion = 1;          // 1 = 42 features, 2 = 58 features
 let modelNumFeatures = 42;
 let optimalThreshold = 0.65;   // From v2 training, auto-tuned
 let modelMetrics = null;
+let featureNameToIdx = null;   // Map<string, number> for named splits
+let plattA = 1.0;             // Platt calibration coefficient A (default: identity)
+let plattB = 0.0;             // Platt calibration coefficient B
 
-// ═══ Pre-allocated buffers (ZERO allocation per prediction) ═══
+// ═══ Pre-allocated buffer (ZERO allocation per prediction) ═══
 const featureBuf = new Float64Array(MAX_FEATURES);
-const normBuf = new Float64Array(MAX_FEATURES);
 
 // ═══ Feature index mapping (base 42) ═══
 const FI = {
@@ -53,9 +63,26 @@ const FI = {
   vol_delta_buy_ratio: 34, vol_delta_accel: 35, ema_dist_norm: 36,
   ema_cross_signal: 37, stoch_k_norm: 38, stoch_kd_norm: 39,
   funding_rate_norm: 40, funding_sentiment: 41,
+  hour_sin: 42, hour_cos: 43,
+  market_yes_price: 44, market_price_momentum: 45, orderbook_imbalance: 46,
+  spread_pct: 47, crowd_model_divergence: 48,
 };
 
 // ═══ Tree Processing ═══
+
+function resolveFeatureIdx(splitName) {
+  // Handle named features first (e.g. "multi_tf_agreement", "rsi_norm")
+  if (featureNameToIdx) {
+    const idx = featureNameToIdx.get(splitName);
+    if (idx !== undefined) return idx;
+  }
+  // Fallback: "fN" format (e.g. "f0", "f26")
+  if (splitName[0] === 'f') {
+    const idx = parseInt(splitName.slice(1), 10);
+    if (!isNaN(idx)) return idx;
+  }
+  return -1;
+}
 
 function indexTree(rawTree) {
   const nodeMap = new Map();
@@ -65,7 +92,7 @@ function indexTree(rawTree) {
       nodeMap.set(node.nodeid, { leaf: node.leaf });
       return;
     }
-    const featureIdx = parseInt(node.split.replace('f', ''), 10);
+    const featureIdx = resolveFeatureIdx(node.split);
     nodeMap.set(node.nodeid, {
       featureIdx,
       threshold: node.split_condition,
@@ -97,31 +124,24 @@ function evaluateTreeFast(nodeMap, features) {
 }
 
 function predictXGBoost(features, numFeatures) {
-  if (!processedTrees || !normMeans) return null;
+  if (!processedTrees) return null;
 
-  // Normalize into pre-allocated buffer
-  for (let i = 0; i < numFeatures; i++) {
-    if (i < normMeans.length) {
-      const std = normStds[i];
-      normBuf[i] = std !== 0 ? (features[i] - normMeans[i]) / std : 0;
-    } else {
-      normBuf[i] = features[i];
-    }
-  }
-
-  // Sum tree outputs
+  // XGBoost is tree-based — trees were trained on raw feature values,
+  // so we must NOT normalize. Pass features directly.
+  // Only use trees up to best_iteration (early stopping — extra trees overfit).
   let logit = 0;
   const trees = processedTrees;
-  const len = trees.length;
+  const len = numUsableTrees;
   for (let i = 0; i < len; i++) {
-    logit += evaluateTreeFast(trees[i], normBuf);
+    logit += evaluateTreeFast(trees[i], features);
   }
 
   return 1 / (1 + Math.exp(-logit));
 }
 
-// ═══ Engineered Features (v2 — 16 interaction features) ═══
-// Computed IN-PLACE in featureBuf[42..57] from base features [0..41]
+// ═══ Engineered Features (v2 — 25 interaction features) ═══
+// Computed IN-PLACE in featureBuf[49..73] from base features [0..48]
+// (indices shifted +5 from v4 due to 5 Polymarket features at [44-48])
 
 function computeEngineeredFeaturesInPlace() {
   const sign = (v) => v > 0 ? 1 : v < 0 ? -1 : 0;
@@ -146,55 +166,99 @@ function computeEngineeredFeaturesInPlace() {
   const regChop   = featureBuf[FI.regime_choppy];
   const regMR     = featureBuf[FI.regime_mean_reverting];
 
-  // [42] delta_1m_capped — clip extreme spikes
+  // [49] delta_1m_capped — clip extreme spikes
   const clip = 0.003;
-  featureBuf[42] = Math.max(-clip, Math.min(clip, delta1m));
+  featureBuf[49] = Math.max(-clip, Math.min(clip, delta1m));
 
-  // [43] momentum_accel — is momentum accelerating?
-  featureBuf[43] = delta1m - (delta3m / 3);
+  // [50] momentum_accel — is momentum accelerating?
+  featureBuf[50] = delta1m - (delta3m / 3);
 
-  // [44] rsi_x_trending — RSI means different things per regime
-  featureBuf[44] = rsi * regTrend;
+  // [51] rsi_x_trending — RSI means different things per regime
+  featureBuf[51] = rsi * regTrend;
 
-  // [45] rsi_x_choppy
-  featureBuf[45] = rsi * regChop;
+  // [52] rsi_x_choppy
+  featureBuf[52] = rsi * regChop;
 
-  // [46] rsi_x_mean_rev
-  featureBuf[46] = rsi * regMR;
+  // [53] rsi_x_mean_rev
+  featureBuf[53] = rsi * regMR;
 
-  // [47] delta1m_x_multitf — momentum confirmed by multi-timeframe
-  featureBuf[47] = delta1m * multiTf;
+  // [54] delta1m_x_multitf — momentum confirmed by multi-timeframe
+  featureBuf[54] = delta1m * multiTf;
 
-  // [48] bb_pctb_x_squeeze — BB position during squeeze = breakout signal
-  featureBuf[48] = bbPctB * bbSqueeze;
+  // [55] bb_pctb_x_squeeze — BB position during squeeze = breakout signal
+  featureBuf[55] = bbPctB * bbSqueeze;
 
-  // [49] vol_buy_x_delta — volume confirms price direction
-  featureBuf[49] = volBuy * sign(delta1m);
+  // [56] vol_buy_x_delta — volume confirms price direction
+  featureBuf[56] = volBuy * sign(delta1m);
 
-  // [50] vwap_trend_strength — distance × slope direction
-  featureBuf[50] = vwapDist * sign(vwapSlope);
+  // [57] vwap_trend_strength — distance × slope direction
+  featureBuf[57] = vwapDist * sign(vwapSlope);
 
-  // [51] rsi_divergence — price up but RSI down = bearish divergence
-  featureBuf[51] = sign(delta3m) * (-rsiSlope);
+  // [58] rsi_divergence — price up but RSI down = bearish divergence
+  featureBuf[58] = sign(delta3m) * (-rsiSlope);
 
-  // [52] combined_oscillator — average of 3 oscillators
-  featureBuf[52] = (rsi + stochK + bbPctB) / 3;
+  // [59] combined_oscillator — average of 3 oscillators
+  featureBuf[59] = (rsi + stochK + bbPctB) / 3;
 
-  // [53] ha_delta_agree — Heiken Ashi agrees with delta direction
-  featureBuf[53] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
+  // [60] ha_delta_agree — Heiken Ashi agrees with delta direction
+  featureBuf[60] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
 
-  // [54] delta_1m_atr_adj — volatility-normalized momentum
+  // [61] delta_1m_atr_adj — volatility-normalized momentum
   const atrSafe = Math.max(atrPct, 0.01);
-  featureBuf[54] = delta1m / atrSafe;
+  featureBuf[61] = delta1m / atrSafe;
 
-  // [55] price_position_score — combined VWAP + BB + EMA position
-  featureBuf[55] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
+  // [62] price_position_score — combined VWAP + BB + EMA position
+  featureBuf[62] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
 
-  // [56] vol_weighted_momentum
-  featureBuf[56] = delta1m * volRatio;
+  // [63] vol_weighted_momentum
+  featureBuf[63] = delta1m * volRatio;
 
-  // [57] macd_x_rsi_slope — trend confirmation
-  featureBuf[57] = sign(macdLine) * rsiSlope;
+  // [64] macd_x_rsi_slope — trend confirmation
+  featureBuf[64] = sign(macdLine) * rsiSlope;
+
+  // ═══ 6 agreement/confirmation features ═══
+
+  // [65] trend_alignment_score — all trend indicators aligned
+  featureBuf[65] = regTrend * multiTf * sign(delta1m);
+
+  // [66] oscillator_extreme — RSI in extreme zones (>0.7 or <0.3)
+  featureBuf[66] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
+
+  // [67] vol_momentum_confirm — volume confirms momentum with magnitude
+  featureBuf[67] = volBuy * sign(delta1m) * volRatio;
+
+  // [68] squeeze_breakout_potential — StochRSI extremes during BB squeeze
+  featureBuf[68] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
+
+  // [69] multi_indicator_agree — count indicators agreeing on direction
+  const deltaDir = sign(delta1m);
+  const macdHist = featureBuf[FI.macd_hist];
+  const agreeCount = (
+    (sign(haConsec) === deltaDir ? 1 : 0) +
+    (sign(macdHist) === deltaDir ? 1 : 0) +
+    (sign(featureBuf[FI.vwap_dist]) === deltaDir ? 1 : 0) +
+    ((rsi > 0.5 ? 1 : -1) === deltaDir ? 1 : 0) +
+    multiTf
+  );
+  featureBuf[69] = agreeCount / 5;
+
+  // [70] stoch_rsi_extreme — extreme StochRSI zones
+  featureBuf[70] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
+
+  // ═══ 3 NEW Polymarket crowd/orderbook interaction features ═══
+
+  // [71] crowd_agree_momentum — crowd momentum agrees with price momentum
+  const mktMomentum = featureBuf[FI.market_price_momentum];
+  featureBuf[71] = sign(mktMomentum) * sign(delta1m);
+
+  // [72] divergence_x_confidence — model-crowd divergence weighted by confidence
+  const crowdDiv = featureBuf[FI.crowd_model_divergence];
+  const ruleConf = featureBuf[FI.rule_confidence];
+  featureBuf[72] = crowdDiv * ruleConf;
+
+  // [73] imbalance_x_vol_delta — orderbook imbalance × volume buy ratio
+  const obImbalance = featureBuf[FI.orderbook_imbalance];
+  featureBuf[73] = obImbalance * volBuy;
 }
 
 // ═══ Public API ═══
@@ -227,10 +291,27 @@ export async function loadMLModel(
     optimalThreshold = Math.max(rawModel.optimal_threshold || 0.65, 0.60); // min 0.60
     modelMetrics = rawModel.metrics || null;
 
-    // Pre-index trees
-    const numTrees = rawModel.trees.length;
-    processedTrees = new Array(numTrees);
-    for (let i = 0; i < numTrees; i++) {
+    // Platt calibration params (v4+)
+    plattA = rawModel.platt_a ?? 1.0;
+    plattB = rawModel.platt_b ?? 0.0;
+
+    // Build feature name → index lookup (for models with named splits)
+    if (rawModel.feature_names && rawModel.feature_names.length > 0) {
+      featureNameToIdx = new Map();
+      for (let i = 0; i < rawModel.feature_names.length; i++) {
+        featureNameToIdx.set(rawModel.feature_names[i], i);
+      }
+    }
+
+    // Pre-index trees (only up to best_iteration to exclude overfit trees)
+    const totalTrees = rawModel.trees.length;
+    const bestIter = rawModel.best_iteration;
+    numUsableTrees = (bestIter != null && bestIter < totalTrees)
+      ? bestIter + 1
+      : totalTrees;
+
+    processedTrees = new Array(numUsableTrees);
+    for (let i = 0; i < numUsableTrees; i++) {
       processedTrees[i] = indexTree(rawModel.trees[i]);
     }
 
@@ -245,11 +326,11 @@ export async function loadMLModel(
 
     // Memory estimate
     let totalNodes = 0;
-    for (let i = 0; i < numTrees; i++) totalNodes += processedTrees[i].size;
+    for (let i = 0; i < numUsableTrees; i++) totalNodes += processedTrees[i].size;
     modelMemoryKB = Math.round((totalNodes * 80 + nf * 16) / 1024);
 
     console.log(
-      `[ML] XGBoost v${modelVersion} loaded: ${numTrees} trees, ${modelNumFeatures} features, ~${modelMemoryKB}KB`
+      `[ML] XGBoost v${modelVersion} loaded: ${numUsableTrees}/${totalTrees} trees (best_iter=${bestIter}), ${modelNumFeatures} features, ~${modelMemoryKB}KB`
     );
     if (modelMetrics) {
       console.log(
@@ -270,7 +351,7 @@ export async function loadMLModel(
 }
 
 export function isMLReady() {
-  return processedTrees !== null && normMeans !== null;
+  return processedTrees !== null;
 }
 
 export function getMLStatus() {
@@ -278,7 +359,7 @@ export function getMLStatus() {
     return {
       status: 'ready',
       version: modelVersion,
-      trees: processedTrees.length,
+      trees: numUsableTrees,
       features: modelNumFeatures,
       threshold: optimalThreshold,
       memoryKB: modelMemoryKB,
@@ -293,18 +374,22 @@ export function getMLStatus() {
 
 export function unloadMLModel() {
   processedTrees = null;
+  numUsableTrees = 0;
   normMeans = null;
   normStds = null;
+  featureNameToIdx = null;
   modelMemoryKB = 0;
   modelVersion = 1;
   modelNumFeatures = BASE_FEATURES;
   modelMetrics = null;
+  plattA = 1.0;
+  plattB = 0.0;
   if (IS_DEV) console.log('[ML] Model unloaded');
 }
 
 /**
- * Extract 42 base features into featureBuf (in-place, zero alloc).
- * If model is v2, also computes 16 engineered features [42-57].
+ * Extract 49 base features into featureBuf (in-place, zero alloc).
+ * If model is v2, also computes 25 engineered features [49-73].
  */
 function extractLiveFeaturesInPlace({
   price, priceToBeat, rsi, rsiSlope, macd, vwap, vwapSlope,
@@ -317,6 +402,7 @@ function extractLiveFeaturesInPlace({
   emaDistPct, emaCrossSignal,
   stochK, stochKD,
   fundingRatePct, fundingSentiment,
+  marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
 }) {
   const ptbDistPct = priceToBeat ? (price - priceToBeat) / priceToBeat : 0;
   const isGreen = heikenColor === 'green';
@@ -385,7 +471,21 @@ function extractLiveFeaturesInPlace({
   featureBuf[40] = fundingRatePct != null ? Math.max(-0.1, Math.min(0.1, fundingRatePct)) * 5 + 0.5 : 0.5;
   featureBuf[41] = fundingSentiment === 'BULLISH' ? 1 : fundingSentiment === 'BEARISH' ? 0 : 0.5;
 
-  // [42-57] Engineered features (v2 only — computed from base features above)
+  // [42-43] Time cyclical encoding (hour of day as sin/cos)
+  const now = new Date();
+  const hourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;
+  featureBuf[42] = Math.sin(hourUTC / 24 * 2 * Math.PI);
+  featureBuf[43] = Math.cos(hourUTC / 24 * 2 * Math.PI);
+
+  // [44-48] Polymarket features
+  const mktYes = marketYesPrice ?? 0.5;
+  featureBuf[44] = Math.max(0.01, Math.min(0.99, mktYes));
+  featureBuf[45] = Math.max(-0.1, Math.min(0.1, marketPriceMomentum ?? 0));
+  featureBuf[46] = Math.max(-1, Math.min(1, orderbookImbalance ?? 0));
+  featureBuf[47] = Math.max(0, Math.min(1, spreadPct ?? 0.02));
+  featureBuf[48] = Math.abs((ruleProbUp ?? 0.5) - mktYes);
+
+  // [49-73] Engineered features (v2 only — computed from base features above)
   if (modelVersion >= 2) {
     computeEngineeredFeaturesInPlace();
   }
@@ -398,11 +498,17 @@ function extractLiveFeaturesInPlace({
  * @returns {{ probUp, confidence, side, isHighConfidence, threshold }} or null
  */
 export function predictML(features) {
-  if (!processedTrees || !normMeans) return null;
+  if (!processedTrees) return null;
 
   const numFeat = modelVersion >= 2 ? MAX_FEATURES : BASE_FEATURES;
-  const probUp = predictXGBoost(features, numFeat);
+  let probUp = predictXGBoost(features, numFeat);
   if (probUp === null) return null;
+
+  // Apply Platt calibration if available (v4+)
+  // calibrated = sigmoid(A * rawProb + B)
+  if (plattA !== 1.0 || plattB !== 0.0) {
+    probUp = 1 / (1 + Math.exp(-(plattA * probUp + plattB)));
+  }
 
   const confidence = Math.abs(probUp - 0.5) * 2;
   const side = probUp >= 0.5 ? 'UP' : 'DOWN';

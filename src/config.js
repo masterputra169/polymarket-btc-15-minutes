@@ -6,7 +6,7 @@ export const CONFIG = {
   clobBaseUrl: '/clob-api',
 
   // ═══ Reverted to 5s — safe now because CLOB REST is skipped when WS connected ═══
-  pollIntervalMs: 5_000,
+  pollIntervalMs: 3_000,
   candleWindowMinutes: 15,
 
   // ═══ Market discovery also 5s ═══

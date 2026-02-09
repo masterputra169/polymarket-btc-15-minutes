@@ -4,6 +4,7 @@ import { usePolymarketChainlinkStream } from './hooks/usePolymarketChainlinkStre
 import { useChainlinkWssStream } from './hooks/useChainlinkWssStream.js';
 import { usePolymarketClobStream } from './hooks/usePolymarketClobStream.js';
 import { useMarketData } from './hooks/useMarketData.js';
+import { useCountdown } from './hooks/useCountdown.js';
 import CurrentPriceCard from './components/CurrentPriceCard.jsx';
 import TAIndicators from './components/TAIndicators.jsx';
 import PredictPanel from './components/PredictPanel.jsx';
@@ -34,6 +35,9 @@ export default function App() {
 
   // Pass CLOB WS data to useMarketData so it can use real-time prices
   const { data, loading, error } = useMarketData({ clobWs });
+
+  // Smooth 1-second countdown (instead of 5s poll jumps)
+  const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
 
   // Chainlink price priority: Polymarket WS > Chainlink WSS > Chainlink HTTP RPC
   const chainlinkResolved = useMemo(() => {
@@ -90,13 +94,13 @@ export default function App() {
     binancePrice: binance.price ?? data?.lastPrice,
     binancePrevPrice: binance.prevPrice,
     binanceConnected: binance.connected,
-    timeLeftMin: data?.timeLeftMin,
+    timeLeftMin: smoothTimeLeft ?? data?.timeLeftMin,
     priceToBeat: data?.priceToBeat,
   }), [
     chainlinkResolved.price, chainlinkResolved.prevPrice,
     chainlinkConnected, chainlinkResolved.source,
     binance.price, binance.prevPrice, binance.connected,
-    data?.lastPrice, data?.timeLeftMin, data?.priceToBeat,
+    data?.lastPrice, smoothTimeLeft, data?.timeLeftMin, data?.priceToBeat,
   ]);
 
   // PredictPanel: probability, recommendation, score
@@ -119,13 +123,14 @@ export default function App() {
       vwapNarrative: data.vwapNarrative,
       timing: data.timing,
       consec: data.consec,
+      ml: data.ml,
     };
   }, [
     data?.pLong, data?.pShort, data?.rawUp, data?.rawDown,
     data?.rec, data?.edge, data?.timeDecay,
     data?.scoreBreakdown, data?.regimeInfo, data?.feedbackStats,
     data?.haNarrative, data?.rsiNarrative, data?.macdNarrative, data?.vwapNarrative,
-    data?.timing, data?.consec,
+    data?.timing, data?.consec, data?.ml?.confidence,
   ]);
 
   // TAIndicators: RSI, MACD, VWAP, HA, BB, ATR, EMA, VolDelta, StochRSI, Funding, Hidden
@@ -198,17 +203,17 @@ export default function App() {
       clobWsConnected: data.clobWsConnected,
       priceToBeat: data.priceToBeat,
       marketQuestion: data.marketQuestion,
-      settlementLeftMin: data.settlementLeftMin,
+      settlementLeftMin: smoothTimeLeft ?? data.settlementLeftMin,
     };
   }, [
     data?.poly?.ok, data?.poly?.reason, data?.poly?.market?.question, data?.poly?.market?.slug,
     data?.marketUp, data?.marketDown, data?.marketSlug, data?.liquidity,
     data?.orderbookUp, data?.orderbookDown, data?.orderbookSignal,
     data?.clobSource, data?.clobWsConnected,
-    data?.priceToBeat, data?.marketQuestion, data?.settlementLeftMin,
+    data?.priceToBeat, data?.marketQuestion, smoothTimeLeft, data?.settlementLeftMin,
   ]);
 
-  // EdgePanel: edge, recommendation
+  // EdgePanel: edge, recommendation, ML confidence
   const edgeData = useMemo(() => {
     if (!data) return null;
     return {
@@ -216,14 +221,17 @@ export default function App() {
       rec: data.rec,
       pLong: data.pLong,
       pShort: data.pShort,
+      ruleUp: data.ruleUp,
       marketUp: data.marketUp,
       marketDown: data.marketDown,
       timeLeftMin: data.timeLeftMin,
       feedbackStats: data.feedbackStats,
+      ml: data.ml,
     };
   }, [
-    data?.edge, data?.rec, data?.pLong, data?.pShort,
+    data?.edge, data?.rec, data?.pLong, data?.pShort, data?.ruleUp,
     data?.marketUp, data?.marketDown, data?.timeLeftMin, data?.feedbackStats,
+    data?.ml?.confidence,
   ]);
 
   // MLPanel: ML-specific + rule prob
@@ -234,8 +242,9 @@ export default function App() {
       pLong: data.pLong,
       pShort: data.pShort,
       rawUp: data.rawUp,
+      ruleUp: data.ruleUp,
     };
-  }, [data?.ml, data?.pLong, data?.pShort, data?.rawUp]);
+  }, [data?.ml, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
 
   return (
     <div className="app-container">

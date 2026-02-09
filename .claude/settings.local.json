@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c:*)",
+      "Bash(node generateTrainingData.mjs:*)",
+      "Bash(ls -la \"C:\\\\Users\\\\Asus\\\\Downloads\\\\PolymarketBTC15mAssistant-main\\\\frontend\\\\backtest\\\\ml_training\"\" 2>/dev/null; echo \"---\"; ls -la \"C:UsersAsusDownloadsPolymarketBTC15mAssistant-mainbacktestml_training\"\")",
+      "Bash(node --version:*)",
+      "Bash(python trainXGBoost_v3.py:*)",
+      "Bash(curl:*)",
+      "Bash(npm run build:*)",
+      "Bash(bash:*)",
+      "Bash(PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(PYTHONIOENCODING=utf-8 node generateTrainingData.mjs:*)"
+    ]
+  }
+}

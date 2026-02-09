@@ -4,7 +4,7 @@ import { formatProbPct } from '../utils.js';
 function MLPanel({ data }) {
   if (!data) return null;
 
-  const { ml, pLong, pShort, rawUp } = data;
+  const { ml, pLong, pShort, rawUp, ruleUp } = data;
   const mlReady = ml?.status === 'ready';
 
   // ML values
@@ -15,8 +15,8 @@ function MLPanel({ data }) {
   const alpha = ml?.alpha;
   const source = ml?.source;
 
-  // Rule-based values
-  const ruleProbUp = pLong;
+  // Rule-based values (use ruleUp, NOT pLong which is now ensemble)
+  const ruleProbUp = ruleUp ?? pLong;
 
   // Ensemble direction
   const ensembleSide = ensembleProbUp !== null && ensembleProbUp !== undefined
@@ -38,6 +38,7 @@ function MLPanel({ data }) {
   };
 
   const mlConfTier = getConfTier(mlConfidence);
+  const isHighConfidence = mlConfidence !== null && mlConfidence >= 0.40;
 
   // Alpha bar width
   const alphaBarPct = alpha !== null ? Math.round(alpha * 100) : 0;
@@ -52,13 +53,35 @@ function MLPanel({ data }) {
         : { text: 'OFF', cls: 'badge--offline' };
 
   return (
-    <div className="card" style={{ animationDelay: '0.28s' }}>
+    <div
+      className={`card${mlReady && isHighConfidence ? ' card--glow-cyan' : ''}`}
+      style={{ animationDelay: '0.28s' }}
+    >
       <div className="card__header">
         <span className="card__title">🧠 ML Engine</span>
         <span className={`card__badge ${statusBadge.cls}`}>
           {statusBadge.text}
         </span>
       </div>
+
+      {mlReady && isHighConfidence && (
+        <div
+          style={{
+            background: 'linear-gradient(90deg, rgba(0,229,255,0.12), rgba(0,229,255,0.03))',
+            border: '1px solid rgba(0,229,255,0.25)',
+            borderRadius: 'var(--radius-sm)',
+            padding: '6px 10px',
+            marginBottom: 10,
+            textAlign: 'center',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            color: 'var(--accent-cyan)',
+            letterSpacing: '0.08em',
+          }}
+        >
+          HIGH CONFIDENCE — {mlSide === 'UP' ? '↑ LONG' : '↓ SHORT'}
+        </div>
+      )}
 
       {!mlReady && (
         <div style={{ padding: '16px 0', textAlign: 'center', color: 'var(--text-dim)' }}>
@@ -383,6 +406,7 @@ export default memo(MLPanel, (prev, next) => {
     a.ml?.source === b.ml?.source &&
     a.ml?.status === b.ml?.status &&
     a.pLong === b.pLong &&
-    a.pShort === b.pShort
+    a.pShort === b.pShort &&
+    a.ruleUp === b.ruleUp
   );
 });

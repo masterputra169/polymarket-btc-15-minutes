@@ -94,6 +94,9 @@ export function useMarketData({ clobWs } = {}) {
   // Prevent concurrent polls
   const pollingRef = useRef(false);
 
+  // ═══ Polymarket market price ring buffer (for momentum calculation) ═══
+  const marketUpHistoryRef = useRef({ buf: new Float64Array(24), idx: 0, count: 0 });
+
   // ═══ MEMORY FIX 1: Reuse previous data ref to enable shallow diff ═══
   const prevDataRef = useRef(null);
 
@@ -167,7 +170,9 @@ export function useMarketData({ clobWs } = {}) {
         marketExpired;
 
       if (needsFreshPoly) {
-        const skipClob = wsConnected && !marketExpired;
+        const wsLastUpdateForClob = clobWs?.lastUpdate;
+        const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 20_000) : false;
+        const skipClob = wsConnected && !marketExpired && !wsClobStale;
         poly = await fetchPolymarketSnapshot({ skipClob });
         polySnapshotRef.current = poly;
         polyLastFetchRef.current = now;
@@ -208,6 +213,10 @@ export function useMarketData({ clobWs } = {}) {
 
         // 4. Reset poll counter (fresh market = fresh cycle)
         pollCountRef.current = 0;
+
+        // 4b. Reset market price ring buffer
+        const mh = marketUpHistoryRef.current;
+        mh.buf.fill(0); mh.idx = 0; mh.count = 0;
 
         // 5. CLOB WS: force fresh connection with new tokens
         if (poly.ok && poly.tokens && clobWs?.setTokenIds) {
@@ -298,11 +307,13 @@ export function useMarketData({ clobWs } = {}) {
         priceToBeatRef.current.value = priceToBeat;
       }
 
-      // Orderbook
+      // Orderbook — check WS data staleness before trusting prices
       const wsOrderbook = clobWs?.orderbook;
       const wsUpPrice = clobWs?.upPrice;
       const wsDownPrice = clobWs?.downPrice;
-      const wsDataFresh = wsConnected && !slugChanged;
+      const wsLastUpdate = clobWs?.lastUpdate;
+      const wsStale = wsLastUpdate ? (now - wsLastUpdate > 20_000) : (wsUpPrice === null);
+      const wsDataFresh = wsConnected && !slugChanged && !wsStale;
 
       const earlyMarketUp = wsDataFresh && wsUpPrice !== null ? wsUpPrice : (poly.ok ? poly.prices.up : null);
       const earlyMarketDown = wsDataFresh && wsDownPrice !== null ? wsDownPrice : (poly.ok ? poly.prices.down : null);
@@ -356,20 +367,29 @@ export function useMarketData({ clobWs } = {}) {
       const orderbookDown = wsDataFresh && wsOrderbook?.down?.bestBid !== null
         ? wsOrderbook.down : poly.ok ? poly.orderbook?.down : null;
 
-      // Edge
-      const edge = computeEdge({
+      // ═══ Step 1: Rule-based edge (needed as ML input feature) ═══
+      const ruleEdge = computeEdge({
         modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown,
         marketYes: marketUp, marketNo: marketDown,
       });
-      const rec = decide({
-        remainingMinutes: timeLeftMin,
-        edgeUp: edge.edgeUp, edgeDown: edge.edgeDown,
-        modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown,
-        breakdown: scored.breakdown,
-        multiTfConfirmed: multiTfConfirm?.agreement ?? false,
-      });
 
-      // ML Ensemble
+      // ═══ Step 2: ML prediction (uses rule edge as feature) ═══
+
+      // Update market price ring buffer for momentum calculation
+      let marketPriceMomentum = 0;
+      if (marketUp != null) {
+        const mh = marketUpHistoryRef.current;
+        mh.buf[mh.idx] = marketUp;
+        mh.idx = (mh.idx + 1) % mh.buf.length;
+        if (mh.count < mh.buf.length) mh.count++;
+
+        // momentum = current vs ~60s ago (12 entries back at 5s poll)
+        if (mh.count >= 12) {
+          const pastIdx = (mh.idx - 12 + mh.buf.length) % mh.buf.length;
+          marketPriceMomentum = marketUp - mh.buf[pastIdx];
+        }
+      }
+
       const mlResult = getMLPrediction({
         price: lastPrice, priceToBeat: priceToBeatRef.current.value,
         rsi: rsiNow, rsiSlope, macd, vwap: vwapNow, vwapSlope,
@@ -377,7 +397,7 @@ export function useMarketData({ clobWs } = {}) {
         delta1m, delta3m, volumeRecent, volumeAvg,
         regime: regimeInfo.regime, session: getSessionName(),
         minutesLeft: timeLeftMin,
-        bestEdge: Math.max(edge.edgeUp ?? 0, edge.edgeDown ?? 0),
+        bestEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
         vwapCrossCount, multiTfAgreement: multiTfConfirm?.agreement ?? false,
         failedVwapReclaim,
         bbWidth: bb?.width ?? null, bbPercentB: bb?.percentB ?? null,
@@ -391,7 +411,37 @@ export function useMarketData({ clobWs } = {}) {
         stochKD: stochRsi ? (stochRsi.k - stochRsi.d) : null,
         fundingRatePct: fundingRate?.ratePct ?? null,
         fundingSentiment: fundingRate?.sentiment ?? 'NEUTRAL',
+        marketYesPrice: marketUp,
+        marketPriceMomentum,
+        orderbookImbalance: orderbookSignal?.imbalance ?? null,
+        spreadPct: wsOrderbook?.up?.spread ?? null,
       }, timeAware.adjustedUp);
+
+      // ═══ Step 3: Recompute edge using ML ensemble probability ═══
+      const ensembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
+      const ensembleDown = mlResult.available ? (1 - mlResult.ensembleProbUp) : timeAware.adjustedDown;
+      const edge = computeEdge({
+        modelUp: ensembleUp, modelDown: ensembleDown,
+        marketYes: marketUp, marketNo: marketDown,
+      });
+
+      // ML agreement: does ML side match rule-based side?
+      const ruleSide = timeAware.adjustedUp >= 0.5 ? 'UP' : 'DOWN';
+      const mlAgreesWithRules = mlResult.available && mlResult.mlSide === ruleSide;
+
+      // ═══ Step 4: decide() using ensemble prob + ML confidence ═══
+      const rec = decide({
+        remainingMinutes: timeLeftMin,
+        edgeUp: edge.edgeUp, edgeDown: edge.edgeDown,
+        modelUp: ensembleUp, modelDown: ensembleDown,
+        breakdown: scored.breakdown,
+        multiTfConfirmed: multiTfConfirm?.agreement ?? false,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlAgreesWithRules,
+      });
+      // Map strength + edge onto rec for UI consumption
+      rec.strength = rec.confidence;
+      rec.edge = edge.bestEdge;
 
       // Feedback
       try {
@@ -399,7 +449,7 @@ export function useMarketData({ clobWs } = {}) {
         if (rec.action === 'ENTER' && rec.side && marketSlug) {
           recordPrediction({
             side: rec.side,
-            modelProb: rec.side === 'UP' ? timeAware.adjustedUp : timeAware.adjustedDown,
+            modelProb: rec.side === 'UP' ? ensembleUp : ensembleDown,
             marketPrice: rec.side === 'UP' ? marketUp : marketDown,
             btcPrice: lastPrice, priceToBeat: priceToBeatRef.current.value, marketSlug,
           });
@@ -440,6 +490,7 @@ export function useMarketData({ clobWs } = {}) {
         marketDown,
         marketSlug,
         liquidity,
+        settlementMs,
         settlementLeftMin,
         orderbookUp,
         orderbookDown,
@@ -463,8 +514,10 @@ export function useMarketData({ clobWs } = {}) {
         rsiNarrative,
         macdNarrative,
         vwapNarrative,
-        pLong: timeAware.adjustedUp,
-        pShort: timeAware.adjustedDown,
+        pLong: ensembleUp,
+        pShort: ensembleDown,
+        ruleUp: timeAware.adjustedUp,
+        ruleDown: timeAware.adjustedDown,
         rawUp: scored.rawUp,
         rawDown: scored.rawDown,
         scoreBreakdown: scored.breakdown,
@@ -538,6 +591,8 @@ export function useMarketData({ clobWs } = {}) {
       // Release cached data on unmount
       polySnapshotRef.current = null;
       prevDataRef.current = null;
+      const mh = marketUpHistoryRef.current;
+      mh.buf.fill(0); mh.idx = 0; mh.count = 0;
     };
   }, [poll]);
 

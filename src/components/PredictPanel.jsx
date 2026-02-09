@@ -4,7 +4,7 @@ import { formatProbPct } from '../utils.js';
 function PredictPanel({ data }) {
   if (!data) return null;
 
-  const { pLong, pShort, regimeInfo, rec } = data;
+  const { pLong, pShort, regimeInfo, rec, ml } = data;
 
   const longPct = pLong !== null ? Math.round(pLong * 100) : 50;
   const shortPct = pShort !== null ? Math.round(pShort * 100) : 50;
@@ -32,24 +32,53 @@ function PredictPanel({ data }) {
         ? 'c-red'
         : 'c-yellow';
 
+  // Signal quality banner
+  const isEnter = rec?.action === 'ENTER';
+  const confidence = rec?.confidence ?? 'NONE';
+  const isStrong = confidence === 'VERY_HIGH' || confidence === 'HIGH';
+  const isModerate = confidence === 'MEDIUM';
+
+  const bannerText = isEnter
+    ? isStrong ? 'STRONG SIGNAL' : isModerate ? 'MODERATE SIGNAL' : 'WEAK SIGNAL'
+    : 'NO TRADE';
+  const bannerBg = isEnter
+    ? isStrong
+      ? 'linear-gradient(90deg, rgba(0,230,118,0.15), rgba(0,230,118,0.05))'
+      : isModerate
+        ? 'linear-gradient(90deg, rgba(255,193,7,0.15), rgba(255,193,7,0.05))'
+        : 'linear-gradient(90deg, rgba(255,152,0,0.1), rgba(255,152,0,0.03))'
+    : 'linear-gradient(90deg, rgba(150,150,150,0.08), rgba(150,150,150,0.02))';
+  const bannerBorder = isEnter
+    ? isStrong ? 'rgba(0,230,118,0.3)' : isModerate ? 'rgba(255,193,7,0.3)' : 'rgba(255,152,0,0.2)'
+    : 'rgba(150,150,150,0.15)';
+  const bannerColor = isEnter
+    ? isStrong ? 'var(--green-bright)' : isModerate ? '#ffc107' : '#ff9800'
+    : 'var(--text-dim)';
+
   const signalText =
-    rec?.action === 'ENTER'
+    isEnter
       ? rec.side === 'UP'
         ? 'BUY UP'
         : 'BUY DOWN'
-      : 'NO TRADE';
+      : 'WAIT';
   const signalColor =
-    rec?.action === 'ENTER'
+    isEnter
       ? rec.side === 'UP'
         ? 'c-green'
         : 'c-red'
       : 'c-muted';
 
+  // ML confidence tier label
+  const mlConf = ml?.confidence;
+  const mlConfLabel = mlConf !== null && mlConf !== undefined
+    ? mlConf >= 0.4 ? 'HIGH' : mlConf >= 0.2 ? 'MED' : 'LOW'
+    : null;
+
   return (
     <div className={`card ${cardGlow}`} style={{ animationDelay: '0.15s' }}>
       <div className="card__header">
         <span className="card__title">🎯 Prediction</span>
-        {rec?.action === 'ENTER' && (
+        {isEnter && (
           <span
             className="card__badge"
             style={{
@@ -58,8 +87,29 @@ function PredictPanel({ data }) {
               border: `1px solid ${rec.side === 'UP' ? 'rgba(0,230,118,0.2)' : 'rgba(255,82,82,0.2)'}`,
             }}
           >
-            {rec.strength}
+            {confidence}
           </span>
+        )}
+      </div>
+
+      {/* Signal Quality Banner */}
+      <div
+        style={{
+          background: bannerBg,
+          border: `1px solid ${bannerBorder}`,
+          borderRadius: 'var(--radius-sm)',
+          padding: '8px 12px',
+          marginBottom: 12,
+          textAlign: 'center',
+        }}
+      >
+        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: bannerColor, letterSpacing: '0.08em' }}>
+          {bannerText}
+        </div>
+        {isEnter && (
+          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 3 }}>
+            {rec.side} {mlConfLabel ? `· ML: ${mlConfLabel}` : ''}
+          </div>
         )}
       </div>
 
@@ -103,12 +153,19 @@ function PredictPanel({ data }) {
             </span>
           </div>
         )}
+        {!isEnter && rec?.reason && (
+          <div className="data-row">
+            <span className="data-row__label">Reason</span>
+            <span className="data-row__value" style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
+              {rec.reason}
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-// ═══ React.memo with custom comparator ═══
 // Only re-render when prediction-specific fields change
 export default memo(PredictPanel, (prev, next) => {
   const a = prev.data;
@@ -120,8 +177,10 @@ export default memo(PredictPanel, (prev, next) => {
     a.regimeInfo?.regime === b.regimeInfo?.regime &&
     a.rec?.action === b.rec?.action &&
     a.rec?.side === b.rec?.side &&
-    a.rec?.strength === b.rec?.strength &&
+    a.rec?.confidence === b.rec?.confidence &&
     a.rec?.phase === b.rec?.phase &&
-    a.rec?.edge === b.rec?.edge
+    a.rec?.edge === b.rec?.edge &&
+    a.rec?.reason === b.rec?.reason &&
+    a.ml?.confidence === b.ml?.confidence
   );
 });

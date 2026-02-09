@@ -1,100 +1,123 @@
 /**
- * EMA 8/21 Crossover Signal
+ * Stochastic RSI (StochRSI) Indicator
  *
- * Fast EMA crossover for short-timeframe trading.
- * - EMA 8 (fast) crossing above EMA 21 (slow) → bullish
- * - EMA 8 crossing below EMA 21 → bearish
- * - Distance between EMAs → trend strength
+ * StochRSI applies Stochastic oscillator formula to RSI values.
+ * More sensitive than regular RSI — catches overbought/oversold faster.
  *
- * More responsive than SMA for 15-min prediction windows.
+ * Formula:
+ *   RSI series → find min/max over lookback → normalize to 0-100
+ *   %K = SMA(StochRSI, smoothK)
+ *   %D = SMA(%K, smoothD)
+ *
+ * Signals for 15-min BTC:
+ *   %K > 80: overbought → potential reversal DOWN
+ *   %K < 20: oversold → potential reversal UP
+ *   %K crosses above %D: bullish
+ *   %K crosses below %D: bearish
+ *
+ * Parameters: RSI period=14, Stoch lookback=14, smoothK=3, smoothD=3
  */
+
+import { computeRsiSeries } from './rsi.js';
 
 /**
- * Compute EMA for a given period.
- * @param {number[]} data - Price array
- * @param {number} period - EMA period
- * @returns {number[]} EMA series
+ * Compute Stochastic RSI.
+ * @param {number[]} closes - Array of closing prices
+ * @param {number} rsiPeriod - RSI calculation period (default 14)
+ * @param {number} stochPeriod - Stochastic lookback on RSI (default 14)
+ * @param {number} smoothK - %K smoothing period (default 3)
+ * @param {number} smoothD - %D smoothing period (default 3)
+ * @returns {{ k: number, d: number, kPrev: number|null, crossUp: boolean, crossDown: boolean, zone: string } | null}
  */
-function ema(data, period) {
-  if (!data || data.length < period) return [];
+export function computeStochRsi(closes, rsiPeriod = 14, stochPeriod = 14, smoothK = 3, smoothD = 3) {
+  if (!closes || closes.length < rsiPeriod + stochPeriod + smoothK + smoothD) return null;
 
-  const k = 2 / (period + 1);
-  const result = new Array(data.length);
+  // Step 1: Compute full RSI series
+  const rsiSeries = computeRsiSeries(closes, rsiPeriod);
+  if (rsiSeries.length < stochPeriod + smoothK + smoothD) return null;
 
-  // Seed with SMA of first `period` values
-  let sum = 0;
-  for (let i = 0; i < period; i++) {
-    sum += data[i];
-    result[i] = null;
+  // Step 2: Apply Stochastic formula to RSI values
+  const stochRaw = [];
+  for (let i = stochPeriod - 1; i < rsiSeries.length; i++) {
+    let minRsi = Infinity;
+    let maxRsi = -Infinity;
+    for (let j = i - stochPeriod + 1; j <= i; j++) {
+      if (rsiSeries[j] < minRsi) minRsi = rsiSeries[j];
+      if (rsiSeries[j] > maxRsi) maxRsi = rsiSeries[j];
+    }
+    const range = maxRsi - minRsi;
+    const stochVal = range > 0 ? ((rsiSeries[i] - minRsi) / range) * 100 : 50;
+    stochRaw.push(stochVal);
   }
-  result[period - 1] = sum / period;
 
-  // EMA from period onwards
-  for (let i = period; i < data.length; i++) {
-    result[i] = data[i] * k + result[i - 1] * (1 - k);
+  if (stochRaw.length < smoothK + smoothD) return null;
+
+  // Step 3: Smooth %K = SMA of raw StochRSI
+  const kValues = [];
+  for (let i = smoothK - 1; i < stochRaw.length; i++) {
+    let sum = 0;
+    for (let j = i - smoothK + 1; j <= i; j++) sum += stochRaw[j];
+    kValues.push(sum / smoothK);
   }
 
-  return result;
+  if (kValues.length < smoothD + 1) return null;
+
+  // Step 4: %D = SMA of %K
+  const dValues = [];
+  for (let i = smoothD - 1; i < kValues.length; i++) {
+    let sum = 0;
+    for (let j = i - smoothD + 1; j <= i; j++) sum += kValues[j];
+    dValues.push(sum / smoothD);
+  }
+
+  if (dValues.length < 2) return null;
+
+  // Current and previous values
+  const kLen = kValues.length;
+  const dLen = dValues.length;
+
+  const k = kValues[kLen - 1];
+  const d = dValues[dLen - 1];
+  const kPrev = kLen >= 2 ? kValues[kLen - 2] : null;
+  const dPrev = dLen >= 2 ? dValues[dLen - 2] : null;
+
+  // Crossover detection
+  let crossUp = false;
+  let crossDown = false;
+  if (kPrev !== null && dPrev !== null) {
+    crossUp = kPrev <= dPrev && k > d;    // %K crosses above %D → bullish
+    crossDown = kPrev >= dPrev && k < d;  // %K crosses below %D → bearish
+  }
+
+  // Zone detection
+  let zone = 'NEUTRAL';
+  if (k > 80) zone = 'OVERBOUGHT';
+  else if (k < 20) zone = 'OVERSOLD';
+
+  return {
+    k,            // %K value (0-100)
+    d,            // %D value (0-100)
+    kPrev,        // Previous %K (for crossover)
+    crossUp,      // %K crossed above %D
+    crossDown,    // %K crossed below %D
+    zone,         // OVERBOUGHT | OVERSOLD | NEUTRAL
+  };
 }
 
 /**
- * Compute EMA 8/21 crossover metrics.
- * @param {number[]} closes - Array of closing prices
- * @param {number} fastPeriod - Fast EMA period (default 8)
- * @param {number} slowPeriod - Slow EMA period (default 21)
- * @returns {{ ema8, ema21, distance, distancePct, cross, crossBars, bullish } | null}
+ * Get StochRSI signal for scoring.
+ * @param {number[]} closes
+ * @returns {{ signal: string, k: number, d: number } | null}
  */
-export function computeEmaCrossover(closes, fastPeriod = 8, slowPeriod = 21) {
-  if (!closes || closes.length < slowPeriod + 2) return null;
+export function getStochRSISignal(closes) {
+  const result = computeStochRsi(closes);
+  if (!result) return null;
 
-  const len = closes.length;
-  const ema8 = ema(closes, fastPeriod);
-  const ema21 = ema(closes, slowPeriod);
+  let signal = 'NEUTRAL';
+  if (result.k < 20 || result.crossUp) signal = 'BULLISH';
+  else if (result.k > 80 || result.crossDown) signal = 'BEARISH';
+  else if (result.k > 60) signal = 'LEAN_BULLISH';
+  else if (result.k < 40) signal = 'LEAN_BEARISH';
 
-  const fast = ema8[len - 1];
-  const slow = ema21[len - 1];
-  const prevFast = ema8[len - 2];
-  const prevSlow = ema21[len - 2];
-
-  if (fast === null || slow === null || prevFast === null || prevSlow === null) return null;
-
-  // Distance: EMA8 - EMA21 (positive = bullish, negative = bearish)
-  const distance = fast - slow;
-  const price = closes[len - 1];
-  const distancePct = price > 0 ? (distance / price) * 100 : 0;
-
-  // Crossover detection
-  const prevDiff = prevFast - prevSlow;
-  const currDiff = fast - slow;
-
-  let cross = 'NONE'; // NONE | BULL_CROSS | BEAR_CROSS
-  if (prevDiff <= 0 && currDiff > 0) cross = 'BULL_CROSS';
-  else if (prevDiff >= 0 && currDiff < 0) cross = 'BEAR_CROSS';
-
-  // Count bars since last crossover (lookback up to 30)
-  let crossBars = 30; // default: no recent cross
-  for (let i = len - 2; i >= Math.max(slowPeriod, len - 30); i--) {
-    const pf = ema8[i - 1];
-    const ps = ema21[i - 1];
-    const cf = ema8[i];
-    const cs = ema21[i];
-    if (pf === null || ps === null || cf === null || cs === null) continue;
-
-    const pd = pf - ps;
-    const cd = cf - cs;
-    if ((pd <= 0 && cd > 0) || (pd >= 0 && cd < 0)) {
-      crossBars = len - 1 - i;
-      break;
-    }
-  }
-
-  return {
-    ema8: fast,
-    ema21: slow,
-    distance,          // Absolute: EMA8 - EMA21
-    distancePct,       // As % of price (e.g. 0.05 = 0.05%)
-    cross,             // 'NONE' | 'BULL_CROSS' | 'BEAR_CROSS'
-    crossBars,         // Bars since last crossover
-    bullish: fast > slow, // Simple trend direction
-  };
+  return { signal, k: result.k, d: result.d };
 }

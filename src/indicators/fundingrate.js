@@ -10,14 +10,59 @@
  * - Not directly actionable for timing, but provides context
  * - Extreme funding (>0.05% or <-0.05%) = crowded trade → contrarian signal
  *
- * API: GET /fapi/v1/fundingRate?symbol=BTCUSDT&limit=1
+ * v2: Multi-host fallback for regions where fapi.binance.com is blocked
  */
 
-const BINANCE_FAPI_BASE = 'https://fapi.binance.com';
+const FAPI_HOSTS = [
+  'https://fapi.binance.com',
+  'https://fapi1.binance.com',
+];
+
 const CACHE_TTL_MS = 5 * 60_000; // Cache 5 minutes (rate changes every 8h)
+const FETCH_TIMEOUT_MS = 3_000;  // 3s timeout (was 8s — too slow when blocked)
 
 let cachedFunding = null;
 let lastFetchMs = 0;
+let workingHost = null; // Remember which host works
+
+/**
+ * Fetch with timeout helper
+ */
+async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    return resp;
+  } catch (err) {
+    clearTimeout(timer);
+    throw err;
+  }
+}
+
+/**
+ * Try fetching from multiple hosts with fallback
+ */
+async function fetchFapiWithFallback(path) {
+  // Try working host first
+  const hosts = workingHost
+    ? [workingHost, ...FAPI_HOSTS.filter(h => h !== workingHost)]
+    : FAPI_HOSTS;
+
+  for (const host of hosts) {
+    try {
+      const resp = await fetchWithTimeout(`${host}${path}`);
+      if (resp.ok) {
+        workingHost = host; // Remember for next time
+        return await resp.json();
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 /**
  * Fetch current funding rate from Binance Futures.
@@ -26,57 +71,51 @@ let lastFetchMs = 0;
 export async function fetchFundingRate() {
   const now = Date.now();
 
-  // Return cached if fresh
-  if (cachedFunding && now - lastFetchMs < CACHE_TTL_MS) {
+  // Return cached if fresh (also respect cooldown when all hosts failed)
+  if (now - lastFetchMs < CACHE_TTL_MS) {
     return cachedFunding;
   }
 
   try {
-    const resp = await fetch(
-      `${BINANCE_FAPI_BASE}/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1`
-    );
-    if (!resp.ok) return cachedFunding; // Keep stale on error
+    // Always update timestamp to prevent retry-storm when all hosts are blocked
+    lastFetchMs = now;
 
-    const data = await resp.json();
-    if (!Array.isArray(data) || data.length === 0) return cachedFunding;
+    const data = await fetchFapiWithFallback('/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1');
+    if (!data || !Array.isArray(data) || data.length === 0) return cachedFunding;
 
     const entry = data[0];
     const rate = parseFloat(entry.fundingRate);
-    const ratePct = rate * 100; // Convert to percentage
+    const ratePct = rate * 100;
 
     // Also fetch next funding time from premium index
     let nextFundingTime = null;
     try {
-      const premResp = await fetch(
-        `${BINANCE_FAPI_BASE}/fapi/v1/premiumIndex?symbol=BTCUSDT`
-      );
-      if (premResp.ok) {
-        const prem = await premResp.json();
+      const prem = await fetchFapiWithFallback('/fapi/v1/premiumIndex?symbol=BTCUSDT');
+      if (prem) {
         nextFundingTime = prem.nextFundingTime || null;
       }
     } catch { /* silent */ }
 
-    // Sentiment analysis
+    // Sentiment analysis (CONTRARIAN)
     const extreme = Math.abs(ratePct) > 0.05;
     let sentiment = 'NEUTRAL';
-    if (ratePct > 0.03) sentiment = 'BEARISH'; // Longs crowded → contrarian SHORT
+    if (ratePct > 0.03) sentiment = 'BEARISH';   // Longs crowded → contrarian SHORT
     else if (ratePct < -0.03) sentiment = 'BULLISH'; // Shorts crowded → contrarian LONG
-    // Note: this is CONTRARIAN — high positive funding = bearish signal
 
     cachedFunding = {
-      rate,                // Raw rate (e.g. 0.0001 = 0.01%)
-      ratePct,             // As percentage (e.g. 0.01)
-      extreme,             // Boolean: extreme funding
-      sentiment,           // BULLISH | BEARISH | NEUTRAL (contrarian)
-      nextFundingTime,     // Unix ms of next funding event
+      rate,
+      ratePct,
+      extreme,
+      sentiment,
+      nextFundingTime,
       fetchedAt: now,
     };
 
     lastFetchMs = now;
     return cachedFunding;
   } catch (err) {
-    console.warn('[FundingRate] Fetch failed:', err.message);
-    return cachedFunding; // Return stale or null
+    console.warn('[FundingRate] All hosts failed:', err.message);
+    return cachedFunding;
   }
 }
 
