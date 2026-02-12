@@ -145,6 +145,7 @@ function stopTimers() {
 function doSubscribe(socket) {
   const ids = [tokenIds.up, tokenIds.down].filter(Boolean);
   if (ids.length === 0) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
   try {
     socket.send(JSON.stringify({ assets_ids: ids, type: 'market' }));
     subscribed = true;
@@ -192,11 +193,15 @@ export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   try {
-    ws = new WebSocket(WS_URL);
+    const socket = new WebSocket(WS_URL);
+    ws = socket;
     subscribed = false;
     dataReceived = false;
 
-    ws.on('open', () => {
+    socket.on('open', () => {
+      // Stale socket guard: if forceReconnect replaced ws, ignore this open
+      if (ws !== socket) { try { socket.close(); } catch {} return; }
+
       log.info('Connected');
       _connected = true;
       reconnectMs = 500;
@@ -227,10 +232,10 @@ export function connect() {
         }
       }, HEARTBEAT_CHECK_MS);
 
-      if (tokenIds.up || tokenIds.down) doSubscribe(ws);
+      if (tokenIds.up || tokenIds.down) doSubscribe(socket);
     });
 
-    ws.on('message', (raw) => {
+    socket.on('message', (raw) => {
       lastMsgMs = Date.now();
       try {
         const str = typeof raw === 'string' ? raw : raw.toString();
@@ -244,16 +249,19 @@ export function connect() {
       } catch {}
     });
 
-    ws.on('close', () => {
-      _connected = false;
-      ws = null;
-      subscribed = false;
-      stopTimers();
+    socket.on('close', () => {
+      // Only update module state if this is still the active socket
+      if (ws === socket) {
+        _connected = false;
+        ws = null;
+        subscribed = false;
+        stopTimers();
+      }
       if (intentionalClose) { intentionalClose = false; return; }
-      scheduleReconnect();
+      if (ws === null) scheduleReconnect();
     });
 
-    ws.on('error', () => { try { ws.close(); } catch {} });
+    socket.on('error', () => { try { socket.close(); } catch {} });
   } catch {
     scheduleReconnect();
   }

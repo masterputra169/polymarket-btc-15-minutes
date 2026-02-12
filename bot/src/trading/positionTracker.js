@@ -167,6 +167,10 @@ export function getConsecutiveLosses() {
 }
 
 export function setBankroll(value) {
+  if (!Number.isFinite(value) || value < 0) {
+    log.warn(`Invalid bankroll value: ${value} — ignored`);
+    return;
+  }
   state.bankroll = value;
   saveState();
   log.info(`Bankroll updated to $${value.toFixed(2)} (via dashboard)`);

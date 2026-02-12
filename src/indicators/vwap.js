@@ -42,14 +42,21 @@ export function computeVwapSeries(candles, lookback) {
  * @returns {number|null}
  */
 export function countVwapCrosses(closes, vwapSeries, lookback) {
-  if (closes.length < lookback || vwapSeries.length < lookback) return null;
+  if (!closes || !vwapSeries || closes.length < 2 || vwapSeries.length < 2) return null;
+  const cLen = closes.length;
+  const vLen = vwapSeries.length;
+  // Align from end of each array to handle different lengths
+  const count = Math.min(lookback, cLen, vLen);
+  if (count < 2) return null;
   let crosses = 0;
-  for (let i = closes.length - lookback + 1; i < closes.length; i += 1) {
-    const vPrev = vwapSeries[i - 1];
-    const vCur = vwapSeries[i];
+  for (let k = 1; k < count; k++) {
+    const ci = cLen - count + k;
+    const vi = vLen - count + k;
+    const vPrev = vwapSeries[vi - 1];
+    const vCur = vwapSeries[vi];
     if (vPrev == null || vCur == null) continue;
-    const prev = closes[i - 1] - vPrev;
-    const cur = closes[i] - vCur;
+    const prev = closes[ci - 1] - vPrev;
+    const cur = closes[ci] - vCur;
     if (prev === 0) continue;
     if ((prev > 0 && cur < 0) || (prev < 0 && cur > 0)) crosses += 1;
   }

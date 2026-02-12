@@ -38,7 +38,7 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
   const askUp = orderbookUp?.bestAsk ?? marketUp;
   const askDown = orderbookDown?.bestAsk ?? marketDown;
 
-  if (!askUp || !askDown || askUp <= 0 || askDown <= 0) return noArb;
+  if (!Number.isFinite(askUp) || !Number.isFinite(askDown) || askUp <= 0 || askDown <= 0) return noArb;
 
   const totalCost = askUp + askDown;
   const grossProfit = 1.00 - totalCost;            // guaranteed payout = $1.00

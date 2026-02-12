@@ -85,7 +85,7 @@ export function applyTradeFilters({
   // 7. Weekend low-liquidity filter (Saturday/Sunday UTC)
   const dayOfWeek = new Date().getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  if (isWeekend && mlConfidence != null && mlConfidence < 0.50) {
+  if (isWeekend && Number.isFinite(mlConfidence) && mlConfidence < 0.50) {
     reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
   }
 

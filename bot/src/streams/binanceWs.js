@@ -47,9 +47,13 @@ export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   try {
-    ws = new WebSocket(WS_URL);
+    const socket = new WebSocket(WS_URL);
+    ws = socket;
 
-    ws.on('open', () => {
+    socket.on('open', () => {
+      // Stale socket guard
+      if (ws !== socket) { try { socket.close(); } catch {} return; }
+
       log.info('Connected');
       _connected = true;
       reconnectMs = 500;
@@ -59,12 +63,15 @@ export function connect() {
       hbTimer = setInterval(() => {
         if (Date.now() - lastMsgMs > HEARTBEAT_DEAD_MS) {
           log.warn('Silent — forcing reconnect');
-          try { ws.close(); } catch {}
+          if (ws === socket) { ws = null; _connected = false; }
+          stopHb();
+          try { socket.close(); } catch {}
+          scheduleReconnect();
         }
       }, HEARTBEAT_CHECK_MS);
     });
 
-    ws.on('message', (raw) => {
+    socket.on('message', (raw) => {
       lastMsgMs = Date.now();
       try {
         const data = JSON.parse(raw);
@@ -76,16 +83,18 @@ export function connect() {
       } catch {}
     });
 
-    ws.on('close', () => {
-      log.debug('Disconnected');
-      _connected = false;
-      ws = null;
-      stopHb();
+    socket.on('close', () => {
+      if (ws === socket) {
+        log.debug('Disconnected');
+        _connected = false;
+        ws = null;
+        stopHb();
+      }
       scheduleReconnect();
     });
 
-    ws.on('error', () => {
-      try { ws.close(); } catch {}
+    socket.on('error', () => {
+      try { socket.close(); } catch {}
     });
   } catch {
     scheduleReconnect();

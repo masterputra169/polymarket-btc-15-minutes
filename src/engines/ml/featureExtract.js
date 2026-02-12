@@ -112,8 +112,8 @@ export function extractLiveFeaturesInPlace({
   featureBuf[5]  = vwap ? (price - vwap) / vwap : 0;
   featureBuf[6]  = vwapSlope ?? 0;
   featureBuf[7]  = haSignedConsec / 15;
-  featureBuf[8]  = delta1m ? delta1m / price : 0;
-  featureBuf[9]  = delta3m ? delta3m / price : 0;
+  featureBuf[8]  = delta1m && price > 0 ? delta1m / price : 0;
+  featureBuf[9]  = delta3m && price > 0 ? delta3m / price : 0;
   featureBuf[10] = Math.min(volRatio, 5) / 5;
   featureBuf[11] = (minutesLeft ?? 7.5) / 15;
   featureBuf[12] = ruleProbUp ?? 0.5;

@@ -54,7 +54,6 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, hasPositi
     return { valid: false, reason: `Too close to settlement: ${timeLeftMin.toFixed(1)}min left` };
   }
 
-  const price = betSizing.side === 'UP' ? null : null; // price checked via marketPrice below
   const betAmount = betSizing.betAmount;
 
   if (betAmount < 0.50) {

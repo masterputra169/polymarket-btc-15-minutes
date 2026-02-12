@@ -31,7 +31,7 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   const hasSlope = vwapSlope !== null && vwapSlope !== undefined;
   const hasVolume = volumeRecent !== null && volumeAvg !== null && volumeAvg > 0;
 
-  if (!hasVwap) return { regime, confidence, label };
+  if (!hasVwap || vwap === 0) return { regime, confidence, label };
 
   const vwapDist = Math.abs(price - vwap) / vwap;
   const volumeRatio = hasVolume ? volumeRecent / volumeAvg : 1;

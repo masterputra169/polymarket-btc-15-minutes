@@ -36,7 +36,9 @@ export function evaluateTreeFast(nodeMap, features) {
     const node = nodeMap.get(nodeId);
     if (!node) return 0;
     if (node.leaf !== undefined) return node.leaf;
-    const val = features[node.featureIdx];
+    const idx = node.featureIdx;
+    if (idx < 0 || idx >= features.length) { nodeId = node.missing; continue; }
+    const val = features[idx];
     if (val !== val || val === undefined) { nodeId = node.missing; continue; }
     nodeId = val < node.threshold ? node.yes : node.no;
   }

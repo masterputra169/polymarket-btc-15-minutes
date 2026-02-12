@@ -79,7 +79,7 @@ export function loadMLModelFromDisk() {
     log.info(
       `XGBoost v${version} loaded: ${usable}/${totalTrees} trees (best_iter=${bestIter}), ${numFeatures} features, ~${memKB}KB`
     );
-    if (rawModel.metrics) {
+    if (rawModel.metrics && rawModel.metrics.accuracy != null) {
       log.info(
         `Metrics: ${(rawModel.metrics.accuracy * 100).toFixed(1)}% acc, ` +
         `${((rawModel.metrics.high_conf_accuracy || 0) * 100).toFixed(1)}% high-conf ` +

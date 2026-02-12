@@ -51,9 +51,13 @@ export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   try {
-    ws = new WebSocket(WS_URL);
+    const socket = new WebSocket(WS_URL);
+    ws = socket;
 
-    ws.on('open', () => {
+    socket.on('open', () => {
+      // Stale socket guard
+      if (ws !== socket) { try { socket.close(); } catch {} return; }
+
       log.info('Connected');
       _connected = true;
       reconnectMs = 500;
@@ -62,8 +66,8 @@ export function connect() {
       // Ping every 15s
       stopPing();
       pingTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try { ws.send(JSON.stringify({ action: 'ping' })); } catch {}
+        if (socket.readyState === WebSocket.OPEN) {
+          try { socket.send(JSON.stringify({ action: 'ping' })); } catch {}
         }
       }, PING_MS);
 
@@ -72,20 +76,23 @@ export function connect() {
       hbTimer = setInterval(() => {
         if (Date.now() - lastMsgMs > HEARTBEAT_DEAD_MS) {
           log.warn('Silent — forcing reconnect');
-          try { ws.close(); } catch {}
+          if (ws === socket) { ws = null; _connected = false; }
+          stopTimers();
+          try { socket.close(); } catch {}
+          scheduleReconnect();
         }
       }, HEARTBEAT_CHECK_MS);
 
       // Subscribe to Chainlink crypto prices
       try {
-        ws.send(JSON.stringify({
+        socket.send(JSON.stringify({
           action: 'subscribe',
           subscriptions: [{ topic: 'crypto_prices_chainlink', type: '*', filters: '' }],
         }));
       } catch {}
     });
 
-    ws.on('message', (raw) => {
+    socket.on('message', (raw) => {
       lastMsgMs = Date.now();
       try {
         const str = typeof raw === 'string' ? raw : raw.toString();
@@ -106,16 +113,18 @@ export function connect() {
       } catch {}
     });
 
-    ws.on('close', () => {
-      log.debug('Disconnected');
-      _connected = false;
-      ws = null;
-      stopTimers();
+    socket.on('close', () => {
+      if (ws === socket) {
+        log.debug('Disconnected');
+        _connected = false;
+        ws = null;
+        stopTimers();
+      }
       scheduleReconnect();
     });
 
-    ws.on('error', () => {
-      try { ws.close(); } catch {}
+    socket.on('error', () => {
+      try { socket.close(); } catch {}
     });
   } catch {
     scheduleReconnect();

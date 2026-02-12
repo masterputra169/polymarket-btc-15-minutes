@@ -197,7 +197,11 @@ export async function fetchChainlinkBtcUsd() {
         signal: AbortSignal.timeout(3000),
       });
       const decJson = await decRes.json();
-      cachedDecimals = parseInt(decJson.result, 16);
+      const parsed = parseInt(decJson.result, 16);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 32) {
+        return cachedChainlink; // invalid decimals — abort
+      }
+      cachedDecimals = parsed;
     }
 
     const roundRes = await fetch(rpc, {
