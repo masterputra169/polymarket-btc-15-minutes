@@ -39,13 +39,17 @@ import { ML_CONFIDENCE } from '../config.js';
  * @param {Object|null} [params.orderbookDown]  - { bestAsk, bestBid, spread, ... }
  */
 export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbookUp, orderbookDown }) {
-  // Effective price = bestAsk (what you'd actually pay), not mid
-  const effectiveUp = orderbookUp?.bestAsk ?? marketYes;
-  const effectiveDown = orderbookDown?.bestAsk ?? marketNo;
+  // Effective price = bestAsk (what you'd actually pay), not mid.
+  // bestAsk already includes the spread cost, so no additional penalty needed.
+  // Only add half-spread penalty when falling back to mid/last price (marketYes/No).
+  const hasBookUp = orderbookUp?.bestAsk != null;
+  const hasBookDown = orderbookDown?.bestAsk != null;
+  const effectiveUp = hasBookUp ? orderbookUp.bestAsk : marketYes;
+  const effectiveDown = hasBookDown ? orderbookDown.bestAsk : marketNo;
 
-  // Spread penalty: half-spread as execution cost estimate
-  const spreadPenaltyUp = (orderbookUp?.spread ?? 0) * 0.5;
-  const spreadPenaltyDown = (orderbookDown?.spread ?? 0) * 0.5;
+  // Spread penalty only when using mid/last price (no orderbook bestAsk)
+  const spreadPenaltyUp = hasBookUp ? 0 : (orderbookUp?.spread ?? 0) * 0.5;
+  const spreadPenaltyDown = hasBookDown ? 0 : (orderbookDown?.spread ?? 0) * 0.5;
 
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
     ? modelUp - effectiveUp - spreadPenaltyUp

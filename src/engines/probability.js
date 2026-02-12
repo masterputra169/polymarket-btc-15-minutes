@@ -290,14 +290,14 @@ export function scoreDirection({
         regimeEffect = 'NEUTRAL';
         break;
     }
-    rawUp = 0.5 + (rawUp - 0.5) * regimeMultiplier;
+    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * regimeMultiplier));
   }
   breakdown.regime = { effect: regimeEffect, multiplier: regimeMultiplier };
 
   // ═══ 12. VOLATILITY SESSION ADJUSTMENT — NEW ═══
   const volMultiplier = volProfile?.confidenceMultiplier ?? 1.0;
   if (volMultiplier !== 1.0) {
-    rawUp = 0.5 + (rawUp - 0.5) * volMultiplier;
+    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * volMultiplier));
   }
   breakdown.volatility = {
     session: volProfile?.session ?? 'unknown',
@@ -308,7 +308,7 @@ export function scoreDirection({
   // ═══ 13. FEEDBACK ACCURACY ADJUSTMENT — NEW ═══
   const fbMultiplier = feedbackStats?.confidenceMultiplier ?? 1.0;
   if (fbMultiplier !== 1.0) {
-    rawUp = 0.5 + (rawUp - 0.5) * fbMultiplier;
+    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * fbMultiplier));
   }
   breakdown.feedback = {
     multiplier: fbMultiplier,

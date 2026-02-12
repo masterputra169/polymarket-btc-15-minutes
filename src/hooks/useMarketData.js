@@ -59,6 +59,12 @@ export function useMarketData({ clobWs } = {}) {
   // ═══ MEMORY FIX 1: Reuse previous data ref to enable shallow diff ═══
   const prevDataRef = useRef(null);
 
+  // Store clobWs in ref to prevent poll/interval recreation on every render
+  const clobWsRef = useRef(clobWs);
+
+  // Keep clobWs ref in sync without causing poll recreation
+  useEffect(() => { clobWsRef.current = clobWs; }, [clobWs]);
+
   // Load ML model once
   useEffect(() => {
     loadMLModel().then(ok => {
@@ -83,7 +89,8 @@ export function useMarketData({ clobWs } = {}) {
     try {
       const timing = getCandleWindowTiming(CONFIG.candleWindowMinutes);
       const now = Date.now();
-      const wsConnected = clobWs?.connected ?? false;
+      const clobWsSnap = clobWsRef.current;
+      const wsConnected = clobWsSnap?.connected ?? false;
 
       // Detect if current market has EXPIRED
       const marketExpired =
@@ -103,7 +110,7 @@ export function useMarketData({ clobWs } = {}) {
         marketExpired;
 
       const isFirstPoll = !firstPollDoneRef.current;
-      const wsLastUpdateForClob = clobWs?.lastUpdate;
+      const wsLastUpdateForClob = clobWsSnap?.lastUpdate;
       const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 10_000) : false;
       const skipClob = isFirstPoll || (wsConnected && !marketExpired && !wsClobStale);
 
@@ -161,17 +168,17 @@ export function useMarketData({ clobWs } = {}) {
         mh.buf.fill(0); mh.idx = 0; mh.count = 0;
 
         // 5. CLOB WS: force fresh connection with new tokens
-        if (poly.ok && poly.tokens && clobWs?.setTokenIds) {
+        if (poly.ok && poly.tokens && clobWsSnap?.setTokenIds) {
           if (IS_DEV) console.log('[Market] 📡 Re-subscribing CLOB WS...');
-          clobWs.setTokenIds(poly.tokens.upTokenId, poly.tokens.downTokenId);
+          clobWsSnap.setTokenIds(poly.tokens.upTokenId, poly.tokens.downTokenId);
           tokenIdsNotifiedRef.current = true;
         }
       }
 
       if (marketSlug) currentMarketSlugRef.current = marketSlug;
 
-      if (poly.ok && poly.tokens && clobWs?.setTokenIds && !tokenIdsNotifiedRef.current) {
-        clobWs.setTokenIds(poly.tokens.upTokenId, poly.tokens.downTokenId);
+      if (poly.ok && poly.tokens && clobWsSnap?.setTokenIds && !tokenIdsNotifiedRef.current) {
+        clobWsSnap.setTokenIds(poly.tokens.upTokenId, poly.tokens.downTokenId);
         tokenIdsNotifiedRef.current = true;
       }
 
@@ -196,10 +203,10 @@ export function useMarketData({ clobWs } = {}) {
       }
 
       // Orderbook — check WS data staleness before trusting prices
-      const wsOrderbook = clobWs?.orderbook;
-      const wsUpPrice = clobWs?.upPrice;
-      const wsDownPrice = clobWs?.downPrice;
-      const wsLastUpdate = clobWs?.lastUpdate;
+      const wsOrderbook = clobWsSnap?.orderbook;
+      const wsUpPrice = clobWsSnap?.upPrice;
+      const wsDownPrice = clobWsSnap?.downPrice;
+      const wsLastUpdate = clobWsSnap?.lastUpdate;
       const wsStale = wsLastUpdate ? (now - wsLastUpdate > 10_000) : (wsUpPrice === null);
       const wsDataFresh = wsConnected && !slugChanged && !wsStale;
 
@@ -471,7 +478,7 @@ export function useMarketData({ clobWs } = {}) {
     } finally {
       pollingRef.current = false;
     }
-  }, [clobWs, invalidateMarketCache]);
+  }, [invalidateMarketCache]);
 
   // ═══ MEMORY FIX 8: Cleanup on unmount ═══
   useEffect(() => {

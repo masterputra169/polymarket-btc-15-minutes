@@ -52,7 +52,7 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
     const volBoost = volumeRatio > 1.2 ? 0.10 : 0;
     regime = 'trending';
     confidence = Math.min(0.6 + vwapDist * 200 + volBoost, 0.95);
-    label = (hasSlope && vwapSlope > 0) ? 'Trending UP' : 'Trending DOWN';
+    label = hasSlope ? (vwapSlope > 0 ? 'Trending UP' : 'Trending DOWN') : (price > vwap ? 'Trending UP' : 'Trending DOWN');
     return { regime, confidence, label };
   }
 
