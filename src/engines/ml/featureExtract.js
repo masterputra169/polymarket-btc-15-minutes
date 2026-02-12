@@ -121,10 +121,13 @@ export function extractLiveFeaturesInPlace({
   featureBuf[14] = Math.min(vwapCrossCount ?? 0, 10) / 10;
   featureBuf[15] = Math.min(bestEdge ?? 0, 0.5);
 
-  featureBuf[16] = regime === 'trending'       ? 1 : 0;
-  featureBuf[17] = regime === 'choppy'         ? 1 : 0;
-  featureBuf[18] = regime === 'mean_reverting' ? 1 : 0;
-  featureBuf[19] = regime === 'moderate'       ? 1 : 0;
+  // Remap choppy → moderate for ML (v5 model trained with 0% choppy due to
+  // countVwapCrosses bug — feeding choppy=1 causes out-of-distribution predictions)
+  const mlRegime = regime === 'choppy' ? 'moderate' : regime;
+  featureBuf[16] = mlRegime === 'trending'       ? 1 : 0;
+  featureBuf[17] = 0; // choppy always 0 for v5 compat
+  featureBuf[18] = mlRegime === 'mean_reverting' ? 1 : 0;
+  featureBuf[19] = mlRegime === 'moderate'       ? 1 : 0;
 
   featureBuf[20] = session === 'Asia'           ? 1 : 0;
   featureBuf[21] = session === 'Europe'         ? 1 : 0;
