@@ -27,6 +27,10 @@ __pycache__/
 *.pyc
 venv/
 
-backtest/
+backtest/*
+!backtest/ml_training/
+backtest/ml_training/*
+!backtest/ml_training/*.py
+!backtest/ml_training/*.mjs
 .backtest_cache/
 .backtest/
