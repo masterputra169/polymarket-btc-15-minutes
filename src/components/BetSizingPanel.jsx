@@ -38,13 +38,6 @@ function BetSizingPanel({ data, setBankroll }) {
   const risk = bet.riskLevel ?? 'NO_BET';
   const riskStyle = RISK_COLORS[risk] ?? RISK_COLORS.NO_BET;
   const barPct = bet.shouldBet && bet.betPercent != null ? Math.min((bet.betPercent / BET_SIZING.MAX_BET_PCT) * 100, 100) : 0;
-  const impliedOdds = bet.shouldBet && bet.betPercent > 0
-    ? (1 / (bet.side === 'UP' ? (data?.rec?.marketUp ?? 0.5) : (data?.rec?.marketDown ?? 0.5))).toFixed(2)
-    : null;
-
-  // Compute implied odds from market price stored in betSizing
-  const mktPrice = bet.bankroll > 0 && bet.betAmount > 0 && bet.shouldBet
-    ? bet.betAmount / bet.bankroll : 0;
 
   return (
     <div className="card" style={{ animationDelay: '0.35s', gridColumn: '1 / -1' }}>

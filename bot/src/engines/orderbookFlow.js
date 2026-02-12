@@ -22,7 +22,7 @@ let histCount = 0;
 /**
  * Record a new orderbook snapshot.
  * @param {Object} orderbookSignal - from analyzeOrderbook()
- * @param {Object|null} orderbookUp - { bestBid, bestAsk, bidDepth, askDepth, spread }
+ * @param {Object|null} orderbookUp - { bestBid, bestAsk, bidLiquidity, askLiquidity, spread }
  * @param {Object|null} orderbookDown
  */
 export function recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookDown) {
@@ -30,9 +30,9 @@ export function recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookD
   const imbalance = orderbookSignal?.imbalance ?? 0;
   imbalanceHistory[histIdx] = imbalance;
 
-  // Depth ratio: bidDepth / askDepth for UP side (>1 = buyers deeper)
-  const bidDepth = orderbookUp?.bidDepth ?? 0;
-  const askDepth = orderbookUp?.askDepth ?? 0;
+  // Depth ratio: bidLiquidity / askLiquidity for UP side (>1 = buyers deeper)
+  const bidDepth = orderbookUp?.bidLiquidity ?? 0;
+  const askDepth = orderbookUp?.askLiquidity ?? 0;
   const depthRatio = askDepth > 0 ? bidDepth / askDepth : 1;
   depthRatioHistory[histIdx] = depthRatio;
 

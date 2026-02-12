@@ -190,6 +190,7 @@ export default memo(AccuracyPanel, (prev, next) => {
     a.detailedFeedback?.totalSettled === b.detailedFeedback?.totalSettled &&
     a.feedbackStats?.accuracy === b.feedbackStats?.accuracy &&
     a.feedbackStats?.confidenceMultiplier === b.feedbackStats?.confidenceMultiplier &&
-    a.detailedFeedback?.streak?.count === b.detailedFeedback?.streak?.count
+    a.detailedFeedback?.streak?.count === b.detailedFeedback?.streak?.count &&
+    a.detailedFeedback?.streak?.type === b.detailedFeedback?.streak?.type
   );
 });

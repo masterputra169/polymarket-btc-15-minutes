@@ -209,6 +209,11 @@ export async function pollOnce() {
     const marketExpired = currentMarketEndMs !== null && now >= currentMarketEndMs;
     if (marketExpired) {
       log.info('Market expired! Forcing fresh discovery...');
+      const pos = getCurrentPosition();
+      if (pos && pos.marketSlug === currentMarketSlug) {
+        log.warn('Position expired with market — settling as loss');
+        settleTrade(false);
+      }
       resetMarketCache();
     }
 
@@ -518,7 +523,8 @@ export async function pollOnce() {
     const hasPending = hasPendingOrder();
 
     // 13a. Arbitrage execution (priority over directional — riskless profit)
-    if (arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending) {
+    if (arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+        poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       const arbShares = Math.floor(bankroll * 0.10 / arb.totalCost); // 10% of bankroll
       if (arbShares > 0) {
         if (BOT_CONFIG.dryRun) {

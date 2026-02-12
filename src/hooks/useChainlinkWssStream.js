@@ -54,6 +54,7 @@ export function useChainlinkWssStream() {
         stopHb();
         hbRef.current = setInterval(() => {
           if (Date.now() - lastMsgRef.current > HEARTBEAT_DEAD_MS) {
+            if (wsRef.current !== ws) return; // stale — new WS already connected
             console.warn('[Chainlink WSS] ⚠️ Silent — forcing reconnect');
             try { ws.close(); } catch (_e) { /* */ }
           }

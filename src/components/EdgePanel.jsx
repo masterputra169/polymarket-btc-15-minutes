@@ -79,10 +79,10 @@ function EdgePanel({ data }) {
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <span className="c-green" style={{ fontWeight: 600 }}>
-              ↑ {marketUp !== null ? `${marketUp}¢` : '-'}
+              ↑ {marketUp !== null ? `${Math.round(marketUp * 100)}¢` : '-'}
             </span>
             <span className="c-red" style={{ fontWeight: 600 }}>
-              ↓ {marketDown !== null ? `${marketDown}¢` : '-'}
+              ↓ {marketDown !== null ? `${Math.round(marketDown * 100)}¢` : '-'}
             </span>
           </div>
         </div>
@@ -181,6 +181,8 @@ export default memo(EdgePanel, (prev, next) => {
     a.ml?.confidence === b.ml?.confidence &&
     a.ruleUp === b.ruleUp &&
     a.arbitrage?.found === b.arbitrage?.found &&
-    a.arbitrage?.netProfit === b.arbitrage?.netProfit
+    a.arbitrage?.netProfit === b.arbitrage?.netProfit &&
+    a.arbitrage?.profitPct === b.arbitrage?.profitPct &&
+    a.arbitrage?.spreadHealthy === b.arbitrage?.spreadHealthy
   );
 });
