@@ -5,7 +5,7 @@ import { CONFIG } from '../config.js';
  * FIX: Increased cache duration, reduced timeout, better throttling.
  */
 
-const RPC_TIMEOUT_MS = 5000;
+const RPC_TIMEOUT_MS = 3000;
 
 // ABI function selectors
 const DECIMALS_SELECTOR = '0x313ce567';
@@ -100,6 +100,7 @@ export async function fetchChainlinkBtcUsd() {
   }
 
   fetchInProgress = true;
+  const lockTimer = setTimeout(() => { fetchInProgress = false; }, 10_000);
 
   try {
     // Only try first RPC (we reduced to 1 in config)
@@ -134,6 +135,7 @@ export async function fetchChainlinkBtcUsd() {
       return cachedResult;
     }
   } finally {
+    clearTimeout(lockTimer);
     fetchInProgress = false;
   }
 }

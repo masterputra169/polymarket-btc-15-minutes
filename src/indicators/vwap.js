@@ -35,6 +35,28 @@ export function computeVwapSeries(candles, lookback) {
 }
 
 /**
+ * Count how many times price crosses VWAP in the last `lookback` candles.
+ * @param {number[]} closes
+ * @param {number[]} vwapSeries
+ * @param {number} lookback
+ * @returns {number|null}
+ */
+export function countVwapCrosses(closes, vwapSeries, lookback) {
+  if (closes.length < lookback || vwapSeries.length < lookback) return null;
+  let crosses = 0;
+  for (let i = closes.length - lookback + 1; i < closes.length; i += 1) {
+    const vPrev = vwapSeries[i - 1];
+    const vCur = vwapSeries[i];
+    if (vPrev == null || vCur == null) continue;
+    const prev = closes[i - 1] - vPrev;
+    const cur = closes[i] - vCur;
+    if (prev === 0) continue;
+    if ((prev > 0 && cur < 0) || (prev < 0 && cur > 0)) crosses += 1;
+  }
+  return crosses;
+}
+
+/**
  * Get the current session VWAP value.
  * @param {Array} candles
  * @param {number} [lookback]

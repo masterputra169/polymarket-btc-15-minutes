@@ -3,76 +3,24 @@ import { CONFIG } from '../config.js';
 import { fetchKlines, fetchLastPrice } from '../data/binance.js';
 import { fetchPolymarketSnapshot } from '../data/polymarket.js';
 import { fetchChainlinkBtcUsd } from '../data/chainlinkRpc.js';
-import { computeSessionVwap, computeVwapSeries } from '../indicators/vwap.js';
-import { computeRsi, computeRsiSeries, sma, slopeLast } from '../indicators/rsi.js';
-import { computeMacd } from '../indicators/macd.js';
-import { computeHeikenAshi, countConsecutive } from '../indicators/heikenAshi.js';
-import { computeBollingerBands } from '../indicators/bollinger.js';
-import { computeATR } from '../indicators/atr.js';
-import { computeVolumeDelta } from '../indicators/volumedelta.js';
-import { computeEmaCrossover } from '../indicators/emacross.js';
-import { computeStochRsi } from '../indicators/stochrsi.js';
 import { fetchFundingRate } from '../indicators/fundingrate.js';
-import { detectRegime } from '../engines/regime.js';
 import { scoreDirection, applyTimeAwareness } from '../engines/probability.js';
 import { computeEdge, decide } from '../engines/edge.js';
+import { computeBetSizing } from '../engines/asymmetricBet.js';
 import { analyzeOrderbook } from '../engines/orderbook.js';
-import { getVolatilityProfile, computeRealizedVol } from '../engines/volatility.js';
-import { computeMultiTfConfirmation } from '../engines/multitf.js';
-import { getAccuracyStats, recordPrediction, autoSettle, onMarketSwitch } from '../engines/feedback.js';
+import { getAccuracyStats, getDetailedStats, recordPrediction, autoSettle, onMarketSwitch } from '../engines/feedback.js';
 import { loadMLModel, getMLPrediction, getMLStatus } from '../engines/Mlpredictor.js';
 import {
   getCandleWindowTiming,
   narrativeFromSign,
   narrativeFromSlope,
   extractPriceToBeat,
+  getSessionName,
+  shallowChanged,
 } from '../utils.js';
+import { computeAllIndicators } from './computeIndicators.js';
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
-
-function countVwapCrosses(closes, vwapSeries, lookback) {
-  if (closes.length < lookback || vwapSeries.length < lookback) return null;
-  let crosses = 0;
-  for (let i = closes.length - lookback + 1; i < closes.length; i += 1) {
-    const prev = closes[i - 1] - vwapSeries[i - 1];
-    const cur = closes[i] - vwapSeries[i];
-    if (prev === 0) continue;
-    if ((prev > 0 && cur < 0) || (prev < 0 && cur > 0)) crosses += 1;
-  }
-  return crosses;
-}
-
-function getSessionName() {
-  const h = new Date().getUTCHours();
-  if (h >= 13 && h < 16) return 'EU/US Overlap';
-  if (h >= 13 && h < 22) return 'US';
-  if (h >= 8 && h < 16) return 'Europe';
-  if (h >= 0 && h < 8) return 'Asia';
-  return 'Off-hours';
-}
-
-/**
- * ═══ Shallow-compare two flat objects ═══
- * Returns true if any top-level value changed.
- * Skips deep compare — for nested objects we always update.
- */
-function shallowChanged(prev, next) {
-  if (prev === null || prev === undefined) return true;
-  const keys = Object.keys(next);
-  for (let i = 0; i < keys.length; i++) {
-    const k = keys[i];
-    const pv = prev[k];
-    const nv = next[k];
-    // Primitives: compare directly
-    if (typeof nv !== 'object' || nv === null) {
-      if (pv !== nv) return true;
-    } else {
-      // Objects/arrays: always treat as changed (cheap — we reuse refs where possible)
-      return true;
-    }
-  }
-  return false;
-}
 
 export function useMarketData({ clobWs } = {}) {
   const [data, setData] = useState(null);
@@ -94,14 +42,22 @@ export function useMarketData({ clobWs } = {}) {
   // Prevent concurrent polls
   const pollingRef = useRef(false);
 
+  // Track first poll to skip CLOB REST on initial load
+  const firstPollDoneRef = useRef(false);
+
   // ═══ Polymarket market price ring buffer (for momentum calculation) ═══
   const marketUpHistoryRef = useRef({ buf: new Float64Array(24), idx: 0, count: 0 });
 
+  // ═══ Bankroll for bet sizing (persisted to localStorage) ═══
+  const bankrollRef = useRef((() => {
+    try {
+      const stored = localStorage.getItem('btc15m_bankroll');
+      return stored ? Number(stored) : 1000;
+    } catch { return 1000; }
+  })());
+
   // ═══ MEMORY FIX 1: Reuse previous data ref to enable shallow diff ═══
   const prevDataRef = useRef(null);
-
-  // ═══ MEMORY FIX 2: Track poll count for periodic GC hint ═══
-  const pollCountRef = useRef(0);
 
   // Load ML model once
   useEffect(() => {
@@ -139,55 +95,44 @@ export function useMarketData({ clobWs } = {}) {
         invalidateMarketCache();
       }
 
-      // 1. Fetch klines + last price
-      let klines1m, klines5m, lastPrice;
-      try {
-        [klines1m, klines5m, lastPrice] = await Promise.all([
-          fetchKlines({ interval: '1m', limit: 240 }),
-          fetchKlines({ interval: '5m', limit: 48 }),
-          fetchLastPrice(),
-        ]);
-      } catch (err) {
-        throw new Error(`Binance: ${err.message}`);
-      }
-
-      // ═══ MEMORY FIX 3: Extract closes in-place, reuse arrays ═══
-      const candles = klines1m;
-      const cLen = candles.length;
-      const closes = new Array(cLen);
-      for (let i = 0; i < cLen; i++) closes[i] = candles[i].close;
-
-      const c5Len = klines5m.length;
-      const closes5m = new Array(c5Len);
-      for (let i = 0; i < c5Len; i++) closes5m[i] = klines5m[i].close;
-
-      // 2. Polymarket
+      // ── Pre-compute flags for parallel fetch ──
       const marketDiscoveryInterval = CONFIG.marketDiscoveryIntervalMs || 5_000;
-      let poly;
       const needsFreshPoly =
         !polySnapshotRef.current ||
         now - polyLastFetchRef.current > marketDiscoveryInterval ||
         marketExpired;
 
+      const isFirstPoll = !firstPollDoneRef.current;
+      const wsLastUpdateForClob = clobWs?.lastUpdate;
+      const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 10_000) : false;
+      const skipClob = isFirstPoll || (wsConnected && !marketExpired && !wsClobStale);
+
+      // ── ALL network calls in parallel ──
+      const [binanceResult, poly, chainlinkRpc, fundingRate] = await Promise.all([
+        Promise.all([
+          fetchKlines({ interval: '1m', limit: 240 }),
+          fetchKlines({ interval: '5m', limit: 48 }),
+          fetchLastPrice(),
+        ]).catch(err => { throw new Error(`Binance: ${err.message}`); }),
+        needsFreshPoly
+          ? fetchPolymarketSnapshot({ skipClob })
+          : Promise.resolve(polySnapshotRef.current),
+        fetchChainlinkBtcUsd().catch(() => ({ price: null, updatedAt: null, source: 'chainlink_rpc_error' })),
+        fetchFundingRate().catch(() => null),
+      ]);
+      const [klines1m, klines5m, lastPrice] = binanceResult;
+
+      const candles = klines1m;
+
+      // Update poly cache after parallel fetch
       if (needsFreshPoly) {
-        const wsLastUpdateForClob = clobWs?.lastUpdate;
-        const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 20_000) : false;
-        const skipClob = wsConnected && !marketExpired && !wsClobStale;
-        poly = await fetchPolymarketSnapshot({ skipClob });
         polySnapshotRef.current = poly;
         polyLastFetchRef.current = now;
-
         if (poly.ok && poly.market?.endDate) {
           const endMs = new Date(poly.market.endDate).getTime();
           if (Number.isFinite(endMs)) currentMarketEndMsRef.current = endMs;
         }
-      } else {
-        poly = polySnapshotRef.current;
       }
-
-      // 3. Chainlink RPC
-      let chainlinkRpc = { price: null, updatedAt: null, source: 'chainlink_rpc_skipped' };
-      try { chainlinkRpc = await fetchChainlinkBtcUsd(); } catch { /* silent */ }
 
       // Market slug tracking
       const marketSlug = poly.ok ? String(poly.market?.slug ?? '') : '';
@@ -211,10 +156,7 @@ export function useMarketData({ clobWs } = {}) {
         // 3. Previous data ref: prevent stale comparisons
         prevDataRef.current = null;
 
-        // 4. Reset poll counter (fresh market = fresh cycle)
-        pollCountRef.current = 0;
-
-        // 4b. Reset market price ring buffer
+        // 4. Reset market price ring buffer
         const mh = marketUpHistoryRef.current;
         mh.buf.fill(0); mh.idx = 0; mh.count = 0;
 
@@ -233,70 +175,16 @@ export function useMarketData({ clobWs } = {}) {
         tokenIdsNotifiedRef.current = true;
       }
 
-      // ── TA Calculations ──
-      const vwapSeries = computeVwapSeries(candles, CONFIG.vwapLookbackCandles);
-      const vwapNow = vwapSeries[vwapSeries.length - 1];
-      const lookback = CONFIG.vwapSlopeLookbackMinutes;
-      const vwapSlope =
-        vwapSeries.length >= lookback
-          ? (vwapNow - vwapSeries[vwapSeries.length - lookback]) / lookback
-          : null;
-      const vwapDist = vwapNow ? (lastPrice - vwapNow) / vwapNow : null;
-
-      const rsiNow = computeRsi(closes, CONFIG.rsiPeriod);
-      const rsiSeries = computeRsiSeries(closes, CONFIG.rsiPeriod);
-      const rsiSlope = slopeLast(rsiSeries, 3);
-
-      const macd = computeMacd(closes, CONFIG.macdFast, CONFIG.macdSlow, CONFIG.macdSignal);
-
-      const ha = computeHeikenAshi(candles);
-      const consec = countConsecutive(ha);
-
-      const vwapCrossCount = countVwapCrosses(closes, vwapSeries, 20);
-
-      // ═══ Bollinger Bands + ATR ═══
-      const bb = computeBollingerBands(closes, 20, 2);
-      const atr = computeATR(candles, 14);
-
-      // ═══ Volume Delta (buy/sell pressure) ═══
-      const volDelta = computeVolumeDelta(candles, 10, 20);
-
-      // ═══ EMA 8/21 Crossover ═══
-      const emaCross = computeEmaCrossover(closes, 8, 21);
-
-      // ═══ Stochastic RSI ═══
-      const stochRsi = computeStochRsi(closes, 14, 14, 3, 3);
-
-      // ═══ Funding Rate (async, cached 5min) ═══
-      let fundingRate = null;
-      try { fundingRate = await fetchFundingRate(); } catch { /* silent */ }
-
-      // ═══ MEMORY FIX 4: compute volume with loop instead of slice+reduce ═══
-      let volumeRecent = 0;
-      const volRecentStart = Math.max(0, cLen - 20);
-      for (let i = volRecentStart; i < cLen; i++) volumeRecent += candles[i].volume;
-
-      let volumeTotal120 = 0;
-      const volAvgStart = Math.max(0, cLen - 120);
-      for (let i = volAvgStart; i < cLen; i++) volumeTotal120 += candles[i].volume;
-      const volumeAvg = volumeTotal120 / 6;
-
-      const failedVwapReclaim =
-        vwapNow !== null && vwapSeries.length >= 3
-          ? closes[cLen - 1] < vwapNow &&
-            closes[cLen - 2] > vwapSeries[vwapSeries.length - 2]
-          : false;
-
-      const regimeInfo = detectRegime({
-        price: lastPrice, vwap: vwapNow, vwapSlope, vwapCrossCount,
-        volumeRecent, volumeAvg,
-      });
-
-      const lastClose = closes[cLen - 1] ?? null;
-      const close1mAgo = cLen >= 2 ? closes[cLen - 2] : null;
-      const close3mAgo = cLen >= 4 ? closes[cLen - 4] : null;
-      const delta1m = lastClose !== null && close1mAgo !== null ? lastClose - close1mAgo : null;
-      const delta3m = lastClose !== null && close3mAgo !== null ? lastClose - close3mAgo : null;
+      // ── TA Calculations (extracted to computeIndicators.js) ──
+      const ind = computeAllIndicators({ candles, klines5m, lastPrice });
+      const {
+        closes, vwapSeries, vwapNow, vwapSlope, vwapDist,
+        rsiNow, rsiSlope, macd, consec, vwapCrossCount,
+        bb, atr, volDelta, emaCross, stochRsi,
+        volumeRecent, volumeAvg, failedVwapReclaim,
+        regimeInfo, lastClose, delta1m, delta3m,
+        volProfile, realizedVol, multiTfConfirm,
+      } = ind;
 
       const marketQuestion = poly.ok ? (poly.market?.question ?? poly.market?.title ?? '') : '';
       const priceToBeat = poly.ok ? extractPriceToBeat(poly.market, klines1m) : null;
@@ -312,7 +200,7 @@ export function useMarketData({ clobWs } = {}) {
       const wsUpPrice = clobWs?.upPrice;
       const wsDownPrice = clobWs?.downPrice;
       const wsLastUpdate = clobWs?.lastUpdate;
-      const wsStale = wsLastUpdate ? (now - wsLastUpdate > 20_000) : (wsUpPrice === null);
+      const wsStale = wsLastUpdate ? (now - wsLastUpdate > 10_000) : (wsUpPrice === null);
       const wsDataFresh = wsConnected && !slugChanged && !wsStale;
 
       const earlyMarketUp = wsDataFresh && wsUpPrice !== null ? wsUpPrice : (poly.ok ? poly.prices.up : null);
@@ -325,22 +213,8 @@ export function useMarketData({ clobWs } = {}) {
         marketDown: earlyMarketDown,
       });
 
-      const volProfile = getVolatilityProfile();
-      const realizedVol = computeRealizedVol(closes, 15);
-
-      // Multi-TF
-      const delta5m = c5Len >= 2 ? closes5m[c5Len - 1] - closes5m[c5Len - 2] : null;
-      const ha5m = computeHeikenAshi(klines5m);
-      const consec5m = countConsecutive(ha5m);
-      const rsi5m = computeRsi(closes5m, 8);
-
-      const multiTfConfirm = computeMultiTfConfirmation({
-        delta1m, delta3m, delta5m,
-        ha1mColor: consec.color, ha5mColor: consec5m.color,
-        rsi1m: rsiNow, rsi5m,
-      });
-
       const feedbackStats = getAccuracyStats();
+      const detailedFeedback = getDetailedStats();
 
       // Probability
       const scored = scoreDirection({
@@ -371,6 +245,7 @@ export function useMarketData({ clobWs } = {}) {
       const ruleEdge = computeEdge({
         modelUp: timeAware.adjustedUp, modelDown: timeAware.adjustedDown,
         marketYes: marketUp, marketNo: marketDown,
+        orderbookUp, orderbookDown,
       });
 
       // ═══ Step 2: ML prediction (uses rule edge as feature) ═══
@@ -423,6 +298,7 @@ export function useMarketData({ clobWs } = {}) {
       const edge = computeEdge({
         modelUp: ensembleUp, modelDown: ensembleDown,
         marketYes: marketUp, marketNo: marketDown,
+        orderbookUp, orderbookDown,
       });
 
       // ML agreement: does ML side match rule-based side?
@@ -438,10 +314,27 @@ export function useMarketData({ clobWs } = {}) {
         multiTfConfirmed: multiTfConfirm?.agreement ?? false,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
         mlAgreesWithRules,
+        regimeInfo,
       });
       // Map strength + edge onto rec for UI consumption
       rec.strength = rec.confidence;
       rec.edge = edge.bestEdge;
+
+      // ═══ Asymmetric Bet Sizing ═══
+      const betSide = rec.side;
+      const betEnsembleProb = betSide === 'UP' ? ensembleUp
+        : betSide === 'DOWN' ? ensembleDown : null;
+      const betMarketPrice = betSide === 'UP' ? marketUp
+        : betSide === 'DOWN' ? marketDown : null;
+
+      const betSizing = computeBetSizing({
+        action: rec.action, side: betSide,
+        ensembleProb: betEnsembleProb, marketPrice: betMarketPrice,
+        edge: edge.bestEdge, confidence: rec.confidence,
+        regimeInfo, feedbackStats,
+        ml: mlResult.available ? { status: 'ready', side: mlResult.mlSide, confidence: mlResult.mlConfidence } : null,
+        bankroll: bankrollRef.current,
+      });
 
       // Feedback
       try {
@@ -452,6 +345,8 @@ export function useMarketData({ clobWs } = {}) {
             modelProb: rec.side === 'UP' ? ensembleUp : ensembleDown,
             marketPrice: rec.side === 'UP' ? marketUp : marketDown,
             btcPrice: lastPrice, priceToBeat: priceToBeatRef.current.value, marketSlug,
+            regime: regimeInfo.regime,
+            mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           });
         }
       } catch { /* feedback should never break main loop */ }
@@ -532,6 +427,7 @@ export function useMarketData({ clobWs } = {}) {
         realizedVol,
         multiTfConfirm,
         feedbackStats,
+        detailedFeedback,
         bb,
         atr,
         volDelta,
@@ -544,6 +440,7 @@ export function useMarketData({ clobWs } = {}) {
         volumeRatio: volumeAvg > 0 ? volumeRecent / volumeAvg : 1,
         vwapCrossCount,
         failedVwapReclaim,
+        betSizing,
         ml: mlResult.available ? {
           probUp: mlResult.mlProbUp,
           confidence: mlResult.mlConfidence,
@@ -560,19 +457,14 @@ export function useMarketData({ clobWs } = {}) {
       };
 
       // Only trigger re-render if data actually changed
-      prevDataRef.current = nextData;
-      setData(nextData);
+      if (shallowChanged(prevDataRef.current, nextData)) {
+        prevDataRef.current = nextData;
+        setData(nextData);
+      }
       setLastUpdated(now);
       setLoading(false);
       setError(null);
-
-      // ═══ MEMORY FIX 7: Periodic cleanup hint ═══
-      pollCountRef.current += 1;
-      if (pollCountRef.current % 60 === 0) {
-        // Every ~60 polls (~5min at 5s interval), null out large intermediates
-        // to hint GC. The next poll will recreate them.
-        if (IS_DEV) console.log('[Memory] 🧹 Periodic cleanup hint');
-      }
+      firstPollDoneRef.current = true;
 
     } catch (err) {
       setError(err.message);
@@ -596,5 +488,11 @@ export function useMarketData({ clobWs } = {}) {
     };
   }, [poll]);
 
-  return { data, loading, error, lastUpdated };
+  return {
+    data, loading, error, lastUpdated,
+    setBankroll: (v) => {
+      bankrollRef.current = v;
+      try { localStorage.setItem('btc15m_bankroll', String(v)); } catch {}
+    },
+  };
 }

@@ -1,0 +1,17 @@
+{
+  "name": "polymarket-btc-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Automated BTC 15-minute Polymarket trading bot",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dry-run": "DRY_RUN=true node index.js"
+  },
+  "dependencies": {
+    "@polymarket/clob-client": "^4",
+    "dotenv": "^16",
+    "ethers": "^6",
+    "ws": "^8.19.0"
+  }
+}

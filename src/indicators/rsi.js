@@ -3,24 +3,8 @@
  * Reworked: period 8 for faster 15-minute responsiveness.
  */
 
-/**
- * Simple moving average of last N values.
- */
-export function sma(arr, period) {
-  if (!arr || arr.length < period) return null;
-  const slice = arr.slice(-period);
-  return slice.reduce((a, b) => a + b, 0) / period;
-}
-
-/**
- * Slope of the last N values (linear regression-ish).
- * Returns change per step. Positive = rising.
- */
-export function slopeLast(arr, n = 3) {
-  if (!arr || arr.length < n) return null;
-  const slice = arr.slice(-n);
-  return (slice[slice.length - 1] - slice[0]) / (n - 1);
-}
+// Re-export shared math from single source of truth
+export { sma, slopeLast } from './math.js';
 
 /**
  * Compute RSI using Wilder's smoothing method.

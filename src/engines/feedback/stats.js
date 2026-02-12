@@ -1,0 +1,187 @@
+/**
+ * Accuracy statistics and calibration.
+ */
+
+import { ensureLoaded } from './state.js';
+import * as S from './state.js';
+
+function computeStreakFromCache() {
+  for (let i = S.cache.length - 1; i >= 0; i--) {
+    const p = S.cache[i];
+    if (!p.settled || p.correct === null) continue;
+    const streakType = p.correct;
+    let count = 1;
+    for (let j = i - 1; j >= 0; j--) {
+      const q = S.cache[j];
+      if (!q.settled || q.correct === null) continue;
+      if (q.correct === streakType) count++;
+      else break;
+    }
+    return { type: streakType ? 'win' : 'loss', count };
+  }
+  return { type: 'none', count: 0 };
+}
+
+export function getAccuracyStats(window = 20) {
+  ensureLoaded();
+  if (!S.statsDirty && S.statsCache) return S.statsCache;
+
+  let settledCount = 0;
+  for (let i = 0; i < S.cache.length; i++) {
+    if (S.cache[i].settled && S.cache[i].correct !== null) settledCount++;
+  }
+
+  if (settledCount < 5) {
+    let correctSoFar = 0;
+    for (let i = 0; i < S.cache.length; i++) {
+      if (S.cache[i].settled && S.cache[i].correct === true) correctSoFar++;
+    }
+    const streak = computeStreakFromCache();
+    const result = {
+      accuracy: null,
+      total: settledCount,
+      correct: correctSoFar,
+      confidenceMultiplier: 1.0,
+      streak,
+      label: `Tracking (${settledCount}/5 minimum)`,
+    };
+    S.setStatsCache(result);
+    return result;
+  }
+
+  const windowSize = Math.min(window, settledCount);
+  let skip = settledCount - windowSize;
+  let recentCorrect = 0;
+  let recentTotal = 0;
+  let streakType = null;
+  let streakCount = 0;
+  let streakDone = false;
+
+  for (let i = 0; i < S.cache.length; i++) {
+    const p = S.cache[i];
+    if (!p.settled || p.correct === null) continue;
+    if (skip > 0) { skip--; continue; }
+    recentTotal++;
+    if (p.correct) recentCorrect++;
+  }
+
+  for (let i = S.cache.length - 1; i >= 0 && !streakDone; i--) {
+    const p = S.cache[i];
+    if (!p.settled || p.correct === null) continue;
+    if (streakType === null) { streakType = p.correct; streakCount = 1; }
+    else if (p.correct === streakType) streakCount++;
+    else streakDone = true;
+  }
+
+  const accuracy = recentTotal > 0 ? recentCorrect / recentTotal : null;
+  const streak = { type: streakType === null ? 'none' : streakType ? 'win' : 'loss', count: streakCount };
+
+  let confidenceMultiplier, label;
+  const pct = accuracy !== null ? (accuracy * 100).toFixed(0) : '0';
+
+  if (accuracy >= 0.70) { confidenceMultiplier = 1.15; label = `\uD83D\uDD25 Hot (${pct}% of last ${recentTotal})`; }
+  else if (accuracy >= 0.55) { confidenceMultiplier = 1.05; label = `\u2705 Good (${pct}% of last ${recentTotal})`; }
+  else if (accuracy >= 0.45) { confidenceMultiplier = 1.0; label = `\u2796 Average (${pct}% of last ${recentTotal})`; }
+  else if (accuracy >= 0.35) { confidenceMultiplier = 0.85; label = `\u26A0\uFE0F Cold (${pct}% of last ${recentTotal})`; }
+  else { confidenceMultiplier = 0.70; label = `\u2744\uFE0F Ice Cold (${pct}% of last ${recentTotal})`; }
+
+  if (streak.type === 'loss' && streak.count >= 3) { confidenceMultiplier *= 0.90; label += ` | ${streak.count}L streak`; }
+  else if (streak.type === 'win' && streak.count >= 3) { confidenceMultiplier *= 1.05; label += ` | ${streak.count}W streak`; }
+
+  if (confidenceMultiplier < 0.50) confidenceMultiplier = 0.50;
+  else if (confidenceMultiplier > 1.25) confidenceMultiplier = 1.25;
+
+  const result = { accuracy, total: recentTotal, correct: recentCorrect, confidenceMultiplier, streak, label };
+  S.setStatsCache(result);
+  return result;
+}
+
+export function getDetailedStats() {
+  ensureLoaded();
+
+  const settled = [];
+  for (let i = 0; i < S.cache.length; i++) {
+    if (S.cache[i].settled && S.cache[i].correct !== null) settled.push(S.cache[i]);
+  }
+
+  const totalSettled = settled.length;
+
+  function rollingAcc(n) {
+    if (totalSettled < n) return null;
+    let correct = 0;
+    const start = totalSettled - n;
+    for (let i = start; i < totalSettled; i++) {
+      if (settled[i].correct) correct++;
+    }
+    return correct / n;
+  }
+
+  const rolling = {
+    last20: rollingAcc(20),
+    last50: rollingAcc(50),
+    last100: rollingAcc(100),
+  };
+
+  const regimeMap = {};
+  for (let i = 0; i < totalSettled; i++) {
+    const r = settled[i].regime || 'unknown';
+    if (!regimeMap[r]) regimeMap[r] = { correct: 0, total: 0 };
+    regimeMap[r].total++;
+    if (settled[i].correct) regimeMap[r].correct++;
+  }
+  const regimes = {};
+  for (const [r, data] of Object.entries(regimeMap)) {
+    regimes[r] = {
+      accuracy: data.total > 0 ? data.correct / data.total : null,
+      total: data.total,
+      correct: data.correct,
+    };
+  }
+
+  const calBuckets = [
+    { lo: 0.50, hi: 0.55 }, { lo: 0.55, hi: 0.60 },
+    { lo: 0.60, hi: 0.65 }, { lo: 0.65, hi: 0.70 },
+    { lo: 0.70, hi: 0.80 }, { lo: 0.80, hi: 1.00 },
+  ];
+  const calibration = calBuckets.map(({ lo, hi }) => {
+    let correct = 0, total = 0;
+    for (let i = 0; i < totalSettled; i++) {
+      const p = settled[i];
+      const conf = p.modelProb ?? 0.5;
+      if (conf >= lo && conf < hi) {
+        total++;
+        if (p.correct) correct++;
+      }
+    }
+    return {
+      range: `${(lo * 100).toFixed(0)}-${(hi * 100).toFixed(0)}%`,
+      predicted: (lo + hi) / 2,
+      actual: total > 0 ? correct / total : null,
+      total,
+    };
+  });
+
+  let streakType = null;
+  let streakCount = 0;
+  for (let i = totalSettled - 1; i >= 0; i--) {
+    if (streakType === null) {
+      streakType = settled[i].correct;
+      streakCount = 1;
+    } else if (settled[i].correct === streakType) {
+      streakCount++;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    totalSettled,
+    rolling,
+    regimes,
+    calibration,
+    streak: {
+      type: streakType === null ? 'none' : streakType ? 'win' : 'loss',
+      count: streakCount,
+    },
+  };
+}

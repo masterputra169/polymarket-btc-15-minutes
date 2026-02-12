@@ -165,16 +165,20 @@ export async function fetchPolymarketSnapshot({ skipClob = false } = {}) {
 
     if (upTokenId && downTokenId) {
       try {
-        const [yesBuy, noBuy, upBook, downBook] = await Promise.all([
-          fetchClobPrice({ tokenId: upTokenId, side: 'buy' }),
-          fetchClobPrice({ tokenId: downTokenId, side: 'buy' }),
+        // Fetch full orderbooks — compute midpoint from bid/ask (matches WS calculation)
+        // This also saves 2 HTTP requests vs separate /price calls
+        const [upBook, downBook] = await Promise.all([
           fetchOrderBook({ tokenId: upTokenId }),
           fetchOrderBook({ tokenId: downTokenId }),
         ]);
-        upBuy = yesBuy;
-        downBuy = noBuy;
         upBookSummary = summarizeOrderBook(upBook);
         downBookSummary = summarizeOrderBook(downBook);
+
+        // Midpoint price (consistent with WS midpoint)
+        if (upBookSummary.bestBid !== null && upBookSummary.bestAsk !== null)
+          upBuy = (upBookSummary.bestBid + upBookSummary.bestAsk) / 2;
+        if (downBookSummary.bestBid !== null && downBookSummary.bestAsk !== null)
+          downBuy = (downBookSummary.bestBid + downBookSummary.bestAsk) / 2;
       } catch {
         upBuy = gammaYes;
         downBuy = gammaNo;

@@ -1,3 +1,5 @@
+import { ML_CONFIDENCE } from '../config.js';
+
 /**
  * ═══ Edge & Decision Engine v2 ═══
  *
@@ -21,14 +23,35 @@
  */
 
 /**
- * Compute edge: model probability minus market price.
+ * Compute edge: model probability minus effective execution price.
+ *
+ * Spread-aware (from Math Part 1 & 2.5):
+ * - Real edge = modelProb - bestAsk (not midprice)
+ * - Spread penalty: half-spread as execution cost estimate
+ * - When orderbook data is available, use bestAsk; otherwise fall back to market mid
+ *
+ * @param {Object} params
+ * @param {number} params.modelUp
+ * @param {number} params.modelDown
+ * @param {number|null} params.marketYes        - mid/last price
+ * @param {number|null} params.marketNo         - mid/last price
+ * @param {Object|null} [params.orderbookUp]    - { bestAsk, bestBid, spread, ... }
+ * @param {Object|null} [params.orderbookDown]  - { bestAsk, bestBid, spread, ... }
  */
-export function computeEdge({ modelUp, modelDown, marketYes, marketNo }) {
-  const edgeUp = marketYes !== null && Number.isFinite(marketYes)
-    ? modelUp - marketYes
+export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbookUp, orderbookDown }) {
+  // Effective price = bestAsk (what you'd actually pay), not mid
+  const effectiveUp = orderbookUp?.bestAsk ?? marketYes;
+  const effectiveDown = orderbookDown?.bestAsk ?? marketNo;
+
+  // Spread penalty: half-spread as execution cost estimate
+  const spreadPenaltyUp = (orderbookUp?.spread ?? 0) * 0.5;
+  const spreadPenaltyDown = (orderbookDown?.spread ?? 0) * 0.5;
+
+  const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
+    ? modelUp - effectiveUp - spreadPenaltyUp
     : null;
-  const edgeDown = marketNo !== null && Number.isFinite(marketNo)
-    ? modelDown - marketNo
+  const edgeDown = effectiveDown !== null && Number.isFinite(effectiveDown)
+    ? modelDown - effectiveDown - spreadPenaltyDown
     : null;
 
   let bestSide = null;
@@ -50,7 +73,7 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo }) {
     bestEdge = edgeDown;
   }
 
-  return { edgeUp, edgeDown, bestSide, bestEdge };
+  return { edgeUp, edgeDown, bestSide, bestEdge, spreadPenaltyUp, spreadPenaltyDown };
 }
 
 /**
@@ -73,8 +96,8 @@ export function countAgreement(breakdown, side) {
     if (!entry || entry.weight === 0) continue;
 
     const signal = entry.signal?.toUpperCase() ?? '';
-    if (side === 'UP' && (signal.includes('UP') || signal === 'UP (CONFIRMED)')) count++;
-    if (side === 'DOWN' && (signal.includes('DOWN') || signal === 'DOWN (CONFIRMED)')) count++;
+    if (side === 'UP' && signal.includes('UP')) count++;
+    if (side === 'DOWN' && signal.includes('DOWN')) count++;
   }
 
   return count;
@@ -105,6 +128,7 @@ export function decide({
   multiTfConfirmed = false,
   mlConfidence = null,
   mlAgreesWithRules = false,
+  regimeInfo = null,
 }) {
   // ═══ Phase thresholds v2 (stricter) ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
@@ -135,9 +159,27 @@ export function decide({
     preferMultiTf = false;
   }
 
-  // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= 0.40),
+  // ═══ Regime-adaptive thresholds ═══
+  if (regimeInfo && regimeInfo.regime) {
+    const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.85);
+    switch (regimeInfo.regime) {
+      case 'trending':
+        minEdge = Math.max(minEdge - 0.02 * scale, 0.04);
+        minProb = Math.max(minProb - 0.02 * scale, 0.52);
+        break;
+      case 'choppy':
+        minEdge = Math.min(minEdge + 0.03 * scale, 0.25);
+        minProb = Math.min(minProb + 0.03 * scale, 0.70);
+        break;
+      case 'mean_reverting':
+        minEdge = Math.min(minEdge + 0.01 * scale, 0.20);
+        break;
+    }
+  }
+
+  // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= HIGH),
   // the model's 75%+ accuracy justifies relaxing thresholds by 2%
-  const mlIsHighConf = mlConfidence !== null && mlConfidence >= 0.40;
+  const mlIsHighConf = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
   if (mlIsHighConf && mlAgreesWithRules) {
     minEdge = Math.max(minEdge - 0.02, 0.04);
     minProb = Math.max(minProb - 0.02, 0.52);
@@ -148,63 +190,72 @@ export function decide({
   const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 99;
 
   // Check UP side
+  // MultiTF waiver: minAgreement+1 indicators can waive multiTF requirement
+  const multiTfWaiver = minAgreement + 1;
+
   const upEdgePass = edgeUp !== null && edgeUp >= minEdge;
   const upProbPass = modelUp >= minProb;
   const upAgreementPass = upAgreement >= minAgreement;
-  const upMultiTfPass = !preferMultiTf || multiTfConfirmed || upAgreement >= 4; // 4+ agreement waives multiTF
+  const upMultiTfPass = !preferMultiTf || multiTfConfirmed || upAgreement >= multiTfWaiver;
   const upPass = upEdgePass && upProbPass && upAgreementPass && upMultiTfPass;
 
   // Check DOWN side
   const downEdgePass = edgeDown !== null && edgeDown >= minEdge;
   const downProbPass = modelDown >= minProb;
   const downAgreementPass = downAgreement >= minAgreement;
-  const downMultiTfPass = !preferMultiTf || multiTfConfirmed || downAgreement >= 4;
+  const downMultiTfPass = !preferMultiTf || multiTfConfirmed || downAgreement >= multiTfWaiver;
   const downPass = downEdgePass && downProbPass && downAgreementPass && downMultiTfPass;
+
+  const regimeLabel = regimeInfo?.label ?? regimeInfo?.regime ?? null;
 
   if (upPass && downPass) {
     if (edgeUp >= edgeDown) {
-      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
+      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
     } else {
-      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
+      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
     }
   }
 
   if (upPass) {
-    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
+    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
   }
 
   if (downPass) {
-    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules);
+    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
   }
 
   // No entry — explain why
   const bestEdge = Math.max(edgeUp ?? -Infinity, edgeDown ?? -Infinity);
-  const bestSide = (edgeUp ?? -1) >= (edgeDown ?? -1) ? 'UP' : 'DOWN';
-  const bestProb = bestSide === 'UP' ? modelUp : modelDown;
-  const bestAgree = bestSide === 'UP' ? upAgreement : downAgreement;
+  const hasValidEdge = Number.isFinite(bestEdge);
+  const bestSide = edgeUp == null && edgeDown == null ? null
+    : (edgeUp ?? -1) >= (edgeDown ?? -1) ? 'UP' : 'DOWN';
+  const bestProb = bestSide === 'UP' ? modelUp : bestSide === 'DOWN' ? modelDown : Math.max(modelUp, modelDown);
+  const bestAgree = bestSide === 'UP' ? upAgreement : bestSide === 'DOWN' ? downAgreement : Math.max(upAgreement, downAgreement);
 
   const reasons = [];
-  if (bestEdge < minEdge) reasons.push(`edge ${(bestEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}%`);
+  if (!hasValidEdge) reasons.push('no valid edge');
+  else if (bestEdge < minEdge) reasons.push(`edge ${(bestEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}%`);
   if (bestProb < minProb) reasons.push(`prob ${(bestProb * 100).toFixed(0)}% < ${(minProb * 100).toFixed(0)}%`);
   if (bestAgree < minAgreement) reasons.push(`agree ${bestAgree} < ${minAgreement}`);
-  if (preferMultiTf && !multiTfConfirmed && bestAgree < 4) reasons.push('no multiTF confirm');
+  if (preferMultiTf && !multiTfConfirmed && bestAgree < multiTfWaiver) reasons.push('no multiTF confirm');
+  if (regimeLabel) reasons.push(regimeLabel);
 
   return {
     action: 'WAIT',
     side: null,
     confidence: 'NONE',
     phase,
-    reason: `${bestSide}: ${reasons.join(', ')}`,
+    reason: `${bestSide ?? 'N/A'}: ${reasons.join(', ')}`,
   };
 }
 
-function makeEnter(side, edge, prob, agreement, phase, minEdge, minProb, mlHighConf = false, mlAgrees = false) {
+function makeEnter(side, edge, prob, agreement, phase, minEdge, minProb, mlHighConf = false, mlAgrees = false, regimeLabel = null) {
   return {
     action: 'ENTER',
     side,
     confidence: getConfidence(edge, prob, agreement, mlHighConf, mlAgrees),
     phase,
-    reason: `${side} edge ${(edge * 100).toFixed(1)}%≥${(minEdge * 100).toFixed(0)}%, prob ${(prob * 100).toFixed(0)}%≥${(minProb * 100).toFixed(0)}%, ${agreement} indicators agree${mlHighConf ? ', ML high-conf' : ''}`,
+    reason: `${side} edge ${(edge * 100).toFixed(1)}%≥${(minEdge * 100).toFixed(0)}%, prob ${(prob * 100).toFixed(0)}%≥${(minProb * 100).toFixed(0)}%, ${agreement} indicators agree${mlHighConf ? ', ML high-conf' : ''}${regimeLabel ? `, ${regimeLabel}` : ''}`,
   };
 }
 

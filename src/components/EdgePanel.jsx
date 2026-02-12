@@ -1,10 +1,11 @@
 import React, { memo } from 'react';
 import { formatProbPct } from '../utils.js';
+import { ML_CONFIDENCE } from '../config.js';
 
 function EdgePanel({ data }) {
   if (!data) return null;
 
-  const { edge, pLong, pShort, ruleUp, marketUp, marketDown, rec, ml } = data;
+  const { edge, pLong, pShort, ruleUp, marketUp, marketDown, rec, ml, arbitrage } = data;
 
   const edgeUpPct = edge?.edgeUp !== null ? (edge.edgeUp * 100).toFixed(1) : '-';
   const edgeDownPct = edge?.edgeDown !== null ? (edge.edgeDown * 100).toFixed(1) : '-';
@@ -18,7 +19,7 @@ function EdgePanel({ data }) {
   const mlConf = ml?.confidence;
   const mlConfPct = mlConf !== null && mlConf !== undefined ? (mlConf * 100).toFixed(1) : null;
   const mlConfColor = mlConf !== null
-    ? mlConf >= 0.4 ? 'c-green' : mlConf >= 0.2 ? 'c-yellow' : 'c-red'
+    ? mlConf >= ML_CONFIDENCE.HIGH ? 'c-green' : mlConf >= ML_CONFIDENCE.MEDIUM ? 'c-yellow' : 'c-red'
     : 'c-muted';
 
   // Gate indicators — thresholds match edge.js decide()
@@ -26,7 +27,7 @@ function EdgePanel({ data }) {
   const bestProb = Math.max(pLong ?? 0, pShort ?? 0);
   let edgePassThreshold = phase === 'EARLY' ? 0.08 : phase === 'MID' ? 0.10 : phase === 'LATE' ? 0.12 : 0.15;
   let probPassThreshold = phase === 'EARLY' ? 0.60 : phase === 'MID' ? 0.58 : phase === 'LATE' ? 0.57 : 0.56;
-  const gateMlConf = mlConf !== null && mlConf >= 0.40;
+  const gateMlConf = mlConf !== null && mlConf >= ML_CONFIDENCE.HIGH;
 
   // Mirror ML relaxation from edge.js: when ML high-conf + agrees with RULES, thresholds drop 2%
   // Use ruleUp (pure rule-based prob) not pLong (ensemble) to match edge.js logic
@@ -100,6 +101,30 @@ function EdgePanel({ data }) {
         </span>
       </div>
 
+      {/* Spread penalties */}
+      {(edge?.spreadPenaltyUp > 0 || edge?.spreadPenaltyDown > 0) && (
+        <div className="data-row">
+          <span className="data-row__label">Spread Cost</span>
+          <span className="data-row__value c-yellow" style={{ fontSize: '0.7rem' }}>
+            {edge.spreadPenaltyUp > 0 ? `UP -${(edge.spreadPenaltyUp * 100).toFixed(1)}%` : ''}
+            {edge.spreadPenaltyUp > 0 && edge.spreadPenaltyDown > 0 ? ' | ' : ''}
+            {edge.spreadPenaltyDown > 0 ? `DN -${(edge.spreadPenaltyDown * 100).toFixed(1)}%` : ''}
+          </span>
+        </div>
+      )}
+
+      {/* Arbitrage */}
+      {arbitrage && (
+        <div className="data-row">
+          <span className="data-row__label">Arbitrage</span>
+          <span className={`data-row__value ${arbitrage.found ? 'c-green' : 'c-muted'}`} style={{ fontWeight: arbitrage.found ? 700 : 400 }}>
+            {arbitrage.found
+              ? `${arbitrage.profitPct.toFixed(1)}% profit ($${arbitrage.netProfit.toFixed(3)})${!arbitrage.spreadHealthy ? ' [wide spread]' : ''}`
+              : `No (cost $${arbitrage.totalCost?.toFixed(3) ?? '?'})`}
+          </span>
+        </div>
+      )}
+
       {/* ML Confidence */}
       <div className="data-row">
         <span className="data-row__label">ML Confidence</span>
@@ -144,6 +169,8 @@ export default memo(EdgePanel, (prev, next) => {
   return (
     a.edge?.edgeUp === b.edge?.edgeUp &&
     a.edge?.edgeDown === b.edge?.edgeDown &&
+    a.edge?.spreadPenaltyUp === b.edge?.spreadPenaltyUp &&
+    a.edge?.spreadPenaltyDown === b.edge?.spreadPenaltyDown &&
     a.pLong === b.pLong &&
     a.pShort === b.pShort &&
     a.marketUp === b.marketUp &&
@@ -152,6 +179,8 @@ export default memo(EdgePanel, (prev, next) => {
     a.rec?.confidence === b.rec?.confidence &&
     a.rec?.reason === b.rec?.reason &&
     a.ml?.confidence === b.ml?.confidence &&
-    a.ruleUp === b.ruleUp
+    a.ruleUp === b.ruleUp &&
+    a.arbitrage?.found === b.arbitrage?.found &&
+    a.arbitrage?.netProfit === b.arbitrage?.netProfit
   );
 });

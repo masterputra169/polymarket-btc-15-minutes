@@ -1,21 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { CONFIG } from '../config.js';
+import { CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE } from '../config.js';
 import { useThrottledPricePair } from './useThrottledState.js';
 
 /**
  * ═══ Polymarket Chainlink LiveData WS — v3 (Memory Optimized) ═══
- *
- * Optimizations:
- * - Throttled price state (2x/sec flush)
- * - Ping 15s · heartbeat 30s · backoff 30s max
- * - Visibility recovery · conditional logging
  */
 
-const PING_MS           = 15_000;
-const HEARTBEAT_DEAD_MS = 30_000;
-const HEARTBEAT_CHK_MS  = 10_000;
-const RECONNECT_MAX_MS  = 30_000;
-const THROTTLE_MS       = 500;
+const PING_MS           = WS_POLYMARKET_LIVE.pingMs;
+const HEARTBEAT_DEAD_MS = WS_POLYMARKET_LIVE.heartbeatDeadMs;
+const HEARTBEAT_CHK_MS  = WS_DEFAULTS.heartbeatCheckMs;
+const RECONNECT_MAX_MS  = WS_DEFAULTS.reconnectMaxMs;
+const THROTTLE_MS       = WS_DEFAULTS.throttleMs;
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 

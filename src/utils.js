@@ -97,6 +97,36 @@ export function narrativeFromSlope(slope) {
   return Number(slope) > 0 ? 'LONG' : 'SHORT';
 }
 
+export function getSessionName() {
+  const h = new Date().getUTCHours();
+  if (h >= 13 && h < 16) return 'EU/US Overlap';
+  if (h >= 13 && h < 22) return 'US';
+  if (h >= 8 && h < 16) return 'Europe';
+  if (h >= 0 && h < 8) return 'Asia';
+  return 'Off-hours';
+}
+
+/**
+ * Shallow-compare two flat objects.
+ * Returns true if any top-level value changed.
+ * Skips deep compare — for nested objects we always update.
+ */
+export function shallowChanged(prev, next) {
+  if (prev === null || prev === undefined) return true;
+  const keys = Object.keys(next);
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const pv = prev[k];
+    const nv = next[k];
+    if (typeof nv !== 'object' || nv === null) {
+      if (pv !== nv) return true;
+    } else {
+      return true;
+    }
+  }
+  return false;
+}
+
 function toNumber(x) {
   const n = Number(x);
   return Number.isFinite(n) ? n : null;

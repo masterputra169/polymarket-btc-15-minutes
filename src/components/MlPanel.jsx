@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import { formatProbPct } from '../utils.js';
+import { ML_CONFIDENCE } from '../config.js';
 
 function MLPanel({ data }) {
   if (!data) return null;
@@ -32,13 +33,13 @@ function MLPanel({ data }) {
   // Confidence tier
   const getConfTier = (conf) => {
     if (conf === null || conf === undefined) return { label: '-', color: 'c-muted' };
-    if (conf >= 0.4) return { label: 'HIGH', color: 'c-green' };
-    if (conf >= 0.2) return { label: 'MEDIUM', color: 'c-yellow' };
+    if (conf >= ML_CONFIDENCE.HIGH) return { label: 'HIGH', color: 'c-green' };
+    if (conf >= ML_CONFIDENCE.MEDIUM) return { label: 'MEDIUM', color: 'c-yellow' };
     return { label: 'LOW', color: 'c-red' };
   };
 
   const mlConfTier = getConfTier(mlConfidence);
-  const isHighConfidence = mlConfidence !== null && mlConfidence >= 0.40;
+  const isHighConfidence = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
 
   // Alpha bar width
   const alphaBarPct = alpha !== null ? Math.round(alpha * 100) : 0;

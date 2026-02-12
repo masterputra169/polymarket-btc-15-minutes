@@ -1,23 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { CONFIG } from '../config.js';
+import { CONFIG, WS_DEFAULTS, WS_BINANCE } from '../config.js';
 import { useThrottledPricePair } from './useThrottledState.js';
 
 /**
  * ═══ Binance WebSocket Stream — v3 (Memory Optimized) ═══
- *
- * Optimizations:
- * - Throttled price state: ref updated every tick, state flushed 2x/sec
- * - Heartbeat detection: 20s silence → force reconnect
- * - Visibility recovery: instant reconnect when tab focused
- * - No console.log spam in production
- *
- * Memory impact: ~90% fewer re-renders from Binance ticks
  */
 
-const HEARTBEAT_DEAD_MS = 20_000;
-const HEARTBEAT_CHK_MS  = 5_000;
-const RECONNECT_MAX_MS  = 30_000;
-const THROTTLE_MS       = 500;       // flush price to state 2x/sec
+const HEARTBEAT_DEAD_MS = WS_BINANCE.heartbeatDeadMs;
+const HEARTBEAT_CHK_MS  = WS_BINANCE.heartbeatCheckMs;
+const RECONNECT_MAX_MS  = WS_DEFAULTS.reconnectMaxMs;
+const THROTTLE_MS       = WS_DEFAULTS.throttleMs;
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 

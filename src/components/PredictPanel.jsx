@@ -1,5 +1,6 @@
 import React, { memo } from 'react';
 import { formatProbPct } from '../utils.js';
+import { ML_CONFIDENCE } from '../config.js';
 
 function PredictPanel({ data }) {
   if (!data) return null;
@@ -71,7 +72,7 @@ function PredictPanel({ data }) {
   // ML confidence tier label
   const mlConf = ml?.confidence;
   const mlConfLabel = mlConf !== null && mlConf !== undefined
-    ? mlConf >= 0.4 ? 'HIGH' : mlConf >= 0.2 ? 'MED' : 'LOW'
+    ? mlConf >= ML_CONFIDENCE.HIGH ? 'HIGH' : mlConf >= ML_CONFIDENCE.MEDIUM ? 'MED' : 'LOW'
     : null;
 
   return (

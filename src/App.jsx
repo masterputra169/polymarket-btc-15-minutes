@@ -1,9 +1,5 @@
 import React, { useMemo, memo } from 'react';
-import { useBinanceStream } from './hooks/useBinanceStream.js';
-import { usePolymarketChainlinkStream } from './hooks/usePolymarketChainlinkStream.js';
-import { useChainlinkWssStream } from './hooks/useChainlinkWssStream.js';
-import { usePolymarketClobStream } from './hooks/usePolymarketClobStream.js';
-import { useMarketData } from './hooks/useMarketData.js';
+import { useBotData } from './hooks/useBotData.js';
 import { useCountdown } from './hooks/useCountdown.js';
 import CurrentPriceCard from './components/CurrentPriceCard.jsx';
 import TAIndicators from './components/TAIndicators.jsx';
@@ -11,6 +7,9 @@ import PredictPanel from './components/PredictPanel.jsx';
 import PolymarketPanel from './components/PolymarketPanel.jsx';
 import EdgePanel from './components/EdgePanel.jsx';
 import MLPanel from './components/MlPanel.jsx';
+import AccuracyPanel from './components/AccuracyPanel.jsx';
+import BetSizingPanel from './components/BetSizingPanel.jsx';
+import BotPanel from './components/BotPanel.jsx';
 import SessionInfo from './components/SessionInfo.jsx';
 
 // ═══ React.memo: StatusDot only re-renders when connected/label changes ═══
@@ -25,56 +24,26 @@ const StatusDot = memo(function StatusDot({ connected, label }) {
 });
 
 export default function App() {
-  // Data sources
-  const binance = useBinanceStream();
-  const polymarketWs = usePolymarketChainlinkStream();
-  const chainlinkWss = useChainlinkWssStream();
+  // ═══ Single data source: bot via WebSocket ═══
+  const { data, loading, error, setBankroll, botConnected, binancePrice, binancePrevPrice } = useBotData();
 
-  // ═══ Real-time CLOB WebSocket ═══
-  const clobWs = usePolymarketClobStream();
-
-  // Pass CLOB WS data to useMarketData so it can use real-time prices
-  const { data, loading, error } = useMarketData({ clobWs });
-
-  // Smooth 1-second countdown (instead of 5s poll jumps)
+  // Smooth 1-second countdown (local timer, no network)
   const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
 
-  // Chainlink price priority: Polymarket WS > Chainlink WSS > Chainlink HTTP RPC
+  // Chainlink price: bot resolves priority (Polymarket WS > Chainlink WSS > RPC)
   const chainlinkResolved = useMemo(() => {
-    if (polymarketWs.price !== null) {
-      return {
-        price: polymarketWs.price,
-        prevPrice: polymarketWs.prevPrice,
-        connected: polymarketWs.connected,
-        source: 'Polymarket WS',
-      };
-    }
-    if (chainlinkWss.price !== null) {
-      return {
-        price: chainlinkWss.price,
-        prevPrice: chainlinkWss.prevPrice,
-        connected: chainlinkWss.connected,
-        source: 'Chainlink WSS',
-      };
-    }
-    if (data?.chainlinkRpc?.price !== null && data?.chainlinkRpc?.price !== undefined) {
+    if (data?.chainlinkRpc?.price != null) {
       return {
         price: data.chainlinkRpc.price,
         prevPrice: null,
         connected: true,
-        source: 'Chainlink RPC',
+        source: data.chainlinkRpc.source ?? 'Chainlink RPC',
       };
     }
-    return {
-      price: null,
-      prevPrice: null,
-      connected: false,
-      source: 'None',
-    };
-  }, [polymarketWs, chainlinkWss, data?.chainlinkRpc]);
+    return { price: null, prevPrice: null, connected: false, source: 'None' };
+  }, [data?.chainlinkRpc?.price, data?.chainlinkRpc?.source]);
 
-  const chainlinkConnected =
-    polymarketWs.connected || chainlinkWss.connected || (data?.chainlinkRpc?.price != null);
+  const chainlinkConnected = data?.chainlinkRpc?.price != null;
 
   // ═══════════════════════════════════════════════════════════════
   // useMemo DATA SLICING — stable references for child components
@@ -83,23 +52,22 @@ export default function App() {
 
   // Header status deps
   const mlStatus = data?.ml?.status;
-  const hasError = !!error;
 
-  // CurrentPriceCard: only binance + chainlink + timer
+  // CurrentPriceCard: binance + chainlink + timer
   const priceCardProps = useMemo(() => ({
     chainlinkPrice: chainlinkResolved.price,
     chainlinkPrevPrice: chainlinkResolved.prevPrice,
     chainlinkConnected,
     chainlinkSource: chainlinkResolved.source,
-    binancePrice: binance.price ?? data?.lastPrice,
-    binancePrevPrice: binance.prevPrice,
-    binanceConnected: binance.connected,
+    binancePrice: binancePrice ?? data?.lastPrice,
+    binancePrevPrice,
+    binanceConnected: data?.binanceConnected ?? false,
     timeLeftMin: smoothTimeLeft ?? data?.timeLeftMin,
     priceToBeat: data?.priceToBeat,
   }), [
     chainlinkResolved.price, chainlinkResolved.prevPrice,
     chainlinkConnected, chainlinkResolved.source,
-    binance.price, binance.prevPrice, binance.connected,
+    binancePrice, binancePrevPrice, data?.binanceConnected,
     data?.lastPrice, smoothTimeLeft, data?.timeLeftMin, data?.priceToBeat,
   ]);
 
@@ -159,12 +127,10 @@ export default function App() {
       regimeInfo: data.regimeInfo,
       bb: data.bb,
       atr: data.atr,
-      // New indicators
       volDelta: data.volDelta,
       emaCross: data.emaCross,
       stochRsi: data.stochRsi,
       fundingRate: data.fundingRate,
-      // Hidden features exposed
       volumeRatio: data.volumeRatio,
       vwapCrossCount: data.vwapCrossCount,
       failedVwapReclaim: data.failedVwapReclaim,
@@ -178,12 +144,10 @@ export default function App() {
     data?.realizedVol, data?.volProfile, data?.multiTfConfirm, data?.regimeInfo,
     data?.bb?.width, data?.bb?.percentB, data?.bb?.squeeze,
     data?.atr?.atr, data?.atr?.atrRatio,
-    // New indicators
     data?.volDelta?.buyRatio, data?.volDelta?.netDeltaPct,
     data?.emaCross?.distancePct, data?.emaCross?.cross,
     data?.stochRsi?.k, data?.stochRsi?.d,
     data?.fundingRate?.ratePct,
-    // Hidden features
     data?.volumeRatio, data?.vwapCrossCount, data?.failedVwapReclaim,
   ]);
 
@@ -213,7 +177,7 @@ export default function App() {
     data?.priceToBeat, data?.marketQuestion, smoothTimeLeft, data?.settlementLeftMin,
   ]);
 
-  // EdgePanel: edge, recommendation, ML confidence
+  // EdgePanel: edge, recommendation, ML confidence, arbitrage
   const edgeData = useMemo(() => {
     if (!data) return null;
     return {
@@ -227,11 +191,13 @@ export default function App() {
       timeLeftMin: data.timeLeftMin,
       feedbackStats: data.feedbackStats,
       ml: data.ml,
+      regimeInfo: data.regimeInfo,
+      arbitrage: data.arbitrage,
     };
   }, [
     data?.edge, data?.rec, data?.pLong, data?.pShort, data?.ruleUp,
     data?.marketUp, data?.marketDown, data?.timeLeftMin, data?.feedbackStats,
-    data?.ml?.confidence,
+    data?.ml?.confidence, data?.regimeInfo, data?.arbitrage,
   ]);
 
   // MLPanel: ML-specific + rule prob
@@ -246,6 +212,21 @@ export default function App() {
     };
   }, [data?.ml, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
 
+  // AccuracyPanel: feedback + detailed stats
+  const accuracyData = useMemo(() => {
+    if (!data) return null;
+    return {
+      feedbackStats: data.feedbackStats,
+      detailedFeedback: data.detailedFeedback,
+    };
+  }, [data?.feedbackStats, data?.detailedFeedback?.totalSettled]);
+
+  // BetSizingPanel: bet sizing output
+  const betSizingData = useMemo(() => {
+    if (!data) return null;
+    return { betSizing: data.betSizing, rec: data.rec, regimeInfo: data.regimeInfo };
+  }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll]);
+
   return (
     <div className="app-container">
       {/* Header */}
@@ -255,29 +236,22 @@ export default function App() {
           Polymarket BTC 15m Assistant
         </div>
         <div className="app-header__status">
-          <StatusDot connected={binance.connected} label="Binance" />
+          <StatusDot connected={data?.binanceConnected ?? false} label="Binance" />
           <span style={{ color: 'var(--text-dim)' }}>|</span>
           <StatusDot connected={chainlinkConnected} label={`Chainlink (${chainlinkResolved.source})`} />
           <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={clobWs.connected} label={`CLOB ${clobWs.connected ? 'WS' : 'REST'}`} />
+          <StatusDot connected={data?.clobWsConnected ?? false} label={`CLOB ${data?.clobWsConnected ? 'WS' : 'REST'}`} />
           <span style={{ color: 'var(--text-dim)' }}>|</span>
           <StatusDot connected={mlStatus === 'ready'} label="ML" />
           <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={!hasError} label="Data" />
+          <StatusDot connected={botConnected} label="Bot" />
         </div>
       </header>
 
-      {/* Connection errors */}
-      {error && (
-        <div className="connection-banner connection-banner--error">
-          ⚠ Data fetch error: {error}
-        </div>
-      )}
-
-      {/* Chainlink fallback notice */}
-      {!polymarketWs.connected && chainlinkResolved.source !== 'Polymarket WS' && chainlinkResolved.price !== null && (
+      {/* Bot disconnected warning */}
+      {!botConnected && data && (
         <div className="connection-banner connection-banner--warning">
-          ⚠ Polymarket WS unavailable — using fallback: {chainlinkResolved.source}
+          Bot disconnected — showing last received data
         </div>
       )}
 
@@ -285,13 +259,18 @@ export default function App() {
       {loading && !data && (
         <div className="loading-screen">
           <div className="loading-screen__spinner" />
-          <div className="loading-screen__text">Connecting to markets...</div>
+          <div className="loading-screen__text">
+            {botConnected ? 'Receiving data...' : 'Waiting for bot...'}
+          </div>
         </div>
       )}
 
       {/* Dashboard Grid */}
       {data && (
         <div className="dashboard-grid">
+          {/* Row 0: Bot Status (full width) */}
+          <BotPanel connected={botConnected} data={data} />
+
           {/* Row 1: Price + Timer (full width) */}
           <CurrentPriceCard {...priceCardProps} />
 
@@ -300,20 +279,26 @@ export default function App() {
           <TAIndicators data={taData} />
 
           {/* Row 3: Polymarket + Edge */}
-          <PolymarketPanel data={polyData} clobWsConnected={clobWs.connected} />
+          <PolymarketPanel data={polyData} clobWsConnected={data?.clobWsConnected ?? false} />
           <EdgePanel data={edgeData} />
 
           {/* Row 4: ML Engine (full width) */}
           <MLPanel data={mlData} />
 
-          {/* Row 5: Session (full width) */}
+          {/* Row 5: Bet Sizing (full width) */}
+          <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />
+
+          {/* Row 6: Accuracy Dashboard (full width) */}
+          <AccuracyPanel data={accuracyData} />
+
+          {/* Row 7: Session (full width) */}
           <SessionInfo />
         </div>
       )}
 
       {/* Footer */}
       <footer className="app-footer">
-        ⚠ Not financial advice. Use at your own risk. — created by @krajekis
+        Not financial advice. Use at your own risk. — created by @krajekis
       </footer>
     </div>
   );

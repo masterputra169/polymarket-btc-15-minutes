@@ -9,33 +9,7 @@
  * More responsive than SMA for 15-min prediction windows.
  */
 
-/**
- * Compute EMA for a given period.
- * @param {number[]} data - Price array
- * @param {number} period - EMA period
- * @returns {number[]} EMA series
- */
-function ema(data, period) {
-  if (!data || data.length < period) return [];
-
-  const k = 2 / (period + 1);
-  const result = new Array(data.length);
-
-  // Seed with SMA of first `period` values
-  let sum = 0;
-  for (let i = 0; i < period; i++) {
-    sum += data[i];
-    result[i] = null;
-  }
-  result[period - 1] = sum / period;
-
-  // EMA from period onwards
-  for (let i = period; i < data.length; i++) {
-    result[i] = data[i] * k + result[i - 1] * (1 - k);
-  }
-
-  return result;
-}
+import { emaSeries as ema } from './math.js';
 
 /**
  * Compute EMA 8/21 crossover metrics.

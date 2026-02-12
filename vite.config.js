@@ -24,6 +24,16 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/binance-api/, ''),
       },
+      '/fapi-api': {
+        target: 'https://fapi.binance.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/fapi-api/, ''),
+      },
+      '/bybit-api': {
+        target: 'https://api.bybit.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/bybit-api/, ''),
+      },
     },
   },
 });

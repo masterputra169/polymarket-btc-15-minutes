@@ -1,0 +1,141 @@
+/**
+ * Chainlink Direct WSS stream for Node.js bot.
+ * Real-time BTC/USD price via Polygon WebSocket RPC.
+ * Ported from useChainlinkWssStream.js — same protocol, no React.
+ */
+
+import { WebSocket } from 'ws';
+import { CONFIG, WS_CHAINLINK, WS_DEFAULTS } from '../config.js';
+import { createLogger } from '../logger.js';
+
+const log = createLogger('ChainlinkWSS');
+
+const WS_URLS = CONFIG.chainlink?.polygonWssUrls || ['wss://polygon-bor-rpc.publicnode.com'];
+const PING_MS = WS_CHAINLINK.pingMs;                     // 15s
+const HEARTBEAT_DEAD_MS = WS_CHAINLINK.heartbeatDeadMs;  // 45s
+const HEARTBEAT_CHECK_MS = WS_DEFAULTS.heartbeatCheckMs;  // 10s
+const RECONNECT_MAX_MS = WS_DEFAULTS.reconnectMaxMs;      // 10s
+
+let ws = null;
+let reconnectTimer = null;
+let reconnectMs = 1000;
+let pingTimer = null;
+let hbTimer = null;
+let lastMsgMs = 0;
+let urlIdx = 0;
+
+// Public state — read by loop.js
+let _price = null;
+let _prevPrice = null;
+let _connected = false;
+let _lastUpdate = 0;
+
+export function getPrice() { return _price; }
+export function getPrevPrice() { return _prevPrice; }
+export function isConnected() { return _connected; }
+export function getLastUpdate() { return _lastUpdate; }
+
+function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
+function stopHb() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
+function stopTimers() { stopPing(); stopHb(); }
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  // Rotate to next URL on reconnect
+  urlIdx = (urlIdx + 1) % WS_URLS.length;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, reconnectMs);
+  reconnectMs = Math.min(RECONNECT_MAX_MS, reconnectMs * 2);
+}
+
+export function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+  const url = WS_URLS[urlIdx];
+  if (!url) return;
+
+  try {
+    ws = new WebSocket(url);
+
+    ws.on('open', () => {
+      log.info(`Connected to ${url}`);
+      _connected = true;
+      reconnectMs = 1000;
+      lastMsgMs = Date.now();
+
+      // Ping every 15s
+      stopPing();
+      pingTimer = setInterval(() => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
+        }
+      }, PING_MS);
+
+      // Heartbeat: 45s dead timeout
+      stopHb();
+      hbTimer = setInterval(() => {
+        if (Date.now() - lastMsgMs > HEARTBEAT_DEAD_MS) {
+          log.warn('Silent — forcing reconnect');
+          try { ws.close(); } catch {}
+        }
+      }, HEARTBEAT_CHECK_MS);
+
+      // Subscribe to BTC/USD feed
+      try {
+        ws.send(JSON.stringify({ type: 'subscribe', feed: 'BTC/USD' }));
+      } catch {}
+    });
+
+    ws.on('message', (raw) => {
+      lastMsgMs = Date.now();
+      try {
+        const str = typeof raw === 'string' ? raw : raw.toString();
+        const data = JSON.parse(str);
+        let p = null;
+
+        // Multiple possible formats from different Polygon WSS providers
+        if (data.answer !== undefined) {
+          p = Number(data.answer);
+          if (data.decimals) p = p / Math.pow(10, Number(data.decimals));
+        } else if (data.price !== undefined) {
+          p = Number(data.price);
+        } else if (data.result !== undefined) {
+          p = Number(data.result);
+        } else if (data.data?.price !== undefined) {
+          p = Number(data.data.price);
+        } else if (data.params?.result?.answer !== undefined) {
+          p = Number(BigInt(data.params.result.answer)) / 1e8;
+        }
+
+        if (p !== null && Number.isFinite(p) && p > 0) {
+          _prevPrice = _price;
+          _price = p;
+          _lastUpdate = Date.now();
+        }
+      } catch {}
+    });
+
+    ws.on('close', () => {
+      log.debug('Disconnected');
+      _connected = false;
+      ws = null;
+      stopTimers();
+      scheduleReconnect();
+    });
+
+    ws.on('error', () => {
+      try { ws.close(); } catch {}
+    });
+  } catch {
+    scheduleReconnect();
+  }
+}
+
+export function disconnect() {
+  if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  stopTimers();
+  if (ws) { try { ws.close(); } catch {} ws = null; }
+  _connected = false;
+}

@@ -4,15 +4,7 @@
  * Fast EMA responds in ~6 min, slow in ~13 min — both within market window.
  */
 
-function ema(data, period) {
-  if (!data || data.length === 0) return [];
-  const k = 2 / (period + 1);
-  const result = [data[0]];
-  for (let i = 1; i < data.length; i++) {
-    result.push(data[i] * k + result[i - 1] * (1 - k));
-  }
-  return result;
-}
+import { emaFull as ema } from './math.js';
 
 /**
  * Compute MACD values.

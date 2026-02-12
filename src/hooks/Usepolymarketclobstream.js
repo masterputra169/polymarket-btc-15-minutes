@@ -1,34 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { CONFIG } from '../config.js';
+import { CONFIG, WS_DEFAULTS, WS_CLOB } from '../config.js';
 import { toNumber } from '../utils.js';
 
 /**
  * ═══ Polymarket CLOB WebSocket stream — v3.1 (Market Switch Fix) ═══
- *
- * v3.1 fixes 3 bugs that caused CLOB WS death on market switch:
- *
- * BUG 1: setTokenIds tried to re-subscribe on SAME connection
- *   → Polymarket CLOB server often rejects/closes re-subscription
- *   → FIX: Force close old WS + open fresh connection on token change
- *
- * BUG 2: connect() guard blocked reconnection
- *   → `if (wsRef.current.readyState <= 1) return` prevented fresh connect
- *   → FIX: forceReconnect() kills existing WS first, then connects
- *
- * BUG 3: No subscription health check
- *   → Subscribe could fail silently, no data flows, appears "connected"
- *   → FIX: Subscription watchdog — if no data 8s after subscribe, reconnect
- *
- * Memory optimizations from v3 preserved:
- *   All WS messages write to refs, flush to state every 500ms.
  */
 
-const HEARTBEAT_DEAD_MS   = 30_000;
-const HEARTBEAT_CHK_MS    = 10_000;
-const RECONNECT_MAX_MS    = 30_000;
-const FLUSH_MS            = 500;
-const SUB_WATCHDOG_MS     = 8_000;  // If no data 8s after subscribe → reconnect
-const DATA_STALE_MS       = 45_000; // If no price data for 45s (even if PONG flows) → reconnect
+const HEARTBEAT_DEAD_MS   = WS_CLOB.heartbeatDeadMs;
+const HEARTBEAT_CHK_MS    = WS_DEFAULTS.heartbeatCheckMs;
+const RECONNECT_MAX_MS    = WS_DEFAULTS.reconnectMaxMs;
+const FLUSH_MS            = WS_DEFAULTS.throttleMs;
+const SUB_WATCHDOG_MS     = WS_CLOB.subWatchdogMs;
+const DATA_STALE_MS       = WS_CLOB.dataStaleMs;
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
@@ -131,6 +114,7 @@ export function usePolymarketClobStream() {
       ws.send(JSON.stringify({ assets_ids: ids, type: 'market' }));
       subscribedRef.current = true;
       dataReceivedRef.current = false;
+      lastDataMsgRef.current = Date.now(); // Reset so heartbeat stale check doesn't fire on old timestamp
       startSubWatchdog();
       if (IS_DEV) console.log('[CLOB WS] 📡 Subscribed to', ids.length, 'tokens — watchdog started');
     } catch (err) {
@@ -157,13 +141,13 @@ export function usePolymarketClobStream() {
     const bookData = { bestBid, bestAsk, spread, bidLiquidity: summarizeLevels(bids), askLiquidity: summarizeLevels(asks) };
 
     if (assetId === up) {
-      orderbookRef.current = { ...orderbookRef.current, up: bookData };
+      orderbookRef.current.up = bookData;
       if (bestBid !== null && bestAsk !== null) {
         upPrevRef.current = upPriceRef.current;
         upPriceRef.current = (bestBid + bestAsk) / 2;
       }
     } else if (assetId === down) {
-      orderbookRef.current = { ...orderbookRef.current, down: bookData };
+      orderbookRef.current.down = bookData;
       if (bestBid !== null && bestAsk !== null) {
         downPrevRef.current = downPriceRef.current;
         downPriceRef.current = (bestBid + bestAsk) / 2;
@@ -188,13 +172,13 @@ export function usePolymarketClobStream() {
         if (assetId === up) {
           upPrevRef.current = upPriceRef.current;
           upPriceRef.current = mid;
-          const ob = orderbookRef.current;
-          orderbookRef.current = { ...ob, up: { ...ob.up, bestBid, bestAsk, spread: bestAsk - bestBid } };
+          const side = orderbookRef.current.up;
+          side.bestBid = bestBid; side.bestAsk = bestAsk; side.spread = bestAsk - bestBid;
         } else if (assetId === down) {
           downPrevRef.current = downPriceRef.current;
           downPriceRef.current = mid;
-          const ob = orderbookRef.current;
-          orderbookRef.current = { ...ob, down: { ...ob.down, bestBid, bestAsk, spread: bestAsk - bestBid } };
+          const side = orderbookRef.current.down;
+          side.bestBid = bestBid; side.bestAsk = bestAsk; side.spread = bestAsk - bestBid;
         }
       }
     }
@@ -210,14 +194,17 @@ export function usePolymarketClobStream() {
     const p = toNumber(data.price);
     const { up, down } = tokenIdsRef.current;
     if (p === null) return;
-    if (assetId === up) {
+    // Only use last trade price as fallback when no book/price_change midpoint exists.
+    // Book midpoint is more representative than a single (possibly stale) trade.
+    if (assetId === up && upPriceRef.current === null) {
       upPrevRef.current = upPriceRef.current;
       upPriceRef.current = p;
-    } else if (assetId === down) {
+      dirtyRef.current = true;
+    } else if (assetId === down && downPriceRef.current === null) {
       downPrevRef.current = downPriceRef.current;
       downPriceRef.current = p;
+      dirtyRef.current = true;
     }
-    dirtyRef.current = true;
   }
 
   /* ── Flush timer: ref → state (single batch) ── */
@@ -229,7 +216,7 @@ export function usePolymarketClobStream() {
       setDownPrice(downPriceRef.current);
       setUpPrevPrice(upPrevRef.current);
       setDownPrevPrice(downPrevRef.current);
-      setOrderbook(orderbookRef.current);
+      setOrderbook({ up: { ...orderbookRef.current.up }, down: { ...orderbookRef.current.down } });
       setLastUpdate(Date.now());
     }, FLUSH_MS);
     return () => stopFlush();

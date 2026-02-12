@@ -49,17 +49,17 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   // ═══ TRENDING: Price far from VWAP + directional slope ═══
   // v2: Lowered slope threshold from 0.5→0.05 (slope is tiny per-candle value)
   if (vwapDist > 0.0008 && absSlope > 0.05) {
-    const volBoost = volumeRatio > 1.2 ? 0.15 : 0;
+    const volBoost = volumeRatio > 1.2 ? 0.10 : 0;
     regime = 'trending';
-    confidence = 0.6 + Math.min(vwapDist * 200, 0.25) + volBoost;
+    confidence = Math.min(0.6 + vwapDist * 200 + volBoost, 0.95);
     label = (hasSlope && vwapSlope > 0) ? 'Trending UP' : 'Trending DOWN';
     return { regime, confidence, label };
   }
 
-  // Also trending if very far from VWAP regardless of slope
+  // Also trending if very far from VWAP regardless of slope (weaker — no slope confirmation)
   if (vwapDist > 0.002) {
     regime = 'trending';
-    confidence = 0.55 + Math.min(vwapDist * 100, 0.3);
+    confidence = Math.min(0.50 + vwapDist * 80, 0.75); // lower cap: no slope = less certain
     label = price > vwap ? 'Trending UP (distance)' : 'Trending DOWN (distance)';
     return { regime, confidence, label };
   }
