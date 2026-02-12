@@ -197,7 +197,7 @@ export default function App() {
   }, [
     data?.edge, data?.rec, data?.pLong, data?.pShort, data?.ruleUp,
     data?.marketUp, data?.marketDown, data?.timeLeftMin, data?.feedbackStats,
-    data?.ml?.confidence, data?.regimeInfo, data?.arbitrage,
+    data?.ml?.confidence, data?.ml?.side, data?.regimeInfo, data?.arbitrage,
   ]);
 
   // MLPanel: ML-specific + rule prob

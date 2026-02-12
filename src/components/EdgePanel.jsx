@@ -119,7 +119,7 @@ function EdgePanel({ data }) {
           <span className="data-row__label">Arbitrage</span>
           <span className={`data-row__value ${arbitrage.found ? 'c-green' : 'c-muted'}`} style={{ fontWeight: arbitrage.found ? 700 : 400 }}>
             {arbitrage.found
-              ? `${arbitrage.profitPct.toFixed(1)}% profit ($${arbitrage.netProfit.toFixed(3)})${!arbitrage.spreadHealthy ? ' [wide spread]' : ''}`
+              ? `${arbitrage.profitPct?.toFixed(1) ?? '?'}% profit ($${arbitrage.netProfit?.toFixed(3) ?? '?'})${!arbitrage.spreadHealthy ? ' [wide spread]' : ''}`
               : `No (cost $${arbitrage.totalCost?.toFixed(3) ?? '?'})`}
           </span>
         </div>

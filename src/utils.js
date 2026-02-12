@@ -108,21 +108,15 @@ export function getSessionName() {
 
 /**
  * Shallow-compare two flat objects.
- * Returns true if any top-level value changed.
- * Skips deep compare — for nested objects we always update.
+ * Returns true if any top-level primitive value changed.
+ * Object values are compared by reference (skipped if same ref).
  */
 export function shallowChanged(prev, next) {
   if (prev === null || prev === undefined) return true;
   const keys = Object.keys(next);
   for (let i = 0; i < keys.length; i++) {
     const k = keys[i];
-    const pv = prev[k];
-    const nv = next[k];
-    if (typeof nv !== 'object' || nv === null) {
-      if (pv !== nv) return true;
-    } else {
-      return true;
-    }
+    if (prev[k] !== next[k]) return true;
   }
   return false;
 }

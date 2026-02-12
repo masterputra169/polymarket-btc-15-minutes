@@ -93,23 +93,23 @@ function BetSizingPanel({ data, setBankroll }) {
             <div>
               <div className="data-row" style={{ borderBottom: 'none', padding: '2px 0' }}>
                 <span className="data-row__label">Kelly (raw)</span>
-                <span className="data-row__value">{(bet.rawKelly * 100).toFixed(1)}%</span>
+                <span className="data-row__value">{bet.rawKelly != null ? (bet.rawKelly * 100).toFixed(1) : '-'}%</span>
               </div>
               <div className="data-row" style={{ borderBottom: 'none', padding: '2px 0' }}>
                 <span className="data-row__label">Kelly (frac)</span>
-                <span className="data-row__value">{(bet.rawKelly * bet.kellyFraction * 100).toFixed(1)}%</span>
+                <span className="data-row__value">{bet.rawKelly != null ? (bet.rawKelly * (bet.kellyFraction ?? 0.25) * 100).toFixed(1) : '-'}%</span>
               </div>
             </div>
             <div>
               <div className="data-row" style={{ borderBottom: 'none', padding: '2px 0' }}>
                 <span className="data-row__label">EV/Dollar</span>
                 <span className={`data-row__value ${bet.expectedValue > 0 ? 'c-green' : 'c-red'}`}>
-                  {bet.expectedValue > 0 ? '+' : ''}{bet.expectedValue.toFixed(2)}
+                  {bet.expectedValue != null ? `${bet.expectedValue > 0 ? '+' : ''}${bet.expectedValue.toFixed(2)}` : '-'}
                 </span>
               </div>
               <div className="data-row" style={{ borderBottom: 'none', padding: '2px 0' }}>
                 <span className="data-row__label">Adjusted</span>
-                <span className="data-row__value">{(bet.adjustedFraction * 100).toFixed(2)}%</span>
+                <span className="data-row__value">{bet.adjustedFraction != null ? (bet.adjustedFraction * 100).toFixed(2) : '-'}%</span>
               </div>
             </div>
           </div>
@@ -120,10 +120,10 @@ function BetSizingPanel({ data, setBankroll }) {
             marginBottom: 10,
           }}>
             {[
-              { label: 'Regime', adj: bet.regimeAdj },
-              { label: 'Accuracy', adj: bet.accuracyAdj },
-              { label: 'ML', adj: bet.mlAdj },
-              { label: 'Confidence', adj: bet.confidenceAdj },
+              { label: 'Regime', adj: bet.regimeAdj ?? { multiplier: 1.0, label: 'N/A' } },
+              { label: 'Accuracy', adj: bet.accuracyAdj ?? { multiplier: 1.0, label: 'N/A' } },
+              { label: 'ML', adj: bet.mlAdj ?? { multiplier: 1.0, label: 'N/A' } },
+              { label: 'Confidence', adj: bet.confidenceAdj ?? { multiplier: 1.0, label: 'N/A' } },
               { label: 'Execution', adj: bet.executionAdj ?? { multiplier: 1.0, label: 'N/A' } },
             ].map(({ label, adj }) => (
               <div key={label} style={{

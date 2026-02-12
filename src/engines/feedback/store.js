@@ -72,7 +72,7 @@ export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
       continue;
     }
 
-    if (priceToBeat !== null && timeLeftMin <= 0.1 && pred.marketSlug === currentSlug) {
+    if (priceToBeat !== null && timeLeftMin <= 0.5 && pred.marketSlug === currentSlug) {
       const result = btcPrice >= priceToBeat ? 'UP' : 'DOWN';
       pred.settled = true;
       pred.correct = pred.side === result;
