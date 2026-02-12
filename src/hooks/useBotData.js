@@ -19,7 +19,7 @@ const BOT_WS_URL = 'ws://localhost:3099';
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 const STALE_TIMEOUT_MS = 15_000;
-const FLUSH_MS = 1000; // Parse + flush to React 1x/sec (display doesn't need faster)
+const FLUSH_MS = 500; // Parse + flush to React 2x/sec
 
 export function useBotData() {
   const [connected, setConnected] = useState(false);
