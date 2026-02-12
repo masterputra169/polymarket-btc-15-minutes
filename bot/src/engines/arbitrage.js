@@ -42,7 +42,7 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
 
   const totalCost = askUp + askDown;
   const grossProfit = 1.00 - totalCost;            // guaranteed payout = $1.00
-  const fees = grossProfit > 0 ? grossProfit * FEE_RATE : 0;
+  const fees = grossProfit > 0 ? Math.round(grossProfit * FEE_RATE * 10000) / 10000 : 0;
   const netProfit = grossProfit - fees;
 
   // Spread health — wide spreads mean bestAsk is unreliable

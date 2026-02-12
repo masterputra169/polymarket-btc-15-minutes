@@ -48,8 +48,11 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
   const effectiveDown = hasBookDown ? orderbookDown.bestAsk : marketNo;
 
   // Spread penalty only when using mid/last price (no orderbook bestAsk)
-  const spreadPenaltyUp = hasBookUp ? 0 : (orderbookUp?.spread ?? 0) * 0.5;
-  const spreadPenaltyDown = hasBookDown ? 0 : (orderbookDown?.spread ?? 0) * 0.5;
+  // Guard: ensure spread is a finite number to prevent NaN propagation
+  const rawSpreadUp = orderbookUp?.spread;
+  const rawSpreadDown = orderbookDown?.spread;
+  const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : 0);
+  const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : 0);
 
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
     ? modelUp - effectiveUp - spreadPenaltyUp

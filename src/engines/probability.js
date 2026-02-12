@@ -354,7 +354,7 @@ export function scoreDirection({
 export function applyTimeAwareness(rawUp, timeLeftMin, totalWindowMin = 15) {
   const FLOOR = 0.35;  // minimum decay — never fully flatten
 
-  if (timeLeftMin === null || timeLeftMin === undefined || !Number.isFinite(timeLeftMin)) {
+  if (!Number.isFinite(timeLeftMin) || !Number.isFinite(totalWindowMin) || totalWindowMin <= 0) {
     return { adjustedUp: rawUp, adjustedDown: 1 - rawUp, timeDecay: 1 };
   }
 

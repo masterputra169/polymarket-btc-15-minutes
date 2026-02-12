@@ -104,9 +104,10 @@ export function computeBetSizing({
     return noBet;
   }
 
-  // Gate 2: valid inputs
-  if (!side || ensembleProb == null || marketPrice == null ||
-      marketPrice <= 0 || marketPrice >= 1) {
+  // Gate 2: valid inputs (reject NaN, non-finite, out-of-range)
+  if (!side || !Number.isFinite(ensembleProb) || !Number.isFinite(marketPrice) ||
+      marketPrice <= 0.01 || marketPrice >= 0.99 ||
+      ensembleProb < 0 || ensembleProb > 1) {
     noBet.rationale = 'Invalid price or probability data';
     return noBet;
   }
@@ -119,19 +120,18 @@ export function computeBetSizing({
   }
 
   // ── Kelly Criterion ──
-  const mktPrice = marketPrice; // already in [0,1] (validated by gate 2 above)
-  const b = (1 / mktPrice) - 1;       // decimal odds payout ratio
+  const b = (1 / marketPrice) - 1;    // decimal odds payout ratio
   const p = ensembleProb;              // model probability of winning
   const q = 1 - p;
   const rawKelly = (b * p - q) / b;
 
-  if (rawKelly <= 0) {
-    noBet.rationale = `Negative Kelly (${(rawKelly * 100).toFixed(1)}%) \u2014 no edge`;
+  if (!Number.isFinite(rawKelly) || rawKelly <= 0) {
+    noBet.rationale = `Negative Kelly (${Number.isFinite(rawKelly) ? (rawKelly * 100).toFixed(1) : 'NaN'}%) \u2014 no edge`;
     return noBet;
   }
 
-  // Fractional Kelly
-  let frac = rawKelly * KELLY_FRACTION;
+  // Fractional Kelly (cap rawKelly at 100% to prevent extreme bets from near-zero market prices)
+  let frac = Math.min(rawKelly, 1.0) * KELLY_FRACTION;
 
   // ── Multipliers ──
 
@@ -164,11 +164,18 @@ export function computeBetSizing({
   const executionAdj = executionMultiplier(executionContext);
 
   // Apply all multipliers (5 total: regime, accuracy, ML, confidence, execution)
-  const adjustedFraction = frac * regimeAdj.multiplier * accuracyAdj.multiplier *
-    mlAdj.multiplier * confidenceAdj.multiplier * executionAdj.multiplier;
+  // Guard each multiplier against NaN — fall back to 1.0 (neutral) if invalid
+  const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
+  const adjustedFraction = frac
+    * safeMult(regimeAdj.multiplier)
+    * safeMult(accuracyAdj.multiplier)
+    * safeMult(mlAdj.multiplier)
+    * safeMult(confidenceAdj.multiplier)
+    * safeMult(executionAdj.multiplier);
 
-  // Clamp
-  const betPercent = Math.max(MIN_BET_PCT, Math.min(MAX_BET_PCT, adjustedFraction));
+  // Clamp (NaN-safe: if adjustedFraction is somehow NaN, default to 0)
+  const safeFraction = Number.isFinite(adjustedFraction) ? adjustedFraction : 0;
+  const betPercent = Math.max(MIN_BET_PCT, Math.min(MAX_BET_PCT, safeFraction));
   const br = bankroll ?? BET_SIZING.DEFAULT_BANKROLL;
   const betAmount = Math.round(betPercent * br * 100) / 100;
 

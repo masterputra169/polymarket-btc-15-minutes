@@ -66,6 +66,8 @@ export function saveState() {
  * Record a new trade (position entry).
  */
 export function recordTrade({ side, tokenId, price, size, marketSlug, orderId }) {
+  const cost = price * size;  // compute once to avoid FP drift from duplicate multiplication
+
   state.currentPosition = {
     side,
     tokenId,
@@ -74,10 +76,10 @@ export function recordTrade({ side, tokenId, price, size, marketSlug, orderId })
     marketSlug,
     orderId: orderId ?? null,
     enteredAt: Date.now(),
-    cost: price * size,
+    cost,
   };
 
-  state.bankroll -= price * size;
+  state.bankroll -= cost;
   state.totalTrades++;
 
   state.trades.push({
@@ -93,7 +95,7 @@ export function recordTrade({ side, tokenId, price, size, marketSlug, orderId })
   // Keep only last 100 trades
   if (state.trades.length > 100) state.trades = state.trades.slice(-100);
 
-  log.info(`Position opened: ${side} ${size} shares @ $${price.toFixed(3)} ($${(price * size).toFixed(2)}) | Bankroll: $${state.bankroll.toFixed(2)}`);
+  log.info(`Position opened: ${side} ${size} shares @ $${price.toFixed(3)} ($${cost.toFixed(2)}) | Bankroll: $${state.bankroll.toFixed(2)}`);
   saveState();
 }
 
