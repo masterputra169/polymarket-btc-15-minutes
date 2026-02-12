@@ -225,7 +225,7 @@ export default function App() {
   const betSizingData = useMemo(() => {
     if (!data) return null;
     return { betSizing: data.betSizing, rec: data.rec, regimeInfo: data.regimeInfo };
-  }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll]);
+  }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll, data?.rec?.action, data?.rec?.side]);
 
   return (
     <div className="app-container">

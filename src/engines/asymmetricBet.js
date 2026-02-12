@@ -119,8 +119,7 @@ export function computeBetSizing({
   }
 
   // ── Kelly Criterion ──
-  // Market price is in cents (e.g. 55 = $0.55), convert if needed
-  const mktPrice = marketPrice > 1 ? marketPrice / 100 : marketPrice;
+  const mktPrice = marketPrice; // already in [0,1] (validated by gate 2 above)
   const b = (1 / mktPrice) - 1;       // decimal odds payout ratio
   const p = ensembleProb;              // model probability of winning
   const q = 1 - p;

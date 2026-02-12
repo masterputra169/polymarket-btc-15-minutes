@@ -32,7 +32,7 @@ export function indexTree(rawTree) {
 
 export function evaluateTreeFast(nodeMap, features) {
   let nodeId = 0;
-  for (;;) {
+  for (let depth = 0; depth < 200; depth++) {
     const node = nodeMap.get(nodeId);
     if (!node) return 0;
     if (node.leaf !== undefined) return node.leaf;
@@ -42,6 +42,7 @@ export function evaluateTreeFast(nodeMap, features) {
     if (val !== val || val === undefined) { nodeId = node.missing; continue; }
     nodeId = val < node.threshold ? node.yes : node.no;
   }
+  return 0; // safety: max depth exceeded
 }
 
 export function predictXGBoost(features) {

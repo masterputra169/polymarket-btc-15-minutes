@@ -20,7 +20,6 @@ const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'deve
 
 export async function loadMLModel(
   modelPath = '/ml/xgboost_model.json',
-  normPath = '/ml/norm_browser.json'
 ) {
   if (S.processedTrees) return true;
   if (S.isLoading) return false;
@@ -28,20 +27,14 @@ export async function loadMLModel(
   S.setState({ isLoading: true, loadError: null });
 
   try {
-    const [modelResp, normResp] = await Promise.all([
-      fetch(modelPath), fetch(normPath),
-    ]);
-
+    const modelResp = await fetch(modelPath);
     if (!modelResp.ok) throw new Error(`Model fetch failed: ${modelResp.status}`);
-    if (!normResp.ok) throw new Error(`Norm fetch failed: ${normResp.status}`);
 
-    const [rawModel, rawNorm] = await Promise.all([
-      modelResp.json(), normResp.json(),
-    ]);
+    const rawModel = await modelResp.json();
 
-    const version = rawModel.version || 1;
-    const numFeatures = rawModel.num_features || BASE_FEATURES;
-    const threshold = Math.max(rawModel.optimal_threshold || 0.65, 0.60);
+    const version = rawModel.version ?? 1;
+    const numFeatures = rawModel.num_features ?? BASE_FEATURES;
+    const threshold = Math.max(rawModel.optimal_threshold ?? 0.65, 0.52);
 
     S.setState({
       modelVersion: version,

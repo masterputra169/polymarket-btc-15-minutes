@@ -20,7 +20,7 @@ function AccuracyPanel({ data }) {
     );
   }
 
-  const streak = df.streak;
+  const streak = df.streak ?? { type: 'none', count: 0 };
   const confMul = feedbackStats?.confidenceMultiplier ?? 1.0;
 
   function accColor(acc) {
@@ -90,9 +90,9 @@ function AccuracyPanel({ data }) {
         }}>
           Rolling Accuracy
         </div>
-        <RollingBar label="Last 20" acc={df.rolling.last20} count={df.totalSettled >= 20 ? 20 : null} />
-        <RollingBar label="Last 50" acc={df.rolling.last50} count={df.totalSettled >= 50 ? 50 : null} />
-        <RollingBar label="Last 100" acc={df.rolling.last100} count={df.totalSettled >= 100 ? 100 : null} />
+        <RollingBar label="Last 20" acc={df.rolling?.last20 ?? null} count={df.totalSettled >= 20 ? 20 : null} />
+        <RollingBar label="Last 50" acc={df.rolling?.last50 ?? null} count={df.totalSettled >= 50 ? 50 : null} />
+        <RollingBar label="Last 100" acc={df.rolling?.last100 ?? null} count={df.totalSettled >= 100 ? 100 : null} />
       </div>
 
       {/* Streak + Confidence Multiplier */}
@@ -123,7 +123,7 @@ function AccuracyPanel({ data }) {
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
           {regimeNames.map(r => {
-            const rd = df.regimes[r];
+            const rd = df.regimes?.[r];
             const acc = rd?.accuracy ?? null;
             const total = rd?.total ?? 0;
             return (
@@ -161,7 +161,7 @@ function AccuracyPanel({ data }) {
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Expected</span>
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Actual</span>
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>n</span>
-          {df.calibration.map((c, i) => {
+          {(df.calibration ?? []).map((c, i) => {
             if (c.total === 0) return null;
             const diff = c.actual !== null ? c.actual - c.predicted : null;
             const diffColor = diff === null ? 'c-muted' : diff >= 0 ? 'c-green' : 'c-red';
@@ -188,6 +188,8 @@ export default memo(AccuracyPanel, (prev, next) => {
   if (!a || !b) return a === b;
   return (
     a.detailedFeedback?.totalSettled === b.detailedFeedback?.totalSettled &&
-    a.feedbackStats?.accuracy === b.feedbackStats?.accuracy
+    a.feedbackStats?.accuracy === b.feedbackStats?.accuracy &&
+    a.feedbackStats?.confidenceMultiplier === b.feedbackStats?.confidenceMultiplier &&
+    a.detailedFeedback?.streak?.count === b.detailedFeedback?.streak?.count
   );
 });

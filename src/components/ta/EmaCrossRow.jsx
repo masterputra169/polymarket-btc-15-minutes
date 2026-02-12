@@ -39,7 +39,7 @@ export default function EmaCrossRow({ emaCross }) {
       </span>
       <span className={`ta-signal-row__value ${colorClass(narrative)}`}>
         {bullish ? '\u2191' : '\u2193'} {(distancePct ?? 0) > 0 ? '+' : ''}{(distancePct ?? 0).toFixed(3)}%
-        {crossBars < 5 && <span style={{ color: 'var(--text-dim)', marginLeft: 4, fontSize: '0.65rem' }}>({crossBars}b ago)</span>}
+        {crossBars != null && crossBars < 5 && <span style={{ color: 'var(--text-dim)', marginLeft: 4, fontSize: '0.65rem' }}>({crossBars}b ago)</span>}
       </span>
     </div>
   );

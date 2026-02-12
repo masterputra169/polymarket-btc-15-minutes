@@ -37,7 +37,7 @@ function BetSizingPanel({ data, setBankroll }) {
 
   const risk = bet.riskLevel ?? 'NO_BET';
   const riskStyle = RISK_COLORS[risk] ?? RISK_COLORS.NO_BET;
-  const barPct = bet.shouldBet ? Math.min((bet.betPercent / BET_SIZING.MAX_BET_PCT) * 100, 100) : 0;
+  const barPct = bet.shouldBet && bet.betPercent != null ? Math.min((bet.betPercent / BET_SIZING.MAX_BET_PCT) * 100, 100) : 0;
   const impliedOdds = bet.shouldBet && bet.betPercent > 0
     ? (1 / (bet.side === 'UP' ? (data?.rec?.marketUp ?? 0.5) : (data?.rec?.marketDown ?? 0.5))).toFixed(2)
     : null;
@@ -67,13 +67,13 @@ function BetSizingPanel({ data, setBankroll }) {
           {/* Main bet size */}
           <div style={{ textAlign: 'center', margin: '8px 0 6px' }}>
             <div style={{ fontSize: '1.5rem', fontWeight: 700, color: riskStyle.color, letterSpacing: '-0.02em' }}>
-              {(bet.betPercent * 100).toFixed(1)}%
+              {((bet.betPercent ?? 0) * 100).toFixed(1)}%
               <span style={{ fontSize: '0.9rem', fontWeight: 500, marginLeft: 6, color: 'var(--text-muted)' }}>
-                (${bet.betAmount.toFixed(2)})
+                (${(bet.betAmount ?? 0).toFixed(2)})
               </span>
             </div>
             <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginTop: 2 }}>
-              {bet.side} &middot; Bankroll ${bet.bankroll.toLocaleString()}
+              {bet.side} &middot; Bankroll ${(bet.bankroll ?? 0).toLocaleString()}
             </div>
           </div>
 
@@ -203,7 +203,7 @@ function BetSizingPanel({ data, setBankroll }) {
             }}
             title="Click to edit bankroll"
           >
-            ${bet.bankroll.toLocaleString()}
+            ${(bet.bankroll ?? 0).toLocaleString()}
           </span>
         )}
       </div>

@@ -62,6 +62,7 @@ export function useBinanceStream() {
 
       ws.onclose = (evt) => {
         if (IS_DEV) console.log(`[Binance WS] ❌ Disconnected (code: ${evt.code})`);
+        if (wsRef.current !== ws) return; // stale close from replaced WS
         setConnected(false);
         wsRef.current = null;
         stopHb();

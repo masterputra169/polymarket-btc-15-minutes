@@ -86,6 +86,7 @@ export function usePolymarketChainlinkStream() {
 
       ws.onclose = (evt) => {
         if (IS_DEV) console.log(`[Polymarket WS] ❌ Disconnected (code: ${evt.code})`);
+        if (wsRef.current !== ws) return; // stale close from replaced WS
         setConnected(false);
         wsRef.current = null;
         stopAll();

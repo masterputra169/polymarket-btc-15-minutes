@@ -9,7 +9,7 @@ export function recordPrediction({ side, modelProb, marketPrice, btcPrice, price
   ensureLoaded();
 
   const now = Date.now();
-  for (let i = S.cache.length - 1; i >= Math.max(0, S.cache.length - 3); i--) {
+  for (let i = S.cache.length - 1; i >= Math.max(0, S.cache.length - 6); i--) {
     const p = S.cache[i];
     if (p.marketSlug === marketSlug && p.side === side && now - p.timestamp < 30_000) return;
   }

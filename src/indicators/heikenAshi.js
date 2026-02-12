@@ -4,7 +4,8 @@ export function computeHeikenAshi(candles) {
   for (let i = 0; i < candles.length; i += 1) {
     const c = candles[i];
     const haClose = (c.open + c.high + c.low + c.close) / 4;
-    const prev = ha[i - 1];
+    if (!Number.isFinite(haClose)) continue; // skip corrupt candles
+    const prev = ha[ha.length - 1];
     const haOpen = prev ? (prev.open + prev.close) / 2 : (c.open + c.close) / 2;
     const haHigh = Math.max(c.high, haOpen, haClose);
     const haLow = Math.min(c.low, haOpen, haClose);

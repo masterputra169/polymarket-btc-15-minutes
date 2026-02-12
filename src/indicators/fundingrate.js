@@ -24,7 +24,8 @@ const FETCH_TIMEOUT_MS = 3_000;  // 3s timeout (was 8s — too slow when blocked
 let cachedFunding = null;
 let lastFetchMs = 0;
 let workingHost = null; // Remember which host works
-let binanceFailed = false; // Skip Binance entirely after first failure
+let binanceFailCount = 0; // Track consecutive failures
+const MAX_BINANCE_RETRIES = 60; // Retry after ~60 poll cycles (~5min)
 
 /**
  * Fetch with timeout helper
@@ -46,8 +47,11 @@ async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT_MS) {
  * Try fetching from multiple hosts with fallback
  */
 async function fetchFapiWithFallback(path) {
-  // Skip Binance entirely if it already failed (all hosts blocked)
-  if (binanceFailed) return null;
+  // Skip Binance if recently failed, but retry periodically
+  if (binanceFailCount > 0 && binanceFailCount < MAX_BINANCE_RETRIES) {
+    binanceFailCount++;
+    return null;
+  }
 
   // Try working host first
   const hosts = workingHost
@@ -59,6 +63,7 @@ async function fetchFapiWithFallback(path) {
       const resp = await fetchWithTimeout(`${host}${path}`);
       if (resp.ok) {
         workingHost = host;
+        binanceFailCount = 0; // reset on success
         return await resp.json();
       }
     } catch {
@@ -66,9 +71,9 @@ async function fetchFapiWithFallback(path) {
     }
   }
 
-  // All Binance hosts failed — don't try again until page reload
-  binanceFailed = true;
-  console.warn('[FundingRate] All Binance FAPI hosts unreachable, skipping future attempts');
+  // All Binance hosts failed — backoff and retry later
+  binanceFailCount = 1;
+  console.warn('[FundingRate] All Binance FAPI hosts unreachable, will retry later');
   return null;
 }
 
@@ -84,7 +89,7 @@ async function fetchBybitFundingRate() {
     if (!resp.ok) return null;
     const data = await resp.json();
     const ticker = data?.result?.list?.[0];
-    if (!ticker || !ticker.fundingRate) return null;
+    if (!ticker || ticker.fundingRate == null) return null;
 
     const rate = parseFloat(ticker.fundingRate);
     const ratePct = rate * 100;

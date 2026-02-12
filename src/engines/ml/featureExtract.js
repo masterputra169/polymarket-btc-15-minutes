@@ -98,7 +98,7 @@ export function extractLiveFeaturesInPlace({
   stochK, stochKD,
   marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
 }) {
-  const ptbDistPct = priceToBeat ? (price - priceToBeat) / priceToBeat : 0;
+  const ptbDistPct = priceToBeat && price ? (price - priceToBeat) / priceToBeat : 0;
   const isGreen = heikenColor === 'green';
   const haSignedConsec = isGreen ? (heikenCount || 0) : -(heikenCount || 0);
   const volRatio = volumeAvg > 0 ? (volumeRecent || 0) / volumeAvg : 1;
@@ -118,7 +118,7 @@ export function extractLiveFeaturesInPlace({
   featureBuf[12] = Math.max(0, Math.min(1, ruleProbUp ?? 0.5));
   featureBuf[13] = ruleConfidence ?? 0;
   featureBuf[14] = Math.min(vwapCrossCount ?? 0, 10) / 10;
-  featureBuf[15] = Math.min(bestEdge ?? 0, 0.5);
+  featureBuf[15] = Math.max(0, Math.min(bestEdge ?? 0, 0.5));
 
   featureBuf[16] = regime === 'trending'       ? 1 : 0;
   featureBuf[17] = Math.max(0, Math.min(1, regimeConfidence ?? 0.5));

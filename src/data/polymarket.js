@@ -3,7 +3,7 @@ import { toNumber } from '../utils.js';
 
 export async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
   const url = `${CONFIG.gammaBaseUrl}/events?series_id=${seriesId}&active=true&closed=false&limit=${limit}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Gamma events error: ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -50,7 +50,7 @@ export function pickLatestLiveMarket(markets, nowMs = Date.now()) {
 
 export async function fetchClobPrice({ tokenId, side }) {
   const url = `${CONFIG.clobBaseUrl}/price?token_id=${tokenId}&side=${side}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
   if (!res.ok) throw new Error(`CLOB price error: ${res.status}`);
   const data = await res.json();
   return toNumber(data.price);
@@ -58,7 +58,7 @@ export async function fetchClobPrice({ tokenId, side }) {
 
 export async function fetchOrderBook({ tokenId }) {
   const url = `${CONFIG.clobBaseUrl}/book?token_id=${tokenId}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
   if (!res.ok) throw new Error(`CLOB book error: ${res.status}`);
   return await res.json();
 }
@@ -108,20 +108,21 @@ export async function fetchPolymarketSnapshot({ skipClob = false } = {}) {
 
     if (!market) return { ok: false, reason: 'market_not_found' };
 
+    const safeParse = (v) => { try { return JSON.parse(v); } catch { return []; } };
     const outcomes = Array.isArray(market.outcomes)
       ? market.outcomes
       : typeof market.outcomes === 'string'
-        ? JSON.parse(market.outcomes)
+        ? safeParse(market.outcomes)
         : [];
     const outcomePrices = Array.isArray(market.outcomePrices)
       ? market.outcomePrices
       : typeof market.outcomePrices === 'string'
-        ? JSON.parse(market.outcomePrices)
+        ? safeParse(market.outcomePrices)
         : [];
     const clobTokenIds = Array.isArray(market.clobTokenIds)
       ? market.clobTokenIds
       : typeof market.clobTokenIds === 'string'
-        ? JSON.parse(market.clobTokenIds)
+        ? safeParse(market.clobTokenIds)
         : [];
 
     let upTokenId = null;
@@ -141,8 +142,10 @@ export async function fetchPolymarketSnapshot({ skipClob = false } = {}) {
       (x) => String(x).toLowerCase() === CONFIG.polymarket.downOutcomeLabel.toLowerCase()
     );
 
-    const gammaYes = upIndex >= 0 ? Number(outcomePrices[upIndex]) : null;
-    const gammaNo = downIndex >= 0 ? Number(outcomePrices[downIndex]) : null;
+    const rawYes = upIndex >= 0 ? Number(outcomePrices[upIndex]) : null;
+    const rawNo = downIndex >= 0 ? Number(outcomePrices[downIndex]) : null;
+    const gammaYes = Number.isFinite(rawYes) ? rawYes : null;
+    const gammaNo = Number.isFinite(rawNo) ? rawNo : null;
 
     // ═══ FIX: Skip CLOB REST calls when WebSocket provides prices ═══
     if (skipClob) {

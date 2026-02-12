@@ -128,6 +128,9 @@ export function useMarketData({ clobWs } = {}) {
         fetchFundingRate().catch(() => null),
       ]);
       const [klines1m, klines5m, lastPrice] = binanceResult;
+      if (!klines1m.length || !klines5m.length) {
+        throw new Error('Binance returned empty klines data');
+      }
 
       const candles = klines1m;
 
@@ -280,7 +283,7 @@ export function useMarketData({ clobWs } = {}) {
         regime: regimeInfo.regime, regimeConfidence: regimeInfo.confidence,
         session: getSessionName(),
         minutesLeft: timeLeftMin,
-        bestEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
+        bestEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0, 0),
         vwapCrossCount, multiTfAgreement: multiTfConfirm?.agreement ?? false,
         failedVwapReclaim,
         bbWidth: bb?.width ?? null, bbPercentB: bb?.percentB ?? null,
@@ -466,8 +469,8 @@ export function useMarketData({ clobWs } = {}) {
       if (shallowChanged(prevDataRef.current, nextData)) {
         prevDataRef.current = nextData;
         setData(nextData);
+        setLastUpdated(now);
       }
-      setLastUpdated(now);
       setLoading(false);
       setError(null);
       firstPollDoneRef.current = true;

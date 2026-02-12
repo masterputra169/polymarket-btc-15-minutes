@@ -265,10 +265,10 @@ function BotPanel({ connected, data }) {
         <span>DN:<b className="c-red">{fmt(data.marketDown, 2)}</b></span>
         {data.arbitrage && (
           <span style={{ color: data.arbitrage.found ? 'var(--green-bright)' : 'var(--text-dim)', fontWeight: data.arbitrage.found ? 700 : 400 }}>
-            ARB:{data.arbitrage.found ? `${data.arbitrage.profitPct?.toFixed(1)}%` : 'no'}
+            ARB:{data.arbitrage.found ? `${data.arbitrage.profitPct?.toFixed(1) ?? '?'}%` : 'no'}
           </span>
         )}
-        {data.fillTracker && (
+        {data.fillTracker && data.fillTracker.fillRate != null && (
           <span>
             Fill:{(data.fillTracker.fillRate * 100).toFixed(0)}%
             {data.fillTracker.pending && <b style={{ color: '#ffc107' }}> [pending]</b>}

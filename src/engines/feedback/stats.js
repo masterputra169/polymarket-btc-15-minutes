@@ -22,7 +22,7 @@ function computeStreakFromCache() {
   return { type: 'none', count: 0 };
 }
 
-export function getAccuracyStats(window = 20) {
+export function getAccuracyStats(windowSize = 20) {
   ensureLoaded();
   if (!S.statsDirty && S.statsCache) return S.statsCache;
 
@@ -49,8 +49,8 @@ export function getAccuracyStats(window = 20) {
     return result;
   }
 
-  const windowSize = Math.min(window, settledCount);
-  let skip = settledCount - windowSize;
+  const windowLen = Math.min(windowSize, settledCount);
+  let skip = settledCount - windowLen;
   let recentCorrect = 0;
   let recentTotal = 0;
   let streakType = null;
@@ -138,6 +138,7 @@ export function getDetailedStats() {
     };
   }
 
+  // Use confidence = max(prob, 1-prob) so both UP and DOWN predictions are included
   const calBuckets = [
     { lo: 0.50, hi: 0.55 }, { lo: 0.55, hi: 0.60 },
     { lo: 0.60, hi: 0.65 }, { lo: 0.65, hi: 0.70 },
@@ -147,7 +148,8 @@ export function getDetailedStats() {
     let correct = 0, total = 0;
     for (let i = 0; i < totalSettled; i++) {
       const p = settled[i];
-      const conf = p.modelProb ?? 0.5;
+      const raw = p.modelProb ?? 0.5;
+      const conf = Math.max(raw, 1 - raw); // symmetric: DOWN 0.35 → 0.65 confidence
       if (conf >= lo && conf < hi) {
         total++;
         if (p.correct) correct++;

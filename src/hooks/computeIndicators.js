@@ -40,9 +40,10 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
   const vwapSeries = computeVwapSeries(candles, CONFIG.vwapLookbackCandles);
   const vwapNow = vwapSeries[vwapSeries.length - 1];
   const lookback = CONFIG.vwapSlopeLookbackMinutes;
+  const vwapPast = vwapSeries.length >= lookback ? vwapSeries[vwapSeries.length - lookback] : null;
   const vwapSlope =
-    vwapSeries.length >= lookback
-      ? (vwapNow - vwapSeries[vwapSeries.length - lookback]) / lookback
+    vwapNow != null && vwapPast != null
+      ? (vwapNow - vwapPast) / lookback
       : null;
   const vwapDist = vwapNow ? (lastPrice - vwapNow) / vwapNow : null;
 
