@@ -12,9 +12,10 @@ export default function BollingerRow({ bb }) {
   }
 
   const { width, percentB, squeeze, squeezeIntensity } = bb;
-  const narrative = percentB > 0.8 ? 'SHORT' : percentB < 0.2 ? 'LONG' : 'NEUTRAL';
-  const widthPct = (width * 100).toFixed(2);
-  const bPct = (percentB * 100).toFixed(0);
+  const pB = percentB ?? 0.5;
+  const narrative = pB > 0.8 ? 'SHORT' : pB < 0.2 ? 'LONG' : 'NEUTRAL';
+  const widthPct = ((width ?? 0) * 100).toFixed(2);
+  const bPct = (pB * 100).toFixed(0);
 
   return (
     <div className={`ta-signal-row ${rowClass(narrative)}`}>

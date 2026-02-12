@@ -100,6 +100,7 @@ export async function fetchChainlinkBtcUsd() {
   }
 
   fetchInProgress = true;
+  cachedFetchedAtMs = now; // Set BEFORE fetch so failures also respect cooldown
   const lockTimer = setTimeout(() => { fetchInProgress = false; }, 10_000);
 
   try {
@@ -128,7 +129,6 @@ export async function fetchChainlinkBtcUsd() {
         updatedAt: decoded.updatedAt * 1000,
         source: 'chainlink_rpc',
       };
-      cachedFetchedAtMs = now;
       return cachedResult;
     } catch {
       cachedDecimals = null;

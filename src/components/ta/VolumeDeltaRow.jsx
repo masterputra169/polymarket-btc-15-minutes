@@ -12,16 +12,18 @@ export default function VolumeDeltaRow({ volDelta }) {
   }
 
   const { buyRatio, netDeltaPct, deltaAccel, buyDominant } = volDelta;
-  const narrative = buyDominant ? 'LONG' : buyRatio < 0.48 ? 'SHORT' : 'NEUTRAL';
+  const br = buyRatio ?? 0.5;
+  const ndp = netDeltaPct ?? 0;
+  const narrative = buyDominant ? 'LONG' : br < 0.48 ? 'SHORT' : 'NEUTRAL';
 
-  const buyPct = (buyRatio * 100).toFixed(1);
-  const accelArrow = deltaAccel > 0.02 ? ' \u2B06' : deltaAccel < -0.02 ? ' \u2B07' : '';
+  const buyPct = (br * 100).toFixed(1);
+  const accelArrow = (deltaAccel ?? 0) > 0.02 ? ' \u2B06' : (deltaAccel ?? 0) < -0.02 ? ' \u2B07' : '';
 
   return (
     <div className={`ta-signal-row ${rowClass(narrative)}`}>
       <span className="ta-signal-row__name">Vol Delta</span>
       <span className={`ta-signal-row__value ${colorClass(narrative)}`}>
-        Buy: {buyPct}% | Net: {netDeltaPct > 0 ? '+' : ''}{netDeltaPct.toFixed(1)}%{accelArrow}
+        Buy: {buyPct}% | Net: {ndp > 0 ? '+' : ''}{ndp.toFixed(1)}%{accelArrow}
       </span>
     </div>
   );

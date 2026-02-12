@@ -37,24 +37,18 @@ export function computeATR(candles, period = 14) {
 
   if (trValues.length < period) return null;
 
-  // Initial ATR: simple average of first `period` TRs
-  let atr = 0;
+  // ATR: simple average of last `period` TRs
+  // NOTE: This is SMA, not Wilder's smoothing. Training data uses the same SMA,
+  // so both are consistent. Changing to Wilder's requires retraining the model.
   const trLen = trValues.length;
-  const startIdx = trLen - period;
-  for (let i = startIdx; i < trLen; i++) atr += trValues[i];
+  let atr = 0;
+  for (let i = trLen - period; i < trLen; i++) atr += trValues[i];
   atr /= period;
-
-  // Wilder's smoothing for current ATR
-  // ATR = ((prev_ATR * (period-1)) + current_TR) / period
-  // We'll compute the "current" smoothed ATR over the last period
-  let smoothedAtr = 0;
-  for (let i = 0; i < period; i++) smoothedAtr += trValues[trLen - period + i];
-  smoothedAtr /= period;
 
   const price = candles[len - 1].close;
 
   // ATR as percentage of price
-  const atrPct = price > 0 ? (smoothedAtr / price) * 100 : 0;
+  const atrPct = price > 0 ? (atr / price) * 100 : 0;
 
   // ATR Ratio: current ATR vs longer-term ATR (2x period)
   const longPeriod = Math.min(period * 2, trValues.length);
@@ -62,11 +56,11 @@ export function computeATR(candles, period = 14) {
   for (let i = trLen - longPeriod; i < trLen; i++) longAtr += trValues[i];
   longAtr /= longPeriod;
 
-  const atrRatio = longAtr > 0 ? smoothedAtr / longAtr : 1;
+  const atrRatio = longAtr > 0 ? atr / longAtr : 1;
   const expanding = atrRatio > 1.1; // Volatility expanding if 10% above average
 
   return {
-    atr: smoothedAtr,     // Absolute ATR in dollars
+    atr,                  // Absolute ATR in dollars
     atrPct,               // ATR as % of price (e.g. 0.15 = 0.15%)
     atrRatio,             // Current vs long-term (>1 = expanding, <1 = contracting)
     expanding,            // Boolean: volatility is expanding

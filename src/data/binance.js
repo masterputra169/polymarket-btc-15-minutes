@@ -14,7 +14,7 @@ import { CONFIG } from '../config.js';
  */
 export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/klines?symbol=${CONFIG.symbol}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
   const raw = await res.json();
 
@@ -36,7 +36,7 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
  */
 export async function fetchLastPrice() {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/ticker/price?symbol=${CONFIG.symbol}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
   const data = await res.json();
   return parseFloat(data.price);

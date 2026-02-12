@@ -32,14 +32,14 @@ export function computeEngineeredFeaturesInPlace() {
   const stochK    = featureBuf[FI.stoch_k_norm];
   const haConsec  = featureBuf[FI.ha_signed_consec];
   const regTrend  = featureBuf[FI.regime_trending];
-  const regChop   = featureBuf[FI.regime_choppy];
+  const regConf   = featureBuf[FI.regime_confidence];
   const regMR     = featureBuf[FI.regime_mean_reverting];
 
   const clip = 0.003;
   featureBuf[49] = Math.max(-clip, Math.min(clip, delta1m));
   featureBuf[50] = delta1m - (delta3m / 3);
   featureBuf[51] = rsi * regTrend;
-  featureBuf[52] = rsi * regChop;
+  featureBuf[52] = rsi * regConf;
   featureBuf[53] = rsi * regMR;
   featureBuf[54] = delta1m * multiTf;
   featureBuf[55] = bbPctB * bbSqueeze;
@@ -89,14 +89,13 @@ export function computeEngineeredFeaturesInPlace() {
 export function extractLiveFeaturesInPlace({
   price, priceToBeat, rsi, rsiSlope, macd, vwap, vwapSlope,
   heikenColor, heikenCount, delta1m, delta3m, volumeRecent, volumeAvg,
-  regime, session, minutesLeft, ruleProbUp, ruleConfidence,
+  regime, regimeConfidence, session, minutesLeft, ruleProbUp, ruleConfidence,
   vwapCrossCount, bestEdge, multiTfAgreement, failedVwapReclaim,
   bbWidth, bbPercentB, bbSqueeze, bbSqueezeIntensity,
   atrPct, atrRatio,
   volDeltaBuyRatio, volDeltaAccel,
   emaDistPct, emaCrossSignal,
   stochK, stochKD,
-  fundingRatePct, fundingSentiment,
   marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
 }) {
   const ptbDistPct = priceToBeat ? (price - priceToBeat) / priceToBeat : 0;
@@ -107,8 +106,8 @@ export function extractLiveFeaturesInPlace({
   featureBuf[0]  = ptbDistPct;
   featureBuf[1]  = (rsi ?? 50) / 100;
   featureBuf[2]  = rsiSlope ?? 0;
-  featureBuf[3]  = macd?.histogram ?? 0;
-  featureBuf[4]  = macd?.macd ?? 0;
+  featureBuf[3]  = macd?.hist ?? 0;
+  featureBuf[4]  = macd?.line ?? 0;
   featureBuf[5]  = vwap ? (price - vwap) / vwap : 0;
   featureBuf[6]  = vwapSlope ?? 0;
   featureBuf[7]  = haSignedConsec / 15;
@@ -116,18 +115,15 @@ export function extractLiveFeaturesInPlace({
   featureBuf[9]  = delta3m && price > 0 ? delta3m / price : 0;
   featureBuf[10] = Math.min(volRatio, 5) / 5;
   featureBuf[11] = (minutesLeft ?? 7.5) / 15;
-  featureBuf[12] = ruleProbUp ?? 0.5;
+  featureBuf[12] = Math.max(0, Math.min(1, ruleProbUp ?? 0.5));
   featureBuf[13] = ruleConfidence ?? 0;
   featureBuf[14] = Math.min(vwapCrossCount ?? 0, 10) / 10;
   featureBuf[15] = Math.min(bestEdge ?? 0, 0.5);
 
-  // Remap choppy → moderate for ML (v5 model trained with 0% choppy due to
-  // countVwapCrosses bug — feeding choppy=1 causes out-of-distribution predictions)
-  const mlRegime = regime === 'choppy' ? 'moderate' : regime;
-  featureBuf[16] = mlRegime === 'trending'       ? 1 : 0;
-  featureBuf[17] = 0; // choppy always 0 for v5 compat
-  featureBuf[18] = mlRegime === 'mean_reverting' ? 1 : 0;
-  featureBuf[19] = mlRegime === 'moderate'       ? 1 : 0;
+  featureBuf[16] = regime === 'trending'       ? 1 : 0;
+  featureBuf[17] = Math.max(0, Math.min(1, regimeConfidence ?? 0.5));
+  featureBuf[18] = regime === 'mean_reverting' ? 1 : 0;
+  featureBuf[19] = regime === 'moderate' || regime === 'choppy' ? 1 : 0;
 
   featureBuf[20] = session === 'Asia'           ? 1 : 0;
   featureBuf[21] = session === 'Europe'         ? 1 : 0;
@@ -156,8 +152,12 @@ export function extractLiveFeaturesInPlace({
   featureBuf[38] = stochK != null ? stochK / 100 : 0.5;
   featureBuf[39] = stochKD != null ? Math.max(-50, Math.min(50, stochKD)) / 100 + 0.5 : 0.5;
 
-  featureBuf[40] = fundingRatePct != null ? Math.max(-0.1, Math.min(0.1, fundingRatePct)) * 5 + 0.5 : 0.5;
-  featureBuf[41] = fundingSentiment === 'BULLISH' ? 1 : fundingSentiment === 'BEARISH' ? 0 : 0.5;
+  // volume_acceleration: recent 5-candle volume vs prior 5-candle volume ratio, normalized [0,1]
+  const volAccel = volumeAvg > 0 && volumeRecent > 0
+    ? Math.min((volumeRecent / volumeAvg), 3) / 3 : 0.5;
+  featureBuf[40] = volAccel;
+  // bb_squeeze_intensity: Bollinger squeeze intensity [0,1]
+  featureBuf[41] = Math.max(0, Math.min(1, bbSqueezeIntensity ?? 0));
 
   const now = new Date();
   const hourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;

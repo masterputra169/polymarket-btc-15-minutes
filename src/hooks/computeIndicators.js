@@ -46,9 +46,10 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
       : null;
   const vwapDist = vwapNow ? (lastPrice - vwapNow) / vwapNow : null;
 
-  // RSI
-  const rsiNow = computeRsi(closes, CONFIG.rsiPeriod);
+  // RSI — use series last value (Wilder-smoothed) to match training data computation.
+  // computeRsi() only uses last period+1 closes (no smoothing), causing train-serve skew.
   const rsiSeries = computeRsiSeries(closes, CONFIG.rsiPeriod);
+  const rsiNow = rsiSeries.length > 0 ? rsiSeries[rsiSeries.length - 1] : computeRsi(closes, CONFIG.rsiPeriod);
   const rsiSlope = slopeLast(rsiSeries, 3);
 
   // MACD
@@ -82,7 +83,9 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
   let volumeTotal120 = 0;
   const volAvgStart = Math.max(0, cLen - 120);
   for (let i = volAvgStart; i < cLen; i++) volumeTotal120 += candles[i].volume;
-  const volumeAvg = volumeTotal120 / 6;
+  const volWindow = cLen - volAvgStart;
+  const numWindows = volWindow / 20;
+  const volumeAvg = numWindows > 0 ? volumeTotal120 / numWindows : volumeRecent;
 
   // Failed VWAP reclaim
   const failedVwapReclaim =

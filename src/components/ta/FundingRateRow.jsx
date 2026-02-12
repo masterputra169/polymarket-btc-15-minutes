@@ -37,9 +37,9 @@ export default function FundingRateRow({ fundingRate }) {
         )}
       </span>
       <span className={`ta-signal-row__value ${colorClass(narrative)}`}>
-        {ratePct >= 0 ? '+' : ''}{ratePct.toFixed(4)}%
+        {(ratePct ?? 0) >= 0 ? '+' : ''}{(ratePct ?? 0).toFixed(4)}%
         <span style={{ color: 'var(--text-dim)', marginLeft: 4, fontSize: '0.65rem' }}>
-          ({sentiment.toLowerCase()})
+          ({(sentiment ?? 'NEUTRAL').toLowerCase()})
         </span>
       </span>
     </div>

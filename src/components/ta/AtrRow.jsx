@@ -13,17 +13,18 @@ export default function AtrRow({ atr }) {
   }
 
   const { atr: atrVal, atrPct, atrRatio, expanding } = atr;
-  const narrative = expanding ? 'SHORT' : atrRatio < 0.8 ? 'LONG' : 'NEUTRAL';
+  const ratio = atrRatio ?? 1;
+  const narrative = expanding ? 'SHORT' : ratio < 0.8 ? 'LONG' : 'NEUTRAL';
 
-  const ratioLabel = atrRatio > 1.2
+  const ratioLabel = ratio > 1.2
     ? '\u2191 HIGH'
-    : atrRatio < 0.8
+    : ratio < 0.8
       ? '\u2193 LOW'
       : '\u2192 NORMAL';
 
-  const ratioColor = atrRatio > 1.2
+  const ratioColor = ratio > 1.2
     ? 'c-red'
-    : atrRatio < 0.8
+    : ratio < 0.8
       ? 'c-cyan'
       : 'c-muted';
 
@@ -35,7 +36,7 @@ export default function AtrRow({ atr }) {
           ${formatNumber(atrVal, 0)}
         </span>
         <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>
-          ({atrPct.toFixed(2)}%)
+          ({(atrPct ?? 0).toFixed(2)}%)
         </span>
         <span className={ratioColor} style={{ fontWeight: 600, fontSize: '0.68rem' }}>
           {ratioLabel}

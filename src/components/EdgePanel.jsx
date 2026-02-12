@@ -7,8 +7,8 @@ function EdgePanel({ data }) {
 
   const { edge, pLong, pShort, ruleUp, marketUp, marketDown, rec, ml, arbitrage } = data;
 
-  const edgeUpPct = edge?.edgeUp !== null ? (edge.edgeUp * 100).toFixed(1) : '-';
-  const edgeDownPct = edge?.edgeDown !== null ? (edge.edgeDown * 100).toFixed(1) : '-';
+  const edgeUpPct = edge?.edgeUp != null ? (edge.edgeUp * 100).toFixed(1) : '-';
+  const edgeDownPct = edge?.edgeDown != null ? (edge.edgeDown * 100).toFixed(1) : '-';
 
   // Quality gates
   const isEnter = rec?.action === 'ENTER';

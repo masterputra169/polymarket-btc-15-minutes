@@ -21,7 +21,7 @@ export default function StochRsiRow({ stochRsi }) {
     <div className={`ta-signal-row ${rowClass(narrative)}`}>
       <span className="ta-signal-row__name">StochRSI</span>
       <span className={`ta-signal-row__value ${colorClass(narrative)}`}>
-        K: {k.toFixed(0)} | D: {d.toFixed(0)}{zoneLabel}{crossLabel}
+        K: {(k ?? 0).toFixed(0)} | D: {(d ?? 0).toFixed(0)}{zoneLabel}{crossLabel}
       </span>
     </div>
   );
