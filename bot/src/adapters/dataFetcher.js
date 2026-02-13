@@ -178,7 +178,7 @@ export async function fetchChainlinkBtcUsd() {
   }
 
   const now = Date.now();
-  if (chainlinkFetchedAt && now - chainlinkFetchedAt < 30_000 && cachedChainlink.price !== null) {
+  if (chainlinkFetchedAt && now - chainlinkFetchedAt < 30_000) {
     return cachedChainlink;
   }
 

@@ -151,6 +151,36 @@ export function getCurrentPosition() {
   return state.currentPosition;
 }
 
+/**
+ * Unwind a position (e.g. stale order cancelled before fill).
+ * Returns the cost back to bankroll and clears the position.
+ */
+export function unwindPosition() {
+  if (!state.currentPosition) return;
+
+  const pos = state.currentPosition;
+  state.bankroll += pos.cost;
+  state.totalTrades = Math.max(0, state.totalTrades - 1);
+
+  state.trades.push({
+    type: 'UNWIND',
+    side: pos.side,
+    price: pos.price,
+    size: pos.size,
+    marketSlug: pos.marketSlug,
+    bankrollAfter: state.bankroll,
+    timestamp: Date.now(),
+  });
+
+  log.info(
+    `Position unwound (stale cancel): ${pos.side} ${pos.size}@$${pos.price.toFixed(3)} | ` +
+    `Returned $${pos.cost.toFixed(2)} | Bankroll: $${state.bankroll.toFixed(2)}`
+  );
+
+  state.currentPosition = null;
+  saveState();
+}
+
 export function getBankroll() {
   return state.bankroll;
 }

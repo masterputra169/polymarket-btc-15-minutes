@@ -10,7 +10,8 @@ import { FI } from './featureMap.js';
 export const featureBuf = new Float64Array(MAX_FEATURES);
 
 /**
- * Compute 25 engineered features in-place in featureBuf[52..76].
+ * Compute 25 engineered features in-place in featureBuf[54..78].
+ * (Indices shifted +2 from v10 due to funding_rate_norm/change at 52-53.)
  */
 export function computeEngineeredFeaturesInPlace() {
   const sign = (v) => v > 0 ? 1 : v < 0 ? -1 : 0;
@@ -36,55 +37,55 @@ export function computeEngineeredFeaturesInPlace() {
   const regMR     = featureBuf[FI.regime_mean_reverting];
 
   const clip = 0.003;
-  featureBuf[52] = Math.max(-clip, Math.min(clip, delta1m));
-  featureBuf[53] = delta1m - (delta3m / 3);
-  featureBuf[54] = rsi * regTrend;
-  featureBuf[55] = rsi * regConf;
-  featureBuf[56] = rsi * regMR;
-  featureBuf[57] = delta1m * multiTf;
-  featureBuf[58] = bbPctB * bbSqueeze;
-  featureBuf[59] = volBuy * sign(delta1m);
-  featureBuf[60] = vwapDist * sign(vwapSlope);
-  featureBuf[61] = sign(delta3m) * (-rsiSlope);
-  featureBuf[62] = (rsi + stochK + bbPctB) / 3;
-  featureBuf[63] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
+  featureBuf[54] = Math.max(-clip, Math.min(clip, delta1m));
+  featureBuf[55] = delta1m - (delta3m / 3);
+  featureBuf[56] = rsi * regTrend;
+  featureBuf[57] = rsi * regConf;
+  featureBuf[58] = rsi * regMR;
+  featureBuf[59] = delta1m * multiTf;
+  featureBuf[60] = bbPctB * bbSqueeze;
+  featureBuf[61] = volBuy * sign(delta1m);
+  featureBuf[62] = vwapDist * sign(vwapSlope);
+  featureBuf[63] = sign(delta3m) * (-rsiSlope);
+  featureBuf[64] = (rsi + stochK + bbPctB) / 3;
+  featureBuf[65] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
 
   const atrSafe = Math.max(atrPct, 0.01);
-  featureBuf[64] = delta1m / atrSafe;
-  featureBuf[65] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
-  featureBuf[66] = delta1m * volRatio;
-  featureBuf[67] = sign(macdLine) * rsiSlope;
-  featureBuf[68] = regTrend * multiTf * sign(delta1m);
-  featureBuf[69] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
-  featureBuf[70] = volBuy * sign(delta1m) * volRatio;
-  featureBuf[71] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
+  featureBuf[66] = delta1m / atrSafe;
+  featureBuf[67] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
+  featureBuf[68] = delta1m * volRatio;
+  featureBuf[69] = sign(macdLine) * rsiSlope;
+  featureBuf[70] = regTrend * multiTf * sign(delta1m);
+  featureBuf[71] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
+  featureBuf[72] = volBuy * sign(delta1m) * volRatio;
+  featureBuf[73] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
 
   const deltaDir = sign(delta1m);
   const macdHist = featureBuf[FI.macd_hist];
-  const agreeCount = (
+  const agreeCount = deltaDir !== 0 ? (
     (sign(haConsec) === deltaDir ? 1 : 0) +
     (sign(macdHist) === deltaDir ? 1 : 0) +
     (sign(featureBuf[FI.vwap_dist]) === deltaDir ? 1 : 0) +
     ((rsi > 0.5 ? 1 : -1) === deltaDir ? 1 : 0) +
-    multiTf
-  );
-  featureBuf[72] = agreeCount / 5;
-  featureBuf[73] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
+    (multiTf > 0.5 ? 1 : 0)
+  ) : 0;
+  featureBuf[74] = agreeCount / 5;
+  featureBuf[75] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
 
   const mktMomentum = featureBuf[FI.market_price_momentum];
-  featureBuf[74] = sign(mktMomentum) * sign(delta1m);
+  featureBuf[76] = sign(mktMomentum) * sign(delta1m);
 
   const crowdDiv = featureBuf[FI.crowd_model_divergence];
   const ruleConf = featureBuf[FI.rule_confidence];
-  featureBuf[75] = crowdDiv * ruleConf;
+  featureBuf[77] = crowdDiv * ruleConf;
 
   const obImbalance = featureBuf[FI.orderbook_imbalance];
-  featureBuf[76] = obImbalance * volBuy;
+  featureBuf[78] = obImbalance * volBuy;
 }
 
 /**
- * Extract 52 base features into featureBuf (in-place, zero alloc).
- * If model is v2, also computes 25 engineered features [52-76].
+ * Extract 54 base features into featureBuf (in-place, zero alloc).
+ * If model is v2, also computes 25 engineered features [54-78].
  */
 export function extractLiveFeaturesInPlace({
   price, priceToBeat, rsi, rsiSlope, macd, vwap, vwapSlope,
@@ -98,6 +99,7 @@ export function extractLiveFeaturesInPlace({
   stochK, stochKD,
   marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
   momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
+  fundingRate,
 }) {
   const ptbDistPct = priceToBeat && price ? (price - priceToBeat) / priceToBeat : 0;
   const isGreen = heikenColor === 'green';
@@ -176,6 +178,11 @@ export function extractLiveFeaturesInPlace({
   featureBuf[49] = Math.max(-0.01, Math.min(0.01, momentum5CandleSlope ?? 0));
   featureBuf[50] = Math.min((volatilityChangeRatio ?? 1), 3) / 3;
   featureBuf[51] = priceConsistency ?? 0.5;
+
+  // [52-53] Funding rate features (v10a+)
+  const fr = fundingRate?.ratePct ?? 0;
+  featureBuf[52] = Math.max(-1, Math.min(1, fr / 0.1));  // funding_rate_norm
+  featureBuf[53] = 0; // funding_rate_change (no historical comparison live)
 
   if (S.modelVersion >= 2) {
     computeEngineeredFeaturesInPlace();

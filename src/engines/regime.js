@@ -35,7 +35,8 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
 
   const vwapDist = Math.abs(price - vwap) / vwap;
   const volumeRatio = hasVolume ? volumeRecent / volumeAvg : 1;
-  const absSlope = hasSlope ? Math.abs(vwapSlope) : 0;
+  // Normalize slope to percentage of VWAP (raw slope is $/candle, varies with BTC price)
+  const normalizedAbsSlope = hasSlope && vwap > 0 ? Math.abs(vwapSlope) / vwap : 0;
 
   // ═══ CHOPPY: Many VWAP crosses + price near VWAP ═══
   // v2: Lowered cross threshold from 4→3, dist from 0.001→0.0015
@@ -47,8 +48,8 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   }
 
   // ═══ TRENDING: Price far from VWAP + directional slope ═══
-  // v2: Lowered slope threshold from 0.5→0.05 (slope is tiny per-candle value)
-  if (vwapDist > 0.0008 && absSlope > 0.05) {
+  // v3: Normalized slope to % of VWAP (raw $/candle was always > 0.05 for BTC → false trending)
+  if (vwapDist > 0.0008 && normalizedAbsSlope > 0.00005) {
     const volBoost = volumeRatio > 1.2 ? 0.10 : 0;
     regime = 'trending';
     confidence = Math.min(0.6 + vwapDist * 200 + volBoost, 0.95);
@@ -65,7 +66,7 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   }
 
   // ═══ MEAN REVERTING: Price near VWAP, low slope, few crosses ═══
-  if (vwapDist < 0.0005 && absSlope < 0.03 && (vwapCrossCount === null || vwapCrossCount < 3)) {
+  if (vwapDist < 0.0005 && normalizedAbsSlope < 0.00003 && (vwapCrossCount === null || vwapCrossCount < 3)) {
     regime = 'mean_reverting';
     confidence = 0.5;
     label = 'Mean Reverting';

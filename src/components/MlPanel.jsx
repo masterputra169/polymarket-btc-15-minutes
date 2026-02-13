@@ -41,8 +41,8 @@ function MLPanel({ data }) {
   const mlConfTier = getConfTier(mlConfidence);
   const isHighConfidence = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
 
-  // Alpha bar width
-  const alphaBarPct = alpha !== null ? Math.round(alpha * 100) : 0;
+  // Alpha bar width (use != null to catch both null and undefined)
+  const alphaBarPct = alpha != null ? Math.round(alpha * 100) : 0;
 
   // Status badge
   const statusBadge = mlReady
@@ -341,7 +341,7 @@ function MLPanel({ data }) {
           <div className="data-row">
             <span className="data-row__label">ML Confidence</span>
             <span className={`data-row__value ${mlConfTier.color}`} style={{ fontWeight: 600 }}>
-              {mlConfidence !== null ? `${(mlConfidence * 100).toFixed(1)}%` : '-'}
+              {mlConfidence != null ? `${(mlConfidence * 100).toFixed(1)}%` : '-'}
               {' '}
               <span style={{ fontSize: '0.68rem' }}>({mlConfTier.label})</span>
             </span>

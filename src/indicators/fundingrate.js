@@ -24,8 +24,8 @@ const FETCH_TIMEOUT_MS = 3_000;  // 3s timeout (was 8s — too slow when blocked
 let cachedFunding = null;
 let lastFetchMs = 0;
 let workingHost = null; // Remember which host works
-let binanceFailCount = 0; // Track consecutive failures
-const MAX_BINANCE_RETRIES = 60; // Retry after ~60 poll cycles (~5min)
+let binanceBackoffUntil = 0; // Timestamp-based backoff (not counter)
+const BINANCE_BACKOFF_MS = 5 * 60_000; // Retry after 5 minutes
 
 /**
  * Fetch with timeout helper
@@ -47,9 +47,8 @@ async function fetchWithTimeout(url, timeoutMs = FETCH_TIMEOUT_MS) {
  * Try fetching from multiple hosts with fallback
  */
 async function fetchFapiWithFallback(path) {
-  // Skip Binance if recently failed, but retry periodically
-  if (binanceFailCount > 0 && binanceFailCount < MAX_BINANCE_RETRIES) {
-    binanceFailCount++;
+  // Skip Binance if recently failed, but retry after backoff period
+  if (binanceBackoffUntil > 0 && Date.now() < binanceBackoffUntil) {
     return null;
   }
 
@@ -63,7 +62,7 @@ async function fetchFapiWithFallback(path) {
       const resp = await fetchWithTimeout(`${host}${path}`);
       if (resp.ok) {
         workingHost = host;
-        binanceFailCount = 0; // reset on success
+        binanceBackoffUntil = 0; // reset on success
         return await resp.json();
       }
     } catch {
@@ -71,8 +70,8 @@ async function fetchFapiWithFallback(path) {
     }
   }
 
-  // All Binance hosts failed — backoff and retry later
-  binanceFailCount = 1;
+  // All Binance hosts failed — backoff and retry after 5 minutes
+  binanceBackoffUntil = Date.now() + BINANCE_BACKOFF_MS;
   console.warn('[FundingRate] All Binance FAPI hosts unreachable, will retry later');
   return null;
 }

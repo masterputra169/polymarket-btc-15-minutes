@@ -11,10 +11,12 @@ const log = createLogger('StatusWS');
 
 const STATUS_PORT = parseInt(process.env.STATUS_PORT || '3099', 10);
 const HEARTBEAT_MS = 30_000;
+const SET_BANKROLL_COOLDOWN_MS = 5_000; // rate limit: 1 setBankroll per 5s
 
 let wss = null;
 let heartbeatInterval = null;
 let lastSnapshot = null;
+let lastSetBankrollMs = 0;
 
 /**
  * Start the status WebSocket server.
@@ -34,11 +36,18 @@ export function startStatusServer() {
     ws.on('pong', () => { ws.isAlive = true; });
     ws.on('error', () => { /* swallow */ });
 
-    // Bidirectional: handle messages from dashboard
+    // Bidirectional: handle messages from dashboard (rate-limited + validated)
     ws.on('message', (raw) => {
       try {
         const msg = JSON.parse(raw);
-        if (msg.type === 'setBankroll' && typeof msg.value === 'number' && msg.value > 0) {
+        if (msg.type === 'setBankroll' && typeof msg.value === 'number' &&
+            Number.isFinite(msg.value) && msg.value > 0 && msg.value <= 1_000_000) {
+          const now = Date.now();
+          if (now - lastSetBankrollMs < SET_BANKROLL_COOLDOWN_MS) {
+            log.debug('setBankroll rate-limited');
+            return;
+          }
+          lastSetBankrollMs = now;
           setBankroll(msg.value);
         }
       } catch (_e) { /* ignore malformed */ }

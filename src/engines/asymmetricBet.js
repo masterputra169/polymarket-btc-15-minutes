@@ -174,8 +174,11 @@ export function computeBetSizing({
     * safeMult(executionAdj.multiplier);
 
   // Clamp (NaN-safe: if adjustedFraction is somehow NaN, default to 0)
+  // Only apply MIN_BET_PCT if Kelly produced a positive fraction; don't force bets when Kelly → 0
   const safeFraction = Number.isFinite(adjustedFraction) ? adjustedFraction : 0;
-  const betPercent = Math.max(MIN_BET_PCT, Math.min(MAX_BET_PCT, safeFraction));
+  const betPercent = safeFraction > 0
+    ? Math.max(MIN_BET_PCT, Math.min(MAX_BET_PCT, safeFraction))
+    : 0;
   const br = bankroll ?? BET_SIZING.DEFAULT_BANKROLL;
   const betAmount = Math.round(betPercent * br * 100) / 100;
 

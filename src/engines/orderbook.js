@@ -87,8 +87,9 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
   // ═══ COMBINE: Imbalance + Price Signal ═══
   // Both agree → strong signal
   // Disagree → weak/neutral
-
-  const combinedScore = imbalance * 0.6 + (priceSignal > 0 ? 0.4 : priceSignal < 0 ? -0.4 : 0);
+  // Use continuous price signal scaled to [-0.4, 0.4] instead of step function
+  const clampedPriceSignal = Math.max(-0.4, Math.min(0.4, priceSignal * 0.8));
+  const combinedScore = imbalance * 0.6 + clampedPriceSignal;
 
   if (combinedScore > 0.15) {
     result.signal = 'UP';

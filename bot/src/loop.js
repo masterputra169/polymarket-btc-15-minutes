@@ -103,6 +103,7 @@ import {
   getConsecutiveLosses,
   getStats,
   getCurrentPosition,
+  unwindPosition,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 
@@ -202,6 +203,12 @@ export async function pollOnce() {
         log.info(`Fill confirmed (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
       } else if (fillResult.cancelled) {
         log.warn('Stale order cancelled — fill timeout exceeded');
+        // Unwind the pre-recorded position (bankroll was already deducted)
+        const pos = getCurrentPosition();
+        if (pos) {
+          unwindPosition();
+          log.info('Position unwound after stale order cancel');
+        }
       }
     }
 
@@ -214,8 +221,21 @@ export async function pollOnce() {
       log.info('Market expired! Forcing fresh discovery...');
       const pos = getCurrentPosition();
       if (pos && pos.marketSlug === currentMarketSlug) {
-        log.warn('Position expired with market — settling as loss');
-        settleTrade(false);
+        // Determine actual outcome: compare current BTC price to PTB
+        const wsPrice = getBinancePrice();
+        const currentBtcPrice = wsPrice || pos.price; // best available price
+        const ptbValue = priceToBeat.value;
+        if (ptbValue != null && currentBtcPrice != null) {
+          const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
+          const won = pos.side === actualResult;
+          log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
+          settleTrade(won);
+          if (!won) recordLoss();
+        } else {
+          log.warn('Position expired — no PTB data, settling as loss');
+          settleTrade(false);
+          recordLoss();
+        }
       }
       resetMarketCache();
     }
@@ -311,9 +331,21 @@ export async function pollOnce() {
 
       const pos = getCurrentPosition();
       if (pos && pos.marketSlug === oldSlug) {
-        log.warn('Position expired on market switch');
-        settleTrade(false);
-        recordLoss(); // trigger cooldown
+        // Determine actual outcome: market resolved, check BTC vs PTB
+        const wsPrice = getBinancePrice();
+        const currentBtcPrice = wsPrice || pos.price;
+        const ptbValue = priceToBeat.value;
+        if (ptbValue != null && currentBtcPrice != null) {
+          const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
+          const won = pos.side === actualResult;
+          log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
+          settleTrade(won);
+          if (!won) recordLoss();
+        } else {
+          log.warn('Position expired on market switch — no PTB data, settling as loss');
+          settleTrade(false);
+          recordLoss();
+        }
       }
 
       resetMarketCache();
@@ -432,7 +464,7 @@ export async function pollOnce() {
       rsi: rsiNow, rsiSlope, macd, vwap: vwapNow, vwapSlope,
       heikenColor: consec.color, heikenCount: consec.count,
       delta1m, delta3m, volumeRecent, volumeAvg,
-      regime: regimeInfo.regime, session: getSessionName(),
+      regime: regimeInfo.regime, regimeConfidence: regimeInfo.confidence, session: getSessionName(),
       minutesLeft: timeLeftMin,
       bestEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
       vwapCrossCount, multiTfAgreement: multiTfConfirm?.agreement ?? false,
@@ -566,19 +598,36 @@ export async function pollOnce() {
           );
         } else {
           try {
+            // Leg 1: Buy UP
             const upResult = await placeBuyOrder({
               tokenId: poly.tokens.upTokenId,
               price: arb.askUp,
               size: arbShares,
             });
-            await placeBuyOrder({
-              tokenId: poly.tokens.downTokenId,
-              price: arb.askDown,
-              size: arbShares,
-            });
-            log.info(`ARB executed: ${arbShares} pairs @ cost $${(arbShares * arb.totalCost).toFixed(2)}`);
+            // Leg 2: Buy DOWN — if this fails, we have one-legged exposure
+            try {
+              await placeBuyOrder({
+                tokenId: poly.tokens.downTokenId,
+                price: arb.askDown,
+                size: arbShares,
+              });
+            } catch (downErr) {
+              // ONE-LEGGED: Only UP bought, DOWN failed — record as directional position
+              log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — recording one-legged UP position`);
+              recordTrade({
+                side: 'UP',
+                tokenId: poly.tokens.upTokenId,
+                price: arb.askUp,
+                size: arbShares,
+                marketSlug,
+                orderId: upResult?.id ?? upResult?.orderID ?? null,
+              });
+              return; // Don't count as successful arb
+            }
+            const arbCost = arbShares * arb.totalCost;
+            log.info(`ARB executed: ${arbShares} pairs @ cost $${arbCost.toFixed(2)} | Expected profit: $${(arbShares * arb.netProfit).toFixed(2)}`);
           } catch (err) {
-            log.error(`ARB order failed: ${err.message}`);
+            log.error(`ARB leg 1 (UP) failed: ${err.message}`);
           }
         }
       }
@@ -643,11 +692,12 @@ export async function pollOnce() {
             if (orderId) {
               trackOrderPlacement(orderId, { tokenId, price: betMarketPrice, size: shares, side: betSide });
             }
+            // Only count as trade if order succeeded (not on failure)
+            recordTradeForMarket(marketSlug);
           } catch (err) {
             log.error(`Order failed: ${err.message}`);
           }
         }
-        if (!BOT_CONFIG.dryRun) recordTradeForMarket(marketSlug);
       } else {
         log.debug(`Trade blocked: ${!priceCheck.valid ? priceCheck.reason : tradeCheck.reason}`);
       }

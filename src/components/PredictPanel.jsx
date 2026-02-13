@@ -27,11 +27,13 @@ function PredictPanel({ data }) {
         : '';
 
   const regimeColor =
-    regimeInfo?.regime === 'TREND_UP'
-      ? 'c-green'
-      : regimeInfo?.regime === 'TREND_DOWN'
+    regimeInfo?.regime === 'trending'
+      ? regimeInfo?.label?.includes('UP') ? 'c-green' : 'c-red'
+      : regimeInfo?.regime === 'choppy'
         ? 'c-red'
-        : 'c-yellow';
+        : regimeInfo?.regime === 'moderate'
+          ? 'c-green'
+          : 'c-yellow';
 
   // Signal quality banner
   const isEnter = rec?.action === 'ENTER';

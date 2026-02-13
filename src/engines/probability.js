@@ -187,11 +187,13 @@ export function scoreDirection({
   }
 
   // ═══ 6. VWAP Slope (weight: 1, reduced from 2) ═══
-  if (vwapSlope !== null) {
-    if (vwapSlope > 0.1) {
+  // Normalize slope to % of VWAP to be price-independent (raw $/candle always > 0.1 for BTC)
+  if (vwapSlope !== null && vwap !== null && vwap > 0) {
+    const normalizedSlope = vwapSlope / vwap;
+    if (normalizedSlope > 0.000001) {
       upScore += 1;
       breakdown.vwapSlope = { signal: 'UP', weight: 1 };
-    } else if (vwapSlope < -0.1) {
+    } else if (normalizedSlope < -0.000001) {
       downScore += 1;
       breakdown.vwapSlope = { signal: 'DOWN', weight: 1 };
     } else {

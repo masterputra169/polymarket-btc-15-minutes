@@ -3,9 +3,9 @@
  */
 
 // Feature counts
-export const BASE_FEATURES = 52;
+export const BASE_FEATURES = 54;
 export const ENGINEERED_FEATURES = 25;
-export const MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 77
+export const MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 79
 
 // Module state
 export let processedTrees = null;

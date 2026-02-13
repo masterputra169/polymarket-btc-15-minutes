@@ -42,7 +42,10 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
 
   const totalCost = askUp + askDown;
   const grossProfit = 1.00 - totalCost;            // guaranteed payout = $1.00
-  const fees = grossProfit > 0 ? Math.round(grossProfit * FEE_RATE * 10000) / 10000 : 0;
+  // Fee is on winning side's profit (1.00 - askWinner), not net arb profit.
+  // Use max winning profit (= 1.00 - min(askUp, askDown)) for conservative estimate.
+  const winnerProfit = grossProfit > 0 ? (1.00 - Math.min(askUp, askDown)) : 0;
+  const fees = winnerProfit > 0 ? Math.round(winnerProfit * FEE_RATE * 10000) / 10000 : 0;
   const netProfit = grossProfit - fees;
 
   // Spread health — wide spreads mean bestAsk is unreliable

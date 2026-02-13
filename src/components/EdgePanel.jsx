@@ -22,15 +22,29 @@ function EdgePanel({ data }) {
     ? mlConf >= ML_CONFIDENCE.HIGH ? 'c-green' : mlConf >= ML_CONFIDENCE.MEDIUM ? 'c-yellow' : 'c-red'
     : 'c-muted';
 
-  // Gate indicators — thresholds match edge.js decide()
+  // Gate indicators — thresholds mirror edge.js decide() including regime + session adjustments
   const bestEdge = edge?.bestEdge ?? 0;
   const bestProb = Math.max(pLong ?? 0, pShort ?? 0);
   let edgePassThreshold = phase === 'EARLY' ? 0.08 : phase === 'MID' ? 0.10 : phase === 'LATE' ? 0.12 : 0.15;
   let probPassThreshold = phase === 'EARLY' ? 0.60 : phase === 'MID' ? 0.58 : phase === 'LATE' ? 0.57 : 0.56;
   const gateMlConf = mlConf !== null && mlConf >= ML_CONFIDENCE.HIGH;
 
-  // Mirror ML relaxation from edge.js: when ML high-conf + agrees with RULES, thresholds drop 2%
-  // Use ruleUp (pure rule-based prob) not pLong (ensemble) to match edge.js logic
+  // Regime-adaptive adjustments (same logic as edge.js decide)
+  const regime = data.regimeInfo;
+  if (regime?.regime) {
+    const scale = Math.min(regime.confidence ?? 0.5, 0.85);
+    if (regime.regime === 'trending') {
+      edgePassThreshold = Math.max(edgePassThreshold - 0.02 * scale, 0.04);
+      probPassThreshold = Math.max(probPassThreshold - 0.02 * scale, 0.52);
+    } else if (regime.regime === 'choppy') {
+      edgePassThreshold = Math.min(edgePassThreshold + 0.03 * scale, 0.25);
+      probPassThreshold = Math.min(probPassThreshold + 0.03 * scale, 0.70);
+    } else if (regime.regime === 'mean_reverting') {
+      edgePassThreshold = Math.min(edgePassThreshold + 0.01 * scale, 0.20);
+    }
+  }
+
+  // ML high-conf relaxation
   const ruleSide = (ruleUp ?? pLong ?? 0) >= 0.5 ? 'UP' : 'DOWN';
   const mlAgreesHere = gateMlConf && ml?.side === ruleSide;
   if (mlAgreesHere) {
@@ -177,9 +191,12 @@ export default memo(EdgePanel, (prev, next) => {
     a.marketDown === b.marketDown &&
     a.rec?.action === b.rec?.action &&
     a.rec?.confidence === b.rec?.confidence &&
+    a.rec?.phase === b.rec?.phase &&
     a.rec?.reason === b.rec?.reason &&
     a.ml?.confidence === b.ml?.confidence &&
     a.ruleUp === b.ruleUp &&
+    a.regimeInfo?.regime === b.regimeInfo?.regime &&
+    a.regimeInfo?.confidence === b.regimeInfo?.confidence &&
     a.arbitrage?.found === b.arbitrage?.found &&
     a.arbitrage?.netProfit === b.arbitrage?.netProfit &&
     a.arbitrage?.profitPct === b.arbitrage?.profitPct &&

@@ -16,10 +16,11 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  */
 
 const BOT_WS_URL = 'ws://localhost:3099';
-const RECONNECT_MIN_MS = 500;
-const RECONNECT_MAX_MS = 10_000;
+const RECONNECT_MIN_MS = 1_000;
+const RECONNECT_MAX_MS = 30_000;
 const STALE_TIMEOUT_MS = 15_000;
 const FLUSH_MS = 500; // Parse + flush to React 2x/sec
+const BACKOFF_PAUSE_AFTER = 5; // After N failures, stop auto-reconnect (only retry on tab focus)
 
 export function useBotData() {
   const [connected, setConnected] = useState(false);
@@ -31,6 +32,7 @@ export function useBotData() {
   const reconMsRef = useRef(RECONNECT_MIN_MS);
   const staleRef = useRef(null);
   const lastMsgRef = useRef(0);
+  const failCountRef = useRef(0);
 
   // Store raw JSON string — only parse on flush
   const rawRef = useRef(null);
@@ -93,6 +95,7 @@ export function useBotData() {
       ws.onopen = () => {
         setConnected(true);
         reconMsRef.current = RECONNECT_MIN_MS;
+        failCountRef.current = 0;
         lastMsgRef.current = Date.now();
         firstMsgRef.current = false; // Reset so first message on new connection flushes immediately
 
@@ -123,6 +126,9 @@ export function useBotData() {
         setConnected(false);
         wsRef.current = null;
         stopStaleCheck();
+        failCountRef.current++;
+        // After too many failures, stop auto-reconnect (only tab focus retries)
+        if (failCountRef.current >= BACKOFF_PAUSE_AFTER) return;
         const wait = reconMsRef.current;
         reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
         reconnectRef.current = setTimeout(connect, wait);
@@ -132,6 +138,8 @@ export function useBotData() {
         try { ws.close(); } catch (_e) { /* */ }
       };
     } catch (_e) {
+      failCountRef.current++;
+      if (failCountRef.current >= BACKOFF_PAUSE_AFTER) return;
       const wait = reconMsRef.current;
       reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
       reconnectRef.current = setTimeout(connect, wait);
@@ -149,13 +157,15 @@ export function useBotData() {
     };
   }, [connect]);
 
-  // Reconnect on tab focus
+  // Reconnect on tab focus (single retry, doesn't reset backoff aggressively)
   useEffect(() => {
     const h = () => {
       if (document.visibilityState !== 'visible') return;
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
         clearTimeout(reconnectRef.current);
+        // Reset fail count so we get one fresh attempt, but keep backoff reasonable
+        failCountRef.current = 0;
         reconMsRef.current = RECONNECT_MIN_MS;
         connect();
       }

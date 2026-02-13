@@ -48,12 +48,15 @@ export async function checkPendingFill() {
     const stillOpen = openOrders.some(o => o.id === pendingOrder.orderId);
 
     if (!stillOpen) {
-      // Order no longer open = filled (or cancelled externally)
+      // Order no longer in open orders — assumed filled.
+      // NOTE: Could also be externally cancelled (user via Polymarket UI).
+      // Polymarket CLOB API doesn't distinguish filled vs cancelled in open orders.
+      // If actually cancelled, loop.js will hold position until market resolves.
       const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
       const fill = { filled: true, timeToFill: elapsed, adverseSelection };
       recordFill(fill);
       log.info(
-        `Order filled in ${(elapsed / 1000).toFixed(1)}s` +
+        `Order ${pendingOrder.orderId} no longer open after ${(elapsed / 1000).toFixed(1)}s — assumed filled` +
         (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
       );
       pendingOrder = null;

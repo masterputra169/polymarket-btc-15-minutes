@@ -89,8 +89,8 @@ export async function fetchChainlinkBtcUsd() {
   const now = Date.now();
   const minInterval = getMinFetchInterval();
 
-  // ═══ FIX: Return cached if still fresh ═══
-  if (cachedFetchedAtMs && now - cachedFetchedAtMs < minInterval && cachedResult.price !== null) {
+  // ═══ FIX: Return cached if still fresh (cooldown applies even when price is null) ═══
+  if (cachedFetchedAtMs && now - cachedFetchedAtMs < minInterval) {
     return cachedResult;
   }
 
