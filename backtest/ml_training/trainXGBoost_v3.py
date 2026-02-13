@@ -42,6 +42,12 @@ parser.add_argument('--deploy', action='store_true')
 parser.add_argument('--days', type=int, default=540)
 parser.add_argument('--zero-features', type=str, default='',
                     help='Comma-separated feature names to zero out before training (e.g., macd_hist,macd_line)')
+parser.add_argument('--exclude-features', type=str, default='',
+                    help='Comma-separated feature names to pre-exclude via feature_weights=0 (applied before Optuna)')
+parser.add_argument('--recency', action='store_true',
+                    help='Apply recency sample weighting (90-day half-life)')
+parser.add_argument('--recency-halflife', type=int, default=90,
+                    help='Half-life in days for recency weighting (default: 90)')
 parser.add_argument('--regime-split', action='store_true',
                     help='Train separate models per regime (trending/moderate/choppy)')
 # Legacy flags kept for compatibility
@@ -59,6 +65,9 @@ if args.tune and not HAS_OPTUNA:
 # Parse --zero-features
 zero_feature_names = [f.strip() for f in args.zero_features.split(',') if f.strip()] if args.zero_features else []
 
+# Parse --exclude-features
+exclude_feature_names = [f.strip() for f in args.exclude_features.split(',') if f.strip()] if args.exclude_features else []
+
 print(f"""
 ==================================================
   XGBoost v8 — Advanced Training Pipeline
@@ -68,6 +77,8 @@ print(f"""
   Test size: {args.test_size}
   Optuna:    {'Yes (' + str(args.tune_trials) + ' trials)' if USE_OPTUNA else 'No (grid search)'}
   Zero-feat: {', '.join(zero_feature_names) if zero_feature_names else 'none'}
+  Exclude:   {len(exclude_feature_names)} features {'(' + ', '.join(exclude_feature_names[:5]) + ('...' if len(exclude_feature_names) > 5 else '') + ')' if exclude_feature_names else 'none'}
+  Recency:   {'Yes (half-life=' + str(args.recency_halflife) + 'd)' if args.recency else 'No'}
 ==================================================
 """)
 
@@ -180,6 +191,19 @@ X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 feature_cols = feature_cols_orig + new_names
 print(f"   +{len(new_names)} engineered = {len(feature_cols)} total features")
 
+# Build pre-exclude feature weights (Task B: zero out consistently pruned features BEFORE Optuna)
+pre_exclude_fw = np.ones(len(feature_cols), dtype=np.float32)
+if exclude_feature_names:
+    fi_all = {name: i for i, name in enumerate(feature_cols)}
+    excluded_count = 0
+    for ef in exclude_feature_names:
+        if ef in fi_all:
+            pre_exclude_fw[fi_all[ef]] = 0.0
+            excluded_count += 1
+        else:
+            print(f"   WARNING: --exclude-features '{ef}' not found in feature list")
+    print(f"   Pre-excluded {excluded_count} features via feature_weights=0")
+
 # ================================================
 # 3. TEMPORAL SPLIT
 # ================================================
@@ -207,9 +231,19 @@ for regime_name, feat_idx in regime_idx.items():
     mask = X_orig[:, feat_idx] > 0.5
     regime_counts[regime_name] = int(mask.sum())
 
-# All weights = 1.0 (no regime weighting)
+# Sample weights: start with uniform, optionally add recency weighting
 w_train = None
 w_test = None
+
+if args.recency:
+    # Task H: Recency-weighted training — recent data matters more
+    # Rows are chronological; estimate days_ago from row position
+    n_train = len(X_train)
+    days_ago = np.linspace(args.days, 0, n_train)  # first row = oldest, last = newest
+    recency_weight = 0.5 + 0.5 * np.exp(-days_ago / args.recency_halflife)
+    w_train = recency_weight.astype(np.float32)
+    print(f"   Recency weighting: half-life={args.recency_halflife}d")
+    print(f"     Oldest sample weight: {w_train[0]:.3f} | Newest: {w_train[-1]:.3f} | Mean: {w_train.mean():.3f}")
 
 for rn, rc in regime_counts.items():
     pct = rc / len(X) * 100
@@ -228,9 +262,10 @@ EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
 # --- Walk-Forward CV ---
-def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False):
+def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False, feat_weights=None):
     """Walk-forward CV: train on folds 1..k, validate on fold k+1.
-    Optionally returns out-of-fold predictions for calibration."""
+    Optionally returns out-of-fold predictions for calibration.
+    feat_weights: optional per-feature weight array (0=exclude from splits)."""
     fold_size = len(X_tr) // (n_folds + 1)
     aucs, accs = [], []
     oof_preds, oof_labels = [], []
@@ -258,8 +293,13 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
             'tree_method': 'hist',
             **cfg,
         }
+        # feature_weights requires colsample_bytree < 1.0
+        if feat_weights is not None and params.get('colsample_bytree', 1.0) >= 1.0:
+            params['colsample_bytree'] = 0.95
 
         dtrain_f = xgb.DMatrix(X_f_train, label=y_f_train, weight=w_f_train, feature_names=feature_cols)
+        if feat_weights is not None:
+            dtrain_f.feature_weights = feat_weights
         dval_f = xgb.DMatrix(X_f_val, label=y_f_val, feature_names=feature_cols)
 
         model_f = xgb.train(
@@ -361,7 +401,7 @@ if USE_OPTUNA:
             'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 2.0, log=True),
             'reg_lambda': trial.suggest_float('reg_lambda', 0.3, 6.0),
         }
-        cv_auc, _ = walk_forward_cv(X_train, y_train, cfg, w_train)
+        cv_auc, _ = walk_forward_cv(X_train, y_train, cfg, w_train, feat_weights=pre_exclude_fw if exclude_feature_names else None)
         if np.isnan(cv_auc) or cv_auc == 0:
             return 0.5  # random chance — bad trial but not NaN
         return cv_auc
@@ -403,7 +443,7 @@ else:
 
     cv_results = {}
     for name, cfg in configs.items():
-        cv_auc, cv_acc = walk_forward_cv(X_train, y_train, cfg, w_train)
+        cv_auc, cv_acc = walk_forward_cv(X_train, y_train, cfg, w_train, feat_weights=pre_exclude_fw if exclude_feature_names else None)
         cv_results[name] = {'auc': cv_auc, 'acc': cv_acc}
         print(f"   {name}: CV acc={cv_acc*100:.1f}% | CV AUC={cv_auc:.4f}")
 
@@ -426,6 +466,11 @@ final_params = {
 }
 
 dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, feature_names=feature_cols)
+if exclude_feature_names:
+    # Ensure colsample_bytree < 1.0 for feature_weights to work
+    if final_params.get('colsample_bytree', 1.0) >= 1.0:
+        final_params['colsample_bytree'] = 0.95
+    dtrain.feature_weights = pre_exclude_fw
 dtest = xgb.DMatrix(X_test, label=y_test, feature_names=feature_cols)
 
 ev = {}
@@ -478,8 +523,12 @@ if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
     if retrain_params.get('colsample_bytree', 1.0) >= 1.0:
         retrain_params['colsample_bytree'] = 0.95
 
+    # Combine pre-exclude weights with soft-pruning weights
+    combined_fw = feature_weights.copy()
+    if exclude_feature_names:
+        combined_fw = np.minimum(combined_fw, pre_exclude_fw)
     dtrain_fw = xgb.DMatrix(X_train, label=y_train, weight=w_train, feature_names=feature_cols)
-    dtrain_fw.feature_weights = feature_weights
+    dtrain_fw.feature_weights = combined_fw
 
     ev2 = {}
     model_pruned = xgb.train(
@@ -514,7 +563,8 @@ print("\n[7/8] Platt calibration...")
 
 # Get out-of-fold predictions for calibration fitting
 cv_auc_final, cv_acc_final, oof_preds, oof_labels = walk_forward_cv(
-    X_train, y_train, best_cfg, w_train, return_preds=True
+    X_train, y_train, best_cfg, w_train, return_preds=True,
+    feat_weights=pre_exclude_fw if exclude_feature_names else None
 )
 print(f"   CV AUC: {cv_auc_final:.4f} | CV acc: {cv_acc_final*100:.1f}%")
 print(f"   Out-of-fold predictions: {len(oof_preds)} samples")
@@ -652,7 +702,9 @@ browser_model = {
     'platt_a': platt_a,
     'platt_b': platt_b,
     'pruned_features': pruned_features,
+    'pre_excluded_features': exclude_feature_names,
     'zero_features': zero_feature_names,
+    'recency_weighting': {'enabled': args.recency, 'halflife_days': args.recency_halflife} if args.recency else None,
     'params': {k: str(v) for k, v in final_params.items()},
     'training_method': 'optuna' if USE_OPTUNA else 'grid_search',
     'metrics': {
@@ -736,6 +788,8 @@ report = [
     f"Platt calibration: A={platt_a:.4f}, B={platt_b:.4f}",
     f"Pruned features ({len(pruned_features)}): {', '.join(pruned_features) if pruned_features else 'none'}",
     f"Zero features: {', '.join(zero_feature_names) if zero_feature_names else 'none'}",
+    f"Pre-excluded: {', '.join(exclude_feature_names) if exclude_feature_names else 'none'}",
+    f"Recency: {'half-life=' + str(args.recency_halflife) + 'd' if args.recency else 'off'}",
     f"CV folds: {N_CV_FOLDS} | Boost rounds: {NUM_BOOST_ROUND} | Early stopping: {EARLY_STOPPING}",
     f"",
     f"Params: {json.dumps({k:v for k,v in final_params.items() if k not in ['objective','eval_metric','tree_method','seed']}, indent=2)}",
@@ -746,7 +800,7 @@ with open(os.path.join(args.output_dir, 'training_report.txt'), 'w') as f:
 
 print(f"""
 ==================================================
-  DONE — {best_cfg_name}
+  XGBoost DONE — {best_cfg_name}
 ==================================================
   Accuracy:     {accuracy*100:.2f}%
   AUC:          {auc:.4f}
@@ -757,9 +811,317 @@ print(f"""
   Platt:        A={platt_a:.4f} B={platt_b:.4f}
   Pruned:       {len(pruned_features)} features
   Zero-feat:    {', '.join(zero_feature_names) if zero_feature_names else 'none'}
+  Pre-excluded: {len(exclude_feature_names)} features
+  Recency:      {'half-life=' + str(args.recency_halflife) + 'd' if args.recency else 'off'}
   Method:       {'Optuna' if USE_OPTUNA else 'Grid search'}
   CV folds:     {N_CV_FOLDS}
 ==================================================
+""")
+
+# ================================================
+# 9. LIGHTGBM ENSEMBLE PARTNER
+# ================================================
+
+try:
+    import lightgbm as lgb
+    HAS_LGB = True
+except ImportError:
+    HAS_LGB = False
+
+lgb_model_final = None
+lgb_platt_a, lgb_platt_b = 1.0, 0.0
+ens_weight_xgb, ens_weight_lgb = 0.5, 0.5
+
+if HAS_LGB:
+    print("[9/9] Training LightGBM ensemble partner...")
+
+    LGB_BOOST_ROUND = 1200
+    LGB_EARLY_STOPPING = 80
+    LGB_OPTUNA_TRIALS = 50
+
+    def lgb_walk_forward_cv(X_tr, y_tr, params, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False):
+        """Walk-forward CV for LightGBM."""
+        fold_size = len(X_tr) // (n_folds + 1)
+        aucs, accs = [], []
+        oof_preds, oof_labels = [], []
+
+        for fold in range(n_folds):
+            tr_end = fold_size * (fold + 2)
+            val_start = tr_end
+            val_end = min(val_start + fold_size, len(X_tr))
+            if val_end <= val_start:
+                continue
+
+            X_f_train = X_tr[:tr_end]
+            y_f_train = y_tr[:tr_end]
+            X_f_val = X_tr[val_start:val_end]
+            y_f_val = y_tr[val_start:val_end]
+            w_f_train = w_tr[:tr_end] if w_tr is not None else None
+
+            dtrain = lgb.Dataset(X_f_train, label=y_f_train, weight=w_f_train,
+                                 feature_name=feature_cols, free_raw_data=False)
+            dval = lgb.Dataset(X_f_val, label=y_f_val,
+                               feature_name=feature_cols, free_raw_data=False, reference=dtrain)
+
+            callbacks = [lgb.early_stopping(LGB_EARLY_STOPPING, verbose=False),
+                         lgb.log_evaluation(period=0)]
+
+            model_f = lgb.train(
+                params, dtrain,
+                num_boost_round=LGB_BOOST_ROUND,
+                valid_sets=[dval],
+                callbacks=callbacks,
+            )
+
+            y_prob_f = model_f.predict(X_f_val)
+
+            if np.any(np.isnan(y_prob_f)):
+                continue
+
+            acc_f = accuracy_score(y_f_val, (y_prob_f >= 0.5).astype(int))
+            try:
+                auc_f = roc_auc_score(y_f_val, y_prob_f)
+            except ValueError:
+                auc_f = 0.5
+            if np.isnan(auc_f):
+                auc_f = 0.5
+            aucs.append(auc_f)
+            accs.append(acc_f)
+
+            if return_preds:
+                oof_preds.extend(y_prob_f.tolist())
+                oof_labels.extend(y_f_val.tolist())
+
+        mean_auc = np.mean(aucs) if aucs else 0
+        mean_acc = np.mean(accs) if accs else 0
+
+        if return_preds:
+            return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_labels)
+        return mean_auc, mean_acc
+
+    # --- LightGBM Hyperparameter Optimization ---
+    lgb_best_params = None
+
+    if USE_OPTUNA:
+        print(f"   Optuna optimization ({LGB_OPTUNA_TRIALS} trials, {N_CV_FOLDS}-fold CV)...")
+
+        def lgb_objective(trial):
+            params = {
+                'objective': 'binary',
+                'metric': ['binary_logloss', 'auc'],
+                'verbosity': -1,
+                'num_leaves': trial.suggest_int('num_leaves', 15, 63),
+                'learning_rate': trial.suggest_float('learning_rate', 0.008, 0.2, log=True),
+                'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 0.95),
+                'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 0.95),
+                'bagging_freq': 5,
+                'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+                'lambda_l1': trial.suggest_float('lambda_l1', 1e-3, 2.0, log=True),
+                'lambda_l2': trial.suggest_float('lambda_l2', 0.3, 6.0),
+            }
+            cv_auc, _ = lgb_walk_forward_cv(X_train, y_train, params, w_train)
+            if np.isnan(cv_auc) or cv_auc == 0:
+                return 0.5
+            return cv_auc
+
+        lgb_study = optuna.create_study(
+            direction='maximize',
+            sampler=optuna.samplers.TPESampler(seed=args.seed + 1),
+        )
+        lgb_study.optimize(lgb_objective, n_trials=LGB_OPTUNA_TRIALS, show_progress_bar=True)
+
+        lgb_best_params = lgb_study.best_trial.params
+        lgb_best_params.update({
+            'objective': 'binary',
+            'metric': ['binary_logloss', 'auc'],
+            'verbosity': -1,
+            'bagging_freq': 5,
+        })
+        print(f"   Best trial #{lgb_study.best_trial.number}: CV AUC = {lgb_study.best_value:.4f}")
+        print(f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in lgb_best_params.items() if k not in ['objective','metric','verbosity']})}")
+    else:
+        # Default LightGBM params (no Optuna)
+        lgb_best_params = {
+            'objective': 'binary',
+            'metric': ['binary_logloss', 'auc'],
+            'verbosity': -1,
+            'num_leaves': 31,
+            'learning_rate': 0.05,
+            'feature_fraction': 0.8,
+            'bagging_fraction': 0.8,
+            'bagging_freq': 5,
+            'min_child_samples': 20,
+            'lambda_l1': 0.1,
+            'lambda_l2': 1.0,
+        }
+        print(f"   Using default LightGBM params (no Optuna)")
+
+    # --- Train final LightGBM model ---
+    print(f"   Training final LightGBM model...")
+
+    lgb_dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train,
+                             feature_name=feature_cols, free_raw_data=False)
+    lgb_dval = lgb.Dataset(X_test, label=y_test,
+                           feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+
+    lgb_callbacks = [lgb.early_stopping(LGB_EARLY_STOPPING, verbose=False),
+                     lgb.log_evaluation(period=0)]
+
+    lgb_model_final = lgb.train(
+        lgb_best_params, lgb_dtrain,
+        num_boost_round=LGB_BOOST_ROUND,
+        valid_sets=[lgb_dval],
+        callbacks=lgb_callbacks,
+    )
+
+    lgb_y_prob = lgb_model_final.predict(X_test)
+    lgb_acc = accuracy_score(y_test, (lgb_y_prob >= 0.5).astype(int))
+    lgb_auc = roc_auc_score(y_test, lgb_y_prob)
+    lgb_n_trees = lgb_model_final.best_iteration if lgb_model_final.best_iteration > 0 else lgb_model_final.num_trees()
+    print(f"   LightGBM: acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f} | trees={lgb_n_trees}")
+
+    # --- LightGBM Platt Calibration ---
+    print(f"   LightGBM Platt calibration...")
+    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_labels = lgb_walk_forward_cv(
+        X_train, y_train, lgb_best_params, w_train, return_preds=True
+    )
+    print(f"   LGB CV AUC: {lgb_cv_auc:.4f} | CV acc: {lgb_cv_acc*100:.1f}%")
+
+    if len(lgb_oof_preds) > 100:
+        lgb_lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
+        lgb_lr.fit(lgb_oof_preds.reshape(-1, 1), lgb_oof_labels)
+        lgb_platt_a = float(lgb_lr.coef_[0][0])
+        lgb_platt_b = float(lgb_lr.intercept_[0])
+
+        lgb_y_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_prob + lgb_platt_b)))
+        lgb_cal_acc = accuracy_score(y_test, (lgb_y_cal >= 0.5).astype(int))
+        lgb_cal_auc = roc_auc_score(y_test, lgb_y_cal)
+
+        if lgb_cal_auc < lgb_auc - 0.005:
+            print(f"   [WARN] LGB calibration hurts AUC, disabling")
+            lgb_platt_a, lgb_platt_b = 1.0, 0.0
+        else:
+            print(f"   LGB Platt: A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
+            print(f"   LGB calibrated: acc={lgb_cal_acc*100:.1f}% | AUC={lgb_cal_auc:.4f}")
+
+    # --- Ensemble Weight Optimization ---
+    print(f"\n   Optimizing ensemble weights...")
+    xgb_cal_probs = y_prob_final
+    lgb_cal_probs = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_prob + lgb_platt_b)))
+
+    best_ens_auc = 0
+    best_ens_w = 0.5
+    for w in np.arange(0.25, 0.80, 0.05):
+        ens_prob = w * xgb_cal_probs + (1 - w) * lgb_cal_probs
+        ens_auc_val = roc_auc_score(y_test, ens_prob)
+        if ens_auc_val > best_ens_auc:
+            best_ens_auc = ens_auc_val
+            best_ens_w = w
+
+    ens_weight_xgb = round(best_ens_w, 3)
+    ens_weight_lgb = round(1 - best_ens_w, 3)
+
+    ens_prob_final = ens_weight_xgb * xgb_cal_probs + ens_weight_lgb * lgb_cal_probs
+    ens_acc = accuracy_score(y_test, (ens_prob_final >= 0.5).astype(int))
+    ens_auc_final = roc_auc_score(y_test, ens_prob_final)
+
+    print(f"\n   === Ensemble Results ===")
+    print(f"   XGB weight: {ens_weight_xgb} | LGB weight: {ens_weight_lgb}")
+    print(f"   XGB only:   acc={accuracy*100:.1f}% | AUC={auc:.4f}")
+    print(f"   LGB only:   acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f}")
+    print(f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f}")
+
+    # --- Export LightGBM model ---
+    print(f"\n   Exporting LightGBM model...")
+    lgb_dump = lgb_model_final.dump_model()
+
+    # Compute init_score for browser inference
+    label_mean = float(np.average(y_train, weights=w_train)) if w_train is not None else float(y_train.mean())
+    lgb_init_score = float(np.log(label_mean / (1 - label_mean)))
+
+    lgb_browser = {
+        'format': 'lightgbm_json_v1',
+        'version': 1,
+        'num_features': len(feature_cols),
+        'num_trees': lgb_n_trees,
+        'feature_names': feature_cols,
+        'init_score': lgb_init_score,
+        'platt_a': lgb_platt_a,
+        'platt_b': lgb_platt_b,
+        'metrics': {
+            'accuracy': round(lgb_acc, 4),
+            'auc': round(lgb_auc, 4),
+        },
+        'ensemble_weights': {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
+        'tree_info': lgb_dump['tree_info'][:lgb_n_trees],
+    }
+
+    lgb_path = os.path.join(args.output_dir, 'lightgbm_model.json')
+    with open(lgb_path, 'w') as f:
+        json.dump(lgb_browser, f)
+    lgb_mb = os.path.getsize(lgb_path) / 1024 / 1024
+    print(f"   LGB model: {lgb_path} ({lgb_mb:.1f} MB)")
+
+    # --- Update norm_browser.json with ensemble info ---
+    norm['ensemble_weights'] = {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb}
+    norm['lgb_platt_a'] = lgb_platt_a
+    norm['lgb_platt_b'] = lgb_platt_b
+
+    with open(os.path.join(args.output_dir, 'norm_browser.json'), 'w') as f:
+        json.dump(norm, f, indent=2)
+    print(f"   Updated norm_browser.json with ensemble weights")
+
+    # --- Verify browser inference consistency ---
+    print(f"\n   Verifying LGB browser inference...")
+    def _traverse_lgb_tree(node, features):
+        if 'leaf_value' in node:
+            return node['leaf_value']
+        fi = node['split_feature']
+        thr = node['threshold']
+        val = features[fi]
+        default_left = node.get('default_left', True)
+        if np.isnan(val):
+            return _traverse_lgb_tree(node['left_child'] if default_left else node['right_child'], features)
+        if val <= thr:
+            return _traverse_lgb_tree(node['left_child'], features)
+        else:
+            return _traverse_lgb_tree(node['right_child'], features)
+
+    model_raw_scores = lgb_model_final.predict(X_test[:5], raw_score=True)
+    max_diff = 0
+    for i in range(5):
+        manual_raw = lgb_init_score
+        for ti in lgb_dump['tree_info'][:lgb_n_trees]:
+            manual_raw += _traverse_lgb_tree(ti['tree_structure'], X_test[i])
+        diff = abs(model_raw_scores[i] - manual_raw)
+        max_diff = max(max_diff, diff)
+    print(f"   Max raw score diff (model vs manual): {max_diff:.8f}")
+    if max_diff > 0.01:
+        print(f"   [WARN] Large inference discrepancy! Browser predictions may differ.")
+    else:
+        print(f"   [OK] Browser inference verified")
+
+    print(f"""
+==================================================
+  ENSEMBLE DONE
+==================================================
+  XGB:      acc={accuracy*100:.2f}% | AUC={auc:.4f} | {len(best_trees)} trees
+  LGB:      acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f} | {lgb_n_trees} trees
+  Ensemble: acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f} (w={ens_weight_xgb}/{ens_weight_lgb})
+  Target: >=60% acc, >=70% high-conf
+==================================================
+""")
+
+else:
+    print("\n[9/9] LightGBM not available — XGBoost only")
+    print("   Install with: pip install lightgbm")
+    print(f"""
+==================================================
+  DONE — {best_cfg_name} (XGBoost only)
+==================================================
+  Accuracy:     {accuracy*100:.2f}%
+  AUC:          {auc:.4f}
+  High-conf:    {hc_acc*100:.1f}% ({hc_count:,} signals)
   Target: >=60% acc, >=70% high-conf
 ==================================================
 """)

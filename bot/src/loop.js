@@ -129,6 +129,9 @@ import {
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
 
+// Live Polymarket data logger (writes CSV to backtest/ml_training/)
+import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.js';
+
 const log = createLogger('Loop');
 
 // ── Module-level state ──
@@ -342,6 +345,7 @@ export async function pollOnce() {
       volumeRecent, volumeAvg, failedVwapReclaim,
       regimeInfo, lastClose, delta1m, delta3m,
       volProfile, realizedVol, multiTfConfirm,
+      momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
     } = ind;
 
     // Price to beat
@@ -442,12 +446,12 @@ export async function pollOnce() {
       emaCrossSignal: emaCross?.cross === 'BULL_CROSS' ? 1 : emaCross?.cross === 'BEAR_CROSS' ? -1 : 0,
       stochK: stochRsi?.k ?? null,
       stochKD: stochRsi ? (stochRsi.k - stochRsi.d) : null,
-      fundingRatePct: fundingRate?.ratePct ?? null,
-      fundingSentiment: fundingRate?.sentiment ?? 'NEUTRAL',
+      fundingRate,
       marketYesPrice: marketUp,
       marketPriceMomentum,
       orderbookImbalance: orderbookSignal?.imbalance ?? null,
       spreadPct: orderbookUp?.spread ?? null,
+      momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
     }, timeAware.adjustedUp);
 
     // ── 9. Ensemble edge (spread-aware) ──
@@ -462,6 +466,33 @@ export async function pollOnce() {
     const ruleSide = timeAware.adjustedUp >= 0.5 ? 'UP' : 'DOWN';
     const mlAgreesWithRules = mlResult.available && mlResult.mlSide === ruleSide;
 
+    // ── Log real Polymarket data for ML training (every 30s, zero alloc when throttled) ──
+    if (shouldLogPoly() && lastPrice && marketSlug) {
+      logPolySnapshot({
+        btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug,
+        marketUp, marketDown, marketPriceMomentum,
+        orderbookImbalance: orderbookSignal?.imbalance,
+        spreadPct: orderbookUp?.spread,
+        rsi: rsiNow, rsiSlope, macdHist: macd?.hist, macdLine: macd?.line,
+        vwapNow, vwapSlope, haColor: consec.color, haCount: consec.count,
+        delta1m, delta3m, volumeRecent, volumeAvg,
+        regime: regimeInfo.regime, regimeConfidence: regimeInfo.confidence,
+        timeLeftMin,
+        bbWidth: bb?.width, bbPercentB: bb?.percentB,
+        bbSqueeze: bb?.squeeze, bbSqueezeIntensity: bb?.squeezeIntensity,
+        atrPct: atr?.atrPct, atrRatio: atr?.atrRatio,
+        volDeltaBuyRatio: volDelta?.buyRatio, volDeltaAccel: volDelta?.deltaAccel,
+        emaDistPct: emaCross?.distancePct,
+        emaCrossSignal: emaCross?.cross === 'BULL_CROSS' ? 1 : emaCross?.cross === 'BEAR_CROSS' ? -1 : 0,
+        stochK: stochRsi?.k, stochKD: stochRsi ? (stochRsi.k - stochRsi.d) : null,
+        vwapCrossCount, multiTfAgreement: multiTfConfirm?.agreement,
+        failedVwapReclaim, fundingRate: null,
+        momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
+        ruleEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
+        ensembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
+      });
+    }
+
     // ── 10. Decision ──
     const rec = decide({
       remainingMinutes: timeLeftMin,
@@ -472,6 +503,7 @@ export async function pollOnce() {
       mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
       mlAgreesWithRules,
       regimeInfo,
+      session: getSessionName(),
     });
     rec.strength = rec.confidence;
     rec.edge = edge.bestEdge;

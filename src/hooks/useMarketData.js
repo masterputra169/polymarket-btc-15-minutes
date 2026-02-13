@@ -194,6 +194,7 @@ export function useMarketData({ clobWs } = {}) {
         volumeRecent, volumeAvg, failedVwapReclaim,
         regimeInfo, lastClose, delta1m, delta3m,
         volProfile, realizedVol, multiTfConfirm,
+        momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
       } = ind;
 
       const marketQuestion = poly.ok ? (poly.market?.question ?? poly.market?.title ?? '') : '';
@@ -299,6 +300,8 @@ export function useMarketData({ clobWs } = {}) {
         marketPriceMomentum,
         orderbookImbalance: orderbookSignal?.imbalance ?? null,
         spreadPct: wsOrderbook?.up?.spread ?? null,
+        momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
+        fundingRate,
       }, timeAware.adjustedUp);
 
       // ═══ Step 3: Recompute edge using ML ensemble probability ═══
@@ -324,6 +327,7 @@ export function useMarketData({ clobWs } = {}) {
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
         mlAgreesWithRules,
         regimeInfo,
+        session: getSessionName(),
       });
       // Map strength + edge onto rec for UI consumption
       rec.strength = rec.confidence;
@@ -450,6 +454,11 @@ export function useMarketData({ clobWs } = {}) {
         vwapCrossCount,
         failedVwapReclaim,
         betSizing,
+        // ML input features (needed for training data logger)
+        momentum5CandleSlope,
+        volatilityChangeRatio,
+        priceConsistency,
+        marketPriceMomentum,
         ml: mlResult.available ? {
           probUp: mlResult.mlProbUp,
           confidence: mlResult.mlConfidence,

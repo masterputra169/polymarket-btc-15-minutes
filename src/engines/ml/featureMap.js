@@ -21,6 +21,7 @@ export const FI = {
   hour_sin: 42, hour_cos: 43,
   market_yes_price: 44, market_price_momentum: 45, orderbook_imbalance: 46,
   spread_pct: 47, crowd_model_divergence: 48,
+  momentum_5candle_slope: 49, volatility_change_ratio: 50, price_consistency: 51,
 };
 
 export function resolveFeatureIdx(splitName) {

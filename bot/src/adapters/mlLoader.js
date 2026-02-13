@@ -4,13 +4,16 @@
  * After loading into shared state, all inference functions work unchanged.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 
 // Import ML internals to populate shared state
 import * as S from '../../../src/engines/ml/state.js';
 import { indexTree } from '../../../src/engines/ml/treeEval.js';
+import { loadLgbModelFromData, isLgbReady } from '../../../src/engines/ml/lgbPredictor.js';
 
 // Re-export all inference functions — they work unchanged after state is loaded
 export {
@@ -20,10 +23,12 @@ export {
   predictML,
 } from '../../../src/engines/Mlpredictor.js';
 
+import { setEnsembleWeights } from '../../../src/engines/Mlpredictor.js';
+
 const log = createLogger('ML');
 
 /**
- * Load XGBoost model from disk into shared ML state.
+ * Load XGBoost + LightGBM models from disk into shared ML state.
  * Same logic as Mlpredictor.js loadMLModel() but uses fs.readFileSync().
  */
 export function loadMLModelFromDisk() {
@@ -85,6 +90,24 @@ export function loadMLModelFromDisk() {
         `${((rawModel.metrics.high_conf_accuracy || 0) * 100).toFixed(1)}% high-conf ` +
         `(threshold=${threshold})`
       );
+    }
+
+    // Load LightGBM model if available
+    const lgbPath = BOT_CONFIG.modelPath.replace('xgboost_model.json', 'lightgbm_model.json');
+    if (existsSync(lgbPath)) {
+      try {
+        const lgbData = JSON.parse(readFileSync(lgbPath, 'utf-8'));
+        loadLgbModelFromData(lgbData);
+        log.info(`LightGBM loaded: ${lgbData.num_trees} trees`);
+
+        // Load ensemble weights from norm
+        if (rawNorm.ensemble_weights) {
+          setEnsembleWeights(rawNorm.ensemble_weights.xgb ?? 0.5, rawNorm.ensemble_weights.lgb ?? 0.5);
+          log.info(`Ensemble weights: XGB=${rawNorm.ensemble_weights.xgb} LGB=${rawNorm.ensemble_weights.lgb}`);
+        }
+      } catch (lgbErr) {
+        log.warn(`LightGBM not loaded: ${lgbErr.message}`);
+      }
     }
 
     return true;

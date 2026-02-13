@@ -136,6 +136,7 @@ export function decide({
   mlConfidence = null,
   mlAgreesWithRules = false,
   regimeInfo = null,
+  session = null,
 }) {
   // ═══ Phase thresholds v2 (stricter) ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
@@ -181,6 +182,24 @@ export function decide({
       case 'mean_reverting':
         minEdge = Math.min(minEdge + 0.01 * scale, 0.20);
         break;
+    }
+  }
+
+  // ═══ Session-adaptive thresholds ═══
+  // Asia/Off-hours: tighten (noisy/thin liquidity)
+  // US/EU-US Overlap: relax (predictable trends, high volume)
+  if (session) {
+    const SESSION_ADJ = {
+      'Asia':          { edgeAdj: +0.02, probAdj: +0.02 },
+      'US':            { edgeAdj: -0.01, probAdj: -0.01 },
+      'EU/US Overlap': { edgeAdj: -0.02, probAdj: -0.01 },
+      'Europe':        { edgeAdj:  0,    probAdj:  0    },
+      'Off-hours':     { edgeAdj: +0.03, probAdj: +0.02 },
+    };
+    const adj = SESSION_ADJ[session];
+    if (adj) {
+      minEdge = Math.max(minEdge + adj.edgeAdj, 0.04);
+      minProb = Math.max(Math.min(minProb + adj.probAdj, 0.70), 0.52);
     }
   }
 

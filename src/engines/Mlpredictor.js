@@ -1,9 +1,13 @@
 /**
- * ═══ ML Predictor (Browser) — XGBoost Inference v5 ═══
+ * ═══ ML Predictor (Browser) — XGBoost + LightGBM Ensemble v6 ═══
  *
  * Thin facade re-exporting the same public API from split modules.
  * Internal modules: ml/state, ml/featureMap, ml/featureExtract,
- *   ml/treeEval, ml/ensemble, ml/calibration
+ *   ml/treeEval, ml/ensemble, ml/calibration, ml/lgbPredictor
+ *
+ * v6: Adds LightGBM as ensemble partner. Averages XGB and LGB
+ * calibrated probabilities using trained weights. Falls back to
+ * XGB-only if LGB model is not available.
  */
 
 import { ML_CONFIDENCE } from '../config.js';
@@ -13,8 +17,19 @@ import { indexTree, predictXGBoost } from './ml/treeEval.js';
 import { calibrate } from './ml/calibration.js';
 import { featureBuf, extractLiveFeaturesInPlace } from './ml/featureExtract.js';
 import { ensemblePrediction } from './ml/ensemble.js';
+import { loadLgbModel, isLgbReady, predictLgb, unloadLgbModel } from './ml/lgbPredictor.js';
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
+
+// Ensemble weights (loaded from norm_browser.json or model metadata)
+let ensembleWeightXgb = 0.5;
+let ensembleWeightLgb = 0.5;
+
+/** Set ensemble weights (used by bot's disk-based loader). */
+export function setEnsembleWeights(xgb, lgb) {
+  ensembleWeightXgb = xgb;
+  ensembleWeightLgb = lgb;
+}
 
 // ═══ Public API ═══
 
@@ -86,6 +101,20 @@ export async function loadMLModel(
       );
     }
 
+    // Load LightGBM model (non-blocking, graceful degradation)
+    loadLgbModel().then(ok => {
+      if (ok) {
+        // Try to load ensemble weights from norm_browser.json
+        fetch('/ml/norm_browser.json').then(r => r.json()).then(norm => {
+          if (norm.ensemble_weights) {
+            ensembleWeightXgb = norm.ensemble_weights.xgb ?? 0.5;
+            ensembleWeightLgb = norm.ensemble_weights.lgb ?? 0.5;
+            console.log(`[ML] Ensemble weights: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
+          }
+        }).catch(() => {});
+      }
+    });
+
     return true;
   } catch (err) {
     console.warn('[ML] Failed to load model:', err.message);
@@ -109,11 +138,12 @@ export function getMLStatus() {
       memoryKB: S.modelMemoryKB,
       metrics: S.modelMetrics,
       error: null,
+      lgbReady: isLgbReady(),
     };
   }
-  if (S.isLoading) return { status: 'loading', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: null };
-  if (S.loadError) return { status: 'error', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: S.loadError };
-  return { status: 'not_loaded', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: null };
+  if (S.isLoading) return { status: 'loading', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: null, lgbReady: false };
+  if (S.loadError) return { status: 'error', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: S.loadError, lgbReady: false };
+  return { status: 'not_loaded', version: 0, trees: 0, features: 0, threshold: 0.65, memoryKB: 0, metrics: null, error: null, lgbReady: false };
 }
 
 export function unloadMLModel() {
@@ -128,16 +158,31 @@ export function unloadMLModel() {
     plattA: 1.0,
     plattB: 0.0,
   });
-  if (IS_DEV) console.log('[ML] Model unloaded');
+  unloadLgbModel();
+  if (IS_DEV) console.log('[ML] Models unloaded');
 }
 
 export function predictML(features) {
   if (!S.processedTrees) return null;
 
-  let probUp = predictXGBoost(features);
-  if (probUp === null) return null;
+  // XGBoost prediction
+  let xgbProb = predictXGBoost(features);
+  if (xgbProb === null) return null;
+  xgbProb = calibrate(xgbProb);
 
-  probUp = calibrate(probUp);
+  // LightGBM prediction (if available)
+  let probUp;
+  if (isLgbReady()) {
+    const lgbProb = predictLgb(features);
+    if (lgbProb !== null) {
+      // Weighted ensemble
+      probUp = ensembleWeightXgb * xgbProb + ensembleWeightLgb * lgbProb;
+    } else {
+      probUp = xgbProb;
+    }
+  } else {
+    probUp = xgbProb;
+  }
 
   const confidence = Math.abs(probUp - 0.5) * 2;
   const side = probUp >= 0.5 ? 'UP' : 'DOWN';

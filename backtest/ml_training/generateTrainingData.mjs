@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * ═══ Generate Training Data for XGBoost (49 Features) ═══
+ * ═══ Generate Training Data for XGBoost (54 Features) ═══
  *
  * Fetches historical Binance BTCUSDT klines and computes the same
- * 49 base features used in live prediction (Mlpredictor.js).
- * (44 original + 5 simulated Polymarket features)
+ * 54 base features used in live prediction (Mlpredictor.js).
+ * (44 original + 5 simulated Polymarket + 3 lag features + 2 funding rate)
  *
- * Output: training_data.csv with 49 feature columns + label column
+ * Output: training_data.csv with 54 feature columns + label column
  *
  * Usage:
  *   node generateTrainingData.mjs [--days 30] [--interval 1m] [--output training_data.csv]
@@ -25,7 +25,7 @@ const CANDLE_INTERVAL = '1m';
 const OUTPUT_FILE = ARGS.output || 'training_data.csv';
 const PREDICTION_WINDOW = 15; // minutes ahead for label
 const LIMIT_PER_REQUEST = 1000;
-const MIN_MOVE_PCT = ARGS['min-move'] != null ? parseFloat(ARGS['min-move']) : 0.0005; // 0.05% min move — filters ~30% ambiguous coin-flip samples
+const MIN_MOVE_PCT = ARGS['min-move'] != null ? parseFloat(ARGS['min-move']) : 0.0008; // 0.08% min move — filters noise while keeping ~55k samples
 
 // Proxy support for regions where Binance is blocked (e.g., Indonesia)
 // Usage: --proxy http://localhost:3001  (your local proxy)
@@ -754,6 +754,20 @@ function getSessionName(timestamp) {
   return 'Off-hours';
 }
 
+// ═══ FUNDING RATE LOOKUP ═══
+// Binary search for most recent funding rate at or before given timestamp
+function lookupFundingRate(fundingRates, timestamp) {
+  if (!fundingRates || fundingRates.length === 0) return null;
+  let lo = 0, hi = fundingRates.length - 1;
+  if (fundingRates[0].time > timestamp) return null;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (fundingRates[mid].time <= timestamp) lo = mid;
+    else hi = mid - 1;
+  }
+  return fundingRates[lo];
+}
+
 // ═══ FEATURE EXTRACTION (mirrors Mlpredictor.js exactly) ═══
 function extractFeatures(candles, idx, candles5m, fundingRates) {
   // We need at least MIN_LOOKBACK candles before idx
@@ -884,8 +898,9 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   // ═══ StochRSI ═══
   const stoch = computeStochRSI(closes, 14, 14, 3, 3);
 
-  // ═══ BUILD 49-FEATURE VECTOR (exact same order as Mlpredictor.js) ═══
-  const features = new Array(49);
+  // ═══ BUILD 54-FEATURE VECTOR (exact same order as Mlpredictor.js) ═══
+  // 49 original base + 3 lag features + 2 funding rate
+  const features = new Array(54);
 
   // Numerical (16)
   features[0]  = ptbDistPct;
@@ -978,6 +993,54 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   // [48] crowd_model_divergence — |rule prob - simulated market yes|
   features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - simMarketYes);
 
+  // ═══ Lag features (temporal memory) — [49-51] ═══
+
+  // [49] momentum_5candle_slope — 5-candle price slope, normalized by price
+  const slope5 = cLen >= 6 ? (closes[cLen - 1] - closes[cLen - 6]) / (5 * price) : 0;
+  features[49] = Math.max(-0.01, Math.min(0.01, slope5));
+
+  // [50] volatility_change_ratio — stddev(returns last 5) / stddev(returns last 20)
+  // Captures short-term vol expansion/contraction
+  let volChangeRatio = 0.5;
+  if (cLen >= 21) {
+    const returns5 = [];
+    for (let k = cLen - 5; k < cLen; k++) returns5.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    const returns20 = [];
+    for (let k = cLen - 20; k < cLen; k++) returns20.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    const stddev = (arr) => {
+      const mu = arr.reduce((a, b) => a + b, 0) / arr.length;
+      return Math.sqrt(arr.reduce((s, v) => s + (v - mu) ** 2, 0) / arr.length);
+    };
+    const std5 = stddev(returns5);
+    const std20 = stddev(returns20);
+    volChangeRatio = std20 > 1e-10 ? std5 / std20 : 1;
+  }
+  features[50] = Math.min(volChangeRatio, 3) / 3;
+
+  // [51] price_consistency — fraction of last 10 candles moving in same direction as current delta1m
+  let consistency = 0.5;
+  if (cLen >= 11 && delta1m !== 0) {
+    const dir = delta1m > 0 ? 1 : -1;
+    let sameDir = 0;
+    for (let k = cLen - 10; k < cLen; k++) {
+      const candleDir = closes[k] > closes[k - 1] ? 1 : closes[k] < closes[k - 1] ? -1 : 0;
+      if (candleDir === dir) sameDir++;
+    }
+    consistency = sameDir / 10;
+  }
+  features[51] = consistency;
+
+  // ═══ Funding rate features (2) — [52-53] ═══
+  const fr = lookupFundingRate(fundingRates, timestamp);
+  const frRate = fr?.rate ?? 0; // raw rate, e.g., 0.0001
+  const frRatePct = frRate * 100; // as percent, e.g., 0.01
+  features[52] = Math.max(-1, Math.min(1, frRatePct / 0.1)); // funding_rate_norm
+
+  // funding_rate_change: current rate vs 8h ago (direction of sentiment shift)
+  const fr8hAgo = lookupFundingRate(fundingRates, timestamp - 8 * 3600_000);
+  const rate8h = fr8hAgo?.rate ?? 0;
+  features[53] = Math.max(-1, Math.min(1, (frRate - rate8h) * 1000)); // funding_rate_change
+
   return { features, label };
 }
 
@@ -999,11 +1062,13 @@ const FEATURE_NAMES = [
   'hour_sin', 'hour_cos',
   'market_yes_price', 'market_price_momentum', 'orderbook_imbalance',
   'spread_pct', 'crowd_model_divergence',
+  'momentum_5candle_slope', 'volatility_change_ratio', 'price_consistency',
+  'funding_rate_norm', 'funding_rate_change',
 ];
 
 // ═══ MAIN ═══
 async function main() {
-  console.log(`\n=== Training Data Generator v8 (49 features + min-move filter) ===`);
+  console.log(`\n=== Training Data Generator v11 (54 features + funding rate + min-move filter) ===`);
   console.log(`Days: ${DAYS} | Window: ${PREDICTION_WINDOW}min | Min-move: ${(MIN_MOVE_PCT*100).toFixed(3)}% | Output: ${OUTPUT_FILE}`);
   if (PROXY_URL) {
     console.log(`API: ${PROXY_URL} (proxy mode)`);
@@ -1016,10 +1081,10 @@ async function main() {
   // Seed PRNG for reproducible minutesLeft values
   seedRng(42);
 
-  // Fetch data (funding rates no longer needed — features replaced with volume_acceleration/bb_squeeze)
+  // Fetch data
   const candles1m = await fetchAllKlines(DAYS);
   const candles5m = await fetchAllKlines5m(DAYS);
-  const fundingRates = []; // kept for API compat
+  const fundingRates = await fetchFundingRates(DAYS);
 
   // Generate features
   console.log(`\n🔧 Generating features (min-move filter: ${(MIN_MOVE_PCT*100).toFixed(3)}%)...`);
@@ -1052,7 +1117,7 @@ async function main() {
   console.log(`💾 Saved to ${OUTPUT_FILE} (${(fs.statSync(OUTPUT_FILE).size / 1024 / 1024).toFixed(1)} MB)`);
 
   // Compute and save normalization stats
-  const nf = FEATURE_NAMES.length; // 49
+  const nf = FEATURE_NAMES.length; // 54
   const means = new Array(nf).fill(0);
   const stds = new Array(nf).fill(0);
   const n = rows.length;

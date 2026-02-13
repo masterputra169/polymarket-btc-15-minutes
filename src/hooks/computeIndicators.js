@@ -124,6 +124,31 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
     rsi1m: rsiNow, rsi5m,
   });
 
+  // Lag features (temporal memory for ML)
+  const momentum5CandleSlope = cLen >= 6
+    ? (closes[cLen - 1] - closes[cLen - 6]) / (5 * (lastPrice || closes[cLen - 1])) : 0;
+
+  let volatilityChangeRatio = 1;
+  if (cLen >= 21) {
+    const r5 = [], r20 = [];
+    for (let k = cLen - 5; k < cLen; k++) r5.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    for (let k = cLen - 20; k < cLen; k++) r20.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    const std = (arr) => { const mu = arr.reduce((a, b) => a + b, 0) / arr.length; return Math.sqrt(arr.reduce((s, v) => s + (v - mu) ** 2, 0) / arr.length); };
+    const s5 = std(r5), s20 = std(r20);
+    volatilityChangeRatio = s20 > 1e-10 ? s5 / s20 : 1;
+  }
+
+  let priceConsistency = 0.5;
+  if (cLen >= 11 && delta1m) {
+    const dir = delta1m > 0 ? 1 : -1;
+    let same = 0;
+    for (let k = cLen - 10; k < cLen; k++) {
+      const d = closes[k] > closes[k - 1] ? 1 : closes[k] < closes[k - 1] ? -1 : 0;
+      if (d === dir) same++;
+    }
+    priceConsistency = same / 10;
+  }
+
   return {
     closes, vwapSeries, vwapNow, vwapSlope, vwapDist,
     rsiNow, rsiSlope, macd, consec, vwapCrossCount,
@@ -131,5 +156,6 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
     volumeRecent, volumeAvg, failedVwapReclaim,
     regimeInfo, lastClose, delta1m, delta3m,
     volProfile, realizedVol, multiTfConfirm,
+    momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   };
 }

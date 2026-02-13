@@ -1,6 +1,7 @@
-import React, { useMemo, memo } from 'react';
+import React, { useMemo, useEffect, memo } from 'react';
 import { useBotData } from './hooks/useBotData.js';
 import { useCountdown } from './hooks/useCountdown.js';
+import { initLoggerDB, shouldLog, logSnapshot } from './data/polymarketLogger.js';
 import CurrentPriceCard from './components/CurrentPriceCard.jsx';
 import TAIndicators from './components/TAIndicators.jsx';
 import PredictPanel from './components/PredictPanel.jsx';
@@ -26,6 +27,57 @@ const StatusDot = memo(function StatusDot({ connected, label }) {
 export default function App() {
   // ═══ Single data source: bot via WebSocket ═══
   const { data, loading, error, setBankroll, botConnected, binancePrice, binancePrevPrice } = useBotData();
+
+  // ═══ Polymarket training data logger (IndexedDB, every 30s) ═══
+  useEffect(() => { initLoggerDB(); }, []);
+  useEffect(() => {
+    if (!data || !shouldLog()) return;
+    logSnapshot({
+      timestamp: Date.now(),
+      btcPrice: data.lastPrice,
+      priceToBeat: data.priceToBeat,
+      marketSlug: data.marketSlug,
+      marketUp: data.marketUp,
+      marketDown: data.marketDown,
+      marketPriceMomentum: data.marketPriceMomentum ?? 0,
+      orderbookImbalance: data.orderbookSignal?.imbalance ?? null,
+      spreadPct: data.orderbookUp?.spread ?? null,
+      rsi: data.rsiNow,
+      rsiSlope: data.rsiSlope,
+      macdHist: data.macd?.hist ?? null,
+      macdLine: data.macd?.line ?? null,
+      vwapNow: data.vwapNow,
+      vwapSlope: data.vwapSlope,
+      haColor: data.consec?.color ?? null,
+      haCount: data.consec?.count ?? 0,
+      delta1m: data.delta1m,
+      delta3m: data.delta3m,
+      volumeRecent: data.volumeRecent,
+      volumeAvg: data.volumeAvg,
+      regime: data.regimeInfo?.regime ?? 'unknown',
+      regimeConfidence: data.regimeInfo?.confidence ?? 0,
+      timeLeftMin: data.timeLeftMin,
+      bbWidth: data.bb?.width ?? null,
+      bbPercentB: data.bb?.percentB ?? null,
+      bbSqueeze: data.bb?.squeeze ?? false,
+      bbSqueezeIntensity: data.bb?.squeezeIntensity ?? 0,
+      atrPct: data.atr?.atrPct ?? null,
+      atrRatio: data.atr?.atrRatio ?? null,
+      volDeltaBuyRatio: data.volDelta?.buyRatio ?? null,
+      volDeltaAccel: data.volDelta?.deltaAccel ?? null,
+      emaDistPct: data.emaCross?.distancePct ?? null,
+      emaCrossSignal: data.emaCross?.cross === 'BULL_CROSS' ? 1 : data.emaCross?.cross === 'BEAR_CROSS' ? -1 : 0,
+      stochK: data.stochRsi?.k ?? null,
+      stochKD: data.stochRsi ? (data.stochRsi.k - data.stochRsi.d) : null,
+      vwapCrossCount: data.vwapCrossCount ?? 0,
+      multiTfAgreement: data.multiTfConfirm?.agreement ?? false,
+      failedVwapReclaim: data.failedVwapReclaim ?? false,
+      fundingRate: data.fundingRate?.rate ?? null,
+      momentum5CandleSlope: data.momentum5CandleSlope ?? 0,
+      volatilityChangeRatio: data.volatilityChangeRatio ?? 1,
+      priceConsistency: data.priceConsistency ?? 0.5,
+    });
+  }, [data]);
 
   // Smooth 1-second countdown (local timer, no network)
   const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
