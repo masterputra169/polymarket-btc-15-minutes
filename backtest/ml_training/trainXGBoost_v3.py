@@ -266,14 +266,14 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
     """Walk-forward CV: train on folds 1..k, validate on fold k+1.
     Optionally returns out-of-fold predictions for calibration.
     feat_weights: optional per-feature weight array (0=exclude from splits)."""
-    fold_size = len(X_tr) // (n_folds + 1)
+    fold_size = len(X_tr) // (n_folds + 2)
     aucs, accs = [], []
     oof_preds, oof_labels = [], []
 
     for fold in range(n_folds):
         tr_end = fold_size * (fold + 2)
         val_start = tr_end
-        val_end = min(val_start + fold_size, len(X_tr))
+        val_end = len(X_tr) if fold == n_folds - 1 else val_start + fold_size
         if val_end <= val_start:
             continue
 
@@ -841,14 +841,14 @@ if HAS_LGB:
 
     def lgb_walk_forward_cv(X_tr, y_tr, params, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False):
         """Walk-forward CV for LightGBM."""
-        fold_size = len(X_tr) // (n_folds + 1)
+        fold_size = len(X_tr) // (n_folds + 2)
         aucs, accs = [], []
         oof_preds, oof_labels = [], []
 
         for fold in range(n_folds):
             tr_end = fold_size * (fold + 2)
             val_start = tr_end
-            val_end = min(val_start + fold_size, len(X_tr))
+            val_end = len(X_tr) if fold == n_folds - 1 else val_start + fold_size
             if val_end <= val_start:
                 continue
 

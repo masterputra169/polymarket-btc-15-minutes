@@ -720,7 +720,7 @@ export async function pollOnce() {
       stats: getStats(),
       indicators: {
         rsi: rsiNow,
-        macd: macd?.histogram,
+        macd: macd?.hist,
         vwapDist,
         delta1m,
         consec: consec.count,

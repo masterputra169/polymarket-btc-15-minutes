@@ -28,6 +28,7 @@ export function computeRsi(closes, period = 8) {
   avgGain /= period;
   avgLoss /= period;
 
+  if (avgGain === 0 && avgLoss === 0) return 50;
   if (avgLoss === 0) return 100;
 
   const rs = avgGain / avgLoss;
@@ -57,7 +58,7 @@ export function computeRsiSeries(closes, period = 8) {
   avgGain /= period;
   avgLoss /= period;
 
-  series.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+  series.push(avgGain === 0 && avgLoss === 0 ? 50 : avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
 
   // Wilder smoothing
   for (let i = period + 1; i < closes.length; i++) {
@@ -68,7 +69,7 @@ export function computeRsiSeries(closes, period = 8) {
     avgGain = (avgGain * (period - 1) + gain) / period;
     avgLoss = (avgLoss * (period - 1) + loss) / period;
 
-    series.push(avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
+    series.push(avgGain === 0 && avgLoss === 0 ? 50 : avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss));
   }
 
   return series;

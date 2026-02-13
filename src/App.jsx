@@ -150,7 +150,7 @@ export default function App() {
     data?.rec, data?.edge, data?.timeDecay,
     data?.scoreBreakdown, data?.regimeInfo, data?.feedbackStats,
     data?.haNarrative, data?.rsiNarrative, data?.macdNarrative, data?.vwapNarrative,
-    data?.timing, data?.consec, data?.ml?.confidence,
+    data?.timing, data?.consec, data?.ml?.confidence, data?.ml?.side,
   ]);
 
   // TAIndicators: RSI, MACD, VWAP, HA, BB, ATR, EMA, VolDelta, StochRSI, Funding, Hidden
@@ -277,7 +277,7 @@ export default function App() {
   const betSizingData = useMemo(() => {
     if (!data) return null;
     return { betSizing: data.betSizing, rec: data.rec, regimeInfo: data.regimeInfo };
-  }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll, data?.rec?.action, data?.rec?.side]);
+  }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll, data?.rec?.action, data?.rec?.side, data?.regimeInfo?.regime, data?.regimeInfo?.confidence]);
 
   return (
     <div className="app-container">
