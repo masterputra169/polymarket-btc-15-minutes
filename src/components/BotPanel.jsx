@@ -73,7 +73,7 @@ function BotPanel({ connected, data }) {
     ? ml.confidence >= 0.40 ? 'HI' : ml.confidence >= 0.20 ? 'MED' : 'LO'
     : '-';
 
-  const winRate = stats?.totalTrades > 0
+  const winRate = stats?.totalTrades > 0 && stats?.winRate != null
     ? `${(stats.winRate * 100).toFixed(0)}%`
     : '-';
 
@@ -230,7 +230,7 @@ function BotPanel({ connected, data }) {
           <div className="data-row">
             <span className="data-row__label">Trades</span>
             <span className="data-row__value">
-              {stats ? `${stats.wins}W/${stats.losses}L` : '-'}
+              {stats ? `${stats.wins ?? 0}W/${stats.losses ?? 0}L` : '-'}
             </span>
           </div>
           <div className="data-row">

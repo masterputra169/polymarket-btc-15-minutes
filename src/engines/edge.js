@@ -211,9 +211,9 @@ export function decide({
     minProb = Math.max(minProb - 0.02, 0.52);
   }
 
-  // Count agreements if breakdown available
-  const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 99;
-  const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 99;
+  // Count agreements if breakdown available (default 0 = conservative, not 99)
+  const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 0;
+  const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 0;
 
   // Check UP side
   // MultiTF waiver: minAgreement+1 indicators can waive multiTF requirement

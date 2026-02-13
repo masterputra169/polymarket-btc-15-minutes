@@ -111,7 +111,7 @@ export function useMarketData({ clobWs } = {}) {
 
       const isFirstPoll = !firstPollDoneRef.current;
       const wsLastUpdateForClob = clobWsSnap?.lastUpdate;
-      const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 10_000) : false;
+      const wsClobStale = wsLastUpdateForClob ? (now - wsLastUpdateForClob > 10_000) : true;
       const skipClob = isFirstPoll || (wsConnected && !marketExpired && !wsClobStale);
 
       // ── ALL network calls in parallel ──

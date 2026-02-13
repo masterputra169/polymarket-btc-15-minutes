@@ -94,6 +94,7 @@ export function useBotData() {
         setConnected(true);
         reconMsRef.current = RECONNECT_MIN_MS;
         lastMsgRef.current = Date.now();
+        firstMsgRef.current = false; // Reset so first message on new connection flushes immediately
 
         // Stale check: if no message for 15s, force reconnect
         stopStaleCheck();
