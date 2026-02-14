@@ -231,6 +231,9 @@ export function evaluateCutLoss({
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
   const isCrash = dropPct >= crashDrop && hasPtb && btcDistPct >= crashDist;
 
+  // Declare tokenSlope outside the block so it's available in diagnostics
+  let tokenSlope = null;
+
   if (!isCrash) {
     // ── Gate 12c: Orderbook liquidity (#3) ──
     if (orderbook) {
@@ -245,7 +248,7 @@ export function evaluateCutLoss({
     }
 
     // ── Gate 12d: Token price trajectory (#5) ──
-    const tokenSlope = getTokenPriceSlope();
+    tokenSlope = getTokenPriceSlope();
     if (tokenSlope != null && tokenSlope > 0.005) {
       return no(`token_recovering_+${(tokenSlope * 100).toFixed(1)}¢`);
     }
@@ -310,6 +313,15 @@ export function resetCutLossState() {
   tokenPriceBuf.fill(0);
   tokenBufIdx = 0;
   tokenBufCount = 0;
+}
+
+/**
+ * Reset only the consecutive confirmation counter.
+ * Called after a partial cut so the next cut needs fresh confirmation
+ * (prevents rapid successive partial cuts at progressively worse prices).
+ */
+export function resetCutLossConfirmation() {
+  consecutiveCutPolls = 0;
 }
 
 /**

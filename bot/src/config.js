@@ -17,11 +17,22 @@ const CONFIG = {
   clobBaseUrl: 'https://clob.polymarket.com',
 };
 
+/** Parse a number from env with min/max bounds. Returns default if invalid or out of range. */
+function envNum(envVal, defaultVal, min = -Infinity, max = Infinity) {
+  if (envVal == null) return defaultVal;
+  const n = Number(envVal);
+  if (!Number.isFinite(n) || n < min || n > max) return defaultVal;
+  return n;
+}
+function envInt(envVal, defaultVal, min = 0, max = Infinity) {
+  return Math.round(envNum(envVal, defaultVal, min, max));
+}
+
 const BOT_CONFIG = {
   dryRun: process.env.DRY_RUN !== 'false',
-  bankroll: parseFloat(process.env.BANKROLL || '100'),
-  maxDailyLossPct: parseFloat(process.env.MAX_DAILY_LOSS_PCT || '20'),
-  maxConsecutiveLosses: parseInt(process.env.MAX_CONSECUTIVE_LOSSES || '5', 10),
+  bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
+  maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 20, 1, 100),
+  maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // File paths for persistence
@@ -48,16 +59,16 @@ const BOT_CONFIG = {
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: parseInt(process.env.CUT_LOSS_MIN_HOLD_SEC || '60', 10),
-    minTokenPrice: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_PRICE || '0.05'),
-    cooldownMs: parseInt(process.env.CUT_LOSS_COOLDOWN_MS || '10000', 10),
-    maxAttempts: parseInt(process.env.CUT_LOSS_MAX_ATTEMPTS || '3', 10),
-    minTokenDropPct: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT || '15'),
-    consecutivePolls: parseInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS || '3', 10),
-    minBidLiquidity: parseFloat(process.env.CUT_LOSS_MIN_BID_LIQUIDITY || '2'),
-    maxCutSpreadPct: parseFloat(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT || '15'),
-    crashDropPct: parseFloat(process.env.CUT_LOSS_CRASH_DROP_PCT || '40'),
-    crashBtcDistPct: parseFloat(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT || '0.20'),
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 60, 0, 600),
+    minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
+    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 10000, 1000, 120000),
+    maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 3, 1, 20),
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 15, 1, 90),
+    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 3, 1, 20),
+    minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
+    maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 40, 10, 90),
+    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
   },
 };
 

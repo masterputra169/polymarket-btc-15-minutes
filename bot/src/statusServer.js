@@ -5,7 +5,7 @@
 
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
-import { setBankroll } from './trading/positionTracker.js';
+import { setBankroll, acquireSellLock, releaseSellLock } from './trading/positionTracker.js';
 
 const log = createLogger('StatusWS');
 
@@ -131,9 +131,14 @@ export function startStatusServer() {
           if (typeof tokenId === 'string' && tokenId.length > 0 &&
               typeof size === 'number' && Number.isFinite(size) && size > 0 &&
               typeof price === 'number' && Number.isFinite(price) && price > 0 && price <= 1) {
-            _closePosition(tokenId, size, price)
-              .then(result => respond('sellPosition', { ok: true, result }))
-              .catch(err => respond('sellPosition', { ok: false, error: err.message }));
+            // Sell lock: prevent dashboard sell and loop cut-loss from racing
+            if (!acquireSellLock()) {
+              respond('sellPosition', { ok: false, error: 'sell_in_progress' });
+            } else {
+              _closePosition(tokenId, size, price)
+                .then(result => { releaseSellLock(); respond('sellPosition', { ok: true, result }); })
+                .catch(err => { releaseSellLock(); respond('sellPosition', { ok: false, error: err.message }); });
+            }
           }
 
         // ── Trader Discovery commands ──

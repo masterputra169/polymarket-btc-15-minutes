@@ -392,7 +392,7 @@ export default function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        Not financial advice. Use at your own risk. — created by @krajekis
+        Not financial advice. Use at your own risk. — created by @masterputra
       </footer>
     </div>
   );

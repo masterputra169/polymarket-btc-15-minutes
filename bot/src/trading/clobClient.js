@@ -227,13 +227,21 @@ export async function getUsdcBalance() {
   try {
     const result = await client.getBalanceAllowance({ asset_type: 'COLLATERAL' });
     if (result && result.balance != null) {
-      balanceCache = {
-        balance: parseFloat(result.balance) / 1e6, // USDC.e has 6 decimals (raw microUSDC)
-        allowance: parseFloat(result.allowance ?? '0') / 1e6,
-        fetchedAt: now,
-      };
-      balanceLastFetchMs = now;
-      return balanceCache;
+      // USDC.e has 6 decimals — API returns raw microUSDC string
+      const rawBalance = parseFloat(result.balance);
+      const rawAllowance = parseFloat(result.allowance ?? '0');
+      // Validate: must be finite, non-negative, and reasonable (< $100M)
+      if (!Number.isFinite(rawBalance) || rawBalance < 0) {
+        log.warn(`Invalid USDC balance from API: ${result.balance}`);
+      } else {
+        balanceCache = {
+          balance: rawBalance / 1e6,
+          allowance: Number.isFinite(rawAllowance) && rawAllowance >= 0 ? rawAllowance / 1e6 : 0,
+          fetchedAt: now,
+        };
+        balanceLastFetchMs = now;
+        return balanceCache;
+      }
     }
   } catch (err) {
     log.warn(`USDC balance fetch failed: ${err.message}`);

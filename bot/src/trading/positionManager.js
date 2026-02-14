@@ -14,6 +14,9 @@ const log = createLogger('Positions');
 const CACHE_TTL_MS = 15_000; // Cache positions for 15s
 const DATA_API = 'https://data-api.polymarket.com';
 
+const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
+const POLYGON_RPC = 'https://polygon-rpc.com';
+
 let cachedPositions = [];
 let lastFetchMs = 0;
 let pollTimer = null;
@@ -47,14 +50,59 @@ export async function fetchPositions(walletAddress) {
 }
 
 /**
+ * Query actual on-chain CTF token balance for the proxy wallet.
+ * Returns balance in decimal (e.g. 7.883), or null on error.
+ */
+async function queryOnChainTokenBalance(tokenId) {
+  try {
+    const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS || getWalletAddress();
+    if (!proxyAddress) return null;
+
+    // ERC1155 balanceOf(address, uint256)
+    const addr = '000000000000000000000000' + proxyAddress.slice(2).toLowerCase();
+    const id = BigInt(tokenId).toString(16).padStart(64, '0');
+    const data = '0x00fdd58e' + addr + id;
+
+    const res = await fetch(POLYGON_RPC, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: CTF_ADDRESS, data }, 'latest'], id: 1 }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const json = await res.json();
+    if (!json.result) return null;
+    return Number(BigInt(json.result)) / 1e6;
+  } catch (err) {
+    log.warn(`On-chain balance query failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Close a position by placing a FOK sell order.
+ * If sell fails due to balance mismatch (recorded size > actual on-chain tokens),
+ * retries with the actual on-chain balance.
  */
 export async function closePosition(tokenId, size, price) {
   if (BOT_CONFIG.dryRun) {
     log.info(`[DRY RUN] Would SELL ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
     return { dryRun: true };
   }
-  return await placeSellOrder({ tokenId, price, size });
+  try {
+    return await placeSellOrder({ tokenId, price, size });
+  } catch (err) {
+    if (err.message.includes('not enough balance')) {
+      // Recorded size likely exceeds actual on-chain balance (exchange fees/rounding)
+      const actualBalance = await queryOnChainTokenBalance(tokenId);
+      if (actualBalance != null && actualBalance > 0 && actualBalance < size) {
+        // Floor to 6 decimal precision (CTF token precision)
+        const correctedSize = Math.floor(actualBalance * 1e6) / 1e6;
+        log.warn(`Balance mismatch: recorded ${size}, on-chain ${actualBalance.toFixed(6)} — retrying sell with ${correctedSize}`);
+        return await placeSellOrder({ tokenId, price, size: correctedSize });
+      }
+    }
+    throw err;
+  }
 }
 
 /**

@@ -30,6 +30,9 @@ let state = {
   trades: [],               // recent trade log
 };
 
+// ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
+let sellingInProgress = false;
+
 // ── Audit log (append-only) ──
 function auditLog(entry) {
   try {
@@ -240,15 +243,21 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   state.bankroll = roundMoney(state.bankroll + recovered);
 
   const pnl = roundMoney(recovered - pos.cost);
+  const isWin = pnl >= 0;
 
-  // Cut-loss is always a loss (partial recovery)
-  state.losses++;
-  state.consecutiveLosses++;
+  // Cut-loss is typically a loss, but if recovered >= cost, count as win
+  if (isWin) {
+    state.wins++;
+    state.consecutiveLosses = 0;
+  } else {
+    state.losses++;
+    state.consecutiveLosses++;
+  }
 
   state.trades.push({
     type: 'CUT_LOSS',
     side: pos.side,
-    won: false,
+    won: isWin,
     payout: recovered,
     pnl,
     cost: pos.cost,
@@ -298,6 +307,7 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }
   const pnl = roundMoney(payout - totalCost);
 
   state.bankroll = roundMoney(state.bankroll - totalCost + payout);
+  state.pendingCost = 0; // Clear pending reservation (matches recordTrade behavior)
   state.totalTrades++;
   state.wins++;
 
@@ -346,8 +356,9 @@ export function partialExit(sellSize, recoveredUsdc) {
   const pnl = roundMoney(recovered - costPortion);
 
   // Update position in-place (reduce size + cost)
+  // Round size to prevent float drift (e.g. 10 - 7.5 = 2.4999999...)
   const prevSize = pos.size;
-  pos.size -= sellSize;
+  pos.size = Math.round((pos.size - sellSize) * 1e8) / 1e8;
   pos.cost = roundMoney(pos.cost - costPortion);
 
   // Add recovery to bankroll
@@ -476,8 +487,8 @@ export function getConsecutiveLosses() {
 }
 
 export function setBankroll(value) {
-  if (!Number.isFinite(value) || value < 0) {
-    log.warn(`Invalid bankroll value: ${value} — ignored`);
+  if (!Number.isFinite(value) || value <= 0) {
+    log.warn(`Invalid bankroll value: ${value} — ignored (must be > 0)`);
     return;
   }
   const prev = state.bankroll;
@@ -485,6 +496,24 @@ export function setBankroll(value) {
   auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, source: 'dashboard' });
   saveState();
   log.info(`Bankroll updated to $${state.bankroll.toFixed(2)} (via dashboard)`);
+}
+
+/**
+ * Sell guard: prevents dashboard sell and loop cut-loss from racing on the same position.
+ * Returns true if the lock was acquired, false if a sell is already in progress.
+ */
+export function acquireSellLock() {
+  if (sellingInProgress) return false;
+  sellingInProgress = true;
+  return true;
+}
+
+export function releaseSellLock() {
+  sellingInProgress = false;
+}
+
+export function isSelling() {
+  return sellingInProgress;
 }
 
 export function getStats() {
@@ -496,7 +525,7 @@ export function getStats() {
     wins: state.wins,
     losses: state.losses,
     cutLosses: cutLossCount,
-    winRate: state.totalTrades > 0 ? state.wins / state.totalTrades : 0,
+    winRate: (state.wins + state.losses) > 0 ? state.wins / (state.wins + state.losses) : 0,
     consecutiveLosses: state.consecutiveLosses,
     dailyPnL: getDailyPnL(),
     dailyPnLPct: getDailyPnLPct(),

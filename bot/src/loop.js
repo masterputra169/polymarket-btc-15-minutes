@@ -109,12 +109,15 @@ import {
   unwindPosition,
   confirmFill,
   setPendingCost,
+  getPendingCost,
   recordArbTrade,
+  acquireSellLock,
+  releaseSellLock,
   setBankroll,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
-import { evaluateCutLoss, resetCutLossState, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
+import { evaluateCutLoss, resetCutLossState, resetCutLossConfirmation, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -144,6 +147,18 @@ import { broadcast } from './statusServer.js';
 import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.js';
 
 const log = createLogger('Loop');
+
+/**
+ * Safely parse a CLOB amount field (makingAmount / takingAmount).
+ * Returns null if the value is missing, NaN, negative, or unreasonably large.
+ * Prevents phantom bankroll adjustments from malformed API responses.
+ */
+function parseClobAmount(value, fallback = null) {
+  if (value == null) return fallback;
+  const n = typeof value === 'number' ? value : parseFloat(value);
+  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return fallback;
+  return n;
+}
 
 // ── Pause/Resume control ──
 let paused = false;
@@ -430,6 +445,7 @@ export async function pollOnce() {
     // ── 3b. USDC balance (every 30s — non-blocking) ──
     if (now - usdcBalanceLastFetchMs > USDC_BALANCE_INTERVAL && isClientReady()) {
       usdcBalanceLastFetchMs = now; // Set BEFORE fetch to prevent parallel fetches
+      const snapshotBankroll = getBankroll(); // Capture BEFORE async fetch
       getUsdcBalance().then(result => {
         if (result) {
           const prev = usdcBalanceData;
@@ -440,14 +456,28 @@ export async function pollOnce() {
           if (!prev) {
             log.info(`USDC balance: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
           }
-          // Auto-sync: if no open position and drift > $1, snap local to on-chain
+          // Race guard: if bankroll changed between fetch start and callback,
+          // a trade was recorded during the async gap — skip sync this cycle
+          if (Math.abs(localBankroll - snapshotBankroll) > 0.01) {
+            log.debug(`USDC sync skipped: bankroll changed during fetch ($${snapshotBankroll.toFixed(2)} -> $${localBankroll.toFixed(2)})`);
+            return;
+          }
+          // Auto-sync: if no open position, no pending cost, and drift > $1
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
-          if (drift > 1.0 && !hasPos) {
-            log.warn(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
-            setBankroll(onChain);
-          } else if (drift > 1.0 && hasPos) {
-            log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, position open — deferring sync)`);
+          const hasPendingCost = getPendingCost() > 0;
+          // Safety cap: reject sync if drift > 50% of local bankroll (likely API error)
+          const MAX_SYNC_DRIFT_PCT = 0.50;
+          const driftPct = localBankroll > 0 ? drift / localBankroll : Infinity;
+          if (drift > 1.0 && !hasPos && !hasPendingCost) {
+            if (driftPct > MAX_SYNC_DRIFT_PCT) {
+              log.warn(`SYNC REJECTED: drift $${drift.toFixed(2)} (${(driftPct * 100).toFixed(0)}%) exceeds ${(MAX_SYNC_DRIFT_PCT * 100).toFixed(0)}% safety cap — possible API error`);
+            } else {
+              log.warn(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
+              setBankroll(onChain);
+            }
+          } else if (drift > 1.0 && (hasPos || hasPendingCost)) {
+            log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, ${hasPos ? 'position open' : 'pending cost'} — deferring sync)`);
           }
         }
       }).catch(err => { log.debug(`USDC balance error: ${err.message}`); });
@@ -753,6 +783,10 @@ export async function pollOnce() {
       }
 
       if (cutResult.shouldCut) {
+        // Sell lock: prevent dashboard sell and loop cut-loss from racing
+        if (!acquireSellLock()) {
+          log.info('Cut-loss skipped — sell already in progress (dashboard?)');
+        } else {
         const isPartial = (cutResult.cutFraction ?? 1.0) < 1.0;
         const sellSize = isPartial
           ? Math.max(1, Math.floor(pos.size * cutResult.cutFraction))
@@ -778,10 +812,13 @@ export async function pollOnce() {
 
         if (BOT_CONFIG.dryRun) {
           const recovery = cutResult.sellPrice * sellSize;
+          // Use actual sellSize fraction for P&L (cutFraction differs due to Math.floor)
+          const actualFraction = sellSize / pos.size;
           if (isPartial) {
             partialExit(sellSize, recovery);
-            writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: recovery - (pos.cost * cutResult.cutFraction), exitData: { ...exitData, cutLossRecovered: recovery } });
-            // Don't reset — position still open, may cut more later
+            writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: recovery - (pos.cost * actualFraction), exitData: { ...exitData, cutLossRecovered: recovery } });
+            // Reset confirmation counter so next partial cut needs fresh confirmation
+            resetCutLossConfirmation();
           } else {
             settleTradeEarlyExit(recovery);
             writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
@@ -792,13 +829,15 @@ export async function pollOnce() {
           recordSellAttempt();
           try {
             const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
-            const actualRecovery = sellResult?.takingAmount != null
-              ? parseFloat(sellResult.takingAmount) : cutResult.sellPrice * sellSize;
+            const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
 
             if (isPartial) {
+              // Use actual sellSize fraction for P&L (cutFraction differs due to Math.floor)
+              const actualFraction = sellSize / pos.size;
               partialExit(sellSize, actualRecovery);
-              writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: actualRecovery - (pos.cost * cutResult.cutFraction), exitData: { ...exitData, cutLossRecovered: actualRecovery } });
-              // Position still open — don't reset, don't recordLoss
+              writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: actualRecovery - (pos.cost * actualFraction), exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+              // Reset confirmation counter so next partial cut needs fresh confirmation
+              resetCutLossConfirmation();
             } else {
               settleTradeEarlyExit(actualRecovery);
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
@@ -809,6 +848,8 @@ export async function pollOnce() {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);
           }
         }
+        releaseSellLock();
+        } // end acquireSellLock
       }
     }
 
@@ -895,8 +936,7 @@ export async function pollOnce() {
               price: arb.askUp,
               size: arbShares,
             });
-            const upFillCost = upResult?.makingAmount != null
-              ? parseFloat(upResult.makingAmount) : arbShares * arb.askUp;
+            const upFillCost = parseClobAmount(upResult?.makingAmount, arbShares * arb.askUp);
             const upOrderId = upResult?.orderId ?? null;
 
             // Leg 2: Buy DOWN — if this fails, we have one-legged exposure
@@ -907,8 +947,7 @@ export async function pollOnce() {
                 price: arb.askDown,
                 size: arbShares,
               });
-              const downFillCost = downResult?.makingAmount != null
-                ? parseFloat(downResult.makingAmount) : arbShares * arb.askDown;
+              const downFillCost = parseClobAmount(downResult?.makingAmount, arbShares * arb.askDown);
               const downOrderId = downResult?.orderId ?? null;
 
               // Both legs succeeded — record arb with actual fill costs
@@ -1073,8 +1112,8 @@ export async function pollOnce() {
 
             // Use actual fill amounts from CLOB response when available
             // makingAmount = USDC actually spent, takingAmount = shares actually received
-            const fillCost = orderResult?.makingAmount != null ? parseFloat(orderResult.makingAmount) : null;
-            const fillShares = orderResult?.takingAmount != null ? parseFloat(orderResult.takingAmount) : null;
+            const fillCost = parseClobAmount(orderResult?.makingAmount, null);
+            const fillShares = parseClobAmount(orderResult?.takingAmount, null);
             const actualSize = (fillShares && fillShares > 0) ? fillShares : shares;
             const actualPrice = (fillCost && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
             const actualCost = (fillCost && fillCost > 0) ? fillCost : null;
