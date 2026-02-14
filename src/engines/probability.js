@@ -8,10 +8,11 @@
  * 8. Feedback confidence adjustment (recent accuracy tracking)
  *
  * WEIGHT TABLE:
- *   Price to PTB distance:    +5  (adaptive thresholds per session)
+ *   Price to PTB distance:    +2..5 (time-adaptive: 2 at 15min, 5 at 0min)
+ *   PTB momentum:             +1.5  (price moving away/toward PTB)
  *   Delta momentum (1m/3m):   +3
- *   Orderbook imbalance:      +2  (NEW — real money signal)
- *   Multi-TF confirmation:    +2  (NEW — 1m+5m agreement)
+ *   Orderbook imbalance:      +2    (real money signal)
+ *   Multi-TF confirmation:    +2    (1m+5m agreement)
  *   RSI + Slope:              +2
  *   MACD Histogram:           +1
  *   MACD Line:                +1
@@ -19,7 +20,7 @@
  *   VWAP Slope:               +1
  *   Heiken Ashi:              +1
  *   Failed VWAP Reclaim:      +2
- *   Total possible per side:  ~21
+ *   Total possible per side:  ~22.5
  *
  *   Post-scoring multipliers:
  *   - Regime:     0.60x (choppy) to 1.25x (trending)
@@ -49,14 +50,24 @@ export function scoreDirection({
   volProfile = null,        // from getVolatilityProfile()
   multiTfConfirm = null,    // { signal: 'UP'|'DOWN'|'NEUTRAL', agreement: bool }
   feedbackStats = null,     // from getAccuracyStats()
+  minutesLeft = null,       // minutes until settlement (for time-adaptive PTB weight)
 }) {
   let upScore = 1;   // base
   let downScore = 1;  // base
   const breakdown = {};
 
-  // ═══ 1. DISTANCE TO PRICE TO BEAT (weight: 5) ═══
-  // Thresholds are now ADAPTIVE based on session volatility.
-  // Asia: 0.1% is big → lower thresholds. US overlap: 0.3% is normal → higher thresholds.
+  // ═══ 1. DISTANCE TO PRICE TO BEAT (weight: 2-5, TIME-ADAPTIVE) ═══
+  // Near expiry PTB distance is highly predictive (less time to reverse).
+  // Far from expiry it's weaker (price can still move significantly).
+  //   15min left → timeScale 0.4 → max weight 2.0
+  //   10min left → timeScale 0.6 → max weight 3.0
+  //    5min left → timeScale 0.8 → max weight 4.0
+  //    1min left → timeScale 0.96 → max weight 4.8
+  //    0min left → timeScale 1.0 → max weight 5.0
+  const ptbTimeScale = minutesLeft != null && Number.isFinite(minutesLeft)
+    ? Math.min(1, 0.4 + 0.6 * Math.max(0, 1 - minutesLeft / 15))
+    : 0.7; // default when time unknown
+
   if (priceToBeat !== null && price !== null && priceToBeat > 0) {
     const distance = price - priceToBeat;
     const distPct = distance / priceToBeat;
@@ -64,23 +75,54 @@ export function scoreDirection({
     // Use session-adaptive thresholds if available, else defaults
     const thr = volProfile?.ptbThresholds ?? { strong: 0.003, moderate: 0.0015, slight: 0.0005 };
 
+    // Base weights scaled by time remaining
+    const wStrong = 5 * ptbTimeScale;
+    const wModerate = 3 * ptbTimeScale;
+    const wSlight = 1.5 * ptbTimeScale;
+
     if (Math.abs(distPct) > thr.strong) {
-      if (distance > 0) upScore += 5;
-      else downScore += 5;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'STRONG UP' : 'STRONG DOWN', weight: 5, distPct };
+      if (distance > 0) upScore += wStrong;
+      else downScore += wStrong;
+      breakdown.ptbDistance = { signal: distance > 0 ? 'STRONG UP' : 'STRONG DOWN', weight: +wStrong.toFixed(1), distPct, timeScale: ptbTimeScale };
     } else if (Math.abs(distPct) > thr.moderate) {
-      if (distance > 0) upScore += 3;
-      else downScore += 3;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'UP' : 'DOWN', weight: 3, distPct };
+      if (distance > 0) upScore += wModerate;
+      else downScore += wModerate;
+      breakdown.ptbDistance = { signal: distance > 0 ? 'UP' : 'DOWN', weight: +wModerate.toFixed(1), distPct, timeScale: ptbTimeScale };
     } else if (Math.abs(distPct) > thr.slight) {
-      if (distance > 0) upScore += 1.5;
-      else downScore += 1.5;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'LEAN UP' : 'LEAN DOWN', weight: 1.5, distPct };
+      if (distance > 0) upScore += wSlight;
+      else downScore += wSlight;
+      breakdown.ptbDistance = { signal: distance > 0 ? 'LEAN UP' : 'LEAN DOWN', weight: +wSlight.toFixed(1), distPct, timeScale: ptbTimeScale };
     } else {
-      breakdown.ptbDistance = { signal: 'NEUTRAL', weight: 0, distPct };
+      breakdown.ptbDistance = { signal: 'NEUTRAL', weight: 0, distPct, timeScale: ptbTimeScale };
+    }
+
+    // ═══ 1b. PTB MOMENTUM (weight: 1.5) ═══
+    // Is price moving AWAY from PTB (reinforcing) or TOWARD PTB (reverting)?
+    // delta1m > 0 while above PTB = moving away = bullish
+    // delta1m < 0 while above PTB = moving toward = bearish
+    if (delta1m !== null && Math.abs(distPct) > thr.slight) {
+      const movingAway = (distance > 0 && delta1m > 0) || (distance < 0 && delta1m < 0);
+      const movingToward = (distance > 0 && delta1m < 0) || (distance < 0 && delta1m > 0);
+
+      if (movingAway) {
+        // Reinforcing: price extending lead over PTB → boost direction
+        if (distance > 0) upScore += 1.5;
+        else downScore += 1.5;
+        breakdown.ptbMomentum = { signal: distance > 0 ? 'EXTENDING UP' : 'EXTENDING DOWN', weight: 1.5 };
+      } else if (movingToward) {
+        // Reverting: price closing gap to PTB → counter-signal
+        if (distance > 0) downScore += 1;
+        else upScore += 1;
+        breakdown.ptbMomentum = { signal: distance > 0 ? 'REVERTING (down toward PTB)' : 'REVERTING (up toward PTB)', weight: 1 };
+      } else {
+        breakdown.ptbMomentum = { signal: 'FLAT', weight: 0 };
+      }
+    } else {
+      breakdown.ptbMomentum = { signal: delta1m === null ? 'N/A' : 'TOO CLOSE', weight: 0 };
     }
   } else {
     breakdown.ptbDistance = { signal: 'N/A', weight: 0 };
+    breakdown.ptbMomentum = { signal: 'N/A', weight: 0 };
   }
 
   // ═══ 2. DELTA MOMENTUM 1m/3m (weight: 3) ═══

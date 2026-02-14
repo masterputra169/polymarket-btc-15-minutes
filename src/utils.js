@@ -136,6 +136,10 @@ export { toNumber };
  * 2. Use market's custom fields (startPrice, referencePrice, etc.)
  * 3. Fall back to klines open price at market start time
  */
+// BTC sanity range for PTB validation — prevents wrong parse if format changes
+const PTB_MIN_BTC = 10_000;   // BTC unlikely below $10K
+const PTB_MAX_BTC = 500_000;  // BTC unlikely above $500K (adjust if needed)
+
 export function parsePriceToBeat(text) {
   if (!text || typeof text !== 'string') return null;
 
@@ -145,7 +149,8 @@ export function parsePriceToBeat(text) {
 
   const raw = matches[0].replace(/[$,]/g, '');
   const num = Number(raw);
-  return Number.isFinite(num) && num > 0 ? num : null;
+  // Sanity check: must be in plausible BTC price range
+  return Number.isFinite(num) && num >= PTB_MIN_BTC && num <= PTB_MAX_BTC ? num : null;
 }
 
 /**
@@ -178,14 +183,15 @@ export function extractPriceToBeat(market, klines) {
   ];
   for (const val of directFields) {
     const n = Number(val);
-    if (Number.isFinite(n) && n > 0) return n;
+    if (Number.isFinite(n) && n >= PTB_MIN_BTC && n <= PTB_MAX_BTC) return n;
   }
 
   // 5. Try parsing from any string field that contains a BTC-like price
+  // parsePriceToBeat already applies BTC range check
   const allStrFields = [market.slug, market.groupItemTitle];
   for (const field of allStrFields) {
     const parsed = parsePriceToBeat(String(field ?? ''));
-    if (parsed !== null && parsed > 10000) return parsed; // sanity check: BTC > $10k
+    if (parsed !== null) return parsed;
   }
 
   // 6. Fall back to klines: find the candle at market start time, use its open price
@@ -203,8 +209,8 @@ export function extractPriceToBeat(market, klines) {
           best = c;
         }
       }
-      // Only use if within 2 minutes of start time
-      if (best && bestDiff < 120_000 && best.open > 0) {
+      // Only use if within 2 minutes of start time + BTC range check
+      if (best && bestDiff < 120_000 && best.open >= PTB_MIN_BTC && best.open <= PTB_MAX_BTC) {
         return best.open;
       }
     }

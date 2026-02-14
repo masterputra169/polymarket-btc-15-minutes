@@ -227,6 +227,11 @@ export function useMarketData({ clobWs } = {}) {
       const feedbackStats = getAccuracyStats();
       const detailedFeedback = getDetailedStats();
 
+      // Settlement timing (computed BEFORE scoring so minutesLeft is available)
+      const settlementMs = poly.ok && poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
+      const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
+      const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
+
       // Probability
       const scored = scoreDirection({
         price: lastPrice, priceToBeat: priceToBeatRef.current.value,
@@ -235,12 +240,8 @@ export function useMarketData({ clobWs } = {}) {
         failedVwapReclaim, delta1m, delta3m, regime: regimeInfo,
         orderbookSignal, volProfile, multiTfConfirm, feedbackStats,
         bb, atr,
+        minutesLeft: timeLeftMin,
       });
-
-      // Settlement timing
-      const settlementMs = poly.ok && poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
-      const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
-      const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
 

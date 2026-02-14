@@ -561,6 +561,11 @@ export async function pollOnce() {
 
     const feedbackStats = getAccuracyStats();
 
+    // Settlement timing (computed BEFORE scoring so minutesLeft is available)
+    const settlementMs = poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
+    const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
+    const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
+
     // ── 6. Score direction ──
     const scored = scoreDirection({
       price: lastPrice, priceToBeat: priceToBeat.value,
@@ -569,12 +574,8 @@ export async function pollOnce() {
       failedVwapReclaim, delta1m, delta3m, regime: regimeInfo,
       orderbookSignal, volProfile, multiTfConfirm, feedbackStats,
       bb, atr,
+      minutesLeft: timeLeftMin,
     });
-
-    // Settlement timing
-    const settlementMs = poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
-    const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
-    const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
     const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
 
@@ -909,7 +910,7 @@ export async function pollOnce() {
         const reasons = [];
         if (signalUnconfirmed) reasons.push(`confirm ${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}`);
         if (tooManyFlips) reasons.push(`${recentFlipCount} flips in ${FLIP_WINDOW_MS / 1000}s`);
-        log.debug(`Signal unstable, holding: ${reasons.join(' | ')}`);
+        log.info(`Signal unstable, holding: ${reasons.join(' | ')}`);
       } else {
       // Signal confirmed — proceed with existing trade filters
 
@@ -929,7 +930,7 @@ export async function pollOnce() {
       const flowAlign = checkFlowAlignment(betSide);
 
       if (!filterResult.pass) {
-        log.debug(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
+        log.info(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
       } else {
       const priceCheck = validatePrice(betMarketPrice);
       // C6: Pass availableBankroll (minus pending allocations) to guard
@@ -1028,7 +1029,7 @@ export async function pollOnce() {
           }
         }
       } else {
-        log.debug(`Trade blocked: ${!priceCheck.valid ? priceCheck.reason : tradeCheck.reason}`);
+        log.info(`Trade blocked: ${!priceCheck.valid ? priceCheck.reason : tradeCheck.reason}`);
       }
       } // end filterResult.pass
       } // end signal confirmed
