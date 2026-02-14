@@ -5,7 +5,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -93,7 +93,7 @@ export function loadMLModelFromDisk() {
     }
 
     // Load LightGBM model if available
-    const lgbPath = BOT_CONFIG.modelPath.replace('xgboost_model.json', 'lightgbm_model.json');
+    const lgbPath = join(dirname(BOT_CONFIG.modelPath), 'lightgbm_model.json');
     if (existsSync(lgbPath)) {
       try {
         const lgbData = JSON.parse(readFileSync(lgbPath, 'utf-8'));

@@ -28,6 +28,8 @@ let state = {
   wins: 0,
   losses: 0,
   trades: [],               // recent trade log
+  lastSettledSlug: null,    // Double-settlement guard: last settled market slug
+  lastSettledTs: 0,         // Double-settlement guard: timestamp of last settlement
 };
 
 // ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
@@ -514,6 +516,19 @@ export function releaseSellLock() {
 
 export function isSelling() {
   return sellingInProgress;
+}
+
+/**
+ * Double-settlement guard: persisted to state.json so bot restart can't double-settle.
+ */
+export function getLastSettled() {
+  return { slug: state.lastSettledSlug, ts: state.lastSettledTs };
+}
+
+export function setLastSettled(slug, ts) {
+  state.lastSettledSlug = slug;
+  state.lastSettledTs = ts;
+  saveState();
 }
 
 export function getStats() {

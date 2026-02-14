@@ -113,6 +113,8 @@ import {
   acquireSellLock,
   releaseSellLock,
   setBankroll,
+  getLastSettled,
+  setLastSettled,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
@@ -198,11 +200,8 @@ let polling = false;
 let tokenIdsNotified = false;
 
 // ── Double-settlement guard ──
-// Tracks the last settled market slug + timestamp to prevent the same market
-// from being settled twice (e.g. expiry handler + slug-change handler in rapid succession,
-// or bot restart reprocessing the same expiry).
-let lastSettledSlug = null;
-let lastSettledTs = 0;
+// Persisted via positionTracker (getLastSettled/setLastSettled) to survive bot restarts.
+// Prevents same market from being settled twice.
 
 // Market price ring buffer (for momentum calculation)
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -317,8 +316,9 @@ export async function pollOnce() {
       log.info('Market expired! Forcing fresh discovery...');
       const pos = getCurrentPosition();
       // Double-settlement guard: skip if this market was already settled recently
-      if (pos && pos.marketSlug === currentMarketSlug && pos.marketSlug === lastSettledSlug && (now - lastSettledTs) < 30_000) {
-        log.warn(`Double settlement prevented for ${pos.marketSlug} (settled ${((now - lastSettledTs) / 1000).toFixed(0)}s ago)`);
+      const _ls1 = getLastSettled();
+      if (pos && pos.marketSlug === currentMarketSlug && pos.marketSlug === _ls1.slug && (now - _ls1.ts) < 30_000) {
+        log.warn(`Double settlement prevented for ${pos.marketSlug} (settled ${((now - _ls1.ts) / 1000).toFixed(0)}s ago)`);
         // Force-clear the stale position to prevent infinite retries
         if (!pos.settled) {
           unwindPosition();
@@ -366,9 +366,8 @@ export async function pollOnce() {
           });
           recordLoss();
         }
-        // Record for double-settlement guard
-        lastSettledSlug = pos.marketSlug;
-        lastSettledTs = Date.now();
+        // Record for double-settlement guard (persisted to state.json)
+        setLastSettled(pos.marketSlug, Date.now());
       }
       resetCutLossState();
       resetMarketTradeCount(currentMarketSlug);
@@ -515,8 +514,9 @@ export async function pollOnce() {
 
       const pos = getCurrentPosition();
       // Double-settlement guard: skip if this market was already settled recently
-      if (pos && pos.marketSlug === oldSlug && pos.marketSlug === lastSettledSlug && (now - lastSettledTs) < 30_000) {
-        log.warn(`Double settlement prevented on switch for ${pos.marketSlug} (settled ${((now - lastSettledTs) / 1000).toFixed(0)}s ago)`);
+      const _ls2 = getLastSettled();
+      if (pos && pos.marketSlug === oldSlug && pos.marketSlug === _ls2.slug && (now - _ls2.ts) < 30_000) {
+        log.warn(`Double settlement prevented on switch for ${pos.marketSlug} (settled ${((now - _ls2.ts) / 1000).toFixed(0)}s ago)`);
         if (!pos.settled) {
           unwindPosition();
         }
@@ -563,9 +563,8 @@ export async function pollOnce() {
           });
           recordLoss();
         }
-        // Record for double-settlement guard
-        lastSettledSlug = pos.marketSlug;
-        lastSettledTs = Date.now();
+        // Record for double-settlement guard (persisted to state.json)
+        setLastSettled(pos.marketSlug, Date.now());
       }
 
       resetMarketCache();
@@ -622,7 +621,7 @@ export async function pollOnce() {
     // ── Market prices: WS (instant) → REST (fallback) ──
     const clobConnected = isClobConnected();
     const clobLastUpdate = getClobLastUpdate();
-    const clobStale = clobLastUpdate ? (now - clobLastUpdate > 10_000) : true;
+    const clobStale = clobLastUpdate ? (now - clobLastUpdate > 15_000) : true; // Aligned: halfway between loop check and clobWs DATA_STALE_MS (20s)
     const useClobWs = clobConnected && !clobStale;
 
     const marketUp = useClobWs ? (getClobUpPrice() ?? poly.prices.up) : poly.prices.up;
@@ -668,7 +667,7 @@ export async function pollOnce() {
       log.info(`Market transition grace: ${elapsed}s / ${MARKET_TRANSITION_GRACE_MS / 1000}s — skipping prediction (WS syncing)`);
       broadcast({
         paused: false, ts: now, pollCounter, btcPrice: lastPrice, dryRun: BOT_CONFIG.dryRun,
-        stats: getStats(), bankroll, marketSlug, marketTransition: true,
+        stats: getStats(), bankroll: getBankroll(), marketSlug, marketTransition: true,
         transitionElapsedMs: now - marketTransitionMs,
       });
       return;
@@ -761,7 +760,7 @@ export async function pollOnce() {
     }
     const recentFlipCount = signalFlipHistory.length;
 
-    // ── Log real Polymarket data for ML training (every 30s, zero alloc when throttled) ──
+    // ── Log real Polymarket data for ML training (every 5s, zero alloc when throttled) ──
     if (shouldLogPoly() && lastPrice && marketSlug) {
       logPolySnapshot({
         btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug,
@@ -857,8 +856,8 @@ export async function pollOnce() {
           writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
           resetCutLossState();
           recordLoss();
-          // Activate tilt protection
-          tiltMarketsLeft = TILT_MARKETS;
+          // Activate tilt protection (+1 because counter decrements on current market's switch too)
+          tiltMarketsLeft = TILT_MARKETS + 1;
           log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
         } else {
           recordSellAttempt();
@@ -869,8 +868,8 @@ export async function pollOnce() {
             writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
             resetCutLossState();
             recordLoss();
-            // Activate tilt protection
-            tiltMarketsLeft = TILT_MARKETS;
+            // Activate tilt protection (+1 because counter decrements on current market's switch too)
+            tiltMarketsLeft = TILT_MARKETS + 1;
             log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);

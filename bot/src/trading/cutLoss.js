@@ -177,7 +177,7 @@ export function evaluateCutLoss({
   recordTokenPrice(currentTokenPrice);
 
   const dropPct = ((entryPrice - currentTokenPrice) / entryPrice) * 100;
-  const hasPtb = btcPrice != null && priceToBeat != null && Number.isFinite(btcPrice) && Number.isFinite(priceToBeat);
+  const hasPtb = btcPrice != null && priceToBeat != null && Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
 
   // BTC distance from PTB
   let btcDistPct = null;

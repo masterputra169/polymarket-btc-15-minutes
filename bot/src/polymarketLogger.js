@@ -2,7 +2,7 @@
  * Live Polymarket data logger — writes directly to CSV file.
  * Runs in the bot (Node.js), so can write to filesystem.
  *
- * Appends one row every 30s to backtest/ml_training/live_polymarket_data.csv
+ * Appends one row every 5s to backtest/ml_training/live_polymarket_data.csv
  */
 
 import fs from 'fs';

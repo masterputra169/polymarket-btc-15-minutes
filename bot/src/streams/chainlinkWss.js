@@ -69,11 +69,11 @@ export function connect() {
       reconnectMs = 1000;
       lastMsgMs = Date.now();
 
-      // Ping every 15s
+      // Ping every 15s (use module-level ws, not local socket, to survive reconnect race)
       stopPing();
       pingTimer = setInterval(() => {
-        if (socket.readyState === WebSocket.OPEN) {
-          try { socket.send(JSON.stringify({ type: 'ping' })); } catch {}
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
         }
       }, PING_MS);
 
