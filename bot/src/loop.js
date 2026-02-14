@@ -135,6 +135,13 @@ import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './po
 
 const log = createLogger('Loop');
 
+// ── Pause/Resume control ──
+let paused = false;
+
+export function pauseBot() { paused = true; log.info('Bot PAUSED by dashboard'); }
+export function resumeBot() { paused = false; log.info('Bot RESUMED by dashboard'); }
+export function isPaused() { return paused; }
+
 // ── Module-level state ──
 let currentMarketSlug = null;
 let currentMarketEndMs = null;
@@ -180,6 +187,11 @@ function resetMarketCache() {
  */
 export async function pollOnce() {
   if (polling) return;
+  if (paused) {
+    // Still broadcast so dashboard knows bot is alive but paused
+    broadcast({ paused: true, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
+    return;
+  }
   polling = true;
   pollCounter++;
   const _pollStart = performance.now();
@@ -763,6 +775,7 @@ export async function pollOnce() {
 
     broadcast({
       // ═══ Bot-specific fields (for BotPanel) ═══
+      paused: false,
       ts: Date.now(),
       pollCounter,
       btcPrice: lastPrice,

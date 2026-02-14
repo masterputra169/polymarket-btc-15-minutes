@@ -182,11 +182,20 @@ export function useBotData() {
     }
   }, []);
 
+  // sendBotCommand: send arbitrary command to bot (e.g. 'botPause', 'botResume')
+  const sendBotCommand = useCallback((type) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type }));
+    }
+  }, []);
+
   return {
     data,
     loading,
     error: null,
     setBankroll,
+    sendBotCommand,
     botConnected: connected,
     binancePrice,
     binancePrevPrice,

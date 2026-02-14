@@ -37,8 +37,8 @@ import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from '
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.js';
-import { pollOnce } from './src/loop.js';
-import { startStatusServer, stopStatusServer } from './src/statusServer.js';
+import { pollOnce, pauseBot, resumeBot } from './src/loop.js';
+import { startStatusServer, stopStatusServer, registerBotControl } from './src/statusServer.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -93,6 +93,7 @@ async function main() {
 
   // 5b. Start status broadcast server (dashboard integration)
   startStatusServer();
+  registerBotControl(pauseBot, resumeBot);
 
   // 6. Start poll loop
   log.info(`Starting poll loop (every ${POLL_MS}ms)...`);

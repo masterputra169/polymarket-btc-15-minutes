@@ -66,21 +66,8 @@ function MLPanel({ data }) {
       </div>
 
       {mlReady && isHighConfidence && (
-        <div
-          style={{
-            background: 'linear-gradient(90deg, rgba(0,229,255,0.12), rgba(0,229,255,0.03))',
-            border: '1px solid rgba(0,229,255,0.25)',
-            borderRadius: 'var(--radius-sm)',
-            padding: '6px 10px',
-            marginBottom: 10,
-            textAlign: 'center',
-            fontSize: '0.72rem',
-            fontWeight: 700,
-            color: 'var(--accent-cyan)',
-            letterSpacing: '0.08em',
-          }}
-        >
-          HIGH CONFIDENCE — {mlSide === 'UP' ? '↑ LONG' : '↓ SHORT'}
+        <div className="ml-high-conf-banner" style={{ marginBottom: 10 }}>
+          HIGH CONFIDENCE — {mlSide === 'UP' ? '\u2191 LONG' : '\u2193 SHORT'}
         </div>
       )}
 

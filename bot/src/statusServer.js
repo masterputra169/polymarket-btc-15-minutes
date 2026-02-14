@@ -12,11 +12,25 @@ const log = createLogger('StatusWS');
 const STATUS_PORT = parseInt(process.env.STATUS_PORT || '3099', 10);
 const HEARTBEAT_MS = 30_000;
 const SET_BANKROLL_COOLDOWN_MS = 5_000; // rate limit: 1 setBankroll per 5s
+const BOT_CONTROL_COOLDOWN_MS = 2_000; // rate limit: 1 pause/resume per 2s
 
 let wss = null;
 let heartbeatInterval = null;
 let lastSnapshot = null;
 let lastSetBankrollMs = 0;
+let lastBotControlMs = 0;
+
+// Bot control callbacks — set via registerBotControl() to avoid circular imports
+let _pauseBot = null;
+let _resumeBot = null;
+
+/**
+ * Register pause/resume callbacks from loop.js (called by index.js).
+ */
+export function registerBotControl(pauseFn, resumeFn) {
+  _pauseBot = pauseFn;
+  _resumeBot = resumeFn;
+}
 
 /**
  * Start the status WebSocket server.
@@ -49,6 +63,16 @@ export function startStatusServer() {
           }
           lastSetBankrollMs = now;
           setBankroll(msg.value);
+        } else if (msg.type === 'botPause' && _pauseBot) {
+          const now = Date.now();
+          if (now - lastBotControlMs < BOT_CONTROL_COOLDOWN_MS) return;
+          lastBotControlMs = now;
+          _pauseBot();
+        } else if (msg.type === 'botResume' && _resumeBot) {
+          const now = Date.now();
+          if (now - lastBotControlMs < BOT_CONTROL_COOLDOWN_MS) return;
+          lastBotControlMs = now;
+          _resumeBot();
         }
       } catch (_e) { /* ignore malformed */ }
     });

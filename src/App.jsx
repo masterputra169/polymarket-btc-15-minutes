@@ -13,12 +13,12 @@ import BetSizingPanel from './components/BetSizingPanel.jsx';
 import BotPanel from './components/BotPanel.jsx';
 import SessionInfo from './components/SessionInfo.jsx';
 
-// ═══ React.memo: StatusDot only re-renders when connected/label changes ═══
-const StatusDot = memo(function StatusDot({ connected, label }) {
-  const cls = connected ? '' : 'status-dot--error';
+// ═══ React.memo: StatusPill — rounded pill with dot + label ═══
+const StatusPill = memo(function StatusPill({ connected, label }) {
+  const dotCls = connected ? '' : 'status-dot--error';
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-      <span className={`status-dot ${cls}`} style={{ width: 5, height: 5 }} />
+    <span className="status-pill">
+      <span className={`status-dot ${dotCls}`} style={{ width: 6, height: 6 }} />
       <span>{label}</span>
     </span>
   );
@@ -26,7 +26,9 @@ const StatusDot = memo(function StatusDot({ connected, label }) {
 
 export default function App() {
   // ═══ Single data source: bot via WebSocket ═══
-  const { data, loading, error, setBankroll, botConnected, binancePrice, binancePrevPrice } = useBotData();
+  const { data, loading, error, setBankroll, sendBotCommand, botConnected, binancePrice, binancePrevPrice } = useBotData();
+
+  const botPaused = data?.paused === true;
 
   // ═══ Polymarket training data logger (IndexedDB, every 30s) ═══
   useEffect(() => { initLoggerDB(); }, []);
@@ -288,15 +290,26 @@ export default function App() {
           Polymarket BTC 15m Assistant
         </div>
         <div className="app-header__status">
-          <StatusDot connected={data?.binanceConnected ?? false} label="Binance" />
-          <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={chainlinkConnected} label={`Chainlink (${chainlinkResolved.source})`} />
-          <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={data?.clobWsConnected ?? false} label={`CLOB ${data?.clobWsConnected ? 'WS' : 'REST'}`} />
-          <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={mlStatus === 'ready'} label="ML" />
-          <span style={{ color: 'var(--text-dim)' }}>|</span>
-          <StatusDot connected={botConnected} label="Bot" />
+          <StatusPill connected={data?.binanceConnected ?? false} label="Binance" />
+          <StatusPill connected={chainlinkConnected} label={`CL:${chainlinkResolved.source}`} />
+          <StatusPill connected={data?.clobWsConnected ?? false} label={`CLOB ${data?.clobWsConnected ? 'WS' : 'REST'}`} />
+          <StatusPill connected={mlStatus === 'ready'} label="ML" />
+          <StatusPill connected={botConnected} label="Bot" />
+          {/* Bot START/STOP control */}
+          <button
+            className={`btn-bot-control ${
+              !botConnected
+                ? 'btn-bot-control--disabled'
+                : botPaused
+                  ? 'btn-bot-control--start'
+                  : 'btn-bot-control--stop'
+            }`}
+            disabled={!botConnected}
+            onClick={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
+          >
+            <span style={{ fontSize: '0.9em' }}>{botPaused ? '\u25B6' : '\u25A0'}</span>
+            {!botConnected ? 'OFFLINE' : botPaused ? 'START' : 'STOP'}
+          </button>
         </div>
       </header>
 
@@ -307,9 +320,17 @@ export default function App() {
         </div>
       )}
 
+      {/* Bot paused banner */}
+      {botConnected && botPaused && (
+        <div className="paused-banner">
+          BOT PAUSED — Analysis loop stopped. Click START to resume.
+        </div>
+      )}
+
       {/* Loading */}
       {loading && !data && (
         <div className="loading-screen">
+          <div className="loading-screen__icon">₿</div>
           <div className="loading-screen__spinner" />
           <div className="loading-screen__text">
             {botConnected ? 'Receiving data...' : 'Waiting for bot...'}

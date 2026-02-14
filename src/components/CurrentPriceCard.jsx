@@ -217,19 +217,20 @@ function CurrentPriceCard({
               </div>
             )}
 
-            {/* Direction indicator */}
+            {/* Direction indicator — prominent gradient badge */}
             {displayPrice !== null && (
               <span
                 style={{
-                  fontSize: '0.7rem',
-                  fontWeight: 600,
-                  padding: '2px 8px',
-                  borderRadius: '4px',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  padding: '4px 14px',
+                  borderRadius: '6px',
+                  letterSpacing: '0.04em',
                   background:
                     displayPrice > priceToBeat
-                      ? 'var(--green-bg)'
+                      ? 'linear-gradient(135deg, rgba(0,230,118,0.15), rgba(0,230,118,0.06))'
                       : displayPrice < priceToBeat
-                        ? 'var(--red-bg)'
+                        ? 'linear-gradient(135deg, rgba(255,82,82,0.15), rgba(255,82,82,0.06))'
                         : 'rgba(255,171,0,0.06)',
                   color:
                     displayPrice > priceToBeat
@@ -239,17 +240,23 @@ function CurrentPriceCard({
                         : 'var(--yellow-bright)',
                   border: `1px solid ${
                     displayPrice > priceToBeat
-                      ? 'rgba(0,230,118,0.2)'
+                      ? 'rgba(0,230,118,0.3)'
                       : displayPrice < priceToBeat
-                        ? 'rgba(255,82,82,0.2)'
+                        ? 'rgba(255,82,82,0.3)'
                         : 'rgba(255,171,0,0.2)'
                   }`,
+                  boxShadow:
+                    displayPrice > priceToBeat
+                      ? '0 0 10px rgba(0,230,118,0.1)'
+                      : displayPrice < priceToBeat
+                        ? '0 0 10px rgba(255,82,82,0.1)'
+                        : 'none',
                 }}
               >
                 {displayPrice > priceToBeat
-                  ? '↑ ABOVE'
+                  ? '\u2191 ABOVE'
                   : displayPrice < priceToBeat
-                    ? '↓ BELOW'
+                    ? '\u2193 BELOW'
                     : '= EXACT'}
               </span>
             )}
