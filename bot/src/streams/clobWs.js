@@ -97,11 +97,16 @@ function handleBookEvent(data) {
 }
 
 function handlePriceChange(data) {
+  // W3: Only reset data freshness timer if there are actual price changes.
+  // CLOB can send price_change events with empty changes array — those should
+  // NOT reset the stale timer, otherwise stale prices go undetected.
+  const changes = Array.isArray(data.price_changes) ? data.price_changes : [];
+  if (changes.length === 0) return;
+
   dataReceived = true;
   lastDataMsgMs = Date.now();
   if (subWatchdogTimer) { clearTimeout(subWatchdogTimer); subWatchdogTimer = null; }
 
-  const changes = Array.isArray(data.price_changes) ? data.price_changes : [];
   for (const change of changes) {
     const assetId = change.asset_id;
     const bestBid = toNumber(change.best_bid);
@@ -146,6 +151,9 @@ function doSubscribe(socket) {
   const ids = [tokenIds.up, tokenIds.down].filter(Boolean);
   if (ids.length === 0) return;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  // W7: Clear old watchdog before setting new one — prevents stale watchdog
+  // from firing after a rapid reconnect and causing unnecessary re-reconnect
+  if (subWatchdogTimer) { clearTimeout(subWatchdogTimer); subWatchdogTimer = null; }
   try {
     socket.send(JSON.stringify({ assets_ids: ids, type: 'market' }));
     subscribed = true;
@@ -279,6 +287,7 @@ export function setTokenIds(upTokenId, downTokenId) {
   _downPrice = null;
   _orderbook.up = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
   _orderbook.down = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
+  _lastUpdate = 0; // W10: Reset so dashboard doesn't see stale timestamp from old market
   forceReconnect();
 }
 

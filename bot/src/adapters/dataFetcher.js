@@ -226,10 +226,15 @@ export async function fetchChainlinkBtcUsd() {
     const updatedAtHex = hex.slice(192, 256);
     const updatedAt = Number(BigInt('0x' + updatedAtHex)) * 1000;
 
-    cachedChainlink = { price, updatedAt, source: 'chainlink_rpc' };
-    chainlinkFetchedAt = now;
+    // W8: Only cache valid prices — prevents null/invalid responses from
+    // overwriting good cache and blocking retries for 30s
+    if (Number.isFinite(price) && price > 0) {
+      cachedChainlink = { price, updatedAt, source: 'chainlink_rpc' };
+      chainlinkFetchedAt = now;
+    }
     return cachedChainlink;
   } catch {
+    // Network error — return stale cache, don't update timestamp so retry happens next poll
     return cachedChainlink;
   }
 }

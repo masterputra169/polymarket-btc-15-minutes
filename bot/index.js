@@ -93,15 +93,15 @@ async function main() {
   connectPolyLiveWs();
   connectChainlinkWss();
 
-  // 5b. Start status broadcast server (dashboard integration)
-  startStatusServer();
-  registerBotControl(pauseBot, resumeBot);
-
-  // 5c. Position manager + trader discovery
+  // 5b. Position manager + trader discovery (load BEFORE server starts)
   loadPositions();
   loadTrackedTraders();
   startPositionPolling();
   registerPositionCallback(getMergedPositions);
+
+  // W2: Register ALL callbacks BEFORE starting server — prevents race where
+  // dashboard connects and sends commands before callbacks are set
+  registerBotControl(pauseBot, resumeBot);
   registerPositionManager({ getPositions: () => getMergedPositions(getCurrentPosition()), closePosition });
   registerTraderDiscovery({
     scan: fullScan,
@@ -111,6 +111,9 @@ async function main() {
     removeTracker: removeTrackedTrader,
     simulate: simulateTrader,
   });
+
+  // 5c. Start status broadcast server (dashboard integration)
+  startStatusServer();
 
   // 6. Start poll loop
   log.info(`Starting poll loop (every ${POLL_MS}ms)...`);

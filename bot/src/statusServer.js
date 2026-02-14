@@ -10,15 +10,18 @@ import { setBankroll } from './trading/positionTracker.js';
 const log = createLogger('StatusWS');
 
 const STATUS_PORT = parseInt(process.env.STATUS_PORT || '3099', 10);
-const HEARTBEAT_MS = 30_000;
-const SET_BANKROLL_COOLDOWN_MS = 5_000; // rate limit: 1 setBankroll per 5s
-const BOT_CONTROL_COOLDOWN_MS = 2_000; // rate limit: 1 pause/resume per 2s
+const HEARTBEAT_MS = 15_000;             // W4: 30s→15s — faster zombie detection for trading bot
+const SET_BANKROLL_COOLDOWN_MS = 5_000;  // rate limit: 1 setBankroll per 5s
+const BOT_CONTROL_COOLDOWN_MS = 2_000;   // rate limit: 1 pause/resume per 2s
+const BACKPRESSURE_MAX_BYTES = 64 * 1024; // W1: terminate clients with >64KB write backlog
+const BROADCAST_THROTTLE_MS = 750;        // W9: max ~1.3 broadcasts/sec (500ms poll → skip every other)
 
 let wss = null;
 let heartbeatInterval = null;
 let lastSnapshot = null;
 let lastSetBankrollMs = 0;
 let lastBotControlMs = 0;
+let lastBroadcastMs = 0;
 
 // Bot control callbacks — set via registerBotControl() to avoid circular imports
 let _pauseBot = null;
@@ -70,7 +73,14 @@ export function registerTraderDiscovery({ scan, getTracked, getDiscovered, addTr
 export function startStatusServer() {
   if (wss) return;
 
-  wss = new WebSocketServer({ port: STATUS_PORT });
+  // W5: Catch port-in-use and other startup errors
+  try {
+    wss = new WebSocketServer({ port: STATUS_PORT });
+  } catch (err) {
+    log.error(`Failed to create WS server on :${STATUS_PORT}: ${err.message}`);
+    wss = null;
+    return;
+  }
 
   wss.on('listening', () => {
     log.info(`Status server listening on :${STATUS_PORT}`);
@@ -97,6 +107,7 @@ export function startStatusServer() {
           const now = Date.now();
           if (now - lastSetBankrollMs < SET_BANKROLL_COOLDOWN_MS) {
             log.debug('setBankroll rate-limited');
+            respond('setBankroll', { ok: false, error: 'rate_limited' }); // W11
             return;
           }
           lastSetBankrollMs = now;
@@ -180,11 +191,22 @@ export function broadcast(stateObj) {
   if (!wss) return;
 
   const json = JSON.stringify(stateObj);
-  lastSnapshot = json;
+  lastSnapshot = json; // Always update for new clients connecting
+
+  // W9: Throttle broadcasts — skip if less than 750ms since last send
+  const now = Date.now();
+  if (now - lastBroadcastMs < BROADCAST_THROTTLE_MS) return;
+  lastBroadcastMs = now;
 
   for (const ws of wss.clients) {
     if (ws.readyState === 1) { // WebSocket.OPEN
-      try { ws.send(json); } catch (_e) { /* */ }
+      // W1: Backpressure check — terminate clients with large write backlogs
+      if (ws.bufferedAmount > BACKPRESSURE_MAX_BYTES) {
+        log.debug(`Client backlog ${(ws.bufferedAmount / 1024).toFixed(0)}KB — terminating`);
+        ws.terminate();
+        continue;
+      }
+      try { ws.send(json); } catch (_e) { ws.terminate(); }
     }
   }
 }

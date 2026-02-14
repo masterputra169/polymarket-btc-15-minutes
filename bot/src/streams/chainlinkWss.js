@@ -105,7 +105,11 @@ export function connect() {
         // Multiple possible formats from different Polygon WSS providers
         if (data.answer !== undefined) {
           p = Number(data.answer);
-          if (data.decimals) p = p / Math.pow(10, Number(data.decimals));
+          // W6: Default decimals to 8 (Chainlink standard) — without this,
+          // a provider returning raw answer (e.g. 5000000000000) without decimals
+          // field would be treated as a valid price of 5 trillion
+          const decimals = Number(data.decimals ?? 8);
+          p = p / Math.pow(10, decimals);
         } else if (data.price !== undefined) {
           p = Number(data.price);
         } else if (data.result !== undefined) {
