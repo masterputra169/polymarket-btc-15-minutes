@@ -83,9 +83,11 @@ export function applyTradeFilters({
   }
 
   // 7. Weekend low-liquidity filter (Saturday/Sunday UTC)
+  // Relaxed: require ML confidence >= 0.35 on weekends (was 0.50 — too aggressive,
+  // blocked most entries since ML confidence typically hovers 40-55%)
   const dayOfWeek = new Date().getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  if (isWeekend && Number.isFinite(mlConfidence) && mlConfidence < 0.50) {
+  if (isWeekend && Number.isFinite(mlConfidence) && mlConfidence < 0.35) {
     reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
   }
 
