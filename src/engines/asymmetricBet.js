@@ -130,8 +130,8 @@ export function computeBetSizing({
     return noBet;
   }
 
-  // Fractional Kelly (cap rawKelly at 100% to prevent extreme bets from near-zero market prices)
-  let frac = Math.min(rawKelly, 1.0) * KELLY_FRACTION;
+  // Fractional Kelly (rawKelly is mathematically bounded by p ≤ 1.0, no cap needed)
+  let frac = rawKelly * KELLY_FRACTION;
 
   // ── Multipliers ──
 
@@ -164,23 +164,26 @@ export function computeBetSizing({
   const executionAdj = executionMultiplier(executionContext);
 
   // Apply all multipliers (5 total: regime, accuracy, ML, confidence, execution)
-  // M1: Clamp after each multiplier to [0, MAX_BET_PCT] — prevents intermediate
-  // explosion where e.g. 1.15 × 1.15 × 1.15 = 1.52 could push fraction beyond cap
+  // Multiply all together, clamp once at end — per-step clamping loses information
+  // when intermediate values hit bounds and later multipliers pull back
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
-  const clamp = (v) => Math.min(Math.max(v, 0), MAX_BET_PCT);
-  let adjustedFraction = frac;
-  adjustedFraction = clamp(adjustedFraction * safeMult(regimeAdj.multiplier));
-  adjustedFraction = clamp(adjustedFraction * safeMult(accuracyAdj.multiplier));
-  adjustedFraction = clamp(adjustedFraction * safeMult(mlAdj.multiplier));
-  adjustedFraction = clamp(adjustedFraction * safeMult(confidenceAdj.multiplier));
-  adjustedFraction = clamp(adjustedFraction * safeMult(executionAdj.multiplier));
+  let adjustedFraction = frac
+    * safeMult(regimeAdj.multiplier)
+    * safeMult(accuracyAdj.multiplier)
+    * safeMult(mlAdj.multiplier)
+    * safeMult(confidenceAdj.multiplier)
+    * safeMult(executionAdj.multiplier);
+  adjustedFraction = Math.min(Math.max(adjustedFraction, 0), MAX_BET_PCT);
 
-  // Final clamp (NaN-safe: if adjustedFraction is somehow NaN, default to 0)
-  // Only apply MIN_BET_PCT if Kelly produced a positive fraction; don't force bets when Kelly → 0
+  // NaN-safe: if adjustedFraction is somehow NaN, default to 0
   const safeFraction = Number.isFinite(adjustedFraction) ? adjustedFraction : 0;
-  const betPercent = safeFraction > 0
-    ? Math.max(MIN_BET_PCT, safeFraction)  // Already clamped to MAX_BET_PCT in M1 loop above
-    : 0;
+  // MIN_BET_PCT as threshold — if multipliers reduced fraction below minimum,
+  // the edge isn't worth a bet under current conditions
+  if (safeFraction > 0 && safeFraction < MIN_BET_PCT) {
+    noBet.rationale = `Adjusted Kelly ${(safeFraction * 100).toFixed(2)}% < min ${(MIN_BET_PCT * 100).toFixed(1)}%`;
+    return noBet;
+  }
+  const betPercent = safeFraction;
   const br = bankroll ?? BET_SIZING.DEFAULT_BANKROLL;
   const betAmount = Math.round(betPercent * br * 100) / 100;
 

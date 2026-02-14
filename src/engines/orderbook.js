@@ -48,8 +48,8 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
   const upTotal = upBidLiq + upAskLiq;
   const downTotal = downBidLiq + downAskLiq;
 
-  if (upTotal < 1 && downTotal < 1) {
-    result.detail = 'Orderbook empty';
+  if (upTotal < 1 || downTotal < 1) {
+    result.detail = upTotal < 1 && downTotal < 1 ? 'Orderbook empty' : 'One side empty';
     return result;
   }
 

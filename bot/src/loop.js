@@ -157,7 +157,7 @@ export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
 // ── Module-level state ──
 let currentMarketSlug = null;
 let currentMarketEndMs = null;
-let priceToBeat = { slug: null, value: null };
+let priceToBeat = { slug: null, value: null, updatedAt: 0 };
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
@@ -206,7 +206,7 @@ function resetMarketCache() {
   polySnapshotCache = null;
   polyLastFetchMs = 0;
   currentMarketEndMs = null;
-  priceToBeat = { slug: null, value: null };
+  priceToBeat = { slug: null, value: null, updatedAt: 0 };
   tokenIdsNotified = false;
   marketUpHistory.buf.fill(0);
   marketUpHistory.idx = 0;
@@ -332,6 +332,7 @@ export async function pollOnce() {
         lastSettledTs = Date.now();
       }
       resetCutLossState();
+      resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
     }
 
@@ -522,9 +523,10 @@ export async function pollOnce() {
     // Price to beat
     const ptb = extractPriceToBeat(poly.market, klines1m);
     if (marketSlug && priceToBeat.slug !== marketSlug) {
-      priceToBeat = { slug: marketSlug, value: ptb };
+      priceToBeat = { slug: marketSlug, value: ptb, updatedAt: ptb !== null ? now : 0 };
     } else if (ptb !== null) {
       priceToBeat.value = ptb;
+      priceToBeat.updatedAt = now;
     }
 
     // ── Market prices: WS (instant) → REST (fallback) ──

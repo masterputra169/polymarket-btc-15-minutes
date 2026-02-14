@@ -300,8 +300,10 @@ export function scoreDirection({
         breakdown.multiTf = { signal: 'DOWN (confirmed)', weight: 2 };
       }
     } else {
-      // 5m contradicts 1m → this is actually a counter-signal, don't add weight
-      breakdown.multiTf = { signal: `CONFLICT (1m vs 5m)`, weight: 0 };
+      // 5m contradicts 1m → penalize the majority direction
+      if (multiTfConfirm.signal === 'UP') downScore += 1;
+      else if (multiTfConfirm.signal === 'DOWN') upScore += 1;
+      breakdown.multiTf = { signal: `CONFLICT (1m vs 5m)`, weight: -1 };
     }
   } else {
     breakdown.multiTf = { signal: multiTfConfirm?.signal ?? 'N/A', weight: 0 };
@@ -334,15 +336,11 @@ export function scoreDirection({
         regimeEffect = 'NEUTRAL';
         break;
     }
-    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * regimeMultiplier));
   }
   breakdown.regime = { effect: regimeEffect, multiplier: regimeMultiplier };
 
   // ═══ 12. VOLATILITY SESSION ADJUSTMENT — NEW ═══
   const volMultiplier = volProfile?.confidenceMultiplier ?? 1.0;
-  if (volMultiplier !== 1.0) {
-    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * volMultiplier));
-  }
   breakdown.volatility = {
     session: volProfile?.session ?? 'unknown',
     multiplier: volMultiplier,
@@ -351,17 +349,16 @@ export function scoreDirection({
 
   // ═══ 13. FEEDBACK ACCURACY ADJUSTMENT — NEW ═══
   const fbMultiplier = feedbackStats?.confidenceMultiplier ?? 1.0;
-  if (fbMultiplier !== 1.0) {
-    rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * fbMultiplier));
-  }
   breakdown.feedback = {
     multiplier: fbMultiplier,
     accuracy: feedbackStats?.accuracy ?? null,
     label: feedbackStats?.label ?? 'No data',
   };
 
-  // Clamp to valid probability range
-  rawUp = Math.max(0.02, Math.min(0.98, rawUp));
+  // Apply all post-scoring multipliers in one step (avoids per-step clamping
+  // artifacts when intermediate values hit [0.02, 0.98] bounds)
+  const combinedMultiplier = regimeMultiplier * volMultiplier * fbMultiplier;
+  rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * combinedMultiplier));
 
   const rawDown = 1 - rawUp;
 

@@ -73,7 +73,8 @@ export function computeMultiTfConfirmation({
   }
 
   const signal = upVotes > downVotes ? 'UP' : upVotes < downVotes ? 'DOWN' : 'NEUTRAL';
-  const agreement = tf1mSignal !== 'NEUTRAL' && tf5mSignal !== 'NEUTRAL' && tf1mSignal === tf5mSignal;
+  // Soft agreement: 1m has direction AND 5m doesn't contradict (neutral 5m = no objection)
+  const agreement = tf1mSignal !== 'NEUTRAL' && (tf5mSignal === 'NEUTRAL' || tf1mSignal === tf5mSignal);
   const confidence = Math.max(upVotes, downVotes) / total;
 
   const detail = agreement

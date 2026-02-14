@@ -39,8 +39,8 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   const normalizedAbsSlope = hasSlope && vwap > 0 ? Math.abs(vwapSlope) / vwap : 0;
 
   // ═══ CHOPPY: Many VWAP crosses + price near VWAP ═══
-  // v2: Lowered cross threshold from 4→3, dist from 0.001→0.0015
-  if (vwapCrossCount !== null && vwapCrossCount >= 3 && vwapDist < 0.0015) {
+  // v3: Raised cross threshold 3→4, dist 0.0015→0.002 (3 crosses too aggressive)
+  if (vwapCrossCount !== null && vwapCrossCount >= 4 && vwapDist < 0.002) {
     regime = 'choppy';
     confidence = 0.3 + Math.min(vwapCrossCount / 8, 0.4);
     label = `Choppy (${vwapCrossCount} crosses)`;

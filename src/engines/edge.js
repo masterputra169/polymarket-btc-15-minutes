@@ -94,7 +94,7 @@ export function countAgreement(breakdown, side) {
 
   let count = 0;
   const signalKeys = [
-    'ptbDistance', 'momentum', 'rsi', 'macdHist', 'macdLine',
+    'ptbDistance', 'ptbMomentum', 'momentum', 'rsi', 'macdHist', 'macdLine',
     'vwapPos', 'vwapSlope', 'heikenAshi', 'failedVwap', 'orderbook', 'multiTf',
   ];
 
