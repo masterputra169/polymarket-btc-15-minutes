@@ -57,6 +57,14 @@ export function applyTradeFilters({
     reasons.push(`Market ${(marketPrice * 100).toFixed(0)}c near 50/50 (${(lo*100).toFixed(0)}-${(hi*100).toFixed(0)}c)`);
   }
 
+  // 2b. Extreme contrarian filter — reject entries where market price is very low/high
+  // Buying at <25c or >75c means the market strongly disagrees with the model.
+  // The model needs to be MUCH more accurate than the market to profit on these.
+  const priceRange = TRADE_FILTERS.MARKET_PRICE_RANGE;
+  if (priceRange && marketPrice != null && (marketPrice < priceRange[0] || marketPrice > priceRange[1])) {
+    reasons.push(`Extreme price ${(marketPrice * 100).toFixed(0)}c outside ${(priceRange[0]*100).toFixed(0)}-${(priceRange[1]*100).toFixed(0)}c range`);
+  }
+
   // 3. Low volatility
   if (atrRatio != null && atrRatio < TRADE_FILTERS.MIN_ATR_RATIO) {
     reasons.push(`Low vol: ATR ratio ${atrRatio.toFixed(2)} < ${TRADE_FILTERS.MIN_ATR_RATIO}`);

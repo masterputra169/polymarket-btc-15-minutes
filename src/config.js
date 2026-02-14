@@ -33,8 +33,9 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.40,       // minimum ML confidence to trade (0.40 = model's HIGH threshold)
+  MIN_ML_CONFIDENCE: 0.55,       // minimum ML confidence to trade (backtest: 0.55+=56.1%, 0.60+=61.1% acc)
   MARKET_5050_RANGE: [0.45, 0.55], // market price in this range = near 50/50, skip
+  MARKET_PRICE_RANGE: [0.25, 0.75], // reject extreme contrarian entries (market price outside this = too risky)
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
   LOSS_COOLDOWN_MS: 60_000,     // 60s cooldown after a loss before next trade

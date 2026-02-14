@@ -60,7 +60,8 @@
       "Bash(ls:*)",
       "Bash(findstr:*)",
       "WebFetch(domain:debank.com)",
-      "Bash(printf:*)"
+      "Bash(printf:*)",
+      "Bash(DRY_RUN=true node:*)"
     ]
   }
 }
