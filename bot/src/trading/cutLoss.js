@@ -73,7 +73,7 @@ export function evaluateCutLoss({ position, currentTokenPrice, orderbook, timeLe
     ? orderbook.bestBid
     : currentTokenPrice;
   const recoveryAmount = sellPrice * position.size;
-  const savings = position.cost - recoveryAmount; // positive = how much we saved vs full loss
+  const savings = recoveryAmount; // amount recovered (saved vs full loss of $0 payout)
 
   return {
     shouldCut: true,

@@ -23,7 +23,7 @@ export { flattenEventMarkets, pickLatestLiveMarket, summarizeOrderBook };
  */
 export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/klines?symbol=${CONFIG.symbol}&interval=${interval}&limit=${limit}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
   if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
   const raw = await res.json();
 
@@ -44,7 +44,7 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
  */
 export async function fetchLastPrice() {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/ticker/price?symbol=${CONFIG.symbol}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
   if (!res.ok) throw new Error(`Binance price HTTP ${res.status}`);
   const data = await res.json();
   return parseFloat(data.price);
@@ -55,7 +55,7 @@ export async function fetchLastPrice() {
  */
 async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
   const url = `${CONFIG.gammaBaseUrl}/events?series_id=${seriesId}&active=true&closed=false&limit=${limit}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
   if (!res.ok) throw new Error(`Gamma events error: ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -66,7 +66,7 @@ async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
  */
 async function fetchOrderBook({ tokenId }) {
   const url = `${CONFIG.clobBaseUrl}/book?token_id=${tokenId}`;
-  const res = await fetch(url);
+  const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
   if (!res.ok) throw new Error(`CLOB book error: ${res.status}`);
   return await res.json();
 }

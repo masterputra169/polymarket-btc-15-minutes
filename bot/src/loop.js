@@ -235,6 +235,7 @@ export async function pollOnce() {
     });
     if (haltCheck.halt) {
       log.warn(`HALTED: ${haltCheck.reason}`);
+      broadcast({ halted: true, haltReason: haltCheck.reason, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
       return;
     }
 
@@ -270,21 +271,37 @@ export async function pollOnce() {
       log.info('Market expired! Forcing fresh discovery...');
       const pos = getCurrentPosition();
       if (pos && pos.marketSlug === currentMarketSlug) {
-        // Determine actual outcome: compare current BTC price to PTB
+        // Prefer oracle prices (Chainlink/Polymarket) over Binance for settlement accuracy
+        const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
         const wsPrice = getBinancePrice();
-        const currentBtcPrice = wsPrice || pos.price; // best available price
+        const currentBtcPrice = oraclePrice || wsPrice || pos.price;
+        const priceSource = oraclePrice ? 'oracle' : wsPrice ? 'binance' : 'entry';
         const ptbValue = priceToBeat.value;
         // C5: PTB freshness check — only trust PTB if it belongs to current market
         const ptbFresh = ptbValue != null && priceToBeat.slug === currentMarketSlug;
-        if (ptbFresh && currentBtcPrice != null) {
+        if (pos.side === 'ARB') {
+          // Arb always wins — riskless guaranteed $1 per share pair
+          const arbPnl = pos.size - pos.cost;
+          log.info(`ARB position settled — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
+          settleTrade(true);
+          writeJournalEntry({
+            outcome: 'WIN', pnl: arbPnl,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
+        } else if (ptbFresh && currentBtcPrice != null) {
           const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
           const won = pos.side === actualResult;
-          log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
+          // Warn if settlement is uncertain (BTC price near PTB boundary)
+          const pctFromPtb = Math.abs(currentBtcPrice - ptbValue) / ptbValue;
+          if (pctFromPtb < 0.001) {
+            log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+          }
+          log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'} (${priceSource})`);
           settleTrade(won);
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
         } else {
@@ -392,21 +409,37 @@ export async function pollOnce() {
 
       const pos = getCurrentPosition();
       if (pos && pos.marketSlug === oldSlug) {
-        // Determine actual outcome: market resolved, check BTC vs PTB
+        // Prefer oracle prices (Chainlink/Polymarket) over Binance for settlement accuracy
+        const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
         const wsPrice = getBinancePrice();
-        const currentBtcPrice = wsPrice || pos.price;
+        const currentBtcPrice = oraclePrice || wsPrice || pos.price;
+        const priceSource = oraclePrice ? 'oracle' : wsPrice ? 'binance' : 'entry';
         const ptbValue = priceToBeat.value;
         // C5: PTB freshness check — only trust PTB if it belongs to the old market
         const ptbFresh = ptbValue != null && priceToBeat.slug === oldSlug;
-        if (ptbFresh && currentBtcPrice != null) {
+        if (pos.side === 'ARB') {
+          // Arb always wins — riskless guaranteed $1 per share pair
+          const arbPnl = pos.size - pos.cost;
+          log.info(`ARB position settled on switch — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
+          settleTrade(true);
+          writeJournalEntry({
+            outcome: 'WIN', pnl: arbPnl,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
+        } else if (ptbFresh && currentBtcPrice != null) {
           const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
           const won = pos.side === actualResult;
-          log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
+          // Warn if settlement is uncertain (BTC price near PTB boundary)
+          const pctFromPtb = Math.abs(currentBtcPrice - ptbValue) / ptbValue;
+          if (pctFromPtb < 0.001) {
+            log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+          }
+          log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'} (${priceSource})`);
           settleTrade(won);
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
         } else {
@@ -763,6 +796,7 @@ export async function pollOnce() {
             const upOrderId = upResult?.orderId ?? null;
 
             // Leg 2: Buy DOWN — if this fails, we have one-legged exposure
+            let arbLeg2Failed = false;
             try {
               const downResult = await placeBuyOrder({
                 tokenId: poly.tokens.downTokenId,
@@ -771,8 +805,9 @@ export async function pollOnce() {
               });
               const downFillCost = downResult?.makingAmount != null
                 ? parseFloat(downResult.makingAmount) : arbShares * arb.askDown;
+              const downOrderId = downResult?.orderId ?? null;
 
-              // Both legs filled — record arb with actual fill costs
+              // Both legs succeeded — record arb with actual fill costs
               setPendingCost(0);
               recordArbTrade({
                 upCost: upFillCost,
@@ -781,8 +816,13 @@ export async function pollOnce() {
                 marketSlug,
                 orderId: upOrderId,
               });
+              recordTradeForMarket(marketSlug);
+              // Track fills for both orders (monitors execution, feeds fill rate stats)
+              if (upOrderId) trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP' });
+              if (downOrderId) trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN' });
             } catch (downErr) {
               // ONE-LEGGED: Only UP bought, DOWN failed — record as directional position
+              arbLeg2Failed = true;
               setPendingCost(0);
               log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — recording one-legged UP position`);
               const actualPrice = upFillCost / arbShares;
@@ -795,7 +835,20 @@ export async function pollOnce() {
                 orderId: upOrderId,
                 actualCost: upFillCost,
               });
-              return; // Don't count as successful arb
+              recordTradeForMarket(marketSlug);
+              // Track fill for the UP order (monitors execution + enables stale cancel)
+              if (upOrderId) trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP' });
+              // Capture journal entry so settlement writes a post-trade record
+              captureEntrySnapshot({
+                side: 'UP', tokenPrice: arb.askUp, btcPrice: lastPrice,
+                priceToBeat: priceToBeat.value, marketSlug,
+                cost: upFillCost, size: arbShares,
+                confidence: 'ARB_ONE_LEG', phase: rec?.phase, reason: 'arb_leg2_failed',
+                timeLeftMin, session: getSessionName(),
+              });
+            }
+            if (arbLeg2Failed) {
+              log.warn('One-legged arb recorded as directional UP — continuing loop');
             }
           } catch (err) {
             setPendingCost(0); // Release reservation on leg 1 failure

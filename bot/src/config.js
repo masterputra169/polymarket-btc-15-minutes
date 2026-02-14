@@ -43,6 +43,9 @@ const BOT_CONFIG = {
   trackedTradersFile: resolve(__dirname, '..', 'data', 'tracked_traders.json'),
   maxTrackedTraders: 20,
 
+  // Trade journal (post-trade analysis)
+  journalFile: resolve(__dirname, '..', 'data', 'trade_journal.jsonl'),
+
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',

@@ -53,15 +53,102 @@ function CutLossBar({ cutLoss }) {
   );
 }
 
+function JournalEntry({ j }) {
+  const { entry, analysis } = j;
+  if (!entry || !analysis) return null;
+
+  const outcomeColor = analysis.outcome === 'WIN' ? 'var(--green-bright)'
+    : analysis.outcome === 'DRY_RUN' ? 'var(--text-dim)'
+    : 'var(--red-bright)';
+
+  const outcomeBg = analysis.outcome === 'WIN' ? 'rgba(0,230,118,0.12)'
+    : analysis.outcome === 'DRY_RUN' ? 'rgba(255,255,255,0.06)'
+    : 'rgba(255,82,82,0.12)';
+
+  // Build analysis notes
+  const notes = [];
+  if (analysis.mlWasRight === false) notes.push('ML wrong');
+  if (analysis.ruleWasRight === false) notes.push('Rules wrong');
+  if (analysis.regimeChanged) notes.push(`${analysis.entryRegime}\u2192${analysis.exitRegime}`);
+  if (entry.bestEdge != null && entry.bestEdge < 0.05) notes.push('Thin edge');
+  if (analysis.outcome === 'CUT_LOSS' && analysis.cutLossSaved > 0) {
+    notes.push(`Saved $${analysis.cutLossSaved.toFixed(2)}`);
+  }
+
+  // Time ago
+  const secsAgo = j._ts ? Math.round((Date.now() - j._ts) / 1000) : null;
+  const agoLabel = secsAgo != null
+    ? (secsAgo < 60 ? `${secsAgo}s` : secsAgo < 3600 ? `${Math.floor(secsAgo / 60)}m` : `${Math.floor(secsAgo / 3600)}h`)
+    : '';
+
+  return (
+    <div style={{
+      fontSize: '0.6rem', padding: '5px 0',
+      borderBottom: '1px solid var(--border-dim)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{
+            fontWeight: 700, fontSize: '0.54rem', padding: '1px 4px', borderRadius: 3,
+            background: outcomeBg, color: outcomeColor,
+          }}>
+            {analysis.outcome}
+          </span>
+          <span style={{
+            color: entry.side === 'UP' ? 'var(--green-bright)' : 'var(--red-bright)',
+            fontWeight: 600,
+          }}>
+            {entry.side}
+          </span>
+          <span style={{ color: 'var(--text-dim)' }}>
+            BTC ${entry.btcPrice?.toFixed(0)}
+          </span>
+          {entry.confidence && (
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.52rem' }}>
+              [{entry.confidence}]
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            fontWeight: 600,
+            color: (analysis.pnl ?? 0) >= 0 ? 'var(--green-bright)' : 'var(--red-bright)',
+          }}>
+            {(analysis.pnl ?? 0) >= 0 ? '+' : ''}{fmtUsd(analysis.pnl)}
+          </span>
+          {agoLabel && (
+            <span style={{ color: 'var(--text-dim)', fontSize: '0.52rem' }}>{agoLabel}</span>
+          )}
+        </div>
+      </div>
+      {/* Second row: key context + analysis notes */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, fontSize: '0.54rem' }}>
+        <span style={{ color: 'var(--text-dim)' }}>
+          E:{((entry.bestEdge ?? 0) * 100).toFixed(1)}%
+          {entry.mlConfidence != null && ` ML:${(entry.mlConfidence * 100).toFixed(0)}%`}
+          {entry.regime && ` ${entry.regime}`}
+        </span>
+        {notes.length > 0 && (
+          <span style={{ color: '#ffab40' }}>
+            {notes.join(' \u00b7 ')}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PositionPanel({ data, sendBotCommand }) {
   const [selling, setSelling] = useState(null);
   const [agoText, setAgoText] = useState('');
+  const [showJournal, setShowJournal] = useState(true);
 
   const positions = data?.positions?.list ?? [];
   const lastUpdate = data?.positions?.lastUpdate;
   const botPosition = data?.positions?.botPosition ?? null;
   const bankroll = data?.bankroll;
   const cutLoss = data?.cutLoss ?? null;
+  const recentJournal = data?.recentJournal ?? [];
 
   // Auto-updating "Xs ago" timer
   useEffect(() => {
@@ -323,6 +410,27 @@ function PositionPanel({ data, sendBotCommand }) {
           </div>
         </>
       )}
+
+      {/* Recent Trades Journal */}
+      {recentJournal.length > 0 && (
+        <div style={{ marginTop: 8, borderTop: '1px solid var(--border-dim)', paddingTop: 6 }}>
+          <div
+            onClick={() => setShowJournal(v => !v)}
+            style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              cursor: 'pointer', fontSize: '0.6rem', color: 'var(--text-dim)',
+              textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4,
+              userSelect: 'none',
+            }}
+          >
+            <span>Recent Trades ({recentJournal.length})</span>
+            <span style={{ fontSize: '0.5rem' }}>{showJournal ? '\u25BC' : '\u25B6'}</span>
+          </div>
+          {showJournal && recentJournal.map((j, i) => (
+            <JournalEntry key={j._ts || i} j={j} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -338,6 +446,8 @@ export default memo(PositionPanel, (prev, next) => {
     pp?.botPosition?.fillConfirmed === np?.botPosition?.fillConfirmed &&
     prev.data?.bankroll === next.data?.bankroll &&
     prev.data?.cutLoss?.dropPct === next.data?.cutLoss?.dropPct &&
-    prev.data?.cutLoss?.attempts === next.data?.cutLoss?.attempts
+    prev.data?.cutLoss?.attempts === next.data?.cutLoss?.attempts &&
+    prev.data?.recentJournal?.length === next.data?.recentJournal?.length &&
+    prev.data?.recentJournal?.[0]?._ts === next.data?.recentJournal?.[0]?._ts
   );
 });
