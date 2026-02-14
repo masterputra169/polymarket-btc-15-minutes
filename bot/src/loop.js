@@ -98,7 +98,6 @@ import {
   recordTrade,
   settleTrade,
   settleTradeEarlyExit,
-  partialExit,
   hasOpenPosition,
   getBankroll,
   getAvailableBankroll,
@@ -117,7 +116,7 @@ import {
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
-import { evaluateCutLoss, resetCutLossState, resetCutLossConfirmation, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
+import { evaluateCutLoss, resetCutLossState, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -182,6 +181,18 @@ let priceToBeat = { slug: null, value: null, updatedAt: 0 };
 // Skip all prediction/trading during this grace period to prevent cross-market signals.
 let marketTransitionMs = 0;
 const MARKET_TRANSITION_GRACE_MS = 5_000;
+
+// ── Tilt protection (post-cut-loss cooldown) ──
+// After a cut-loss, raise ML confidence threshold for the next N markets.
+// Prevents re-entering similar low-confidence trades immediately after a loss.
+let tiltMarketsLeft = 0;
+const TILT_ML_CONF_MIN = 0.60; // raised threshold during tilt (vs normal 0.50)
+const TILT_MARKETS = 2;        // number of markets to stay cautious
+
+// ── Entry regime tracking ──
+// Stored at entry time, passed to cut-loss for regime-change detection.
+let entryRegime = null;
+
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
@@ -562,6 +573,15 @@ export async function pollOnce() {
       resetFlow();
       resetMarketTradeCount(oldSlug);
       onMarketSwitch(oldSlug, marketSlug);
+
+      // Tilt protection: decrement counter on market switch
+      if (tiltMarketsLeft > 0) {
+        tiltMarketsLeft--;
+        log.info(`Tilt protection: ${tiltMarketsLeft} markets remaining (ML conf >= ${TILT_ML_CONF_MIN * 100}%)`);
+      }
+
+      // Reset entry regime for next trade
+      entryRegime = null;
     }
 
     if (marketSlug) currentMarketSlug = marketSlug;
@@ -777,31 +797,31 @@ export async function pollOnce() {
       const cutResult = evaluateCutLoss({
         position: pos, currentTokenPrice: tokenPrice,
         orderbook: tokenBook, timeLeftMin,
-        // v2 additions:
         btcPrice: lastPrice,
         priceToBeat: priceToBeat.value,
         modelProbability: pos.side === 'UP' ? ensembleUp : ensembleDown,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
         mlSide: mlResult.available ? mlResult.mlSide : null,
         regime: regimeInfo?.regime ?? 'moderate',
+        entryRegime,
         btcDelta1m: delta1m,
         atrRatio: atr?.atrRatio ?? null,
       });
 
       // Log cut-loss gate status every 5th poll (debug visibility)
       if (pollCounter % 5 === 0) {
-        const entryPrice = pos.price;
-        const dropPct = entryPrice > 0 && tokenPrice != null
-          ? (((entryPrice - tokenPrice) / entryPrice) * 100).toFixed(1) : '?';
+        const ep = pos.price;
+        const dropPct = ep > 0 && tokenPrice != null
+          ? (((ep - tokenPrice) / ep) * 100).toFixed(1) : '?';
         const btcDist = lastPrice && priceToBeat.value
           ? (Math.abs((lastPrice - priceToBeat.value) / priceToBeat.value) * 100).toFixed(3) : '?';
         const btcSide = lastPrice && priceToBeat.value
           ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
           : '?';
         log.debug(
-          `CutLoss v2.1: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
+          `CutLoss v3: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
           `BTC ${btcSide} dist=${btcDist}% | d1m=$${(delta1m ?? 0).toFixed(1)} | ` +
-          `ATR=${(atr?.atrRatio ?? 0).toFixed(2)} | ${regimeInfo?.regime ?? '?'} | ` +
+          `ATR=${(atr?.atrRatio ?? 0).toFixed(2)} | ${regimeInfo?.regime ?? '?'}${entryRegime && entryRegime !== regimeInfo?.regime ? `(was ${entryRegime})` : ''} | ` +
           `EV(hold)=${((pos.side === 'UP' ? ensembleUp : ensembleDown) * 100).toFixed(0)}% vs token=${(tokenPrice * 100).toFixed(0)}¢`
         );
       }
@@ -811,63 +831,47 @@ export async function pollOnce() {
         if (!acquireSellLock()) {
           log.info('Cut-loss skipped — sell already in progress (dashboard?)');
         } else {
-        const isPartial = (cutResult.cutFraction ?? 1.0) < 1.0;
-        const sellSize = isPartial
-          ? Math.max(1, Math.floor(pos.size * cutResult.cutFraction))
-          : pos.size;
-        const cutTag = isPartial ? `PARTIAL CUT (${(cutResult.cutFraction * 100).toFixed(0)}%)` : 'CUT-LOSS';
+        // v3: Always full cut (binary options are all-or-nothing)
+        const sellSize = pos.size;
 
         log.warn(
-          `${cutTag}: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
-          `sell ${sellSize}/${pos.size} shares @$${cutResult.sellPrice.toFixed(3)} | ` +
-          `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}`
+          `CUT-LOSS v3: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
+          `sell ${sellSize} shares @$${cutResult.sellPrice.toFixed(3)} | ` +
+          `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}` +
+          `${cutResult.reason === 'CRASH' ? ' [CRASH]' : ''}`
         );
 
         const exitData = {
           btcPrice: lastPrice, priceToBeat: priceToBeat.value,
           marketUp, marketDown, tokenPrice,
           regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+          entryRegime,
           rsiNow, vwapDist, timeLeftMin,
           cutLossDropPct: cutResult.dropPct,
-          cutFraction: cutResult.cutFraction,
-          sellSize,
           diagnostics: cutResult.diagnostics,
         };
 
         if (BOT_CONFIG.dryRun) {
           const recovery = cutResult.sellPrice * sellSize;
-          // Use actual sellSize fraction for P&L (cutFraction differs due to Math.floor)
-          const actualFraction = sellSize / pos.size;
-          if (isPartial) {
-            partialExit(sellSize, recovery);
-            writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: recovery - (pos.cost * actualFraction), exitData: { ...exitData, cutLossRecovered: recovery } });
-            // Reset confirmation counter so next partial cut needs fresh confirmation
-            resetCutLossConfirmation();
-          } else {
-            settleTradeEarlyExit(recovery);
-            writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
-            resetCutLossState();
-            recordLoss();
-          }
+          settleTradeEarlyExit(recovery);
+          writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
+          resetCutLossState();
+          recordLoss();
+          // Activate tilt protection
+          tiltMarketsLeft = TILT_MARKETS;
+          log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
         } else {
           recordSellAttempt();
           try {
             const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
             const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
-
-            if (isPartial) {
-              // Use actual sellSize fraction for P&L (cutFraction differs due to Math.floor)
-              const actualFraction = sellSize / pos.size;
-              partialExit(sellSize, actualRecovery);
-              writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: actualRecovery - (pos.cost * actualFraction), exitData: { ...exitData, cutLossRecovered: actualRecovery } });
-              // Reset confirmation counter so next partial cut needs fresh confirmation
-              resetCutLossConfirmation();
-            } else {
-              settleTradeEarlyExit(actualRecovery);
-              writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
-              resetCutLossState();
-              recordLoss();
-            }
+            settleTradeEarlyExit(actualRecovery);
+            writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+            resetCutLossState();
+            recordLoss();
+            // Activate tilt protection
+            tiltMarketsLeft = TILT_MARKETS;
+            log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);
           }
@@ -1047,9 +1051,15 @@ export async function pollOnce() {
       } else {
       // Signal confirmed — proceed with existing trade filters
 
+      // Tilt protection: after cut-loss, temporarily raise ML confidence threshold
+      const effectiveMlConf = mlResult.available ? mlResult.mlConfidence : null;
+      if (tiltMarketsLeft > 0 && effectiveMlConf != null && effectiveMlConf < TILT_ML_CONF_MIN) {
+        log.info(`Tilt protection: ML conf ${(effectiveMlConf * 100).toFixed(0)}% < ${TILT_ML_CONF_MIN * 100}% (${tiltMarketsLeft} markets left) — blocking entry`);
+      }
+
       // Smart trade filters (confidence gating, 50/50 filter, volatility, cooldown, session)
       const filterResult = applyTradeFilters({
-        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlConfidence: effectiveMlConf,
         mlAvailable: mlResult.available,
         marketPrice: betMarketPrice,
         atrRatio: atr?.atrRatio ?? null,
@@ -1059,6 +1069,7 @@ export async function pollOnce() {
         session: getSessionName(),
         btcPrice: lastPrice,
         priceToBeat: priceToBeat.value,
+        tiltMlConfMin: tiltMarketsLeft > 0 ? TILT_ML_CONF_MIN : null,
       });
 
       // Orderbook flow alignment check
@@ -1151,6 +1162,8 @@ export async function pollOnce() {
               orderId,
               actualCost,
             });
+            // Track regime at entry for cut-loss regime-change detection
+            entryRegime = regimeInfo?.regime ?? 'moderate';
             if (orderId) {
               trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide });
             }
@@ -1323,6 +1336,7 @@ export async function pollOnce() {
       fillTracker: getFillTrackerStatus(),
       orderbookFlow: obFlow,
       tradeFilters: getFilterStatus(),
+      tiltProtection: tiltMarketsLeft > 0 ? { active: true, marketsLeft: tiltMarketsLeft, minMlConf: TILT_ML_CONF_MIN } : { active: false },
 
       // Cut-loss status
       cutLoss: (() => {
@@ -1336,6 +1350,7 @@ export async function pollOnce() {
           mlSide: mlResult.available ? mlResult.mlSide : null,
           regime: regimeInfo?.regime ?? 'moderate',
           atrRatio: atr?.atrRatio ?? null,
+          timeLeftMin,
         });
       })(),
 

@@ -43,13 +43,19 @@ export function applyTradeFilters({
   session,         // trading session name from getSessionName()
   btcPrice,        // current BTC price (for distance check)
   priceToBeat,     // PTB for current market (for distance check)
+  tiltMlConfMin,   // raised ML confidence threshold during tilt protection (null = inactive)
 }) {
   const reasons = [];
 
   // 1. ML Confidence gate
+  // During tilt protection (post-cut-loss), use the higher threshold
+  const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > TRADE_FILTERS.MIN_ML_CONFIDENCE)
+    ? tiltMlConfMin
+    : TRADE_FILTERS.MIN_ML_CONFIDENCE;
   if (mlAvailable && mlConfidence != null) {
-    if (mlConfidence < TRADE_FILTERS.MIN_ML_CONFIDENCE) {
-      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(TRADE_FILTERS.MIN_ML_CONFIDENCE * 100).toFixed(0)}%`);
+    if (mlConfidence < mlConfMin) {
+      const tiltTag = tiltMlConfMin != null ? ' [tilt]' : '';
+      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}`);
     }
   }
 
