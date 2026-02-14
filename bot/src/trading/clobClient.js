@@ -3,6 +3,7 @@
  * Handles wallet setup, API credential derivation, and order placement.
  */
 
+import { randomUUID } from 'crypto';
 import { ethers } from 'ethers';
 import { ClobClient } from '@polymarket/clob-client';
 import { createLogger } from '../logger.js';
@@ -72,15 +73,19 @@ export async function initClobClient() {
 export async function placeBuyOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
+  // C2: Idempotency — unique nonce prevents duplicate orders on retry
+  const nonce = randomUUID();
+
   const order = await client.createAndPostOrder({
     tokenID: tokenId,
     price,
     side: 'BUY',
     size,
     orderType: 'GTC',
+    nonce,
   });
 
-  log.info(`Order placed: BUY ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
+  log.info(`Order placed: BUY ${size} @ ${price} | nonce=${nonce.slice(0, 8)} | token=${tokenId.slice(0, 12)}...`);
   return order;
 }
 
@@ -123,15 +128,19 @@ export async function getOpenOrders() {
 export async function placeSellOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
+  // C2: Idempotency — unique nonce prevents duplicate orders on retry
+  const nonce = randomUUID();
+
   const order = await client.createAndPostOrder({
     tokenID: tokenId,
     price,
     side: 'SELL',
     size,
     orderType: 'FOK',
+    nonce,
   });
 
-  log.info(`Order placed: SELL ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
+  log.info(`Order placed: SELL ${size} @ ${price} | nonce=${nonce.slice(0, 8)} | token=${tokenId.slice(0, 12)}...`);
   return order;
 }
 

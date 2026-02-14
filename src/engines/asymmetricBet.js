@@ -164,20 +164,22 @@ export function computeBetSizing({
   const executionAdj = executionMultiplier(executionContext);
 
   // Apply all multipliers (5 total: regime, accuracy, ML, confidence, execution)
-  // Guard each multiplier against NaN — fall back to 1.0 (neutral) if invalid
+  // M1: Clamp after each multiplier to [0, MAX_BET_PCT] — prevents intermediate
+  // explosion where e.g. 1.15 × 1.15 × 1.15 = 1.52 could push fraction beyond cap
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
-  const adjustedFraction = frac
-    * safeMult(regimeAdj.multiplier)
-    * safeMult(accuracyAdj.multiplier)
-    * safeMult(mlAdj.multiplier)
-    * safeMult(confidenceAdj.multiplier)
-    * safeMult(executionAdj.multiplier);
+  const clamp = (v) => Math.min(Math.max(v, 0), MAX_BET_PCT);
+  let adjustedFraction = frac;
+  adjustedFraction = clamp(adjustedFraction * safeMult(regimeAdj.multiplier));
+  adjustedFraction = clamp(adjustedFraction * safeMult(accuracyAdj.multiplier));
+  adjustedFraction = clamp(adjustedFraction * safeMult(mlAdj.multiplier));
+  adjustedFraction = clamp(adjustedFraction * safeMult(confidenceAdj.multiplier));
+  adjustedFraction = clamp(adjustedFraction * safeMult(executionAdj.multiplier));
 
-  // Clamp (NaN-safe: if adjustedFraction is somehow NaN, default to 0)
+  // Final clamp (NaN-safe: if adjustedFraction is somehow NaN, default to 0)
   // Only apply MIN_BET_PCT if Kelly produced a positive fraction; don't force bets when Kelly → 0
   const safeFraction = Number.isFinite(adjustedFraction) ? adjustedFraction : 0;
   const betPercent = safeFraction > 0
-    ? Math.max(MIN_BET_PCT, Math.min(MAX_BET_PCT, safeFraction))
+    ? Math.max(MIN_BET_PCT, safeFraction)  // Already clamped to MAX_BET_PCT in M1 loop above
     : 0;
   const br = bankroll ?? BET_SIZING.DEFAULT_BANKROLL;
   const betAmount = Math.round(betPercent * br * 100) / 100;

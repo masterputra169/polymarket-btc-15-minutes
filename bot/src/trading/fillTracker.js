@@ -20,67 +20,70 @@ const MAX_HISTORY = 50;
 const ADVERSE_SELECTION_MS = 5_000; // filled in <5s = likely adverse
 
 // ── Module state ──
-let pendingOrder = null;   // { orderId, tokenId, price, size, side, placedAt }
-let fillHistory = [];       // last N fills
-let fillRate = 1.0;         // rolling fill rate (initially optimistic)
+// M3: Support multiple concurrent pending orders (e.g. arb legs)
+let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, side, placedAt }
+let fillHistory = [];            // last N fills
+let fillRate = 1.0;              // rolling fill rate (initially optimistic)
 
 /**
  * Record a newly placed order for tracking.
+ * M3: Supports concurrent orders — each tracked independently by orderId.
  */
 export function trackOrderPlacement(orderId, { tokenId, price, size, side }) {
-  pendingOrder = { orderId, tokenId, price, size, side, placedAt: Date.now() };
-  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price}`);
+  pendingOrders.set(orderId, { orderId, tokenId, price, size, side, placedAt: Date.now() });
+  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price} (${pendingOrders.size} pending)`);
 }
 
 /**
- * Check if pending order has been filled or should be cancelled.
+ * Check if pending orders have been filled or should be cancelled.
+ * M3: Checks ALL pending orders, returns array of results.
  * Called every poll (~2s) — NON-BLOCKING async check.
  *
- * @returns {null | { filled: boolean, cancelled?: boolean, timeToFill?: number, adverseSelection?: boolean }}
+ * @returns {null | Array<{ orderId, filled: boolean, cancelled?: boolean, timeToFill?: number, adverseSelection?: boolean }>}
  */
 export async function checkPendingFill() {
-  if (!pendingOrder) return null;
+  if (pendingOrders.size === 0) return null;
 
-  const elapsed = Date.now() - pendingOrder.placedAt;
+  const results = [];
 
   try {
     const openOrders = await getOpenOrders();
-    const stillOpen = openOrders.some(o => o.id === pendingOrder.orderId);
+    const openIds = new Set(openOrders.map(o => o.id));
 
-    if (!stillOpen) {
-      // Order no longer in open orders — assumed filled.
-      // NOTE: Could also be externally cancelled (user via Polymarket UI).
-      // Polymarket CLOB API doesn't distinguish filled vs cancelled in open orders.
-      // If actually cancelled, loop.js will hold position until market resolves.
-      const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
-      const fill = { filled: true, timeToFill: elapsed, adverseSelection };
-      recordFill(fill);
-      log.info(
-        `Order ${pendingOrder.orderId} no longer open after ${(elapsed / 1000).toFixed(1)}s — assumed filled` +
-        (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
-      );
-      pendingOrder = null;
-      return fill;
-    }
+    for (const [orderId, pending] of pendingOrders) {
+      const elapsed = Date.now() - pending.placedAt;
 
-    if (elapsed > FILL_TIMEOUT_MS) {
-      // Stale order — cancel it
-      try {
-        await cancelOrder(pendingOrder.orderId);
-        log.warn(`Stale order cancelled after ${(elapsed / 1000).toFixed(0)}s: ${pendingOrder.orderId}`);
-      } catch (err) {
-        log.warn(`Failed to cancel stale order: ${err.message}`);
+      if (!openIds.has(orderId)) {
+        // Order no longer in open orders — assumed filled
+        const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
+        const fill = { orderId, filled: true, timeToFill: elapsed, adverseSelection };
+        recordFill(fill);
+        log.info(
+          `Order ${orderId} no longer open after ${(elapsed / 1000).toFixed(1)}s — assumed filled` +
+          (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
+        );
+        pendingOrders.delete(orderId);
+        results.push(fill);
+      } else if (elapsed > FILL_TIMEOUT_MS) {
+        // Stale order — cancel it
+        try {
+          await cancelOrder(orderId);
+          log.warn(`Stale order cancelled after ${(elapsed / 1000).toFixed(0)}s: ${orderId}`);
+        } catch (err) {
+          log.warn(`Failed to cancel stale order: ${err.message}`);
+        }
+        recordFill({ orderId, filled: false, timeToFill: elapsed, adverseSelection: false });
+        pendingOrders.delete(orderId);
+        results.push({ orderId, filled: false, cancelled: true });
       }
-      recordFill({ filled: false, timeToFill: elapsed, adverseSelection: false });
-      pendingOrder = null;
-      return { filled: false, cancelled: true };
+      // else: still pending, check next poll
     }
   } catch (err) {
-    // API error — don't kill the order, just skip this check
+    // API error — don't kill orders, just skip this check
     log.debug(`Fill check error: ${err.message}`);
   }
 
-  return null; // Still pending, check next poll
+  return results.length > 0 ? results : null;
 }
 
 /**
@@ -113,20 +116,26 @@ export function getAdverseSelectionRate() {
 }
 
 /**
- * Whether there's a pending order being tracked.
+ * Whether there are any pending orders being tracked.
  */
 export function hasPendingOrder() {
-  return pendingOrder !== null;
+  return pendingOrders.size > 0;
 }
 
 /**
  * Get summary for dashboard broadcast.
  */
 export function getFillTrackerStatus() {
+  // Pick the oldest pending order for display (backward compat)
+  let oldestPending = null;
+  for (const p of pendingOrders.values()) {
+    if (!oldestPending || p.placedAt < oldestPending.placedAt) oldestPending = p;
+  }
   return {
-    pending: pendingOrder !== null,
-    pendingOrderId: pendingOrder?.orderId ?? null,
-    pendingElapsedMs: pendingOrder ? Date.now() - pendingOrder.placedAt : 0,
+    pending: pendingOrders.size > 0,
+    pendingCount: pendingOrders.size,
+    pendingOrderId: oldestPending?.orderId ?? null,
+    pendingElapsedMs: oldestPending ? Date.now() - oldestPending.placedAt : 0,
     fillRate: Math.round(fillRate * 100) / 100,
     adverseSelectionRate: Math.round(getAdverseSelectionRate() * 100) / 100,
     totalTracked: fillHistory.length,

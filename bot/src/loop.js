@@ -99,11 +99,14 @@ import {
   settleTrade,
   hasOpenPosition,
   getBankroll,
+  getAvailableBankroll,
   getDailyPnLPct,
   getConsecutiveLosses,
   getStats,
   getCurrentPosition,
   unwindPosition,
+  confirmFill,
+  setPendingCost,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 
@@ -231,17 +234,22 @@ export async function pollOnce() {
     }
 
     // ── 1b. Check pending order fills (non-blocking) ──
-    const fillResult = await checkPendingFill();
-    if (fillResult) {
-      if (fillResult.filled) {
-        log.info(`Fill confirmed (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
-      } else if (fillResult.cancelled) {
-        log.warn('Stale order cancelled — fill timeout exceeded');
-        // Unwind the pre-recorded position (bankroll was already deducted)
-        const pos = getCurrentPosition();
-        if (pos) {
-          unwindPosition();
-          log.info('Position unwound after stale order cancel');
+    // M3: checkPendingFill now returns array of results for all pending orders
+    const fillResults = await checkPendingFill();
+    if (fillResults) {
+      for (const fillResult of fillResults) {
+        if (fillResult.filled) {
+          // C4: Mark position as fill-confirmed on-chain
+          confirmFill();
+          log.info(`Fill confirmed (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
+        } else if (fillResult.cancelled) {
+          log.warn('Stale order cancelled — fill timeout exceeded');
+          // Unwind the pre-recorded position (bankroll was already deducted)
+          const pos = getCurrentPosition();
+          if (pos) {
+            unwindPosition();
+            log.info('Position unwound after stale order cancel');
+          }
         }
       }
     }
@@ -259,14 +267,16 @@ export async function pollOnce() {
         const wsPrice = getBinancePrice();
         const currentBtcPrice = wsPrice || pos.price; // best available price
         const ptbValue = priceToBeat.value;
-        if (ptbValue != null && currentBtcPrice != null) {
+        // C5: PTB freshness check — only trust PTB if it belongs to current market
+        const ptbFresh = ptbValue != null && priceToBeat.slug === currentMarketSlug;
+        if (ptbFresh && currentBtcPrice != null) {
           const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
           const won = pos.side === actualResult;
           log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
           settleTrade(won);
           if (!won) recordLoss();
         } else {
-          log.warn('Position expired — no PTB data, settling as loss');
+          log.warn(`Position expired — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
           settleTrade(false);
           recordLoss();
         }
@@ -369,14 +379,16 @@ export async function pollOnce() {
         const wsPrice = getBinancePrice();
         const currentBtcPrice = wsPrice || pos.price;
         const ptbValue = priceToBeat.value;
-        if (ptbValue != null && currentBtcPrice != null) {
+        // C5: PTB freshness check — only trust PTB if it belongs to the old market
+        const ptbFresh = ptbValue != null && priceToBeat.slug === oldSlug;
+        if (ptbFresh && currentBtcPrice != null) {
           const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
           const won = pos.side === actualResult;
           log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
           settleTrade(won);
           if (!won) recordLoss();
         } else {
-          log.warn('Position expired on market switch — no PTB data, settling as loss');
+          log.warn(`Position expired on market switch — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
           settleTrade(false);
           recordLoss();
         }
@@ -723,8 +735,10 @@ export async function pollOnce() {
         log.debug(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
       } else {
       const priceCheck = validatePrice(betMarketPrice);
+      // C6: Pass availableBankroll (minus pending allocations) to guard
       const tradeCheck = validateTrade({
         rec, betSizing, timeLeftMin, bankroll,
+        availableBankroll: getAvailableBankroll(),
         hasPosition: alreadyHasPosition,
       });
 
@@ -737,7 +751,12 @@ export async function pollOnce() {
           ? ` | Flow:${flowAlign.signal}${flowAlign.agrees ? '(agree)' : '(DISAGREE)'}`
           : '';
 
+        // C6: Reserve bankroll for this pending order
+        const orderCost = shares * betMarketPrice;
+        setPendingCost(orderCost);
+
         if (BOT_CONFIG.dryRun) {
+          setPendingCost(0); // Release reservation in dry-run
           log.info(
             `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
             `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +
@@ -765,6 +784,7 @@ export async function pollOnce() {
             // Only count as trade if order succeeded (not on failure)
             recordTradeForMarket(marketSlug);
           } catch (err) {
+            setPendingCost(0); // C6: Release pending reservation on failure
             log.error(`Order failed: ${err.message}`);
           }
         }

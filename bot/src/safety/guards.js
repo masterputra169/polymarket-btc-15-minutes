@@ -1,5 +1,9 @@
 /**
  * Safety guards: circuit breaker and pre-trade validation.
+ *
+ * Financial integrity:
+ * - M2: Epsilon comparison for float thresholds (avoids equality edge cases)
+ * - C6: Uses availableBankroll (minus pending allocations) for bet validation
  */
 
 import { BOT_CONFIG } from '../config.js';
@@ -7,12 +11,15 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('Safety');
 
+/** M2: Epsilon for float comparison — prevents boundary edge cases */
+const EPSILON = 1e-9;
+
 /**
  * Circuit breaker — should the bot halt trading?
  * @returns {{ halt: boolean, reason: string }}
  */
 export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
-  if (dailyPnLPct <= -BOT_CONFIG.maxDailyLossPct) {
+  if (dailyPnLPct <= -(BOT_CONFIG.maxDailyLossPct - EPSILON)) {
     const reason = `Daily loss ${dailyPnLPct.toFixed(1)}% exceeds max ${BOT_CONFIG.maxDailyLossPct}%`;
     log.error(`CIRCUIT BREAKER: ${reason}`);
     return { halt: true, reason };
@@ -24,7 +31,7 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
     return { halt: true, reason };
   }
 
-  if (bankroll < 1) {
+  if (bankroll < 1 + EPSILON) {
     const reason = `Bankroll depleted: $${bankroll.toFixed(2)}`;
     log.error(`CIRCUIT BREAKER: ${reason}`);
     return { halt: true, reason };
@@ -37,7 +44,7 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
  * Validate a trade before execution.
  * @returns {{ valid: boolean, reason: string }}
  */
-export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, hasPosition }) {
+export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, availableBankroll, hasPosition }) {
   if (!rec || rec.action !== 'ENTER') {
     return { valid: false, reason: 'No ENTER signal' };
   }
@@ -60,8 +67,10 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, hasPositi
     return { valid: false, reason: `Bet too small: $${betAmount.toFixed(2)} (min: $0.50)` };
   }
 
-  if (betAmount > bankroll) {
-    return { valid: false, reason: `Bet $${betAmount.toFixed(2)} exceeds bankroll $${bankroll.toFixed(2)}` };
+  // C6: Check against available bankroll (excludes pending order allocations)
+  const effectiveBankroll = availableBankroll ?? bankroll;
+  if (betAmount > effectiveBankroll + EPSILON) {
+    return { valid: false, reason: `Bet $${betAmount.toFixed(2)} exceeds available bankroll $${effectiveBankroll.toFixed(2)}` };
   }
 
   return { valid: true, reason: 'OK' };
