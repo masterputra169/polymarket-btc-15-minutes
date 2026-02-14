@@ -142,6 +142,10 @@ export function pauseBot() { paused = true; log.info('Bot PAUSED by dashboard');
 export function resumeBot() { paused = false; log.info('Bot RESUMED by dashboard'); }
 export function isPaused() { return paused; }
 
+// ── Position callback (injected from index.js to avoid circular imports) ──
+let _getPositionsSummary = null;
+export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
+
 // ── Module-level state ──
 let currentMarketSlug = null;
 let currentMarketEndMs = null;
@@ -773,6 +777,11 @@ export async function pollOnce() {
 
     const detailedFeedback = getDetailedStats();
 
+    // Include positions every 60th poll (~30s at 500ms)
+    const positionsSummary = (pollCounter % 60 === 0 && _getPositionsSummary)
+      ? _getPositionsSummary()
+      : undefined;
+
     broadcast({
       // ═══ Bot-specific fields (for BotPanel) ═══
       paused: false,
@@ -781,6 +790,7 @@ export async function pollOnce() {
       btcPrice: lastPrice,
       dryRun: BOT_CONFIG.dryRun,
       stats: getStats(),
+      ...(positionsSummary ? { positions: positionsSummary } : {}),
       indicators: {
         rsi: rsiNow,
         macd: macd?.hist,

@@ -57,6 +57,16 @@ export function useBotData() {
     let msg;
     try { msg = JSON.parse(raw); } catch { return; }
 
+    // Handle response messages (request/response pattern)
+    if (msg.type === 'response' && msg.cmd) {
+      const handler = responseHandlersRef.current.get(msg.cmd);
+      if (handler) {
+        responseHandlersRef.current.delete(msg.cmd);
+        handler(msg.data);
+      }
+      return; // Don't update main data state for responses
+    }
+
     // Track Binance price for tick animation
     const newPrice = msg.lastPrice ?? msg.btcPrice;
     if (newPrice != null && newPrice !== binancePriceRef.current) {
@@ -182,12 +192,28 @@ export function useBotData() {
     }
   }, []);
 
-  // sendBotCommand: send arbitrary command to bot (e.g. 'botPause', 'botResume')
-  const sendBotCommand = useCallback((type) => {
+  // Response handlers for request/response pattern
+  const responseHandlersRef = useRef(new Map());
+
+  // sendBotCommand: send command with optional payload, returns Promise for response
+  const sendBotCommand = useCallback((type, payload) => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type }));
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error('Not connected'));
     }
+    ws.send(JSON.stringify({ type, ...payload }));
+
+    // Return promise that resolves when bot responds
+    return new Promise((resolve) => {
+      responseHandlersRef.current.set(type, resolve);
+      // Timeout after 15s
+      setTimeout(() => {
+        if (responseHandlersRef.current.has(type)) {
+          responseHandlersRef.current.delete(type);
+          resolve(null);
+        }
+      }, 15_000);
+    });
   }, []);
 
   return {

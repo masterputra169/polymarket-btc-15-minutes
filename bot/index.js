@@ -37,8 +37,10 @@ import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from '
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.js';
-import { pollOnce, pauseBot, resumeBot } from './src/loop.js';
-import { startStatusServer, stopStatusServer, registerBotControl } from './src/statusServer.js';
+import { pollOnce, pauseBot, resumeBot, registerPositionCallback } from './src/loop.js';
+import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery } from './src/statusServer.js';
+import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getPositionsSummary, closePosition } from './src/trading/positionManager.js';
+import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -95,6 +97,21 @@ async function main() {
   startStatusServer();
   registerBotControl(pauseBot, resumeBot);
 
+  // 5c. Position manager + trader discovery
+  loadPositions();
+  loadTrackedTraders();
+  startPositionPolling();
+  registerPositionCallback(getPositionsSummary);
+  registerPositionManager({ getPositions: getPositionsSummary, closePosition });
+  registerTraderDiscovery({
+    scan: fullScan,
+    getTracked: getTrackedTraders,
+    getDiscovered: getDiscoveredTraders,
+    addTracker: addTrackedTrader,
+    removeTracker: removeTrackedTrader,
+    simulate: simulateTrader,
+  });
+
   // 6. Start poll loop
   log.info(`Starting poll loop (every ${POLL_MS}ms)...`);
   log.info('-'.repeat(60));
@@ -120,8 +137,9 @@ async function main() {
     disconnectPolyLiveWs();
     disconnectChainlinkWss();
 
-    // Stop status server
+    // Stop status server + position polling
     stopStatusServer();
+    stopPositionPolling();
 
     // Cancel open orders (live mode only)
     if (!BOT_CONFIG.dryRun) {

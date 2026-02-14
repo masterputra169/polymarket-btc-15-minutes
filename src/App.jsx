@@ -11,6 +11,8 @@ import MLPanel from './components/MlPanel.jsx';
 import AccuracyPanel from './components/AccuracyPanel.jsx';
 import BetSizingPanel from './components/BetSizingPanel.jsx';
 import BotPanel from './components/BotPanel.jsx';
+import PositionPanel from './components/PositionPanel.jsx';
+import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.jsx';
 import SessionInfo from './components/SessionInfo.jsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
@@ -275,6 +277,12 @@ export default function App() {
     };
   }, [data?.feedbackStats, data?.detailedFeedback?.totalSettled]);
 
+  // PositionPanel: positions from bot
+  const positionData = useMemo(() => {
+    if (!data) return null;
+    return { positions: data.positions };
+  }, [data?.positions?.lastUpdate, data?.positions?.list?.length]);
+
   // BetSizingPanel: bet sizing output
   const betSizingData = useMemo(() => {
     if (!data) return null;
@@ -343,6 +351,12 @@ export default function App() {
         <div className="dashboard-grid">
           {/* Row 0: Bot Status (full width) */}
           <BotPanel connected={botConnected} data={data} />
+
+          {/* Row 0b: Positions (full width) */}
+          <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />
+
+          {/* Row 0c: Trader Discovery (full width) */}
+          <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />
 
           {/* Row 1: Price + Timer (full width) */}
           <CurrentPriceCard {...priceCardProps} />

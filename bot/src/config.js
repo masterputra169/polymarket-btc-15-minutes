@@ -34,6 +34,14 @@ const BOT_CONFIG = {
   // ML model paths (read from frontend public/)
   modelPath: resolve(__dirname, '..', '..', 'public', 'ml', 'xgboost_model.json'),
   normPath: resolve(__dirname, '..', '..', 'public', 'ml', 'norm_browser.json'),
+
+  // Position management
+  positionsFile: resolve(__dirname, '..', 'data', 'positions.json'),
+  positionPollIntervalMs: 60_000,
+
+  // Trader discovery
+  trackedTradersFile: resolve(__dirname, '..', 'data', 'tracked_traders.json'),
+  maxTrackedTraders: 20,
 };
 
 export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK };

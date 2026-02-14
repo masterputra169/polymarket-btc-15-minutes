@@ -112,6 +112,36 @@ export async function getOpenOrders() {
   return await client.getOpenOrders();
 }
 
+/**
+ * Place a fill-or-kill sell order on Polymarket CLOB.
+ * @param {Object} params
+ * @param {string} params.tokenId - The outcome token ID to sell
+ * @param {number} params.price - Limit price (0-1)
+ * @param {number} params.size - Number of shares to sell
+ * @returns {Object} Order result from CLOB
+ */
+export async function placeSellOrder({ tokenId, price, size }) {
+  if (!client) throw new Error('CLOB client not initialized');
+
+  const order = await client.createAndPostOrder({
+    tokenID: tokenId,
+    price,
+    side: 'SELL',
+    size,
+    orderType: 'FOK',
+  });
+
+  log.info(`Order placed: SELL ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
+  return order;
+}
+
+/**
+ * Get the wallet address used by the CLOB client.
+ */
+export function getWalletAddress() {
+  return wallet?.address ?? null;
+}
+
 export function isClientReady() {
   return client !== null;
 }
