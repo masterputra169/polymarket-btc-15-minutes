@@ -139,7 +139,7 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
   }
 
   let priceConsistency = 0.5;
-  if (cLen >= 11 && delta1m) {
+  if (cLen >= 11 && delta1m != null && delta1m !== 0) {
     const dir = delta1m > 0 ? 1 : -1;
     let same = 0;
     for (let k = cLen - 10; k < cLen; k++) {

@@ -40,6 +40,9 @@ export function useBotData() {
   const dirtyRef = useRef(false);
   const firstMsgRef = useRef(false);
 
+  // Response handlers for request/response pattern (cmd→requestId, requestId→resolver)
+  const responseHandlersRef = useRef(new Map());
+
   // Track previous Binance price for tick animation
   const binancePriceRef = useRef(null);
   const binancePrevPriceRef = useRef(null);
@@ -193,9 +196,6 @@ export function useBotData() {
       ws.send(JSON.stringify({ type: 'setBankroll', value }));
     }
   }, []);
-
-  // Response handlers for request/response pattern
-  const responseHandlersRef = useRef(new Map());
 
   // sendBotCommand: send command with optional payload, returns Promise for response
   const sendBotCommand = useCallback((type, payload) => {

@@ -174,7 +174,7 @@ export function startStatusServer() {
     log.error(`Status server error: ${err.message}`);
   });
 
-  // Heartbeat: ping clients every 30s, terminate dead ones
+  // Heartbeat: ping clients every 15s, terminate dead ones
   heartbeatInterval = setInterval(() => {
     if (!wss) return;
     for (const ws of wss.clients) {
