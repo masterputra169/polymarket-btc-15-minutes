@@ -175,6 +175,13 @@ export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
 let currentMarketSlug = null;
 let currentMarketEndMs = null;
 let priceToBeat = { slug: null, value: null, updatedAt: 0 };
+
+// ── Market transition grace period ──
+// After market slug changes, WS needs ~2-5s to reconnect with new token IDs.
+// During this window, token prices are from the OLD market but PTB is from the NEW market.
+// Skip all prediction/trading during this grace period to prevent cross-market signals.
+let marketTransitionMs = 0;
+const MARKET_TRANSITION_GRACE_MS = 5_000;
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
@@ -493,6 +500,7 @@ export async function pollOnce() {
     if (slugChanged) {
       const oldSlug = currentMarketSlug;
       log.info(`Market switched: "${oldSlug}" -> "${marketSlug}"`);
+      marketTransitionMs = now; // Start grace period — WS needs time to reconnect
 
       const pos = getCurrentPosition();
       // Double-settlement guard: skip if this market was already settled recently
@@ -629,6 +637,22 @@ export async function pollOnce() {
     const settlementMs = poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
     const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
     const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
+
+    // ── 5d. Market transition guard ──
+    // After slug change, WS needs ~2-5s to reconnect with new token IDs.
+    // During this window, token prices are from OLD market but PTB is from NEW market.
+    // Skip prediction/trading to prevent cross-market signals (e.g. UP@90c vs new PTB).
+    const inTransition = marketTransitionMs > 0 && (now - marketTransitionMs) < MARKET_TRANSITION_GRACE_MS;
+    if (inTransition) {
+      const elapsed = ((now - marketTransitionMs) / 1000).toFixed(1);
+      log.info(`Market transition grace: ${elapsed}s / ${MARKET_TRANSITION_GRACE_MS / 1000}s — skipping prediction (WS syncing)`);
+      broadcast({
+        paused: false, ts: now, pollCounter, btcPrice: lastPrice, dryRun: BOT_CONFIG.dryRun,
+        stats: getStats(), bankroll, marketSlug, marketTransition: true,
+        transitionElapsedMs: now - marketTransitionMs,
+      });
+      return;
+    }
 
     // ── 6. Score direction ──
     const scored = scoreDirection({
@@ -1146,10 +1170,17 @@ export async function pollOnce() {
       } // end signal confirmed
     }
 
-    // Reset confirmation when signal drops to WAIT (side changed or no longer ENTER)
+    // Reset confirmation when signal drops to WAIT
+    // Tolerant reset: allow 1 gap poll (edge can flicker ENTER→WAIT→ENTER on borderline).
+    // Only hard-reset if 2+ consecutive non-ENTER polls.
     if (rec.action !== 'ENTER') {
-      signalConfirmCount = 0;
-      signalConfirmSide = null;
+      if (signalConfirmCount > 0) {
+        signalConfirmCount--; // Decay by 1 instead of hard reset (allows 1-poll gaps)
+      }
+      if (signalConfirmCount <= 0) {
+        signalConfirmCount = 0;
+        signalConfirmSide = null;
+      }
     }
 
     // ── 14. Resolve Chainlink price: Polymarket WS > Chainlink WSS > RPC ──
