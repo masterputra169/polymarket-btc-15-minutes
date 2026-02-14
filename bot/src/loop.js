@@ -162,6 +162,13 @@ let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
 
+// ── Double-settlement guard ──
+// Tracks the last settled market slug + timestamp to prevent the same market
+// from being settled twice (e.g. expiry handler + slug-change handler in rapid succession,
+// or bot restart reprocessing the same expiry).
+let lastSettledSlug = null;
+let lastSettledTs = 0;
+
 // Market price ring buffer (for momentum calculation)
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
 
@@ -270,7 +277,14 @@ export async function pollOnce() {
     if (marketExpired) {
       log.info('Market expired! Forcing fresh discovery...');
       const pos = getCurrentPosition();
-      if (pos && pos.marketSlug === currentMarketSlug) {
+      // Double-settlement guard: skip if this market was already settled recently
+      if (pos && pos.marketSlug === currentMarketSlug && pos.marketSlug === lastSettledSlug && (now - lastSettledTs) < 30_000) {
+        log.warn(`Double settlement prevented for ${pos.marketSlug} (settled ${((now - lastSettledTs) / 1000).toFixed(0)}s ago)`);
+        // Force-clear the stale position to prevent infinite retries
+        if (!pos.settled) {
+          unwindPosition();
+        }
+      } else if (pos && pos.marketSlug === currentMarketSlug) {
         // Prefer oracle prices (Chainlink/Polymarket) over Binance for settlement accuracy
         const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
         const wsPrice = getBinancePrice();
@@ -313,6 +327,9 @@ export async function pollOnce() {
           });
           recordLoss();
         }
+        // Record for double-settlement guard
+        lastSettledSlug = pos.marketSlug;
+        lastSettledTs = Date.now();
       }
       resetCutLossState();
       resetMarketCache();
@@ -383,15 +400,22 @@ export async function pollOnce() {
     if (fetchMap.klines5m !== undefined) { klines5mCache = klines5m; klines5mLastFetchMs = now; }
     if (fetchMap.chainlink !== undefined) { chainlinkCache = results[fetchMap.chainlink]; chainlinkLastFetchMs = now; }
 
-    const poly = fetchMap.poly !== undefined ? results[fetchMap.poly] : polySnapshotCache;
-    if (fetchMap.poly !== undefined) {
-      polySnapshotCache = poly;
-      polyLastFetchMs = now;
-      if (poly.ok && poly.market?.endDate) {
-        const endMs = new Date(poly.market.endDate).getTime();
-        if (Number.isFinite(endMs)) currentMarketEndMs = endMs;
+    const polyFetched = fetchMap.poly !== undefined ? results[fetchMap.poly] : null;
+    if (polyFetched) {
+      if (polyFetched.ok) {
+        // Only cache successful results — don't overwrite good cache with errors
+        polySnapshotCache = polyFetched;
+        polyLastFetchMs = now;
+        if (polyFetched.market?.endDate) {
+          const endMs = new Date(polyFetched.market.endDate).getTime();
+          if (Number.isFinite(endMs)) currentMarketEndMs = endMs;
+        }
+      } else {
+        // Error — allow retry on next poll (don't set polyLastFetchMs)
+        log.debug(`Polymarket fetch failed: ${polyFetched.reason} — will retry next poll`);
       }
     }
+    const poly = polyFetched?.ok ? polyFetched : polySnapshotCache;
 
     // Funding rate — always null (blocked)
     const fundingRate = null;
@@ -408,7 +432,13 @@ export async function pollOnce() {
       log.info(`Market switched: "${oldSlug}" -> "${marketSlug}"`);
 
       const pos = getCurrentPosition();
-      if (pos && pos.marketSlug === oldSlug) {
+      // Double-settlement guard: skip if this market was already settled recently
+      if (pos && pos.marketSlug === oldSlug && pos.marketSlug === lastSettledSlug && (now - lastSettledTs) < 30_000) {
+        log.warn(`Double settlement prevented on switch for ${pos.marketSlug} (settled ${((now - lastSettledTs) / 1000).toFixed(0)}s ago)`);
+        if (!pos.settled) {
+          unwindPosition();
+        }
+      } else if (pos && pos.marketSlug === oldSlug) {
         // Prefer oracle prices (Chainlink/Polymarket) over Binance for settlement accuracy
         const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
         const wsPrice = getBinancePrice();
@@ -451,6 +481,9 @@ export async function pollOnce() {
           });
           recordLoss();
         }
+        // Record for double-settlement guard
+        lastSettledSlug = pos.marketSlug;
+        lastSettledTs = Date.now();
       }
 
       resetMarketCache();

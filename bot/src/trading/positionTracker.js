@@ -47,7 +47,11 @@ export function loadState() {
     if (existsSync(BOT_CONFIG.stateFile)) {
       const data = JSON.parse(readFileSync(BOT_CONFIG.stateFile, 'utf-8'));
       state = { ...state, ...data };
-      state.pendingCost = state.pendingCost ?? 0;
+      // Clear stale pendingCost — any pending order from a previous session is dead
+      if (state.pendingCost > 0) {
+        log.info(`Clearing stale pendingCost $${state.pendingCost.toFixed(2)} from previous session`);
+        state.pendingCost = 0;
+      }
 
       // Reset daily P&L if new day (UTC-based for consistency)
       const dayMs = 24 * 60 * 60 * 1000;
@@ -55,10 +59,14 @@ export function loadState() {
       const todayStartUtc = now - (now % dayMs);
       const stateDay = state.dayStartMs - (state.dayStartMs % dayMs);
       if (todayStartUtc > stateDay) {
-        state.startOfDayBankroll = state.bankroll;
+        // If there's an open position, bankroll has already been reduced by pos.cost.
+        // Add it back so daily P&L baseline reflects true account value.
+        const openCost = (state.currentPosition && !state.currentPosition.settled)
+          ? (state.currentPosition.cost ?? 0) : 0;
+        state.startOfDayBankroll = roundMoney(state.bankroll + openCost);
         state.dayStartMs = now;
         state.consecutiveLosses = 0;
-        log.info('New trading day (UTC) — daily stats reset');
+        log.info(`New trading day (UTC) — daily stats reset (baseline $${state.startOfDayBankroll.toFixed(2)}${openCost > 0 ? `, incl $${openCost.toFixed(2)} open` : ''})`);
       }
 
       log.info(`State loaded: bankroll=$${state.bankroll.toFixed(2)}, trades=${state.totalTrades}, W/L=${state.wins}/${state.losses}`);

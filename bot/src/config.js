@@ -15,7 +15,6 @@ const CONFIG = {
   binanceBaseUrl: 'https://data-api.binance.vision',
   gammaBaseUrl: 'https://gamma-api.polymarket.com',
   clobBaseUrl: 'https://clob.polymarket.com',
-  pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '5000', 10),
 };
 
 const BOT_CONFIG = {

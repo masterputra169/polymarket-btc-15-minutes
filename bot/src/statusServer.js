@@ -117,7 +117,9 @@ export function startStatusServer() {
           respond('getPositions', _getPositions());
         } else if (msg.type === 'sellPosition' && _closePosition) {
           const { tokenId, size, price } = msg;
-          if (tokenId && size > 0 && price > 0) {
+          if (typeof tokenId === 'string' && tokenId.length > 0 &&
+              typeof size === 'number' && Number.isFinite(size) && size > 0 &&
+              typeof price === 'number' && Number.isFinite(price) && price > 0 && price <= 1) {
             _closePosition(tokenId, size, price)
               .then(result => respond('sellPosition', { ok: true, result }))
               .catch(err => respond('sellPosition', { ok: false, error: err.message }));
