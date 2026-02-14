@@ -48,11 +48,12 @@ const BOT_CONFIG = {
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    dropPct: parseFloat(process.env.CUT_LOSS_DROP_PCT || '30'),
-    minHoldSec: parseInt(process.env.CUT_LOSS_MIN_HOLD_SEC || '30', 10),
-    minTokenPrice: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_PRICE || '0.08'),
+    minHoldSec: parseInt(process.env.CUT_LOSS_MIN_HOLD_SEC || '60', 10),
+    minTokenPrice: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_PRICE || '0.05'),
     cooldownMs: parseInt(process.env.CUT_LOSS_COOLDOWN_MS || '10000', 10),
     maxAttempts: parseInt(process.env.CUT_LOSS_MAX_ATTEMPTS || '3', 10),
+    minTokenDropPct: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT || '15'),
+    consecutivePolls: parseInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS || '3', 10),
   },
 };
 

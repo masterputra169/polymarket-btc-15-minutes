@@ -691,7 +691,32 @@ export async function pollOnce() {
       const cutResult = evaluateCutLoss({
         position: pos, currentTokenPrice: tokenPrice,
         orderbook: tokenBook, timeLeftMin,
+        // v2 additions:
+        btcPrice: lastPrice,
+        priceToBeat: priceToBeat.value,
+        modelProbability: pos.side === 'UP' ? ensembleUp : ensembleDown,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
+        regime: regimeInfo?.regime ?? 'moderate',
+        btcDelta1m: delta1m,
       });
+
+      // Log cut-loss gate status every 5th poll (debug visibility)
+      if (pollCounter % 5 === 0) {
+        const entryPrice = pos.price;
+        const dropPct = entryPrice > 0 && tokenPrice != null
+          ? (((entryPrice - tokenPrice) / entryPrice) * 100).toFixed(1) : '?';
+        const btcDist = lastPrice && priceToBeat.value
+          ? (Math.abs((lastPrice - priceToBeat.value) / priceToBeat.value) * 100).toFixed(3) : '?';
+        const btcSide = lastPrice && priceToBeat.value
+          ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
+          : '?';
+        log.debug(
+          `CutLoss v2: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
+          `BTC ${btcSide} dist=${btcDist}% | d1m=$${(delta1m ?? 0).toFixed(1)} | ` +
+          `EV(hold)=${((pos.side === 'UP' ? ensembleUp : ensembleDown) * 100).toFixed(0)}% vs token=${(tokenPrice * 100).toFixed(0)}¢`
+        );
+      }
 
       if (cutResult.shouldCut) {
         log.warn(
@@ -1186,7 +1211,13 @@ export async function pollOnce() {
       cutLoss: (() => {
         const clPos = getCurrentPosition();
         const clPrice = clPos && !clPos.settled ? (clPos.side === 'UP' ? marketUp : marketDown) : null;
-        return getCutLossStatus(clPos, clPrice);
+        return getCutLossStatus(clPos, clPrice, {
+          btcPrice: lastPrice,
+          priceToBeat: priceToBeat.value,
+          modelProbability: clPos ? (clPos.side === 'UP' ? ensembleUp : ensembleDown) : null,
+          mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+          mlSide: mlResult.available ? mlResult.mlSide : null,
+        });
       })(),
 
       // Signal stability (anti-whipsaw)
