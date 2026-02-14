@@ -100,7 +100,7 @@ export function countAgreement(breakdown, side) {
 
   for (const key of signalKeys) {
     const entry = breakdown[key];
-    if (!entry || entry.weight === 0) continue;
+    if (!entry || entry.weight <= 0) continue;
 
     const signal = entry.signal?.toUpperCase() ?? '';
     if (side === 'UP' && signal.includes('UP')) count++;

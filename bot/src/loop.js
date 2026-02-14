@@ -721,22 +721,20 @@ export async function pollOnce() {
             const sellResult = await closePosition(pos.tokenId, pos.size, cutResult.sellPrice);
             const actualRecovery = sellResult?.takingAmount != null
               ? parseFloat(sellResult.takingAmount) : cutResult.recoveryAmount;
-            if (actualRecovery > 0) {
-              const cutPnl = actualRecovery - pos.cost;
-              settleTradeEarlyExit(actualRecovery);
-              writeJournalEntry({
-                outcome: 'CUT_LOSS', pnl: cutPnl,
-                exitData: {
-                  btcPrice: lastPrice, priceToBeat: priceToBeat.value,
-                  marketUp, marketDown, tokenPrice,
-                  regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
-                  rsiNow, vwapDist, timeLeftMin,
-                  cutLossDropPct: cutResult.dropPct, cutLossRecovered: actualRecovery,
-                },
-              });
-              resetCutLossState();
-              recordLoss();
-            }
+            const cutPnl = actualRecovery - pos.cost;
+            settleTradeEarlyExit(actualRecovery);
+            writeJournalEntry({
+              outcome: 'CUT_LOSS', pnl: cutPnl,
+              exitData: {
+                btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+                marketUp, marketDown, tokenPrice,
+                regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+                rsiNow, vwapDist, timeLeftMin,
+                cutLossDropPct: cutResult.dropPct, cutLossRecovered: actualRecovery,
+              },
+            });
+            resetCutLossState();
+            recordLoss();
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);
           }

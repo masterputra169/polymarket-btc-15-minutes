@@ -59,10 +59,12 @@ export function useBotData() {
 
     // Handle response messages (request/response pattern)
     if (msg.type === 'response' && msg.cmd) {
-      const handler = responseHandlersRef.current.get(msg.cmd);
-      if (handler) {
+      const requestId = responseHandlersRef.current.get(msg.cmd);
+      if (requestId && typeof requestId === 'string') {
+        const resolver = responseHandlersRef.current.get(requestId);
         responseHandlersRef.current.delete(msg.cmd);
-        handler(msg.data);
+        responseHandlersRef.current.delete(requestId);
+        if (resolver) resolver(msg.data);
       }
       return; // Don't update main data state for responses
     }
@@ -204,12 +206,19 @@ export function useBotData() {
     ws.send(JSON.stringify({ type, ...payload }));
 
     // Return promise that resolves when bot responds
+    // Use unique requestId to avoid overwriting pending handlers of the same type
+    const requestId = `${type}_${Date.now()}`;
     return new Promise((resolve) => {
-      responseHandlersRef.current.set(type, resolve);
+      responseHandlersRef.current.set(requestId, resolve);
+      // Also register by type so the response dispatcher can find it
+      responseHandlersRef.current.set(type, requestId);
       // Timeout after 15s
       setTimeout(() => {
-        if (responseHandlersRef.current.has(type)) {
-          responseHandlersRef.current.delete(type);
+        if (responseHandlersRef.current.has(requestId)) {
+          responseHandlersRef.current.delete(requestId);
+          if (responseHandlersRef.current.get(type) === requestId) {
+            responseHandlersRef.current.delete(type);
+          }
           resolve(null);
         }
       }, 15_000);

@@ -61,7 +61,12 @@ export function logSnapshot(row) {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).add(row);
     console.log(`[PolyLogger] Logged | BTC $${row.btcPrice} | mktUp=${row.marketUp} | ${row.marketSlug}`);
-  } catch { /* don't break main loop */ }
+  } catch (err) {
+    if (err?.name === 'QuotaExceededError') {
+      console.warn('[PolyLogger] IndexedDB quota exceeded — logging paused. Export and clear data.');
+      db = null; // stop further attempts
+    }
+  }
 }
 
 // ═══ Utilities ═══

@@ -53,8 +53,8 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
     return result;
   }
 
-  const upBidPressure = upTotal > 0 ? upBidLiq / upTotal : 0.5;
-  const downBidPressure = downTotal > 0 ? downBidLiq / downTotal : 0.5;
+  const upBidPressure = upBidLiq / upTotal;
+  const downBidPressure = downBidLiq / downTotal;
 
   // Imbalance: positive = bullish, negative = bearish
   // Range: roughly -1 to +1
