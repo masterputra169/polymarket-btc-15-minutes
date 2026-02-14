@@ -157,6 +157,20 @@ let tokenIdsNotified = false;
 // Market price ring buffer (for momentum calculation)
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
 
+// ═══ Anti-Whipsaw: Signal Stability Engine ═══
+// Prevents entry on volatile/flipping signals by requiring confirmation
+const SIGNAL_CONFIRM_POLLS = 4;      // Must see same ENTER side N polls in a row (4 × 500ms = 2s)
+const PROB_EMA_ALPHA = 0.3;          // EMA smoothing factor (0.3 = moderate smoothing, lower = more smooth)
+const FLIP_WINDOW_MS = 15_000;       // Track flips in last 15 seconds
+const MAX_FLIPS_TO_ENTER = 3;        // Block entry if signal flipped > N times in window
+const STABILITY_MIN_CONFIDENCE = 0.55; // Smoothed prob must exceed 0.55 (not just 0.50) to confirm direction
+
+let signalConfirmCount = 0;           // Consecutive polls with same ENTER+side
+let signalConfirmSide = null;         // Which side is being confirmed ('UP'|'DOWN'|null)
+let smoothedEnsembleUp = null;        // EMA-smoothed ensemble probability
+const signalFlipHistory = [];         // Array of { ts, side } for flip tracking
+let lastSignalSide = null;            // Previous poll's decided side (for flip detection)
+
 // ── Tiered cache ──
 // Polymarket market discovery (slow: every 30s, market changes every 15min)
 let polySnapshotCache = null;
@@ -183,6 +197,12 @@ function resetMarketCache() {
   marketUpHistory.buf.fill(0);
   marketUpHistory.idx = 0;
   marketUpHistory.count = 0;
+  // Reset signal stability state for new market
+  signalConfirmCount = 0;
+  signalConfirmSide = null;
+  smoothedEnsembleUp = null;
+  signalFlipHistory.length = 0;
+  lastSignalSide = null;
 }
 
 /**
@@ -503,8 +523,18 @@ export async function pollOnce() {
     }, timeAware.adjustedUp);
 
     // ── 9. Ensemble edge (spread-aware) ──
-    const ensembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
-    const ensembleDown = mlResult.available ? (1 - mlResult.ensembleProbUp) : timeAware.adjustedDown;
+    const rawEnsembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
+
+    // ── 9a. EMA Probability Smoothing (anti-whipsaw) ──
+    // Smooth ensemble prob to filter out single-poll noise spikes
+    if (smoothedEnsembleUp === null) {
+      smoothedEnsembleUp = rawEnsembleUp; // Initialize on first poll
+    } else {
+      smoothedEnsembleUp = PROB_EMA_ALPHA * rawEnsembleUp + (1 - PROB_EMA_ALPHA) * smoothedEnsembleUp;
+    }
+    const ensembleUp = smoothedEnsembleUp;
+    const ensembleDown = 1 - ensembleUp;
+
     const edge = computeEdge({
       modelUp: ensembleUp, modelDown: ensembleDown,
       marketYes: marketUp, marketNo: marketDown,
@@ -513,6 +543,18 @@ export async function pollOnce() {
 
     const ruleSide = timeAware.adjustedUp >= 0.5 ? 'UP' : 'DOWN';
     const mlAgreesWithRules = mlResult.available && mlResult.mlSide === ruleSide;
+
+    // ── 9b. Signal flip tracking (anti-whipsaw) ──
+    const currentSide = ensembleUp >= 0.5 ? 'UP' : 'DOWN';
+    if (lastSignalSide !== null && currentSide !== lastSignalSide) {
+      signalFlipHistory.push({ ts: now, from: lastSignalSide, to: currentSide });
+    }
+    lastSignalSide = currentSide;
+    // Purge old flips outside the window
+    while (signalFlipHistory.length > 0 && now - signalFlipHistory[0].ts > FLIP_WINDOW_MS) {
+      signalFlipHistory.shift();
+    }
+    const recentFlipCount = signalFlipHistory.length;
 
     // ── Log real Polymarket data for ML training (every 30s, zero alloc when throttled) ──
     if (shouldLogPoly() && lastPrice && marketSlug) {
@@ -537,7 +579,7 @@ export async function pollOnce() {
         failedVwapReclaim, fundingRate: null,
         momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
         ruleEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
-        ensembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
+        ensembleUp: rawEnsembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
       });
     }
 
@@ -650,6 +692,32 @@ export async function pollOnce() {
     }
     // 13b. Directional trade (when no arb and no pending fill)
     else if (rec.action === 'ENTER' && !hasPending) {
+      // ── Signal Confirmation Gate (anti-whipsaw) ──
+      // Track consecutive polls with same ENTER+side
+      if (signalConfirmSide === rec.side) {
+        signalConfirmCount++;
+      } else {
+        signalConfirmSide = rec.side;
+        signalConfirmCount = 1;
+      }
+
+      // Smoothed prob must show clear direction (not hovering at 0.50)
+      const smoothedProb = rec.side === 'UP' ? ensembleUp : ensembleDown;
+      const probTooWeak = smoothedProb < STABILITY_MIN_CONFIDENCE;
+
+      // Check if signal is stable enough to act on
+      const signalUnconfirmed = signalConfirmCount < SIGNAL_CONFIRM_POLLS;
+      const tooManyFlips = recentFlipCount > MAX_FLIPS_TO_ENTER;
+
+      if (signalUnconfirmed || tooManyFlips || probTooWeak) {
+        const reasons = [];
+        if (signalUnconfirmed) reasons.push(`confirm ${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}`);
+        if (tooManyFlips) reasons.push(`${recentFlipCount} flips in ${FLIP_WINDOW_MS / 1000}s`);
+        if (probTooWeak) reasons.push(`prob ${(smoothedProb * 100).toFixed(1)}% < ${(STABILITY_MIN_CONFIDENCE * 100).toFixed(0)}%`);
+        log.debug(`Signal unstable, holding: ${reasons.join(' | ')}`);
+      } else {
+      // Signal confirmed — proceed with existing trade filters
+
       // Smart trade filters (confidence gating, 50/50 filter, volatility, cooldown, session)
       const filterResult = applyTradeFilters({
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
@@ -718,6 +786,13 @@ export async function pollOnce() {
         log.debug(`Trade blocked: ${!priceCheck.valid ? priceCheck.reason : tradeCheck.reason}`);
       }
       } // end filterResult.pass
+      } // end signal confirmed
+    }
+
+    // Reset confirmation when signal drops to WAIT (side changed or no longer ENTER)
+    if (rec.action !== 'ENTER') {
+      signalConfirmCount = 0;
+      signalConfirmSide = null;
     }
 
     // ── 14. Resolve Chainlink price: Polymarket WS > Chainlink WSS > RPC ──
@@ -751,12 +826,13 @@ export async function pollOnce() {
     const srcTag = `${isBinanceConnected() ? 'WS' : 'REST'}+${useClobWs ? 'WS' : 'REST'}+CL:${clSrc}`;
 
     const _pollMs = (performance.now() - _pollStart).toFixed(0);
+    const stabTag = `Stab:${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}${recentFlipCount > 0 ? ` F${recentFlipCount}` : ''}`;
     log.info(
       `#${pollCounter} [${_pollMs}ms] | BTC $${lastPrice.toFixed(0)} | PTB $${(priceToBeat.value ?? 0).toFixed(0)} | ` +
-      `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
+      `P:${(ensembleUp * 100).toFixed(0)}%(raw${(rawEnsembleUp * 100).toFixed(0)}%) E:${edgeTag} ${mlTag} | ` +
       `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase} | ` +
       `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
-      `${regimeInfo.regime} | ${arbTag} ${fillTag} ${flowTag} | ${srcTag}`
+      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} | ${srcTag}`
     );
 
     // ── 16. Compute narratives + broadcast full state to dashboard ──
@@ -859,6 +935,18 @@ export async function pollOnce() {
       fillTracker: getFillTrackerStatus(),
       orderbookFlow: obFlow,
       tradeFilters: getFilterStatus(),
+
+      // Signal stability (anti-whipsaw)
+      signalStability: {
+        confirmCount: signalConfirmCount,
+        confirmNeeded: SIGNAL_CONFIRM_POLLS,
+        confirmSide: signalConfirmSide,
+        recentFlips: recentFlipCount,
+        maxFlips: MAX_FLIPS_TO_ENTER,
+        smoothedProb: ensembleUp,
+        rawProb: rawEnsembleUp,
+        stable: signalConfirmCount >= SIGNAL_CONFIRM_POLLS && recentFlipCount <= MAX_FLIPS_TO_ENTER,
+      },
 
       // Volatility + Multi-TF
       volProfile,

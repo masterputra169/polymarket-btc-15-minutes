@@ -346,6 +346,18 @@ function BotPanel({ connected, data }) {
             {data.fillTracker.pending && <b style={{ color: '#ffc107' }}> [pending]</b>}
           </span>
         )}
+        {data.signalStability && (
+          <span className="status-pill" style={{
+            padding: '2px 8px', fontSize: '0.62rem',
+            color: data.signalStability.stable ? 'var(--green-bright)' : data.signalStability.recentFlips > 3 ? 'var(--red-bright)' : '#ffc107',
+            fontWeight: 600,
+            borderColor: data.signalStability.stable ? 'rgba(0,230,118,0.2)' : data.signalStability.recentFlips > 3 ? 'rgba(255,82,82,0.2)' : 'rgba(255,193,7,0.2)',
+          }}>
+            Stab:{data.signalStability.confirmCount}/{data.signalStability.confirmNeeded}
+            {data.signalStability.recentFlips > 0 && ` F${data.signalStability.recentFlips}`}
+            {data.signalStability.stable && ' \u2713'}
+          </span>
+        )}
         <span className="status-pill" style={{ padding: '2px 8px', fontSize: '0.62rem', marginLeft: 'auto' }}>
           {data.sources?.binanceWs ? 'BinWS' : 'BinREST'}+{data.sources?.clobWs ? 'ClobWS' : 'ClobREST'}
         </span>
