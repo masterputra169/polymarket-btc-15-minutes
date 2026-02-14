@@ -206,6 +206,43 @@ export async function placeSellOrder({ tokenId, price, size }) {
 }
 
 /**
+ * Fetch real USDC balance + allowance from Polymarket.
+ * Uses the CLOB client's getBalanceAllowance() which returns the actual
+ * on-chain collateral (USDC.e) available for trading.
+ *
+ * @returns {{ balance: number, allowance: number } | null}
+ */
+let balanceCache = null;
+let balanceLastFetchMs = 0;
+const BALANCE_CACHE_TTL = 10_000; // 10s cache
+
+export async function getUsdcBalance() {
+  if (!client) return null;
+
+  const now = Date.now();
+  if (balanceCache && now - balanceLastFetchMs < BALANCE_CACHE_TTL) {
+    return balanceCache;
+  }
+
+  try {
+    const result = await client.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+    if (result && result.balance != null) {
+      balanceCache = {
+        balance: parseFloat(result.balance) / 1e6, // USDC.e has 6 decimals (raw microUSDC)
+        allowance: parseFloat(result.allowance ?? '0') / 1e6,
+        fetchedAt: now,
+      };
+      balanceLastFetchMs = now;
+      return balanceCache;
+    }
+  } catch (err) {
+    log.warn(`USDC balance fetch failed: ${err.message}`);
+    balanceLastFetchMs = now; // Prevent retry storm
+  }
+  return balanceCache; // Return stale cache on error
+}
+
+/**
  * Get the wallet address used by the CLOB client.
  */
 export function getWalletAddress() {

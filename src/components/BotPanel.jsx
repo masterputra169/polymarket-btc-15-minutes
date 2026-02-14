@@ -277,6 +277,22 @@ function BotPanel({ connected, data }) {
               {fmtUsd(data.bankroll, 0)}
             </span>
           </div>
+          {data.usdcBalance && (
+            <div className="data-row">
+              <span className="data-row__label">On-chain</span>
+              <span className="data-row__value" style={{
+                fontWeight: 600,
+                color: data.usdcBalance.drift > 1.0 ? 'var(--red)' : 'var(--text-secondary)',
+              }}>
+                {fmtUsd(data.usdcBalance.balance, 2)}
+                {data.usdcBalance.drift > 1.0 && (
+                  <span style={{ fontSize: '0.75em', marginLeft: 4 }}>
+                    ({data.usdcBalance.drift > 0 ? '+' : ''}{(data.usdcBalance.balance - data.bankroll).toFixed(2)})
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
           <div className="data-row">
             <span className="data-row__label">Daily</span>
             <span className={`data-row__value ${stats?.dailyPnL > 0 ? 'c-green' : stats?.dailyPnL < 0 ? 'c-red' : ''}`}

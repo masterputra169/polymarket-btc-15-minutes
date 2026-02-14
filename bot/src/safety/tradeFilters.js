@@ -41,6 +41,8 @@ export function applyTradeFilters({
   marketSlug,
   consecutiveLosses,
   session,         // trading session name from getSessionName()
+  btcPrice,        // current BTC price (for distance check)
+  priceToBeat,     // PTB for current market (for distance check)
 }) {
   const reasons = [];
 
@@ -75,6 +77,19 @@ export function applyTradeFilters({
     reasons.push(`Too close: ${timeLeftMin.toFixed(1)}min < ${TRADE_FILTERS.MIN_TIME_LEFT_MIN}min`);
   }
 
+  // 4b. Max time remaining (early bird filter — indicators stale, BTC near PTB)
+  if (TRADE_FILTERS.MAX_TIME_LEFT_MIN && timeLeftMin != null && timeLeftMin > TRADE_FILTERS.MAX_TIME_LEFT_MIN) {
+    reasons.push(`Too early: ${timeLeftMin.toFixed(1)}min left > ${TRADE_FILTERS.MAX_TIME_LEFT_MIN}min (wait for price discovery)`);
+  }
+
+  // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)
+  if (TRADE_FILTERS.MIN_BTC_DIST_PCT && btcPrice != null && priceToBeat != null && priceToBeat > 0) {
+    const btcDistPct = Math.abs(btcPrice - priceToBeat) / priceToBeat * 100;
+    if (btcDistPct < TRADE_FILTERS.MIN_BTC_DIST_PCT) {
+      reasons.push(`BTC too close to PTB: ${btcDistPct.toFixed(3)}% < ${TRADE_FILTERS.MIN_BTC_DIST_PCT}% (coin flip)`);
+    }
+  }
+
   // 5. Cooldown after loss
   if (lastLossTimestamp > 0) {
     const elapsed = Date.now() - lastLossTimestamp;
@@ -104,7 +119,7 @@ export function applyTradeFilters({
 
   const pass = reasons.length === 0;
   if (!pass) {
-    log.debug(`Filtered: ${reasons.join(' | ')}`);
+    log.info(`Filtered: ${reasons.join(' | ')}`);
   }
 
   return { pass, reasons, sessionQuality };

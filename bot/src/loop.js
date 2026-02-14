@@ -93,7 +93,7 @@ import {
 } from './trading/fillTracker.js';
 
 // Trading
-import { placeBuyOrder, isClientReady } from './trading/clobClient.js';
+import { placeBuyOrder, isClientReady, getUsdcBalance } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
@@ -110,6 +110,7 @@ import {
   confirmFill,
   setPendingCost,
   recordArbTrade,
+  setBankroll,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
@@ -202,6 +203,10 @@ let chainlinkCache = { price: null, updatedAt: null, source: 'chainlink_rpc' };
 let chainlinkLastFetchMs = 0;
 const CHAINLINK_INTERVAL = 30_000;
 
+// Real USDC balance from Polymarket (every 30s — reconciliation)
+let usdcBalanceData = null;
+let usdcBalanceLastFetchMs = 0;
+const USDC_BALANCE_INTERVAL = 30_000;
 
 function resetMarketCache() {
   polySnapshotCache = null;
@@ -421,6 +426,32 @@ export async function pollOnce() {
 
     // Funding rate — always null (blocked)
     const fundingRate = null;
+
+    // ── 3b. USDC balance (every 30s — non-blocking) ──
+    if (now - usdcBalanceLastFetchMs > USDC_BALANCE_INTERVAL && isClientReady()) {
+      usdcBalanceLastFetchMs = now; // Set BEFORE fetch to prevent parallel fetches
+      getUsdcBalance().then(result => {
+        if (result) {
+          const prev = usdcBalanceData;
+          usdcBalanceData = result;
+          const localBankroll = getBankroll();
+          const onChain = result.balance;
+          const drift = Math.abs(localBankroll - onChain);
+          if (!prev) {
+            log.info(`USDC balance: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
+          }
+          // Auto-sync: if no open position and drift > $1, snap local to on-chain
+          const pos = getCurrentPosition();
+          const hasPos = pos && !pos.settled;
+          if (drift > 1.0 && !hasPos) {
+            log.warn(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
+            setBankroll(onChain);
+          } else if (drift > 1.0 && hasPos) {
+            log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, position open — deferring sync)`);
+          }
+        }
+      }).catch(err => { log.debug(`USDC balance error: ${err.message}`); });
+    }
 
     // ── 4. Market slug tracking + switch detection ──
     const marketSlug = poly?.ok ? String(poly.market?.slug ?? '') : '';
@@ -963,6 +994,8 @@ export async function pollOnce() {
         marketSlug,
         consecutiveLosses: getConsecutiveLosses(),
         session: getSessionName(),
+        btcPrice: lastPrice,
+        priceToBeat: priceToBeat.value,
       });
 
       // Orderbook flow alignment check
@@ -1290,6 +1323,14 @@ export async function pollOnce() {
       polyLiveConnected,
       chainlinkWssConnected,
       chainlinkSource: chainlinkResolved.source,
+
+      // Real USDC balance from Polymarket (on-chain reconciliation)
+      usdcBalance: usdcBalanceData ? {
+        balance: usdcBalanceData.balance,
+        allowance: usdcBalanceData.allowance,
+        fetchedAt: usdcBalanceData.fetchedAt,
+        drift: Math.abs(getBankroll() - usdcBalanceData.balance),
+      } : null,
     });
 
     // Periodic save (every ~120 polls at 2s = ~4min)
