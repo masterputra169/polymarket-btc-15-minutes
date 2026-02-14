@@ -53,8 +53,14 @@ export async function checkPendingFill() {
     for (const [orderId, pending] of pendingOrders) {
       const elapsed = Date.now() - pending.placedAt;
 
+      if (!openIds.has(orderId) && elapsed < 2000) {
+        // Too early to conclude — order may not be visible in getOpenOrders() API yet.
+        // Skip this check; will re-evaluate on next poll.
+        continue;
+      }
+
       if (!openIds.has(orderId)) {
-        // Order no longer in open orders — assumed filled
+        // Order no longer in open orders after 2s — assumed filled
         const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
         const fill = { orderId, filled: true, timeToFill: elapsed, adverseSelection };
         recordFill(fill);

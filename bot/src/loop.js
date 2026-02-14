@@ -108,10 +108,12 @@ import {
   unwindPosition,
   confirmFill,
   setPendingCost,
+  recordArbTrade,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
+import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
 import { shouldHalt, validateTrade, validatePrice } from './safety/guards.js';
@@ -251,6 +253,8 @@ export async function pollOnce() {
           const pos = getCurrentPosition();
           if (pos) {
             unwindPosition();
+            writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: {} });
+            clearEntrySnapshot();
             log.info('Position unwound after stale order cancel');
           }
         }
@@ -277,10 +281,19 @@ export async function pollOnce() {
           const won = pos.side === actualResult;
           log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
           settleTrade(won);
+          writeJournalEntry({
+            outcome: won ? 'WIN' : 'LOSS',
+            pnl: won ? (pos.size - pos.cost) : -pos.cost,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
           if (!won) recordLoss();
         } else {
           log.warn(`Position expired — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
           settleTrade(false);
+          writeJournalEntry({
+            outcome: 'LOSS', pnl: -pos.cost,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
           recordLoss();
         }
       }
@@ -390,10 +403,19 @@ export async function pollOnce() {
           const won = pos.side === actualResult;
           log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'}`);
           settleTrade(won);
+          writeJournalEntry({
+            outcome: won ? 'WIN' : 'LOSS',
+            pnl: won ? (pos.size - pos.cost) : -pos.cost,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
           if (!won) recordLoss();
         } else {
           log.warn(`Position expired on market switch — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
           settleTrade(false);
+          writeJournalEntry({
+            outcome: 'LOSS', pnl: -pos.cost,
+            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
+          });
           recordLoss();
         }
       }
@@ -610,7 +632,18 @@ export async function pollOnce() {
         );
 
         if (BOT_CONFIG.dryRun) {
+          const cutPnl = cutResult.recoveryAmount - pos.cost;
           settleTradeEarlyExit(cutResult.recoveryAmount);
+          writeJournalEntry({
+            outcome: 'CUT_LOSS', pnl: cutPnl,
+            exitData: {
+              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+              marketUp, marketDown, tokenPrice,
+              regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+              rsiNow, vwapDist, timeLeftMin,
+              cutLossDropPct: cutResult.dropPct, cutLossRecovered: cutResult.recoveryAmount,
+            },
+          });
           resetCutLossState();
           recordLoss();
         } else {
@@ -620,7 +653,18 @@ export async function pollOnce() {
             const actualRecovery = sellResult?.takingAmount != null
               ? parseFloat(sellResult.takingAmount) : cutResult.recoveryAmount;
             if (actualRecovery > 0) {
+              const cutPnl = actualRecovery - pos.cost;
               settleTradeEarlyExit(actualRecovery);
+              writeJournalEntry({
+                outcome: 'CUT_LOSS', pnl: cutPnl,
+                exitData: {
+                  btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+                  marketUp, marketDown, tokenPrice,
+                  regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+                  rsiNow, vwapDist, timeLeftMin,
+                  cutLossDropPct: cutResult.dropPct, cutLossRecovered: actualRecovery,
+                },
+              });
               resetCutLossState();
               recordLoss();
             }
@@ -695,14 +739,18 @@ export async function pollOnce() {
     // 13a. Arbitrage execution (priority over directional — riskless profit)
     if (arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
-      const arbShares = Math.floor(bankroll * 0.10 / arb.totalCost); // 10% of bankroll
+      const arbBudget = getAvailableBankroll() * 0.10; // 10% of available bankroll (not total)
+      const arbShares = Math.floor(arbBudget / arb.totalCost);
+      const estCost = Math.round(arbShares * arb.totalCost * 100) / 100;
       if (arbShares > 0) {
         if (BOT_CONFIG.dryRun) {
           log.info(
             `[DRY RUN] ARB: Would BUY ${arbShares} UP@${arb.askUp.toFixed(3)} + ${arbShares} DOWN@${arb.askDown.toFixed(3)} | ` +
-            `Cost: $${(arbShares * arb.totalCost).toFixed(2)} | Net profit: $${(arbShares * arb.netProfit).toFixed(2)} (${arb.profitPct.toFixed(1)}%)`
+            `Cost: $${estCost.toFixed(2)} | Net profit: $${(arbShares * arb.netProfit).toFixed(2)} (${arb.profitPct.toFixed(1)}%)`
           );
         } else {
+          // Reserve capital before arb attempt (prevents concurrent overspend)
+          setPendingCost(estCost);
           try {
             // Leg 1: Buy UP
             const upResult = await placeBuyOrder({
@@ -710,29 +758,47 @@ export async function pollOnce() {
               price: arb.askUp,
               size: arbShares,
             });
+            const upFillCost = upResult?.makingAmount != null
+              ? parseFloat(upResult.makingAmount) : arbShares * arb.askUp;
+            const upOrderId = upResult?.orderId ?? null;
+
             // Leg 2: Buy DOWN — if this fails, we have one-legged exposure
             try {
-              await placeBuyOrder({
+              const downResult = await placeBuyOrder({
                 tokenId: poly.tokens.downTokenId,
                 price: arb.askDown,
                 size: arbShares,
               });
+              const downFillCost = downResult?.makingAmount != null
+                ? parseFloat(downResult.makingAmount) : arbShares * arb.askDown;
+
+              // Both legs filled — record arb with actual fill costs
+              setPendingCost(0);
+              recordArbTrade({
+                upCost: upFillCost,
+                downCost: downFillCost,
+                shares: arbShares,
+                marketSlug,
+                orderId: upOrderId,
+              });
             } catch (downErr) {
               // ONE-LEGGED: Only UP bought, DOWN failed — record as directional position
+              setPendingCost(0);
               log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — recording one-legged UP position`);
+              const actualPrice = upFillCost / arbShares;
               recordTrade({
                 side: 'UP',
                 tokenId: poly.tokens.upTokenId,
-                price: arb.askUp,
+                price: actualPrice,
                 size: arbShares,
                 marketSlug,
-                orderId: upResult?.orderId ?? upResult?.orderID ?? upResult?.id ?? null,
+                orderId: upOrderId,
+                actualCost: upFillCost,
               });
               return; // Don't count as successful arb
             }
-            const arbCost = arbShares * arb.totalCost;
-            log.info(`ARB executed: ${arbShares} pairs @ cost $${arbCost.toFixed(2)} | Expected profit: $${(arbShares * arb.netProfit).toFixed(2)}`);
           } catch (err) {
+            setPendingCost(0); // Release reservation on leg 1 failure
             log.error(`ARB leg 1 (UP) failed: ${err.message}`);
           }
         }
@@ -800,6 +866,33 @@ export async function pollOnce() {
         const orderCost = shares * betMarketPrice;
         setPendingCost(orderCost);
 
+        // Build entry snapshot data for trade journal (shared by DRY_RUN + live paths)
+        const entryData = {
+          side: betSide, tokenPrice: betMarketPrice, btcPrice: lastPrice,
+          priceToBeat: priceToBeat.value, marketSlug, cost: orderCost, size: shares,
+          confidence: rec.confidence, phase: rec.phase, reason: rec.reason,
+          edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
+          ensembleUp, ruleUp: timeAware.adjustedUp,
+          mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
+          mlSide: mlResult.mlSide, mlAgreesWithRules,
+          rsiNow, rsiSlope, macdHist: macd?.hist, macdLine: macd?.line,
+          vwapDist, vwapSlope,
+          bbPercentB: bb?.percentB, bbWidth: bb?.width, bbSqueeze: bb?.squeeze,
+          atrPct: atr?.atrPct, atrRatio: atr?.atrRatio,
+          stochK: stochRsi?.k, stochD: stochRsi?.d,
+          emaCrossSignal: emaCross?.cross, emaDistPct: emaCross?.distancePct,
+          volDeltaBuyRatio: volDelta?.buyRatio,
+          haColor: consec.color, haCount: consec.count,
+          delta1m, delta3m,
+          regime: regimeInfo.regime, regimeConfidence: regimeInfo.confidence,
+          marketUp, marketDown,
+          orderbookImbalance: orderbookSignal?.imbalance, spread: orderbookUp?.spread,
+          timeLeftMin, session: getSessionName(),
+          betAmount: betSizing.betAmount, kellyFraction: betSizing.kellyFraction,
+          riskLevel: betSizing.riskLevel, expectedValue: betSizing.expectedValue,
+          signalConfirmCount, recentFlips: recentFlipCount,
+        };
+
         if (BOT_CONFIG.dryRun) {
           setPendingCost(0); // Release reservation in dry-run
           log.info(
@@ -807,6 +900,9 @@ export async function pollOnce() {
             `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +
             `Conf: ${rec.confidence}${flowTag} | ${betSizing.rationale}`
           );
+          // Journal: capture + write immediately (no settlement in DRY_RUN)
+          captureEntrySnapshot(entryData);
+          writeJournalEntry({ outcome: 'DRY_RUN', pnl: 0, exitData: {} });
         } else {
           try {
             const orderResult = await placeBuyOrder({
@@ -838,6 +934,8 @@ export async function pollOnce() {
             }
             // Only count as trade if order succeeded (not on failure)
             recordTradeForMarket(marketSlug);
+            // Journal: capture entry snapshot (written at settlement)
+            captureEntrySnapshot(entryData);
           } catch (err) {
             setPendingCost(0); // C6: Release pending reservation on failure
             log.error(`Order failed: ${err.message}`);
@@ -1022,6 +1120,9 @@ export async function pollOnce() {
       // Feedback
       feedbackStats,
       detailedFeedback,
+
+      // Trade journal (recent entries for dashboard)
+      recentJournal: getRecentJournal(5),
 
       // Volume features
       volumeRecent, volumeAvg,

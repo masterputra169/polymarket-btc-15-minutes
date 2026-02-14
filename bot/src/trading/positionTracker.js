@@ -7,7 +7,7 @@
  * - Append-only audit log for all financial state changes
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -36,7 +36,7 @@ function auditLog(entry) {
     const auditPath = BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl');
     const line = JSON.stringify({ ...entry, _ts: Date.now() }) + '\n';
     appendFileSync(auditPath, line);
-  } catch { /* audit should never break trading */ }
+  } catch (err) { log.warn(`Audit write failed (financial event may be unrecorded): ${err.message}`); }
 }
 
 /**
@@ -62,6 +62,7 @@ export function loadState() {
       }
 
       log.info(`State loaded: bankroll=$${state.bankroll.toFixed(2)}, trades=${state.totalTrades}, W/L=${state.wins}/${state.losses}`);
+      auditLog({ type: 'STATE_LOADED', bankroll: state.bankroll, totalTrades: state.totalTrades, wins: state.wins, losses: state.losses });
     } else {
       log.info(`No state file found, starting fresh with $${state.bankroll.toFixed(2)} bankroll`);
     }
@@ -77,7 +78,17 @@ export function saveState() {
   try {
     const dir = dirname(BOT_CONFIG.stateFile);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(BOT_CONFIG.stateFile, JSON.stringify(state, null, 2));
+    const data = JSON.stringify(state, null, 2);
+    // Atomic write: write to temp file, then rename over actual file.
+    // Prevents corruption if process crashes mid-write.
+    const tmpPath = BOT_CONFIG.stateFile + '.tmp';
+    writeFileSync(tmpPath, data);
+    try {
+      renameSync(tmpPath, BOT_CONFIG.stateFile);
+    } catch {
+      // Fallback: direct overwrite (rename may fail cross-device on some OS)
+      writeFileSync(BOT_CONFIG.stateFile, data);
+    }
     log.debug('State saved to disk');
   } catch (err) {
     log.warn(`Could not save state: ${err.message}`);
@@ -95,7 +106,7 @@ export function recordTrade({ side, tokenId, price, size, marketSlug, orderId, a
   state.currentPosition = {
     side,
     tokenId,
-    price,
+    price: Math.round(price * 1e8) / 1e8,  // Prevent float drift (e.g. 0.21000000000000002)
     size,
     marketSlug,
     orderId: orderId ?? null,
@@ -257,6 +268,50 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   state.currentPosition = null;
   saveState();
   return true;
+}
+
+/**
+ * Record an arbitrage trade (both legs filled — guaranteed profit).
+ *
+ * Binary market arb: buy UP + DOWN for < $1.00 combined → guaranteed $1/share payout.
+ * Since profit is deterministic, we credit the payout immediately (deducting cost).
+ * On-chain: USDC debited at entry, winning tokens redeemed at settlement.
+ *
+ * @param {Object} params
+ * @param {number} params.upCost - Actual USDC spent on UP leg
+ * @param {number} params.downCost - Actual USDC spent on DOWN leg
+ * @param {number} params.shares - Number of arb pairs
+ * @param {string} params.marketSlug - Market identifier
+ * @param {string|null} params.orderId - Order ID from first leg
+ */
+export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }) {
+  const totalCost = roundMoney(upCost + downCost);
+  const payout = roundMoney(shares); // Binary market: guaranteed $1/share
+  const pnl = roundMoney(payout - totalCost);
+
+  state.bankroll = roundMoney(state.bankroll - totalCost + payout);
+  state.totalTrades++;
+  state.wins++;
+
+  state.trades.push({
+    type: 'ARB',
+    pnl,
+    cost: totalCost,
+    payout,
+    shares,
+    marketSlug,
+    bankrollAfter: state.bankroll,
+    timestamp: Date.now(),
+  });
+
+  if (state.trades.length > 100) state.trades = state.trades.slice(-100);
+
+  auditLog({ type: 'ARB', cost: totalCost, payout, pnl, shares, upCost, downCost, marketSlug, orderId, bankrollAfter: state.bankroll });
+
+  log.info(
+    `ARB settled: cost=$${totalCost.toFixed(2)} payout=$${payout.toFixed(2)} P&L=+$${pnl.toFixed(2)} | Bankroll: $${state.bankroll.toFixed(2)}`
+  );
+  saveState();
 }
 
 /**
