@@ -88,8 +88,9 @@ export function saveState() {
  * Record a new trade (position entry).
  * Bankroll deducted immediately. If order later fails to fill, call unwindPosition().
  */
-export function recordTrade({ side, tokenId, price, size, marketSlug, orderId }) {
-  const cost = roundMoney(price * size);
+export function recordTrade({ side, tokenId, price, size, marketSlug, orderId, actualCost }) {
+  // Use actual fill cost from CLOB response when available, fallback to theoretical
+  const cost = actualCost != null ? roundMoney(actualCost) : roundMoney(price * size);
 
   state.currentPosition = {
     side,
@@ -186,6 +187,71 @@ export function settleTrade(won) {
   log.info(
     `Position settled: ${won ? 'WIN' : 'LOSS'} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ` +
     `Bankroll: $${state.bankroll.toFixed(2)} | Streak: ${state.consecutiveLosses} consec losses`
+  );
+
+  state.currentPosition = null;
+  saveState();
+  return true;
+}
+
+/**
+ * Settle current position via early exit (cut-loss).
+ * Partial recovery — not binary win/loss. Bankroll gets back whatever
+ * USDC was recovered from selling the tokens early.
+ *
+ * @param {number} recoveredUsdc - Actual USDC recovered from the FOK sell
+ * @returns {boolean} Whether settlement occurred
+ */
+export function settleTradeEarlyExit(recoveredUsdc) {
+  if (!state.currentPosition) return false;
+
+  // Dedup guard — same as settleTrade
+  if (state.currentPosition.settled) {
+    log.warn('Cut-loss settlement skipped — position already settled (dedup)');
+    return false;
+  }
+
+  const pos = state.currentPosition;
+  const recovered = roundMoney(Math.max(0, recoveredUsdc));
+
+  // Mark as settled before modifying bankroll
+  state.currentPosition.settled = true;
+  state.currentPosition.settledAt = Date.now();
+
+  state.bankroll = roundMoney(state.bankroll + recovered);
+
+  const pnl = roundMoney(recovered - pos.cost);
+
+  // Cut-loss is always a loss (partial recovery)
+  state.losses++;
+  state.consecutiveLosses++;
+
+  state.trades.push({
+    type: 'CUT_LOSS',
+    side: pos.side,
+    won: false,
+    payout: recovered,
+    pnl,
+    cost: pos.cost,
+    bankrollAfter: state.bankroll,
+    timestamp: Date.now(),
+  });
+
+  auditLog({
+    type: 'CUT_LOSS',
+    side: pos.side,
+    recovered,
+    pnl,
+    cost: pos.cost,
+    entryPrice: pos.price,
+    size: pos.size,
+    bankrollAfter: state.bankroll,
+  });
+
+  log.info(
+    `CUT-LOSS settled: ${pos.side} | Recovered $${recovered.toFixed(2)} of $${pos.cost.toFixed(2)} | ` +
+    `P&L: -$${Math.abs(pnl).toFixed(2)} (saved $${(pos.cost - Math.abs(pnl)).toFixed(2)} vs full loss) | ` +
+    `Bankroll: $${state.bankroll.toFixed(2)}`
   );
 
   state.currentPosition = null;
@@ -295,12 +361,14 @@ export function setBankroll(value) {
 }
 
 export function getStats() {
+  const cutLossCount = state.trades.filter(t => t.type === 'CUT_LOSS').length;
   return {
     bankroll: state.bankroll,
     availableBankroll: getAvailableBankroll(),
     totalTrades: state.totalTrades,
     wins: state.wins,
     losses: state.losses,
+    cutLosses: cutLossCount,
     winRate: state.totalTrades > 0 ? state.wins / state.totalTrades : 0,
     consecutiveLosses: state.consecutiveLosses,
     dailyPnL: getDailyPnL(),

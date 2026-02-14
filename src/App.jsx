@@ -277,11 +277,18 @@ export default function App() {
     };
   }, [data?.feedbackStats, data?.detailedFeedback?.totalSettled]);
 
-  // PositionPanel: positions from bot
+  // PositionPanel: positions + bankroll from bot
   const positionData = useMemo(() => {
     if (!data) return null;
-    return { positions: data.positions };
-  }, [data?.positions?.lastUpdate, data?.positions?.list?.length]);
+    return { positions: data.positions, bankroll: data.bankroll };
+  }, [
+    data?.positions?.lastUpdate,
+    data?.positions?.list?.length,
+    data?.positions?.botPosition?.side,
+    data?.positions?.botPosition?.size,
+    data?.positions?.botPosition?.fillConfirmed,
+    data?.bankroll,
+  ]);
 
   // BetSizingPanel: bet sizing output
   const betSizingData = useMemo(() => {

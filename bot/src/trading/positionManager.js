@@ -11,7 +11,7 @@ import { placeSellOrder, getWalletAddress } from './clobClient.js';
 
 const log = createLogger('Positions');
 
-const CACHE_TTL_MS = 60_000; // Cache positions for 60s
+const CACHE_TTL_MS = 15_000; // Cache positions for 15s
 const DATA_API = 'https://data-api.polymarket.com';
 
 let cachedPositions = [];
@@ -64,6 +64,53 @@ export function getPositionsSummary() {
   return {
     list: cachedPositions,
     lastUpdate: lastFetchMs || null,
+  };
+}
+
+/**
+ * Get positions merged with bot's local position tracking.
+ * Returns API positions augmented with the bot's local position
+ * (which is available instantly, before the API catches up).
+ */
+export function getMergedPositions(localPosition) {
+  const merged = [...cachedPositions];
+
+  if (localPosition && !localPosition.settled && localPosition.size > 0) {
+    const matchIdx = merged.findIndex(p => p.tokenId === localPosition.tokenId);
+    if (matchIdx >= 0) {
+      merged[matchIdx] = { ...merged[matchIdx], botTracked: true, botSide: localPosition.side };
+    } else {
+      merged.push({
+        conditionId: '',
+        tokenId: localPosition.tokenId,
+        size: localPosition.size,
+        avgPrice: localPosition.price,
+        currentPrice: localPosition.price,
+        pnl: 0,
+        market: localPosition.marketSlug ?? '',
+        side: localPosition.side,
+        asset: '',
+        botTracked: true,
+        botSide: localPosition.side,
+        enteredAt: localPosition.enteredAt,
+        fillConfirmed: localPosition.fillConfirmed ?? false,
+      });
+    }
+  }
+
+  return {
+    list: merged,
+    lastUpdate: lastFetchMs || Date.now(),
+    botPosition: localPosition && !localPosition.settled ? {
+      side: localPosition.side,
+      size: localPosition.size,
+      price: localPosition.price,
+      cost: localPosition.cost,
+      marketSlug: localPosition.marketSlug,
+      enteredAt: localPosition.enteredAt,
+      fillConfirmed: localPosition.fillConfirmed ?? false,
+      settled: localPosition.settled,
+    } : null,
   };
 }
 

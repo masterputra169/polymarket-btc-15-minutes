@@ -97,6 +97,7 @@ import { placeBuyOrder, isClientReady } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
+  settleTradeEarlyExit,
   hasOpenPosition,
   getBankroll,
   getAvailableBankroll,
@@ -109,6 +110,8 @@ import {
   setPendingCost,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
+import { closePosition } from './trading/positionManager.js';
+import { evaluateCutLoss, resetCutLossState, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
 
 // Safety
 import { shouldHalt, validateTrade, validatePrice } from './safety/guards.js';
@@ -281,6 +284,7 @@ export async function pollOnce() {
           recordLoss();
         }
       }
+      resetCutLossState();
       resetMarketCache();
     }
 
@@ -395,6 +399,7 @@ export async function pollOnce() {
       }
 
       resetMarketCache();
+      resetCutLossState();
       resetFlow();
       resetMarketTradeCount(oldSlug);
       onMarketSwitch(oldSlug, marketSlug);
@@ -586,6 +591,46 @@ export async function pollOnce() {
       });
     }
 
+    // ── 9c. Cut-loss check ──
+    const pos = getCurrentPosition();
+    if (pos && !pos.settled) {
+      const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
+      const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
+
+      const cutResult = evaluateCutLoss({
+        position: pos, currentTokenPrice: tokenPrice,
+        orderbook: tokenBook, timeLeftMin,
+      });
+
+      if (cutResult.shouldCut) {
+        log.warn(
+          `CUT-LOSS: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
+          `sell@$${cutResult.sellPrice.toFixed(3)} | ` +
+          `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}`
+        );
+
+        if (BOT_CONFIG.dryRun) {
+          settleTradeEarlyExit(cutResult.recoveryAmount);
+          resetCutLossState();
+          recordLoss();
+        } else {
+          recordSellAttempt();
+          try {
+            const sellResult = await closePosition(pos.tokenId, pos.size, cutResult.sellPrice);
+            const actualRecovery = sellResult?.takingAmount != null
+              ? parseFloat(sellResult.takingAmount) : cutResult.recoveryAmount;
+            if (actualRecovery > 0) {
+              settleTradeEarlyExit(actualRecovery);
+              resetCutLossState();
+              recordLoss();
+            }
+          } catch (err) {
+            log.warn(`Cut-loss sell FAILED: ${err.message}`);
+          }
+        }
+      }
+    }
+
     // ── 10. Decision ──
     const rec = decide({
       remainingMinutes: timeLeftMin,
@@ -681,7 +726,7 @@ export async function pollOnce() {
                 price: arb.askUp,
                 size: arbShares,
                 marketSlug,
-                orderId: upResult?.id ?? upResult?.orderID ?? null,
+                orderId: upResult?.orderId ?? upResult?.orderID ?? upResult?.id ?? null,
               });
               return; // Don't count as successful arb
             }
@@ -769,17 +814,27 @@ export async function pollOnce() {
               price: betMarketPrice,
               size: shares,
             });
-            const orderId = orderResult?.id ?? orderResult?.orderID ?? null;
+            const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;
+
+            // Use actual fill amounts from CLOB response when available
+            // makingAmount = USDC actually spent, takingAmount = shares actually received
+            const fillCost = orderResult?.makingAmount != null ? parseFloat(orderResult.makingAmount) : null;
+            const fillShares = orderResult?.takingAmount != null ? parseFloat(orderResult.takingAmount) : null;
+            const actualSize = (fillShares && fillShares > 0) ? fillShares : shares;
+            const actualPrice = (fillCost && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
+            const actualCost = (fillCost && fillCost > 0) ? fillCost : null;
+
             recordTrade({
               side: betSide,
               tokenId,
-              price: betMarketPrice,
-              size: shares,
+              price: actualPrice,
+              size: actualSize,
               marketSlug,
               orderId,
+              actualCost,
             });
             if (orderId) {
-              trackOrderPlacement(orderId, { tokenId, price: betMarketPrice, size: shares, side: betSide });
+              trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide });
             }
             // Only count as trade if order succeeded (not on failure)
             recordTradeForMarket(marketSlug);
@@ -859,10 +914,10 @@ export async function pollOnce() {
 
     const detailedFeedback = getDetailedStats();
 
-    // Include positions every 60th poll (~30s at 500ms)
-    const positionsSummary = (pollCounter % 60 === 0 && _getPositionsSummary)
-      ? _getPositionsSummary()
-      : undefined;
+    // Include positions every poll (lightweight: array + timestamp + botPosition)
+    const positionsSummary = _getPositionsSummary
+      ? _getPositionsSummary(getCurrentPosition())
+      : { list: [], lastUpdate: null, botPosition: null };
 
     broadcast({
       // ═══ Bot-specific fields (for BotPanel) ═══
@@ -872,7 +927,7 @@ export async function pollOnce() {
       btcPrice: lastPrice,
       dryRun: BOT_CONFIG.dryRun,
       stats: getStats(),
-      ...(positionsSummary ? { positions: positionsSummary } : {}),
+      positions: positionsSummary,
       indicators: {
         rsi: rsiNow,
         macd: macd?.hist,
@@ -941,6 +996,13 @@ export async function pollOnce() {
       fillTracker: getFillTrackerStatus(),
       orderbookFlow: obFlow,
       tradeFilters: getFilterStatus(),
+
+      // Cut-loss status
+      cutLoss: (() => {
+        const clPos = getCurrentPosition();
+        const clPrice = clPos && !clPos.settled ? (clPos.side === 'UP' ? marketUp : marketDown) : null;
+        return getCutLossStatus(clPos, clPrice);
+      })(),
 
       // Signal stability (anti-whipsaw)
       signalStability: {

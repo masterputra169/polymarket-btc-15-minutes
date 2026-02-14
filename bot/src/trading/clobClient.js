@@ -12,8 +12,44 @@ const log = createLogger('CLOB');
 
 const POLYGON_CHAIN_ID = 137;
 
+// SignatureType enum from @polymarket/order-utils
+// 0 = EOA (sign with EOA wallet directly — no proxy)
+// 1 = POLY_PROXY (for email/Magic wallet logins — Polymarket's internal proxy)
+// 2 = POLY_GNOSIS_SAFE (for browser wallets — Gnosis Safe proxy created by Polymarket)
+const SIGNATURE_TYPE_EOA = 0;
+const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = 2;
+
 let client = null;
 let wallet = null;
+
+/**
+ * Validate CLOB API response. The @polymarket/clob-client library swallows
+ * HTTP errors and returns { error: "..." } instead of throwing. This function
+ * detects error responses and throws so callers (loop.js) don't record
+ * phantom trades for orders that never went through.
+ */
+function validateOrderResponse(result, action) {
+  if (!result || typeof result !== 'object') {
+    throw new Error(`${action}: empty response from CLOB API`);
+  }
+  if (result.error) {
+    const status = result.status ? ` (HTTP ${result.status})` : '';
+    const msg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
+    throw new Error(`${action}: CLOB API error${status}: ${msg}`);
+  }
+  if (result.success === false) {
+    throw new Error(`${action}: order rejected: ${result.errorMsg || 'unknown reason'}`);
+  }
+  return result;
+}
+
+/**
+ * Extract orderId from CLOB API response.
+ * The API may return it as orderID, order_id, or id depending on version.
+ */
+function extractOrderId(result) {
+  return result?.orderID ?? result?.order_id ?? result?.id ?? null;
+}
 
 /**
  * Initialize the CLOB client with wallet and API credentials.
@@ -37,6 +73,19 @@ export async function initClobClient() {
   const apiKey = process.env.POLYMARKET_API_KEY;
   const apiSecret = process.env.POLYMARKET_API_SECRET;
   const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE;
+  const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS;
+
+  // Determine signature type: if proxy address is set, use POLY_GNOSIS_SAFE (2)
+  // Polymarket creates a Gnosis Safe proxy for browser-wallet users.
+  // The EOA signs orders, maker/funder is the Safe (where USDC.e lives).
+  const sigType = proxyAddress ? SIGNATURE_TYPE_POLY_GNOSIS_SAFE : SIGNATURE_TYPE_EOA;
+  const funder = proxyAddress || undefined;
+
+  if (proxyAddress) {
+    log.info(`Proxy wallet: ${proxyAddress} (signatureType=POLY_GNOSIS_SAFE)`);
+  } else {
+    log.info('No proxy address set — using EOA signing');
+  }
 
   if (apiKey && apiSecret && apiPassphrase) {
     // Use provided API credentials
@@ -45,6 +94,8 @@ export async function initClobClient() {
       POLYGON_CHAIN_ID,
       wallet,
       { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+      sigType,   // signatureType (5th param)
+      funder,    // funderAddress (6th param) — proxy wallet
     );
     log.info('CLOB client initialized with provided API credentials');
   } else {
@@ -53,6 +104,9 @@ export async function initClobClient() {
       CONFIG.clobBaseUrl,
       POLYGON_CHAIN_ID,
       wallet,
+      undefined,
+      sigType,
+      funder,
     );
     log.info('Deriving API credentials from wallet...');
     const creds = await client.createOrDeriveApiCreds();
@@ -61,6 +115,8 @@ export async function initClobClient() {
       POLYGON_CHAIN_ID,
       wallet,
       creds,
+      sigType,
+      funder,
     );
     log.info('CLOB client initialized with derived API credentials');
   }
@@ -79,16 +135,20 @@ export async function initClobClient() {
 export async function placeBuyOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
-  const order = await client.createAndPostOrder({
-    tokenID: tokenId,
-    price,
-    side: 'BUY',
-    size,
-    orderType: 'GTC',
-  });
+  // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
+  const result = await client.createAndPostOrder(
+    { tokenID: tokenId, price, side: 'BUY', size },
+    undefined, // options
+    'GTC',     // orderType (3rd param)
+  );
 
-  log.info(`Order placed: BUY ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
-  return order;
+  // Validate — CLOB client swallows HTTP errors, returning { error: "..." }
+  validateOrderResponse(result, 'BUY');
+
+  const orderId = extractOrderId(result);
+  log.info(`Order placed: BUY ${size} @ ${price} | orderId=${orderId ?? 'unknown'} | token=${tokenId.slice(0, 12)}...`);
+  log.debug(`BUY response: ${JSON.stringify(result)}`);
+  return { ...result, orderId };
 }
 
 /**
@@ -130,16 +190,19 @@ export async function getOpenOrders() {
 export async function placeSellOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
-  const order = await client.createAndPostOrder({
-    tokenID: tokenId,
-    price,
-    side: 'SELL',
-    size,
-    orderType: 'FOK',
-  });
+  // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
+  const result = await client.createAndPostOrder(
+    { tokenID: tokenId, price, side: 'SELL', size },
+    undefined, // options
+    'FOK',     // orderType (3rd param) — fill-or-kill for sells
+  );
 
-  log.info(`Order placed: SELL ${size} @ ${price} | token=${tokenId.slice(0, 12)}...`);
-  return order;
+  validateOrderResponse(result, 'SELL');
+
+  const orderId = extractOrderId(result);
+  log.info(`Order placed: SELL ${size} @ ${price} | orderId=${orderId ?? 'unknown'} | token=${tokenId.slice(0, 12)}...`);
+  log.debug(`SELL response: ${JSON.stringify(result)}`);
+  return { ...result, orderId };
 }
 
 /**

@@ -37,11 +37,21 @@ const BOT_CONFIG = {
 
   // Position management
   positionsFile: resolve(__dirname, '..', 'data', 'positions.json'),
-  positionPollIntervalMs: 60_000,
+  positionPollIntervalMs: 15_000,
 
   // Trader discovery
   trackedTradersFile: resolve(__dirname, '..', 'data', 'tracked_traders.json'),
   maxTrackedTraders: 20,
+
+  // Cut-loss (stop-loss)
+  cutLoss: {
+    enabled: process.env.CUT_LOSS_ENABLED !== 'false',
+    dropPct: parseFloat(process.env.CUT_LOSS_DROP_PCT || '30'),
+    minHoldSec: parseInt(process.env.CUT_LOSS_MIN_HOLD_SEC || '30', 10),
+    minTokenPrice: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_PRICE || '0.08'),
+    cooldownMs: parseInt(process.env.CUT_LOSS_COOLDOWN_MS || '10000', 10),
+    maxAttempts: parseInt(process.env.CUT_LOSS_MAX_ATTEMPTS || '3', 10),
+  },
 };
 
 export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK };

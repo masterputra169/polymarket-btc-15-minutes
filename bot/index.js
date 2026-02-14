@@ -31,7 +31,7 @@ import { BOT_CONFIG, CONFIG } from './src/config.js';
 import { setLogLevel, log } from './src/logger.js';
 import { loadMLModelFromDisk } from './src/adapters/mlLoader.js';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.js';
-import { loadState, saveState as savePositionState, getStats } from './src/trading/positionTracker.js';
+import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
 import { initClobClient, cancelAllOrders } from './src/trading/clobClient.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
@@ -39,7 +39,7 @@ import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.js';
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback } from './src/loop.js';
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery } from './src/statusServer.js';
-import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getPositionsSummary, closePosition } from './src/trading/positionManager.js';
+import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.js';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
@@ -101,8 +101,8 @@ async function main() {
   loadPositions();
   loadTrackedTraders();
   startPositionPolling();
-  registerPositionCallback(getPositionsSummary);
-  registerPositionManager({ getPositions: getPositionsSummary, closePosition });
+  registerPositionCallback(getMergedPositions);
+  registerPositionManager({ getPositions: () => getMergedPositions(getCurrentPosition()), closePosition });
   registerTraderDiscovery({
     scan: fullScan,
     getTracked: getTrackedTraders,
