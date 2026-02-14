@@ -1,4 +1,4 @@
-export const ML_CONFIDENCE = { HIGH: 0.40, MEDIUM: 0.20 };
+export const ML_CONFIDENCE = { HIGH: 0.60, MEDIUM: 0.20 };
 
 export const WS_DEFAULTS = { throttleMs: 500, reconnectMaxMs: 10_000, heartbeatCheckMs: 10_000 };
 export const WS_BINANCE = { heartbeatDeadMs: 20_000, heartbeatCheckMs: 5_000 };

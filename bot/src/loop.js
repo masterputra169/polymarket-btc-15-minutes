@@ -213,7 +213,7 @@ const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
 //   2. Flip detector: block if market is flipping too rapidly (indecisive)
 const SIGNAL_CONFIRM_POLLS = 3;      // Must see same ENTER side N polls in a row (3 × 500ms = 1.5s)
 const FLIP_WINDOW_MS = 15_000;       // Track flips in last 15 seconds
-const MAX_FLIPS_TO_ENTER = 4;        // Block entry if signal flipped > N times in window (4 = very unstable)
+const MAX_FLIPS_TO_ENTER = 1;        // Block entry if signal flipped > 1 time in window (journal: flips > 0 = 0% win rate)
 
 let signalConfirmCount = 0;           // Consecutive polls with same ENTER+side
 let signalConfirmSide = null;         // Which side is being confirmed ('UP'|'DOWN'|null)
@@ -1070,6 +1070,9 @@ export async function pollOnce() {
         btcPrice: lastPrice,
         priceToBeat: priceToBeat.value,
         tiltMlConfMin: tiltMarketsLeft > 0 ? TILT_ML_CONF_MIN : null,
+        bestEdge: edge.bestEdge,
+        delta1m,
+        signalSide: rec.side,
       });
 
       // Orderbook flow alignment check

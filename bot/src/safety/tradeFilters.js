@@ -4,10 +4,15 @@
  * Filters (each returns { pass, reason }):
  * 1. ML Confidence gate — only trade when ML is confident
  * 2. Market near 50/50 — random walk territory, no edge
+ * 2b. Extreme contrarian — market price outside safe range
  * 3. Low volatility — price won't move enough to resolve
- * 4. Cooldown after loss — avoid tilt/revenge trading
- * 5. Min time remaining — too close to settlement = noise
- * 6. Session quality — weekend/off-hours penalty
+ * 4. Min/max time remaining — too close/early for settlement
+ * 4c. BTC distance from PTB — coin flip territory
+ * 5. Cooldown after loss — avoid tilt/revenge trading
+ * 6. Max trades per market
+ * 7. Weekend low-liquidity
+ * 8. High divergence guard — edge >25% = market disagrees, need strong ML
+ * 9. Counter-trend momentum — don't fight strong BTC moves
  */
 
 import { TRADE_FILTERS } from '../../../src/config.js';
@@ -44,6 +49,9 @@ export function applyTradeFilters({
   btcPrice,        // current BTC price (for distance check)
   priceToBeat,     // PTB for current market (for distance check)
   tiltMlConfMin,   // raised ML confidence threshold during tilt protection (null = inactive)
+  bestEdge,        // best edge from edge engine (model prob - market price)
+  delta1m,         // BTC 1-minute price delta ($)
+  signalSide,      // the side we want to enter ('UP'|'DOWN')
 }) {
   const reasons = [];
 
@@ -118,6 +126,30 @@ export function applyTradeFilters({
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   if (isWeekend && Number.isFinite(mlConfidence) && mlConfidence < 0.35) {
     reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
+  }
+
+  // 8. High divergence guard — extreme edge means market strongly disagrees with model.
+  // Edge > 25% typically means token is cheap (30-40¢) and edge is inflated.
+  // Journal data: ALL trades with edge > 25% lost. Require strong ML backing to override market.
+  if (bestEdge != null && bestEdge > 0.25 && mlAvailable) {
+    const minDivergenceConf = 0.65;
+    if (mlConfidence == null || mlConfidence < minDivergenceConf) {
+      reasons.push(`High divergence: edge ${(bestEdge * 100).toFixed(0)}% > 25% but ML conf ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < ${(minDivergenceConf * 100).toFixed(0)}%`);
+    }
+  }
+
+  // 9. Counter-trend momentum guard — don't fight strong BTC moves.
+  // If BTC moved >$50 in 1 minute AGAINST our signal direction, wait for momentum to settle.
+  // The ML model has delta1m as a feature but hard-gating extreme counter-moves prevents
+  // chasing into fast reversals where the model's ensemble hasn't caught up yet.
+  const COUNTER_TREND_THRESHOLD = 50; // $50/min
+  if (delta1m != null && signalSide != null) {
+    if (signalSide === 'UP' && delta1m < -COUNTER_TREND_THRESHOLD) {
+      reasons.push(`Counter-trend: BTC dropped $${Math.abs(delta1m).toFixed(0)} in 1m vs UP signal`);
+    }
+    if (signalSide === 'DOWN' && delta1m > COUNTER_TREND_THRESHOLD) {
+      reasons.push(`Counter-trend: BTC rose $${delta1m.toFixed(0)} in 1m vs DOWN signal`);
+    }
   }
 
   // Session quality score (used as multiplier downstream, not a hard filter)
