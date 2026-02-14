@@ -98,6 +98,7 @@ import {
   recordTrade,
   settleTrade,
   settleTradeEarlyExit,
+  partialExit,
   hasOpenPosition,
   getBankroll,
   getAvailableBankroll,
@@ -699,6 +700,7 @@ export async function pollOnce() {
         mlSide: mlResult.available ? mlResult.mlSide : null,
         regime: regimeInfo?.regime ?? 'moderate',
         btcDelta1m: delta1m,
+        atrRatio: atr?.atrRatio ?? null,
       });
 
       // Log cut-loss gate status every 5th poll (debug visibility)
@@ -712,54 +714,66 @@ export async function pollOnce() {
           ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
           : '?';
         log.debug(
-          `CutLoss v2: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
+          `CutLoss v2.1: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
           `BTC ${btcSide} dist=${btcDist}% | d1m=$${(delta1m ?? 0).toFixed(1)} | ` +
+          `ATR=${(atr?.atrRatio ?? 0).toFixed(2)} | ${regimeInfo?.regime ?? '?'} | ` +
           `EV(hold)=${((pos.side === 'UP' ? ensembleUp : ensembleDown) * 100).toFixed(0)}% vs token=${(tokenPrice * 100).toFixed(0)}¢`
         );
       }
 
       if (cutResult.shouldCut) {
+        const isPartial = (cutResult.cutFraction ?? 1.0) < 1.0;
+        const sellSize = isPartial
+          ? Math.max(1, Math.floor(pos.size * cutResult.cutFraction))
+          : pos.size;
+        const cutTag = isPartial ? `PARTIAL CUT (${(cutResult.cutFraction * 100).toFixed(0)}%)` : 'CUT-LOSS';
+
         log.warn(
-          `CUT-LOSS: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
-          `sell@$${cutResult.sellPrice.toFixed(3)} | ` +
+          `${cutTag}: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
+          `sell ${sellSize}/${pos.size} shares @$${cutResult.sellPrice.toFixed(3)} | ` +
           `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}`
         );
 
+        const exitData = {
+          btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+          marketUp, marketDown, tokenPrice,
+          regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+          rsiNow, vwapDist, timeLeftMin,
+          cutLossDropPct: cutResult.dropPct,
+          cutFraction: cutResult.cutFraction,
+          sellSize,
+          diagnostics: cutResult.diagnostics,
+        };
+
         if (BOT_CONFIG.dryRun) {
-          const cutPnl = cutResult.recoveryAmount - pos.cost;
-          settleTradeEarlyExit(cutResult.recoveryAmount);
-          writeJournalEntry({
-            outcome: 'CUT_LOSS', pnl: cutPnl,
-            exitData: {
-              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
-              marketUp, marketDown, tokenPrice,
-              regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
-              rsiNow, vwapDist, timeLeftMin,
-              cutLossDropPct: cutResult.dropPct, cutLossRecovered: cutResult.recoveryAmount,
-            },
-          });
-          resetCutLossState();
-          recordLoss();
+          const recovery = cutResult.sellPrice * sellSize;
+          if (isPartial) {
+            partialExit(sellSize, recovery);
+            writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: recovery - (pos.cost * cutResult.cutFraction), exitData: { ...exitData, cutLossRecovered: recovery } });
+            // Don't reset — position still open, may cut more later
+          } else {
+            settleTradeEarlyExit(recovery);
+            writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
+            resetCutLossState();
+            recordLoss();
+          }
         } else {
           recordSellAttempt();
           try {
-            const sellResult = await closePosition(pos.tokenId, pos.size, cutResult.sellPrice);
+            const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
             const actualRecovery = sellResult?.takingAmount != null
-              ? parseFloat(sellResult.takingAmount) : cutResult.recoveryAmount;
-            const cutPnl = actualRecovery - pos.cost;
-            settleTradeEarlyExit(actualRecovery);
-            writeJournalEntry({
-              outcome: 'CUT_LOSS', pnl: cutPnl,
-              exitData: {
-                btcPrice: lastPrice, priceToBeat: priceToBeat.value,
-                marketUp, marketDown, tokenPrice,
-                regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
-                rsiNow, vwapDist, timeLeftMin,
-                cutLossDropPct: cutResult.dropPct, cutLossRecovered: actualRecovery,
-              },
-            });
-            resetCutLossState();
-            recordLoss();
+              ? parseFloat(sellResult.takingAmount) : cutResult.sellPrice * sellSize;
+
+            if (isPartial) {
+              partialExit(sellSize, actualRecovery);
+              writeJournalEntry({ outcome: 'PARTIAL_CUT', pnl: actualRecovery - (pos.cost * cutResult.cutFraction), exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+              // Position still open — don't reset, don't recordLoss
+            } else {
+              settleTradeEarlyExit(actualRecovery);
+              writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+              resetCutLossState();
+              recordLoss();
+            }
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);
           }
@@ -1217,6 +1231,8 @@ export async function pollOnce() {
           modelProbability: clPos ? (clPos.side === 'UP' ? ensembleUp : ensembleDown) : null,
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,
+          regime: regimeInfo?.regime ?? 'moderate',
+          atrRatio: atr?.atrRatio ?? null,
         });
       })(),
 

@@ -323,6 +323,70 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }
 }
 
 /**
+ * Partial early exit — sell some shares, keep rest riding to settlement.
+ * Reduces position size + cost proportionally, adds recovery to bankroll.
+ *
+ * @param {number} sellSize - Number of shares to sell
+ * @param {number} recoveredUsdc - Actual USDC recovered from the sell
+ * @returns {boolean} Whether partial exit occurred
+ */
+export function partialExit(sellSize, recoveredUsdc) {
+  if (!state.currentPosition || state.currentPosition.settled) return false;
+
+  const pos = state.currentPosition;
+
+  // If selling all remaining shares, delegate to full exit
+  if (sellSize >= pos.size) {
+    return settleTradeEarlyExit(recoveredUsdc);
+  }
+
+  const fractionSold = sellSize / pos.size;
+  const costPortion = roundMoney(pos.cost * fractionSold);
+  const recovered = roundMoney(Math.max(0, recoveredUsdc));
+  const pnl = roundMoney(recovered - costPortion);
+
+  // Update position in-place (reduce size + cost)
+  const prevSize = pos.size;
+  pos.size -= sellSize;
+  pos.cost = roundMoney(pos.cost - costPortion);
+
+  // Add recovery to bankroll
+  state.bankroll = roundMoney(state.bankroll + recovered);
+
+  state.trades.push({
+    type: 'PARTIAL_CUT',
+    side: pos.side,
+    sellSize,
+    remainingSize: pos.size,
+    recovered,
+    costPortion,
+    pnl,
+    bankrollAfter: state.bankroll,
+    timestamp: Date.now(),
+  });
+
+  if (state.trades.length > 100) state.trades = state.trades.slice(-100);
+
+  auditLog({
+    type: 'PARTIAL_CUT', side: pos.side,
+    sellSize, remainingSize: pos.size,
+    recovered, costPortion, pnl,
+    bankrollAfter: state.bankroll,
+  });
+
+  log.info(
+    `PARTIAL CUT: sold ${sellSize}/${prevSize} shares | ` +
+    `recovered $${recovered.toFixed(2)} of $${costPortion.toFixed(2)} portion | ` +
+    `P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ` +
+    `${pos.size} shares remain (cost $${pos.cost.toFixed(2)}) | ` +
+    `Bankroll: $${state.bankroll.toFixed(2)}`
+  );
+
+  saveState();
+  return true;
+}
+
+/**
  * Check if we have an open position for a given market.
  */
 export function hasOpenPosition(marketSlug) {

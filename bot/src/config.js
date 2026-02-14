@@ -54,6 +54,10 @@ const BOT_CONFIG = {
     maxAttempts: parseInt(process.env.CUT_LOSS_MAX_ATTEMPTS || '3', 10),
     minTokenDropPct: parseFloat(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT || '15'),
     consecutivePolls: parseInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS || '3', 10),
+    minBidLiquidity: parseFloat(process.env.CUT_LOSS_MIN_BID_LIQUIDITY || '2'),
+    maxCutSpreadPct: parseFloat(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT || '15'),
+    crashDropPct: parseFloat(process.env.CUT_LOSS_CRASH_DROP_PCT || '40'),
+    crashBtcDistPct: parseFloat(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT || '0.20'),
   },
 };
 
