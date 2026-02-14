@@ -14,9 +14,12 @@ const DB_NAME = 'polymarket_training_log';
 const STORE_NAME = 'snapshots';
 const DB_VERSION = 1;
 const LOG_INTERVAL_MS = 30_000; // log once per 30s
+const ROTATE_INTERVAL_MS = 3_600_000; // check rotation every 1h
+const ROTATE_MAX_AGE_MS = 7 * 24 * 3_600_000; // keep 7 days
 
 let db = null;
 let lastLogMs = 0;
+let lastRotateMs = 0;
 
 // ═══ IndexedDB setup ═══
 
@@ -52,6 +55,33 @@ export function shouldLog() {
   return db !== null && (Date.now() - lastLogMs >= LOG_INTERVAL_MS);
 }
 
+// ═══ Auto-rotation: delete rows older than 7 days (runs at most once/hour) ═══
+
+function maybeRotate() {
+  if (!db) return;
+  const now = Date.now();
+  if (now - lastRotateMs < ROTATE_INTERVAL_MS) return;
+  lastRotateMs = now;
+  try {
+    const cutoff = now - ROTATE_MAX_AGE_MS;
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const idx = tx.objectStore(STORE_NAME).index('timestamp');
+    const range = IDBKeyRange.upperBound(cutoff);
+    const req = idx.openCursor(range);
+    let deleted = 0;
+    req.onsuccess = (e) => {
+      const cursor = e.target.result;
+      if (cursor) {
+        cursor.delete();
+        deleted++;
+        cursor.continue();
+      } else if (deleted > 0) {
+        console.log(`[PolyLogger] Rotated ${deleted} rows older than 7d`);
+      }
+    };
+  } catch { /* ignore rotation errors */ }
+}
+
 // ═══ Log a snapshot (only call after shouldLog() returns true) ═══
 
 export function logSnapshot(row) {
@@ -67,6 +97,7 @@ export function logSnapshot(row) {
       db = null; // stop further attempts
     }
   }
+  maybeRotate();
 }
 
 // ═══ Utilities ═══

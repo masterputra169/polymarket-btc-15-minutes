@@ -33,55 +33,62 @@ export default function App() {
   const botPaused = data?.paused === true;
 
   // ═══ Polymarket training data logger (IndexedDB, every 30s) ═══
+  // Use ref to avoid re-creating effect closure on every data change (500ms)
   useEffect(() => { initLoggerDB(); }, []);
+  const dataRef = React.useRef(data);
+  dataRef.current = data;
   useEffect(() => {
-    if (!data || !shouldLog()) return;
-    logSnapshot({
-      timestamp: Date.now(),
-      btcPrice: data.lastPrice,
-      priceToBeat: data.priceToBeat,
-      marketSlug: data.marketSlug,
-      marketUp: data.marketUp,
-      marketDown: data.marketDown,
-      marketPriceMomentum: data.marketPriceMomentum ?? 0,
-      orderbookImbalance: data.orderbookSignal?.imbalance ?? null,
-      spreadPct: data.orderbookUp?.spread ?? null,
-      rsi: data.rsiNow,
-      rsiSlope: data.rsiSlope,
-      macdHist: data.macd?.hist ?? null,
-      macdLine: data.macd?.line ?? null,
-      vwapNow: data.vwapNow,
-      vwapSlope: data.vwapSlope,
-      haColor: data.consec?.color ?? null,
-      haCount: data.consec?.count ?? 0,
-      delta1m: data.delta1m,
-      delta3m: data.delta3m,
-      volumeRecent: data.volumeRecent,
-      volumeAvg: data.volumeAvg,
-      regime: data.regimeInfo?.regime ?? 'unknown',
-      regimeConfidence: data.regimeInfo?.confidence ?? 0,
-      timeLeftMin: data.timeLeftMin,
-      bbWidth: data.bb?.width ?? null,
-      bbPercentB: data.bb?.percentB ?? null,
-      bbSqueeze: data.bb?.squeeze ?? false,
-      bbSqueezeIntensity: data.bb?.squeezeIntensity ?? 0,
-      atrPct: data.atr?.atrPct ?? null,
-      atrRatio: data.atr?.atrRatio ?? null,
-      volDeltaBuyRatio: data.volDelta?.buyRatio ?? null,
-      volDeltaAccel: data.volDelta?.deltaAccel ?? null,
-      emaDistPct: data.emaCross?.distancePct ?? null,
-      emaCrossSignal: data.emaCross?.cross === 'BULL_CROSS' ? 1 : data.emaCross?.cross === 'BEAR_CROSS' ? -1 : 0,
-      stochK: data.stochRsi?.k ?? null,
-      stochKD: data.stochRsi ? (data.stochRsi.k - data.stochRsi.d) : null,
-      vwapCrossCount: data.vwapCrossCount ?? 0,
-      multiTfAgreement: data.multiTfConfirm?.agreement ?? false,
-      failedVwapReclaim: data.failedVwapReclaim ?? false,
-      fundingRate: data.fundingRate?.rate ?? null,
-      momentum5CandleSlope: data.momentum5CandleSlope ?? 0,
-      volatilityChangeRatio: data.volatilityChangeRatio ?? 1,
-      priceConsistency: data.priceConsistency ?? 0.5,
-    });
-  }, [data]);
+    const id = setInterval(() => {
+      const d = dataRef.current;
+      if (!d || !shouldLog()) return;
+      logSnapshot({
+        timestamp: Date.now(),
+        btcPrice: d.lastPrice,
+        priceToBeat: d.priceToBeat,
+        marketSlug: d.marketSlug,
+        marketUp: d.marketUp,
+        marketDown: d.marketDown,
+        marketPriceMomentum: d.marketPriceMomentum ?? 0,
+        orderbookImbalance: d.orderbookSignal?.imbalance ?? null,
+        spreadPct: d.orderbookUp?.spread ?? null,
+        rsi: d.rsiNow,
+        rsiSlope: d.rsiSlope,
+        macdHist: d.macd?.hist ?? null,
+        macdLine: d.macd?.line ?? null,
+        vwapNow: d.vwapNow,
+        vwapSlope: d.vwapSlope,
+        haColor: d.consec?.color ?? null,
+        haCount: d.consec?.count ?? 0,
+        delta1m: d.delta1m,
+        delta3m: d.delta3m,
+        volumeRecent: d.volumeRecent,
+        volumeAvg: d.volumeAvg,
+        regime: d.regimeInfo?.regime ?? 'unknown',
+        regimeConfidence: d.regimeInfo?.confidence ?? 0,
+        timeLeftMin: d.timeLeftMin,
+        bbWidth: d.bb?.width ?? null,
+        bbPercentB: d.bb?.percentB ?? null,
+        bbSqueeze: d.bb?.squeeze ?? false,
+        bbSqueezeIntensity: d.bb?.squeezeIntensity ?? 0,
+        atrPct: d.atr?.atrPct ?? null,
+        atrRatio: d.atr?.atrRatio ?? null,
+        volDeltaBuyRatio: d.volDelta?.buyRatio ?? null,
+        volDeltaAccel: d.volDelta?.deltaAccel ?? null,
+        emaDistPct: d.emaCross?.distancePct ?? null,
+        emaCrossSignal: d.emaCross?.cross === 'BULL_CROSS' ? 1 : d.emaCross?.cross === 'BEAR_CROSS' ? -1 : 0,
+        stochK: d.stochRsi?.k ?? null,
+        stochKD: d.stochRsi ? (d.stochRsi.k - d.stochRsi.d) : null,
+        vwapCrossCount: d.vwapCrossCount ?? 0,
+        multiTfAgreement: d.multiTfConfirm?.agreement ?? false,
+        failedVwapReclaim: d.failedVwapReclaim ?? false,
+        fundingRate: d.fundingRate?.rate ?? null,
+        momentum5CandleSlope: d.momentum5CandleSlope ?? 0,
+        volatilityChangeRatio: d.volatilityChangeRatio ?? 1,
+        priceConsistency: d.priceConsistency ?? 0.5,
+      });
+    }, 5_000); // Check every 5s (shouldLog() gates to 30s)
+    return () => clearInterval(id);
+  }, []);
 
   // Smooth 1-second countdown (local timer, no network)
   const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
@@ -151,10 +158,13 @@ export default function App() {
     };
   }, [
     data?.pLong, data?.pShort, data?.rawUp, data?.rawDown,
-    data?.rec, data?.edge, data?.timeDecay,
-    data?.scoreBreakdown, data?.regimeInfo, data?.feedbackStats,
+    data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
+    data?.edge?.bestEdge, data?.edge?.bestSide, data?.timeDecay,
+    data?.regimeInfo?.regime, data?.regimeInfo?.confidence,
+    data?.feedbackStats?.accuracy, data?.feedbackStats?.streak,
     data?.haNarrative, data?.rsiNarrative, data?.macdNarrative, data?.vwapNarrative,
-    data?.timing, data?.consec, data?.ml?.confidence, data?.ml?.side,
+    data?.timing, data?.consec?.count, data?.consec?.color,
+    data?.ml?.confidence, data?.ml?.side,
   ]);
 
   // TAIndicators: RSI, MACD, VWAP, HA, BB, ATR, EMA, VolDelta, StochRSI, Funding, Hidden
@@ -193,11 +203,13 @@ export default function App() {
     };
   }, [
     data?.rsiNow, data?.rsiSlope, data?.rsiNarrative,
-    data?.macd, data?.macdLabel, data?.macdNarrative,
+    data?.macd?.hist, data?.macd?.line, data?.macdLabel, data?.macdNarrative,
     data?.vwapNow, data?.vwapDist, data?.vwapSlope, data?.vwapSlopeLabel, data?.vwapNarrative,
-    data?.consec, data?.haNarrative,
+    data?.consec?.count, data?.consec?.color, data?.haNarrative,
     data?.delta1m, data?.delta3m, data?.lastClose,
-    data?.realizedVol, data?.volProfile, data?.multiTfConfirm, data?.regimeInfo,
+    data?.realizedVol, data?.volProfile?.label,
+    data?.multiTfConfirm?.agreement, data?.multiTfConfirm?.score,
+    data?.regimeInfo?.regime, data?.regimeInfo?.confidence,
     data?.bb?.width, data?.bb?.percentB, data?.bb?.squeeze,
     data?.atr?.atr, data?.atr?.atrRatio,
     data?.volDelta?.buyRatio, data?.volDelta?.netDeltaPct,
@@ -228,7 +240,9 @@ export default function App() {
   }, [
     data?.poly?.ok, data?.poly?.reason, data?.poly?.market?.question, data?.poly?.market?.slug,
     data?.marketUp, data?.marketDown, data?.marketSlug, data?.liquidity,
-    data?.orderbookUp, data?.orderbookDown, data?.orderbookSignal,
+    data?.orderbookUp?.bestBid, data?.orderbookUp?.bestAsk, data?.orderbookUp?.spread,
+    data?.orderbookDown?.bestBid, data?.orderbookDown?.bestAsk,
+    data?.orderbookSignal?.imbalance, data?.orderbookSignal?.signal,
     data?.clobSource, data?.clobWsConnected,
     data?.priceToBeat, data?.marketQuestion, smoothTimeLeft, data?.settlementLeftMin,
   ]);
@@ -251,9 +265,14 @@ export default function App() {
       arbitrage: data.arbitrage,
     };
   }, [
-    data?.edge, data?.rec, data?.pLong, data?.pShort, data?.ruleUp,
-    data?.marketUp, data?.marketDown, data?.timeLeftMin, data?.feedbackStats,
-    data?.ml?.confidence, data?.ml?.side, data?.regimeInfo, data?.arbitrage,
+    data?.edge?.bestEdge, data?.edge?.bestSide, data?.edge?.confidence,
+    data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
+    data?.pLong, data?.pShort, data?.ruleUp,
+    data?.marketUp, data?.marketDown, data?.timeLeftMin,
+    data?.feedbackStats?.accuracy, data?.feedbackStats?.streak,
+    data?.ml?.confidence, data?.ml?.side,
+    data?.regimeInfo?.regime, data?.regimeInfo?.confidence,
+    data?.arbitrage?.found, data?.arbitrage?.profitPct,
   ]);
 
   // MLPanel: ML-specific + rule prob
@@ -266,7 +285,7 @@ export default function App() {
       rawUp: data.rawUp,
       ruleUp: data.ruleUp,
     };
-  }, [data?.ml, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
+  }, [data?.ml?.available, data?.ml?.probUp, data?.ml?.confidence, data?.ml?.side, data?.ml?.status, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
 
   // AccuracyPanel: feedback + detailed stats
   const accuracyData = useMemo(() => {
@@ -275,7 +294,7 @@ export default function App() {
       feedbackStats: data.feedbackStats,
       detailedFeedback: data.detailedFeedback,
     };
-  }, [data?.feedbackStats, data?.detailedFeedback?.totalSettled]);
+  }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions, data?.detailedFeedback?.totalSettled]);
 
   // PositionPanel: positions + bankroll from bot
   const positionData = useMemo(() => {
@@ -295,6 +314,33 @@ export default function App() {
     if (!data) return null;
     return { betSizing: data.betSizing, rec: data.rec, regimeInfo: data.regimeInfo };
   }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll, data?.rec?.action, data?.rec?.side, data?.regimeInfo?.regime, data?.regimeInfo?.confidence]);
+
+  // BotPanel: extract only what BotPanel needs (was passing full `data` = ~200 fields retained)
+  const botData = useMemo(() => {
+    if (!data) return null;
+    return {
+      paused: data.paused, ts: data.ts, pollCounter: data.pollCounter,
+      dryRun: data.dryRun, btcPrice: data.btcPrice, priceToBeat: data.priceToBeat,
+      timeLeftMin: data.timeLeftMin,
+      rec: data.rec, ml: data.ml, edge: data.edge,
+      betSizing: data.betSizing, stats: data.stats,
+      indicators: data.indicators, regime: data.regime, regimeConfidence: data.regimeConfidence,
+      bankroll: data.bankroll, ensembleUp: data.ensembleUp, ruleUp: data.ruleUp,
+      marketUp: data.marketUp, marketDown: data.marketDown,
+      sources: data.sources, arbitrage: data.arbitrage,
+      fillTracker: data.fillTracker, signalStability: data.signalStability,
+      usdcBalance: data.usdcBalance,
+    };
+  }, [
+    data?.ts, data?.pollCounter, data?.paused, data?.dryRun,
+    data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
+    data?.ml?.available, data?.ml?.probUp, data?.ml?.confidence, data?.ml?.side,
+    data?.edge?.bestEdge, data?.bankroll, data?.stats?.wins, data?.stats?.losses,
+    data?.stats?.dailyPnL, data?.stats?.consecutiveLosses,
+    data?.regime, data?.ensembleUp, data?.marketUp, data?.marketDown,
+    data?.signalStability?.confirmCount, data?.signalStability?.recentFlips,
+    data?.arbitrage?.found,
+  ]);
 
   return (
     <div className="app-container">
@@ -357,7 +403,7 @@ export default function App() {
       {data && (
         <div className="dashboard-grid">
           {/* Row 0: Bot Status (full width) */}
-          <BotPanel connected={botConnected} data={data} />
+          <BotPanel connected={botConnected} data={botData} />
 
           {/* Row 0b: Positions (full width) */}
           <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />
