@@ -158,16 +158,15 @@ let tokenIdsNotified = false;
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
 
 // ═══ Anti-Whipsaw: Signal Stability Engine ═══
-// Prevents entry on volatile/flipping signals by requiring confirmation
-const SIGNAL_CONFIRM_POLLS = 4;      // Must see same ENTER side N polls in a row (4 × 500ms = 2s)
-const PROB_EMA_ALPHA = 0.3;          // EMA smoothing factor (0.3 = moderate smoothing, lower = more smooth)
+// Only 2 mechanisms (EMA smoothing REMOVED — it adds harmful lag):
+//   1. Signal confirmation: ENTER must persist N consecutive polls
+//   2. Flip detector: block if market is flipping too rapidly (indecisive)
+const SIGNAL_CONFIRM_POLLS = 3;      // Must see same ENTER side N polls in a row (3 × 500ms = 1.5s)
 const FLIP_WINDOW_MS = 15_000;       // Track flips in last 15 seconds
-const MAX_FLIPS_TO_ENTER = 3;        // Block entry if signal flipped > N times in window
-const STABILITY_MIN_CONFIDENCE = 0.55; // Smoothed prob must exceed 0.55 (not just 0.50) to confirm direction
+const MAX_FLIPS_TO_ENTER = 4;        // Block entry if signal flipped > N times in window (4 = very unstable)
 
 let signalConfirmCount = 0;           // Consecutive polls with same ENTER+side
 let signalConfirmSide = null;         // Which side is being confirmed ('UP'|'DOWN'|null)
-let smoothedEnsembleUp = null;        // EMA-smoothed ensemble probability
 const signalFlipHistory = [];         // Array of { ts, side } for flip tracking
 let lastSignalSide = null;            // Previous poll's decided side (for flip detection)
 
@@ -200,7 +199,6 @@ function resetMarketCache() {
   // Reset signal stability state for new market
   signalConfirmCount = 0;
   signalConfirmSide = null;
-  smoothedEnsembleUp = null;
   signalFlipHistory.length = 0;
   lastSignalSide = null;
 }
@@ -523,16 +521,9 @@ export async function pollOnce() {
     }, timeAware.adjustedUp);
 
     // ── 9. Ensemble edge (spread-aware) ──
-    const rawEnsembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
-
-    // ── 9a. EMA Probability Smoothing (anti-whipsaw) ──
-    // Smooth ensemble prob to filter out single-poll noise spikes
-    if (smoothedEnsembleUp === null) {
-      smoothedEnsembleUp = rawEnsembleUp; // Initialize on first poll
-    } else {
-      smoothedEnsembleUp = PROB_EMA_ALPHA * rawEnsembleUp + (1 - PROB_EMA_ALPHA) * smoothedEnsembleUp;
-    }
-    const ensembleUp = smoothedEnsembleUp;
+    // No EMA smoothing — raw prob used directly. Smoothing adds lag that hurts
+    // genuine breakout entries. Signal confirmation counter handles noise instead.
+    const ensembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
     const ensembleDown = 1 - ensembleUp;
 
     const edge = computeEdge({
@@ -579,7 +570,7 @@ export async function pollOnce() {
         failedVwapReclaim, fundingRate: null,
         momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
         ruleEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
-        ensembleUp: rawEnsembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
+        ensembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
       });
     }
 
@@ -701,19 +692,14 @@ export async function pollOnce() {
         signalConfirmCount = 1;
       }
 
-      // Smoothed prob must show clear direction (not hovering at 0.50)
-      const smoothedProb = rec.side === 'UP' ? ensembleUp : ensembleDown;
-      const probTooWeak = smoothedProb < STABILITY_MIN_CONFIDENCE;
-
       // Check if signal is stable enough to act on
       const signalUnconfirmed = signalConfirmCount < SIGNAL_CONFIRM_POLLS;
       const tooManyFlips = recentFlipCount > MAX_FLIPS_TO_ENTER;
 
-      if (signalUnconfirmed || tooManyFlips || probTooWeak) {
+      if (signalUnconfirmed || tooManyFlips) {
         const reasons = [];
         if (signalUnconfirmed) reasons.push(`confirm ${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}`);
         if (tooManyFlips) reasons.push(`${recentFlipCount} flips in ${FLIP_WINDOW_MS / 1000}s`);
-        if (probTooWeak) reasons.push(`prob ${(smoothedProb * 100).toFixed(1)}% < ${(STABILITY_MIN_CONFIDENCE * 100).toFixed(0)}%`);
         log.debug(`Signal unstable, holding: ${reasons.join(' | ')}`);
       } else {
       // Signal confirmed — proceed with existing trade filters
@@ -829,7 +815,7 @@ export async function pollOnce() {
     const stabTag = `Stab:${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}${recentFlipCount > 0 ? ` F${recentFlipCount}` : ''}`;
     log.info(
       `#${pollCounter} [${_pollMs}ms] | BTC $${lastPrice.toFixed(0)} | PTB $${(priceToBeat.value ?? 0).toFixed(0)} | ` +
-      `P:${(ensembleUp * 100).toFixed(0)}%(raw${(rawEnsembleUp * 100).toFixed(0)}%) E:${edgeTag} ${mlTag} | ` +
+      `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
       `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase} | ` +
       `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
       `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} | ${srcTag}`
@@ -943,8 +929,6 @@ export async function pollOnce() {
         confirmSide: signalConfirmSide,
         recentFlips: recentFlipCount,
         maxFlips: MAX_FLIPS_TO_ENTER,
-        smoothedProb: ensembleUp,
-        rawProb: rawEnsembleUp,
         stable: signalConfirmCount >= SIGNAL_CONFIRM_POLLS && recentFlipCount <= MAX_FLIPS_TO_ENTER,
       },
 
