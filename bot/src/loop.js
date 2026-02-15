@@ -479,20 +479,16 @@ export async function pollOnce() {
             log.debug(`USDC sync skipped: bankroll changed during fetch ($${snapshotBankroll.toFixed(2)} -> $${localBankroll.toFixed(2)})`);
             return;
           }
-          // Auto-sync: if no open position, no pending cost, and drift > $1
+          // Auto-sync: always match on-chain balance when idle (no position, no pending)
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
           const hasPendingCost = getPendingCost() > 0;
-          // Safety cap: reject sync if drift > 50% of local bankroll (likely API error)
-          const MAX_SYNC_DRIFT_PCT = 0.50;
-          const driftPct = localBankroll > 0 ? drift / localBankroll : Infinity;
-          if (drift > 1.0 && !hasPos && !hasPendingCost) {
-            if (driftPct > MAX_SYNC_DRIFT_PCT) {
-              log.warn(`SYNC REJECTED: drift $${drift.toFixed(2)} (${(driftPct * 100).toFixed(0)}%) exceeds ${(MAX_SYNC_DRIFT_PCT * 100).toFixed(0)}% safety cap — possible API error`);
-            } else {
-              log.warn(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
-              setBankroll(onChain);
-            }
+          // Sanity check: reject obviously invalid API responses
+          if (onChain < 0 || onChain > 100_000) {
+            log.warn(`SYNC REJECTED: on-chain=$${onChain.toFixed(2)} looks invalid (out of range)`);
+          } else if (drift > 0.01 && !hasPos && !hasPendingCost) {
+            log.info(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
+            setBankroll(onChain);
           } else if (drift > 1.0 && (hasPos || hasPendingCost)) {
             log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, ${hasPos ? 'position open' : 'pending cost'} — deferring sync)`);
           }
