@@ -265,11 +265,15 @@ export function isClientReady() {
  * Fetch trade history from the CLOB API.
  * Returns real on-chain fill data for the authenticated wallet.
  *
+ * CLOB API expects `after`/`before` as unix timestamp strings (seconds).
+ * This wrapper accepts either unix-seconds numbers or ms numbers (>1e12)
+ * and converts appropriately.
+ *
  * @param {Object} [params]
  * @param {string} [params.market] - Filter by market/conditionId
  * @param {string} [params.assetId] - Filter by asset (token) ID
- * @param {string} [params.after] - ISO timestamp — only trades after this time
- * @param {string} [params.before] - ISO timestamp — only trades before this time
+ * @param {number} [params.after] - Unix timestamp (seconds or ms) — only trades after
+ * @param {number} [params.before] - Unix timestamp (seconds or ms) — only trades before
  * @returns {Promise<Array>} Array of Trade objects from CLOB
  */
 export async function getTradeHistory({ market, assetId, after, before } = {}) {
@@ -277,7 +281,15 @@ export async function getTradeHistory({ market, assetId, after, before } = {}) {
   const params = {};
   if (market) params.market = market;
   if (assetId) params.asset_id = assetId;
-  if (after) params.after = after;
-  if (before) params.before = before;
-  return await client.getTrades(params);
+  // CLOB API requires unix seconds as a string
+  if (after != null) params.after = String(after > 1e12 ? Math.floor(after / 1000) : Math.floor(after));
+  if (before != null) params.before = String(before > 1e12 ? Math.floor(before / 1000) : Math.floor(before));
+
+  const result = await client.getTrades(params);
+  // getTrades may return an error object instead of throwing
+  if (result && !Array.isArray(result)) {
+    if (result.error) throw new Error(`CLOB getTrades: ${result.error}`);
+    return [];
+  }
+  return result ?? [];
 }

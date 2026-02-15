@@ -17,7 +17,7 @@ import { getTradeHistory, isClientReady } from './clobClient.js';
 const log = createLogger('Reconciler');
 
 let intervalId = null;
-let lastProcessedTime = null; // ISO string — only fetch trades after this
+let lastProcessedTime = 0; // Unix ms — only fetch trades after this
 
 /**
  * Extract market start time (unix seconds) from a BTC 15-min slug.
@@ -112,8 +112,8 @@ function loadLastProcessedTime() {
     const lastLine = lines[lines.length - 1];
     const entry = JSON.parse(lastLine);
     if (entry._fetchedAt) {
-      lastProcessedTime = new Date(entry._fetchedAt).toISOString();
-      log.info(`Resuming from last reconciled time: ${lastProcessedTime}`);
+      lastProcessedTime = entry._fetchedAt;
+      log.info(`Resuming from last reconciled time: ${new Date(lastProcessedTime).toISOString()}`);
     }
   } catch {
     // Fresh start — no problem
@@ -170,13 +170,13 @@ async function reconcile() {
 
   // Default: look back 35 minutes (slightly more than interval to avoid gaps)
   const lookbackMs = (BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000) + 5 * 60 * 1000;
-  const afterTime = lastProcessedTime || new Date(now - lookbackMs).toISOString();
+  const afterMs = lastProcessedTime || (now - lookbackMs);
 
-  log.info(`Reconciling trades since ${afterTime}...`);
+  log.info(`Reconciling trades since ${new Date(afterMs).toISOString()}...`);
 
   let trades;
   try {
-    trades = await getTradeHistory({ after: afterTime });
+    trades = await getTradeHistory({ after: afterMs });
   } catch (err) {
     log.warn(`Failed to fetch trade history: ${err.message}`);
     return;
@@ -184,7 +184,7 @@ async function reconcile() {
 
   if (!Array.isArray(trades) || trades.length === 0) {
     log.info('No new trades found');
-    lastProcessedTime = new Date(now).toISOString();
+    lastProcessedTime = now;
     return;
   }
 
@@ -225,7 +225,7 @@ async function reconcile() {
     }
   }
 
-  lastProcessedTime = new Date(now).toISOString();
+  lastProcessedTime = now;
 
   if (marketCount > 0) {
     log.info(
