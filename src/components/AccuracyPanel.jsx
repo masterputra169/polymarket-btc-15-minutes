@@ -3,7 +3,7 @@ import React, { memo } from 'react';
 function AccuracyPanel({ data }) {
   if (!data) return null;
 
-  const { feedbackStats, detailedFeedback } = data;
+  const { feedbackStats, detailedFeedback, signalPerf, overallCRPS } = data;
   const df = detailedFeedback;
 
   if (!df || df.totalSettled < 5) {
@@ -80,6 +80,11 @@ function AccuracyPanel({ data }) {
       <div className="card__header">
         <span className="card__title">Accuracy</span>
         <span className="card__badge badge--live">{df.totalSettled} SETTLED</span>
+        {overallCRPS != null && (
+          <span className="card__badge" style={{ background: 'var(--bg-elevated)', color: overallCRPS <= 0.20 ? 'var(--green-mid)' : overallCRPS <= 0.25 ? 'var(--yellow-mid, #ffc107)' : 'var(--red-mid)' }}>
+            CRPS {overallCRPS.toFixed(3)}
+          </span>
+        )}
       </div>
 
       {/* Rolling Accuracy */}
@@ -148,6 +153,62 @@ function AccuracyPanel({ data }) {
         </div>
       </div>
 
+      {/* Signal Performance */}
+      {signalPerf && signalPerf.some(s => s.fired > 0) && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            fontSize: '0.62rem', color: 'var(--text-dim)',
+            textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6,
+          }}>
+            Signal Performance
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto auto auto', gap: '2px 8px', fontSize: '0.68rem', alignItems: 'center' }}>
+            <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Signal</span>
+            <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Acc (EMA)</span>
+            <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>CRPS</span>
+            <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Mod</span>
+            <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>n</span>
+            {signalPerf.filter(s => s.fired > 0).map(s => {
+              const pct = Math.round(s.emaAccuracy * 100);
+              const barColor = s.emaAccuracy >= 0.60 ? 'var(--green-mid)' : s.emaAccuracy >= 0.50 ? 'var(--yellow-mid, #ffc107)' : 'var(--red-mid)';
+              const modColor = !s.hasEnoughData ? 'var(--text-dim)' : s.modifier > 1.05 ? 'var(--green-mid)' : s.modifier < 0.95 ? 'var(--red-mid)' : 'var(--text-muted)';
+              return (
+                <React.Fragment key={s.key}>
+                  <span style={{ color: 'var(--text-secondary)', fontSize: '0.62rem' }}>{s.key}</span>
+                  <div style={{
+                    height: 14, background: 'var(--bg-elevated)',
+                    borderRadius: 2, overflow: 'hidden', position: 'relative',
+                    border: '1px solid var(--border-dim)',
+                  }}>
+                    <div style={{
+                      position: 'absolute', left: 0, top: 0, bottom: 0,
+                      width: `${pct}%`, background: barColor,
+                      transition: 'width 0.6s ease',
+                    }} />
+                    <span style={{
+                      position: 'absolute', inset: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.58rem', fontWeight: 600, color: '#fff', zIndex: 1,
+                    }}>
+                      {pct}%
+                    </span>
+                  </div>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.62rem', textAlign: 'right' }}>
+                    {s.avgCrps != null ? s.avgCrps.toFixed(3) : '-'}
+                  </span>
+                  <span style={{ color: modColor, fontWeight: 600, fontSize: '0.62rem', textAlign: 'right' }}>
+                    {s.hasEnoughData ? s.modifier.toFixed(2) + 'x' : '-'}
+                  </span>
+                  <span style={{ color: 'var(--text-dim)', fontSize: '0.62rem', textAlign: 'right' }}>
+                    {s.fired}
+                  </span>
+                </React.Fragment>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Calibration */}
       <div>
         <div style={{
@@ -190,6 +251,7 @@ export default memo(AccuracyPanel, (prev, next) => {
     a.feedbackStats?.accuracy === b.feedbackStats?.accuracy &&
     a.feedbackStats?.confidenceMultiplier === b.feedbackStats?.confidenceMultiplier &&
     a.detailedFeedback?.streak?.count === b.detailedFeedback?.streak?.count &&
-    a.detailedFeedback?.streak?.type === b.detailedFeedback?.streak?.type
+    a.detailedFeedback?.streak?.type === b.detailedFeedback?.streak?.type &&
+    a.overallCRPS === b.overallCRPS
   );
 });

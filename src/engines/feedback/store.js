@@ -4,8 +4,9 @@
 
 import { ensureLoaded, markDirty, MAX_HISTORY, clearPersistTimer } from './state.js';
 import * as S from './state.js';
+import { extractSignalSnapshot, updateSignalPerf } from './signalPerf.js';
 
-export function recordPrediction({ side, modelProb, marketPrice, btcPrice, priceToBeat, marketSlug, regime, mlConfidence }) {
+export function recordPrediction({ side, modelProb, marketPrice, btcPrice, priceToBeat, marketSlug, regime, mlConfidence, breakdown }) {
   ensureLoaded();
 
   const now = Date.now();
@@ -24,6 +25,7 @@ export function recordPrediction({ side, modelProb, marketPrice, btcPrice, price
     marketSlug,
     regime: regime ?? null,
     mlConfidence: mlConfidence ?? null,
+    signalSnapshot: extractSignalSnapshot(breakdown),
     settled: false,
     correct: null,
   });
@@ -43,6 +45,7 @@ export function settlePrediction(marketSlug, result) {
       pred.settledAt = Date.now();
       pred.actualResult = result;
       changed = true;
+      updateSignalPerf(pred.signalSnapshot, pred.side, pred.correct, pred.modelProb);
     }
   }
   if (changed) markDirty();
@@ -79,6 +82,7 @@ export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
       pred.settledAt = Date.now();
       pred.actualResult = result;
       changed = true;
+      updateSignalPerf(pred.signalSnapshot, pred.side, pred.correct, pred.modelProb);
     }
   }
 

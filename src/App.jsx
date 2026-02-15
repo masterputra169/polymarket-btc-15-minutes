@@ -1,7 +1,8 @@
-import React, { useMemo, useEffect, memo } from 'react';
+import React, { useMemo, useEffect, useRef, memo } from 'react';
 import { useBotData } from './hooks/useBotData.js';
 import { useCountdown } from './hooks/useCountdown.js';
 import { initLoggerDB, shouldLog, logSnapshot } from './data/polymarketLogger.js';
+import { recordPrediction, autoSettle, loadHistory, onMarketSwitch, getSignalPerfStats, computeOverallCRPS } from './engines/feedback.js';
 import CurrentPriceCard from './components/CurrentPriceCard.jsx';
 import TAIndicators from './components/TAIndicators.jsx';
 import PredictPanel from './components/PredictPanel.jsx';
@@ -89,6 +90,42 @@ export default function App() {
     }, 5_000); // Check every 5s (shouldLog() gates to 30s)
     return () => clearInterval(id);
   }, []);
+
+  // ═══ Browser-side signal perf tracking (bridges bot data → localStorage) ═══
+  // Records predictions + settles them client-side so signalPerf accumulates
+  const prevSlugRef = useRef(null);
+  useEffect(() => {
+    const d = dataRef.current;
+    if (!d) return;
+
+    // Auto-settle near market expiry
+    try {
+      autoSettle(d.marketSlug, d.lastPrice ?? d.btcPrice, d.priceToBeat, d.timeLeftMin);
+    } catch { /* */ }
+
+    // Detect slug change → settle old market predictions
+    if (d.marketSlug && prevSlugRef.current && prevSlugRef.current !== d.marketSlug) {
+      try { onMarketSwitch(prevSlugRef.current, d.marketSlug); } catch { /* */ }
+    }
+    if (d.marketSlug) prevSlugRef.current = d.marketSlug;
+
+    // Record prediction when bot enters trade
+    if (d.rec?.action === 'ENTER' && d.rec?.side && d.marketSlug) {
+      try {
+        recordPrediction({
+          side: d.rec.side,
+          modelProb: d.rec.side === 'UP' ? (d.pLong ?? d.ensembleUp) : (d.pShort ?? d.ensembleDown),
+          marketPrice: d.rec.side === 'UP' ? d.marketUp : d.marketDown,
+          btcPrice: d.lastPrice ?? d.btcPrice,
+          priceToBeat: d.priceToBeat,
+          marketSlug: d.marketSlug,
+          regime: d.regimeInfo?.regime ?? d.regime,
+          mlConfidence: d.ml?.confidence ?? null,
+          breakdown: d.scoreBreakdown,
+        });
+      } catch { /* */ }
+    }
+  });
 
   // Smooth 1-second countdown (local timer, no network)
   const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
@@ -287,14 +324,18 @@ export default function App() {
     };
   }, [data?.ml?.available, data?.ml?.probUp, data?.ml?.confidence, data?.ml?.side, data?.ml?.status, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
 
-  // AccuracyPanel: feedback + detailed stats
+  // AccuracyPanel: feedback + detailed stats + signal performance
+  // signalPerf/CRPS computed from browser-side stores (populated by bridge effect above)
   const accuracyData = useMemo(() => {
     if (!data) return null;
     return {
       feedbackStats: data.feedbackStats,
       detailedFeedback: data.detailedFeedback,
+      signalPerf: getSignalPerfStats(),
+      overallCRPS: computeOverallCRPS(loadHistory()),
     };
-  }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions, data?.detailedFeedback?.totalSettled]);
+  }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions,
+      data?.detailedFeedback?.totalSettled]);
 
   // PositionPanel: positions + bankroll from bot
   const positionData = useMemo(() => {

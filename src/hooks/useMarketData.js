@@ -8,7 +8,7 @@ import { scoreDirection, applyTimeAwareness } from '../engines/probability.js';
 import { computeEdge, decide } from '../engines/edge.js';
 import { computeBetSizing } from '../engines/asymmetricBet.js';
 import { analyzeOrderbook } from '../engines/orderbook.js';
-import { getAccuracyStats, getDetailedStats, recordPrediction, autoSettle, onMarketSwitch } from '../engines/feedback.js';
+import { getAccuracyStats, getDetailedStats, recordPrediction, autoSettle, onMarketSwitch, loadHistory, getSignalModifiers, getSignalPerfStats, computeOverallCRPS } from '../engines/feedback.js';
 import { loadMLModel, getMLPrediction, getMLStatus } from '../engines/Mlpredictor.js';
 import {
   getCandleWindowTiming,
@@ -232,6 +232,9 @@ export function useMarketData({ clobWs } = {}) {
       const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
       const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
+      // Signal weight modifiers (from accumulated per-signal accuracy)
+      const signalModifiers = getSignalModifiers();
+
       // Probability
       const scored = scoreDirection({
         price: lastPrice, priceToBeat: priceToBeatRef.current.value,
@@ -241,6 +244,7 @@ export function useMarketData({ clobWs } = {}) {
         orderbookSignal, volProfile, multiTfConfirm, feedbackStats,
         bb, atr,
         minutesLeft: timeLeftMin,
+        signalModifiers,
       });
 
       const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, CONFIG.candleWindowMinutes);
@@ -361,6 +365,7 @@ export function useMarketData({ clobWs } = {}) {
             btcPrice: lastPrice, priceToBeat: priceToBeatRef.current.value, marketSlug,
             regime: regimeInfo.regime,
             mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+            breakdown: scored.breakdown,
           });
         }
       } catch { /* feedback should never break main loop */ }
@@ -473,6 +478,8 @@ export function useMarketData({ clobWs } = {}) {
           ensembleProbUp: null, alpha: 0,
           source: 'Rule-only', status: getMLStatus().status,
         },
+        signalPerf: getSignalPerfStats(),
+        overallCRPS: computeOverallCRPS(loadHistory()),
       };
 
       // Only trigger re-render if data actually changed

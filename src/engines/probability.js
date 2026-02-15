@@ -51,10 +51,18 @@ export function scoreDirection({
   multiTfConfirm = null,    // { signal: 'UP'|'DOWN'|'NEUTRAL', agreement: bool }
   feedbackStats = null,     // from getAccuracyStats()
   minutesLeft = null,       // minutes until settlement (for time-adaptive PTB weight)
+  signalModifiers = null,   // from getSignalModifiers() — dynamic weight adaptation
 }) {
   let upScore = 1;   // base
   let downScore = 1;  // base
   const breakdown = {};
+
+  // Apply per-signal modifier to base weight
+  const mod = (key, baseWeight) => {
+    if (!signalModifiers) return baseWeight;
+    const m = signalModifiers[key];
+    return (m != null && Number.isFinite(m)) ? +(baseWeight * m).toFixed(2) : baseWeight;
+  };
 
   // ═══ 1. DISTANCE TO PRICE TO BEAT (weight: 2-5, TIME-ADAPTIVE) ═══
   // Near expiry PTB distance is highly predictive (less time to reverse).
@@ -75,10 +83,10 @@ export function scoreDirection({
     // Use session-adaptive thresholds if available, else defaults
     const thr = volProfile?.ptbThresholds ?? { strong: 0.003, moderate: 0.0015, slight: 0.0005 };
 
-    // Base weights scaled by time remaining
-    const wStrong = 5 * ptbTimeScale;
-    const wModerate = 3 * ptbTimeScale;
-    const wSlight = 1.5 * ptbTimeScale;
+    // Base weights scaled by time remaining, then by signal modifier
+    const wStrong = mod('ptbDistance', 5 * ptbTimeScale);
+    const wModerate = mod('ptbDistance', 3 * ptbTimeScale);
+    const wSlight = mod('ptbDistance', 1.5 * ptbTimeScale);
 
     if (Math.abs(distPct) > thr.strong) {
       if (distance > 0) upScore += wStrong;
@@ -106,14 +114,16 @@ export function scoreDirection({
 
       if (movingAway) {
         // Reinforcing: price extending lead over PTB → boost direction
-        if (distance > 0) upScore += 1.5;
-        else downScore += 1.5;
-        breakdown.ptbMomentum = { signal: distance > 0 ? 'EXTENDING UP' : 'EXTENDING DOWN', weight: 1.5 };
+        const wAway = mod('ptbMomentum', 1.5);
+        if (distance > 0) upScore += wAway;
+        else downScore += wAway;
+        breakdown.ptbMomentum = { signal: distance > 0 ? 'EXTENDING UP' : 'EXTENDING DOWN', weight: wAway };
       } else if (movingToward) {
         // Reverting: price closing gap to PTB → counter-signal
-        if (distance > 0) downScore += 1;
-        else upScore += 1;
-        breakdown.ptbMomentum = { signal: distance > 0 ? 'REVERTING (down toward PTB)' : 'REVERTING (up toward PTB)', weight: 1 };
+        const wToward = mod('ptbMomentum', 1);
+        if (distance > 0) downScore += wToward;
+        else upScore += wToward;
+        breakdown.ptbMomentum = { signal: distance > 0 ? 'REVERTING (down toward PTB)' : 'REVERTING (up toward PTB)', weight: wToward };
       } else {
         breakdown.ptbMomentum = { signal: 'FLAT', weight: 0 };
       }
@@ -133,29 +143,35 @@ export function scoreDirection({
     const accelerating1m = Math.abs(delta1m) > Math.abs(delta3m) / 3;
 
     if (bothUp && accelerating1m) {
-      upScore += 3;
-      breakdown.momentum = { signal: 'STRONG UP', weight: 3 };
+      const w = mod('momentum', 3);
+      upScore += w;
+      breakdown.momentum = { signal: 'STRONG UP', weight: w };
     } else if (bothDown && accelerating1m) {
-      downScore += 3;
-      breakdown.momentum = { signal: 'STRONG DOWN', weight: 3 };
+      const w = mod('momentum', 3);
+      downScore += w;
+      breakdown.momentum = { signal: 'STRONG DOWN', weight: w };
     } else if (bothUp) {
-      upScore += 2;
-      breakdown.momentum = { signal: 'UP', weight: 2 };
+      const w = mod('momentum', 2);
+      upScore += w;
+      breakdown.momentum = { signal: 'UP', weight: w };
     } else if (bothDown) {
-      downScore += 2;
-      breakdown.momentum = { signal: 'DOWN', weight: 2 };
+      const w = mod('momentum', 2);
+      downScore += w;
+      breakdown.momentum = { signal: 'DOWN', weight: w };
     } else if (delta1m > 0) {
-      upScore += 1;
-      breakdown.momentum = { signal: 'LEAN UP', weight: 1 };
+      const w = mod('momentum', 1);
+      upScore += w;
+      breakdown.momentum = { signal: 'LEAN UP', weight: w };
     } else if (delta1m < 0) {
-      downScore += 1;
-      breakdown.momentum = { signal: 'LEAN DOWN', weight: 1 };
+      const w = mod('momentum', 1);
+      downScore += w;
+      breakdown.momentum = { signal: 'LEAN DOWN', weight: w };
     } else {
       breakdown.momentum = { signal: 'NEUTRAL', weight: 0 };
     }
   } else if (delta1m !== null) {
-    if (delta1m > 0) { upScore += 1; breakdown.momentum = { signal: 'LEAN UP', weight: 1 }; }
-    else if (delta1m < 0) { downScore += 1; breakdown.momentum = { signal: 'LEAN DOWN', weight: 1 }; }
+    if (delta1m > 0) { const w = mod('momentum', 1); upScore += w; breakdown.momentum = { signal: 'LEAN UP', weight: w }; }
+    else if (delta1m < 0) { const w = mod('momentum', 1); downScore += w; breakdown.momentum = { signal: 'LEAN DOWN', weight: w }; }
     else breakdown.momentum = { signal: 'NEUTRAL', weight: 0 };
   } else {
     breakdown.momentum = { signal: 'N/A', weight: 0 };
@@ -165,17 +181,21 @@ export function scoreDirection({
   if (rsi !== null) {
     // RSI thresholds adjusted for period 8 (more volatile, wider bands)
     if (rsi >= 60 && (rsiSlope === null || rsiSlope >= 0)) {
-      upScore += 2;
-      breakdown.rsi = { signal: 'UP', weight: 2 };
+      const w = mod('rsi', 2);
+      upScore += w;
+      breakdown.rsi = { signal: 'UP', weight: w };
     } else if (rsi <= 40 && (rsiSlope === null || rsiSlope <= 0)) {
-      downScore += 2;
-      breakdown.rsi = { signal: 'DOWN', weight: 2 };
+      const w = mod('rsi', 2);
+      downScore += w;
+      breakdown.rsi = { signal: 'DOWN', weight: w };
     } else if (rsi >= 55) {
-      upScore += 1;
-      breakdown.rsi = { signal: 'LEAN UP', weight: 1 };
+      const w = mod('rsi', 1);
+      upScore += w;
+      breakdown.rsi = { signal: 'LEAN UP', weight: w };
     } else if (rsi <= 45) {
-      downScore += 1;
-      breakdown.rsi = { signal: 'LEAN DOWN', weight: 1 };
+      const w = mod('rsi', 1);
+      downScore += w;
+      breakdown.rsi = { signal: 'LEAN DOWN', weight: w };
     } else {
       breakdown.rsi = { signal: 'NEUTRAL', weight: 0 };
     }
@@ -189,22 +209,26 @@ export function scoreDirection({
       ((macd.hist > 0 && macd.histDelta > 0) || (macd.hist < 0 && macd.histDelta < 0));
 
     if (macd.hist > 0) {
-      upScore += expanding ? 1 : 0.5;
-      breakdown.macdHist = { signal: expanding ? 'UP (expanding)' : 'UP', weight: expanding ? 1 : 0.5 };
+      const w = mod('macdHist', expanding ? 1 : 0.5);
+      upScore += w;
+      breakdown.macdHist = { signal: expanding ? 'UP (expanding)' : 'UP', weight: w };
     } else if (macd.hist < 0) {
-      downScore += expanding ? 1 : 0.5;
-      breakdown.macdHist = { signal: expanding ? 'DOWN (expanding)' : 'DOWN', weight: expanding ? 1 : 0.5 };
+      const w = mod('macdHist', expanding ? 1 : 0.5);
+      downScore += w;
+      breakdown.macdHist = { signal: expanding ? 'DOWN (expanding)' : 'DOWN', weight: w };
     } else {
       breakdown.macdHist = { signal: 'NEUTRAL', weight: 0 };
     }
 
     // MACD line (weight: 1)
     if (macd.line > 0) {
-      upScore += 1;
-      breakdown.macdLine = { signal: 'UP', weight: 1 };
+      const w = mod('macdLine', 1);
+      upScore += w;
+      breakdown.macdLine = { signal: 'UP', weight: w };
     } else if (macd.line < 0) {
-      downScore += 1;
-      breakdown.macdLine = { signal: 'DOWN', weight: 1 };
+      const w = mod('macdLine', 1);
+      downScore += w;
+      breakdown.macdLine = { signal: 'DOWN', weight: w };
     } else {
       breakdown.macdLine = { signal: 'NEUTRAL', weight: 0 };
     }
@@ -216,11 +240,13 @@ export function scoreDirection({
   // ═══ 5. VWAP Position (weight: 1, reduced from 2) ═══
   if (vwap !== null && price !== null) {
     if (price > vwap) {
-      upScore += 1;
-      breakdown.vwapPos = { signal: 'UP', weight: 1 };
+      const w = mod('vwapPos', 1);
+      upScore += w;
+      breakdown.vwapPos = { signal: 'UP', weight: w };
     } else if (price < vwap) {
-      downScore += 1;
-      breakdown.vwapPos = { signal: 'DOWN', weight: 1 };
+      const w = mod('vwapPos', 1);
+      downScore += w;
+      breakdown.vwapPos = { signal: 'DOWN', weight: w };
     } else {
       breakdown.vwapPos = { signal: 'NEUTRAL', weight: 0 };
     }
@@ -233,11 +259,13 @@ export function scoreDirection({
   if (vwapSlope !== null && vwap !== null && vwap > 0) {
     const normalizedSlope = vwapSlope / vwap;
     if (normalizedSlope > 0.000001) {
-      upScore += 1;
-      breakdown.vwapSlope = { signal: 'UP', weight: 1 };
+      const w = mod('vwapSlope', 1);
+      upScore += w;
+      breakdown.vwapSlope = { signal: 'UP', weight: w };
     } else if (normalizedSlope < -0.000001) {
-      downScore += 1;
-      breakdown.vwapSlope = { signal: 'DOWN', weight: 1 };
+      const w = mod('vwapSlope', 1);
+      downScore += w;
+      breakdown.vwapSlope = { signal: 'DOWN', weight: w };
     } else {
       breakdown.vwapSlope = { signal: 'NEUTRAL', weight: 0 };
     }
@@ -248,11 +276,13 @@ export function scoreDirection({
   // ═══ 7. Heiken Ashi Consecutive (weight: 1) ═══
   if (heikenColor && heikenCount >= 2) {
     if (heikenColor.toLowerCase() === 'green') {
-      upScore += 1;
-      breakdown.heikenAshi = { signal: 'UP', weight: 1, count: heikenCount };
+      const w = mod('heikenAshi', 1);
+      upScore += w;
+      breakdown.heikenAshi = { signal: 'UP', weight: w, count: heikenCount };
     } else if (heikenColor.toLowerCase() === 'red') {
-      downScore += 1;
-      breakdown.heikenAshi = { signal: 'DOWN', weight: 1, count: heikenCount };
+      const w = mod('heikenAshi', 1);
+      downScore += w;
+      breakdown.heikenAshi = { signal: 'DOWN', weight: w, count: heikenCount };
     } else {
       breakdown.heikenAshi = { signal: 'NEUTRAL', weight: 0, count: heikenCount };
     }
@@ -262,8 +292,9 @@ export function scoreDirection({
 
   // ═══ 8. Failed VWAP Reclaim (weight: 2, reduced from 3) ═══
   if (failedVwapReclaim) {
-    downScore += 2;
-    breakdown.failedVwap = { signal: 'DOWN', weight: 2 };
+    const w = mod('failedVwap', 2);
+    downScore += w;
+    breakdown.failedVwap = { signal: 'DOWN', weight: w };
   } else {
     breakdown.failedVwap = { signal: 'N/A', weight: 0 };
   }
@@ -272,14 +303,15 @@ export function scoreDirection({
   // Real money signal from Polymarket CLOB WebSocket.
   // Bid/ask imbalance shows what traders are actually doing.
   if (orderbookSignal && orderbookSignal.signal !== 'NEUTRAL' && orderbookSignal.weight > 0) {
+    const w = mod('orderbook', orderbookSignal.weight);
     if (orderbookSignal.signal === 'UP') {
-      upScore += orderbookSignal.weight;
+      upScore += w;
     } else if (orderbookSignal.signal === 'DOWN') {
-      downScore += orderbookSignal.weight;
+      downScore += w;
     }
     breakdown.orderbook = {
       signal: orderbookSignal.signal,
-      weight: orderbookSignal.weight,
+      weight: w,
       detail: orderbookSignal.detail,
     };
   } else {
@@ -292,18 +324,20 @@ export function scoreDirection({
   if (multiTfConfirm && multiTfConfirm.signal !== 'NEUTRAL') {
     if (multiTfConfirm.agreement) {
       // 5m confirms 1m direction → boost
+      const w = mod('multiTf', 2);
       if (multiTfConfirm.signal === 'UP') {
-        upScore += 2;
-        breakdown.multiTf = { signal: 'UP (confirmed)', weight: 2 };
+        upScore += w;
+        breakdown.multiTf = { signal: 'UP (confirmed)', weight: w };
       } else {
-        downScore += 2;
-        breakdown.multiTf = { signal: 'DOWN (confirmed)', weight: 2 };
+        downScore += w;
+        breakdown.multiTf = { signal: 'DOWN (confirmed)', weight: w };
       }
     } else {
       // 5m contradicts 1m → penalize the majority direction
-      if (multiTfConfirm.signal === 'UP') downScore += 1;
-      else if (multiTfConfirm.signal === 'DOWN') upScore += 1;
-      breakdown.multiTf = { signal: `CONFLICT (1m vs 5m)`, weight: -1 };
+      const w = mod('multiTf', 1);
+      if (multiTfConfirm.signal === 'UP') downScore += w;
+      else if (multiTfConfirm.signal === 'DOWN') upScore += w;
+      breakdown.multiTf = { signal: `CONFLICT (1m vs 5m)`, weight: -w };
     }
   } else {
     breakdown.multiTf = { signal: multiTfConfirm?.signal ?? 'N/A', weight: 0 };
