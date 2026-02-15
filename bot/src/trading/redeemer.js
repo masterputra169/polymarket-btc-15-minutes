@@ -137,41 +137,67 @@ function makeSigner(url) {
   return new ethers.Wallet(process.env.POLYMARKET_PRIVATE_KEY, p);
 }
 
+/** Minimum MATIC needed to submit a tx (gasLimit * ~50 gwei). */
+const MIN_MATIC_FOR_TX = 0.03; // ~500k gas * 50 gwei = 0.025 MATIC + buffer
+
 /**
  * Try sending a tx via each RPC endpoint until one succeeds.
- * Uses staticNetwork providers to avoid "failed to detect network" spam.
+ * Pre-checks MATIC balance on the same provider to skip endpoints returning
+ * stale data (balance=0). Uses explicit gasLimit to avoid eth_estimateGas.
  */
 async function sendTxWithFallback(buildTx) {
   let lastErr;
+  let allZeroBalance = true;
+
   for (const url of RPC_ENDPOINTS) {
+    const host = new URL(url).hostname;
     try {
       const s = makeSigner(url);
+
+      // Pre-check balance on this specific RPC to detect stale nodes early
+      const bal = await s.provider.getBalance(s.address);
+      const maticBal = Number(ethers.formatEther(bal));
+      if (maticBal < MIN_MATIC_FOR_TX) {
+        if (maticBal > 0) allZeroBalance = false;
+        log.debug(`Tx via ${host} skipped: MATIC balance ${maticBal.toFixed(4)} < ${MIN_MATIC_FOR_TX}`);
+        continue;
+      }
+      allZeroBalance = false;
+
       const tx = await buildTx(s);
       const receipt = await tx.wait();
       return receipt.hash;
     } catch (err) {
       lastErr = err;
-      const host = new URL(url).hostname;
       log.debug(`Tx via ${host} failed: ${err.message}`);
-      await sleep(1000);
+      await sleep(1500);
     }
+  }
+
+  if (allZeroBalance) {
+    throw new Error('All RPCs report 0 MATIC — stale data or wallet needs MATIC top-up');
   }
   throw lastErr ?? new Error('All RPC endpoints failed for tx');
 }
 
 // ── MATIC balance check ──
 
+/**
+ * Check EOA MATIC balance. Returns balance in MATIC, or -1 on error.
+ */
 async function checkMaticBalance() {
   try {
     const result = await rpcCall('eth_getBalance', [signer.address, 'latest']);
     const matic = Number(ethers.formatEther(BigInt(result)));
-    if (matic < 0.01) {
-      log.warn(`Low MATIC balance: ${matic.toFixed(4)} MATIC — redemption txs may fail`);
+    if (matic < MIN_MATIC_FOR_TX) {
+      log.warn(`Low MATIC balance: ${matic.toFixed(4)} MATIC (need >${MIN_MATIC_FOR_TX}) — redemption txs may fail`);
     } else {
       log.debug(`MATIC balance: ${matic.toFixed(4)}`);
     }
+    return matic;
   } catch (err) {
     log.warn(`MATIC balance check failed: ${err.message}`);
+    return -1;
   }
 }
 
@@ -307,7 +333,8 @@ async function hasRedeemableBalance(conditionId, holder) {
 async function redeemDirect(conditionId) {
   return sendTxWithFallback(async (s) => {
     const ctf = new ethers.Contract(CTF_ADDRESS, CTF_ABI, s);
-    return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS);
+    // Explicit gasLimit skips eth_estimateGas — avoids inflated estimates on free RPCs
+    return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS, { gasLimit: 500_000n });
   });
 }
 
@@ -374,6 +401,7 @@ async function redeemViaSafe(conditionId, safeAddr) {
 
   return sendTxWithFallback(async (s) => {
     const safe = new ethers.Contract(safeAddr, SAFE_ABI, s);
+    // Explicit gasLimit skips eth_estimateGas — avoids inflated estimates on free RPCs
     return safe.execTransaction(
       CTF_ADDRESS,
       0, // value
@@ -385,6 +413,7 @@ async function redeemViaSafe(conditionId, safeAddr) {
       gasToken,
       refundReceiver,
       sig,
+      { gasLimit: 500_000n },
     );
   });
 }
@@ -441,10 +470,10 @@ function saveRedeemedSet() {
 async function redeemCycle() {
   log.info('Starting redemption cycle...');
 
-  try {
-    await checkMaticBalance();
-  } catch {
-    // Non-fatal
+  const maticBal = await checkMaticBalance();
+  if (maticBal >= 0 && maticBal < MIN_MATIC_FOR_TX) {
+    log.warn(`Skipping redemption — MATIC balance ${maticBal.toFixed(4)} too low (need >${MIN_MATIC_FOR_TX})`);
+    return;
   }
 
   const redeemable = await findRedeemablePositions();
