@@ -1135,9 +1135,7 @@ export async function pollOnce() {
             `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +
             `Conf: ${rec.confidence}${flowTag} | ${betSizing.rationale}`
           );
-          // Journal: capture + write immediately (no settlement in DRY_RUN)
-          captureEntrySnapshot(entryData);
-          writeJournalEntry({ outcome: 'DRY_RUN', pnl: 0, exitData: {} });
+          // DRY_RUN: log only, no journal entry (was writing ~2/sec = 1,000+ spam rows/session)
         } else {
           try {
             const orderResult = await placeBuyOrder({
