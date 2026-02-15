@@ -218,7 +218,9 @@ async function reconcile() {
   }
 
   const now = Date.now();
-  const lookbackMs = (BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000) + 5 * 60 * 1000;
+  const intervalMs = BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000;
+  // First run (no journal history): look back 48h to catch all trades
+  const lookbackMs = lastProcessedTime ? intervalMs + 5 * 60 * 1000 : 48 * 60 * 60 * 1000;
   const afterMs = lastProcessedTime || (now - lookbackMs);
 
   log.info(`Reconciling trades since ${new Date(afterMs).toISOString()}...`);
