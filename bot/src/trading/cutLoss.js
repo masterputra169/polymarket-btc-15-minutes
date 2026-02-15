@@ -221,9 +221,9 @@ export function evaluateCutLoss({
     }
 
     // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
-    // v4 override: if token already dropped >20%, skip this gate entirely.
+    // v4 override: if token already dropped >15%, skip this gate entirely.
     // Token market is telling us we're losing even if BTC is still close to PTB.
-    const skipBtcDist = dropPct >= 20;
+    const skipBtcDist = dropPct >= 15;
     if (hasPtb && !btcFavorable && !skipBtcDist) {
       let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
 

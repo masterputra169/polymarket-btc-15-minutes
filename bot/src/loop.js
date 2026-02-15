@@ -872,7 +872,7 @@ export async function pollOnce() {
           ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
           : '?';
         log.debug(
-          `CutLoss v3: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
+          `CutLoss v4: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
           `BTC ${btcSide} dist=${btcDist}% | d1m=$${(delta1m ?? 0).toFixed(1)} | ` +
           `ATR=${(atr?.atrRatio ?? 0).toFixed(2)} | ${regimeInfo?.regime ?? '?'}${entryRegime && entryRegime !== regimeInfo?.regime ? `(was ${entryRegime})` : ''} | ` +
           `EV(hold)=${((pos.side === 'UP' ? ensembleUp : ensembleDown) * 100).toFixed(0)}% vs token=${(tokenPrice * 100).toFixed(0)}¢`
@@ -888,7 +888,7 @@ export async function pollOnce() {
         const sellSize = pos.size;
 
         log.warn(
-          `CUT-LOSS v3: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
+          `CUT-LOSS v4: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
           `sell ${sellSize} shares @$${cutResult.sellPrice.toFixed(3)} | ` +
           `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}` +
           `${cutResult.reason === 'CRASH' ? ' [CRASH]' : ''}`
