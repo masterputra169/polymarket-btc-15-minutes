@@ -126,7 +126,7 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
 
   // Lag features (temporal memory for ML)
   const momentum5CandleSlope = cLen >= 6
-    ? (closes[cLen - 1] - closes[cLen - 6]) / (5 * (lastPrice || closes[cLen - 1])) : 0;
+    ? (closes[cLen - 1] - closes[cLen - 6]) / (5 * (lastPrice || closes[cLen - 1] || 1)) : 0;
 
   let volatilityChangeRatio = 1;
   if (cLen >= 21) {

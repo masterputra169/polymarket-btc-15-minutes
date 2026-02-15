@@ -148,6 +148,7 @@ const MIN_MATIC_FOR_TX = 0.03; // ~500k gas * 50 gwei = 0.025 MATIC + buffer
 async function sendTxWithFallback(buildTx) {
   let lastErr;
   let allZeroBalance = true;
+  let txSubmitted = false; // Track if a tx was sent to prevent double-submit
 
   for (const url of RPC_ENDPOINTS) {
     const host = new URL(url).hostname;
@@ -164,12 +165,24 @@ async function sendTxWithFallback(buildTx) {
       }
       allZeroBalance = false;
 
+      // If we already submitted a tx on a previous RPC, don't re-submit
+      // (the tx may be pending on-chain — re-sending risks nonce conflicts)
+      if (txSubmitted) {
+        log.debug(`Tx already submitted — skipping ${host} to avoid double-submit`);
+        continue;
+      }
+
       const tx = await buildTx(s);
+      txSubmitted = true; // Mark as submitted BEFORE wait() — tx is now on-chain
       const receipt = await tx.wait();
       return receipt.hash;
     } catch (err) {
       lastErr = err;
       log.debug(`Tx via ${host} failed: ${err.message}`);
+      if (txSubmitted) {
+        // Tx was submitted but wait() failed — don't retry on another RPC
+        throw new Error(`Tx submitted but confirmation failed: ${err.message}`);
+      }
       await sleep(1500);
     }
   }
@@ -451,6 +464,11 @@ function saveRedeemedSet() {
     const dir = dirname(filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
+    // Prune to last 500 entries — prevents unbounded growth over months
+    const arr = [...redeemedSet];
+    if (arr.length > 500) {
+      redeemedSet = new Set(arr.slice(-500));
+    }
     const data = JSON.stringify([...redeemedSet], null, 2);
     // Atomic write
     const tmpPath = filePath + '.tmp';
@@ -467,7 +485,12 @@ function saveRedeemedSet() {
 
 // ── Main cycle ──
 
+let redeemCycleRunning = false;
+
 async function redeemCycle() {
+  if (redeemCycleRunning) { log.debug('Redeem cycle already running — skipping'); return; }
+  redeemCycleRunning = true;
+  try {
   log.info('Starting redemption cycle...');
 
   const maticBal = await checkMaticBalance();
@@ -521,6 +544,7 @@ async function redeemCycle() {
   saveRedeemedSet();
 
   log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed, ${redeemable.length - redeemed - failed} skipped`);
+  } finally { redeemCycleRunning = false; }
 }
 
 // ── Lifecycle ──

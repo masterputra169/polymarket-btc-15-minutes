@@ -157,6 +157,8 @@ export async function placeBuyOrder({ tokenId, price, size }) {
 export async function cancelOrder(orderId) {
   if (!client) throw new Error('CLOB client not initialized');
   const result = await client.cancelOrder(orderId);
+  // L2: Log cancel errors (non-critical — don't throw)
+  if (result?.error) log.warn(`Cancel order warning: ${result.error}`);
   log.info(`Order cancelled: ${orderId}`);
   return result;
 }
@@ -167,6 +169,8 @@ export async function cancelOrder(orderId) {
 export async function cancelAllOrders() {
   if (!client) throw new Error('CLOB client not initialized');
   const result = await client.cancelAll();
+  // L2: Log cancel errors (non-critical — don't throw)
+  if (result?.error) log.warn(`Cancel all orders warning: ${result.error}`);
   log.info('All orders cancelled');
   return result;
 }
@@ -285,7 +289,11 @@ export async function getTradeHistory({ market, assetId, after, before } = {}) {
   if (after != null) params.after = String(after > 1e12 ? Math.floor(after / 1000) : Math.floor(after));
   if (before != null) params.before = String(before > 1e12 ? Math.floor(before / 1000) : Math.floor(before));
 
-  const result = await client.getTrades(params);
+  // L3: Add timeout to prevent hanging on slow CLOB API
+  const result = await Promise.race([
+    client.getTrades(params),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('getTrades timeout')), 10000))
+  ]);
   // getTrades may return an error object instead of throwing
   if (result && !Array.isArray(result)) {
     if (result.error) throw new Error(`CLOB getTrades: ${result.error}`);

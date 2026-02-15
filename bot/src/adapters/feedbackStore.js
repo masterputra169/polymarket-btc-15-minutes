@@ -10,7 +10,7 @@
  * We handle actual persistence ourselves via saveFeedbackToDisk().
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -67,12 +67,20 @@ export function loadFeedbackFromDisk() {
 export function saveFeedbackToDisk() {
   try {
     const currentCache = FeedbackState.cache;
-    if (!currentCache || currentCache.length === 0) return;
+    if (!currentCache || !Array.isArray(currentCache)) return;
 
     const dir = dirname(BOT_CONFIG.feedbackFile);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-    writeFileSync(BOT_CONFIG.feedbackFile, JSON.stringify(currentCache, null, 2));
+    // Atomic write: write to temp file then rename (prevents corruption on crash)
+    const data = JSON.stringify(currentCache, null, 2);
+    const tmpPath = BOT_CONFIG.feedbackFile + '.tmp';
+    writeFileSync(tmpPath, data);
+    try {
+      renameSync(tmpPath, BOT_CONFIG.feedbackFile);
+    } catch {
+      writeFileSync(BOT_CONFIG.feedbackFile, data);
+    }
     log.debug(`Saved ${currentCache.length} predictions to disk`);
   } catch (err) {
     log.warn(`Could not save feedback file: ${err.message}`);

@@ -14,6 +14,7 @@ export { getSignalModifiers, getSignalPerfStats, computeOverallCRPS, flushSignal
 import { flushHistory } from './feedback/store.js';
 import { flushSignalPerf } from './feedback/signalPerf.js';
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && !window.__feedbackUnloadRegistered) {
   window.addEventListener('beforeunload', () => { flushHistory(); flushSignalPerf(); });
+  window.__feedbackUnloadRegistered = true;
 }

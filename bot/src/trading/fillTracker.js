@@ -47,7 +47,10 @@ export async function checkPendingFill() {
   const results = [];
 
   try {
-    const openOrders = await getOpenOrders();
+    const openOrders = await Promise.race([
+      getOpenOrders(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('getOpenOrders timeout')), 5000))
+    ]);
     const openIds = new Set(openOrders.map(o => o.id));
 
     for (const [orderId, pending] of pendingOrders) {

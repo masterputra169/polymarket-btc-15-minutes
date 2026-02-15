@@ -83,14 +83,19 @@ export function extractSignalSnapshot(breakdown) {
   const snap = {};
   for (const key of SIGNAL_KEYS) {
     const entry = breakdown[key];
-    if (!entry || entry.weight <= 0) {
+    if (!entry || entry.weight === 0) {
       snap[key] = null;
       continue;
     }
     const sig = String(entry.signal ?? '').toUpperCase();
-    if (sig.includes('UP')) snap[key] = 'UP';
-    else if (sig.includes('DOWN')) snap[key] = 'DOWN';
-    else snap[key] = null; // NEUTRAL / FLAT / CONFLICT etc
+    let dir = null;
+    if (sig.includes('UP')) dir = 'UP';
+    else if (sig.includes('DOWN')) dir = 'DOWN';
+    // If weight is negative, the signal is penalizing (conflicting) — invert direction
+    if (dir && entry.weight < 0) {
+      dir = dir === 'UP' ? 'DOWN' : 'UP';
+    }
+    snap[key] = dir; // null if NEUTRAL / FLAT / CONFLICT etc
   }
   return snap;
 }
@@ -121,12 +126,6 @@ export function updateSignalPerf(signalSnapshot, predSide, wasCorrect, modelProb
 
     // EMA accuracy
     s.emaAccuracy = s.emaAccuracy * (1 - EMA_ALPHA) + (signalCorrect ? 1 : 0) * EMA_ALPHA;
-
-    // CRPS (binary Brier): per-signal contribution
-    const prob = modelProb ?? 0.5;
-    const actual01 = wasCorrect ? 1 : 0;
-    s.crpsSum += (prob - actual01) ** 2;
-    s.crpsCount++;
 
     // Recompute modifier
     if (s.fired >= MIN_SAMPLES) {
@@ -216,8 +215,8 @@ function maybeDecay() {
 
   for (const key of SIGNAL_KEYS) {
     const s = store.signals[key];
-    s.fired = Math.floor(s.fired / 2);
-    s.correct = Math.floor(s.correct / 2);
+    s.fired = Math.round(s.fired / 2);
+    s.correct = Math.round(s.correct / 2);
     s.crpsSum /= 2;
     s.crpsCount = Math.floor(s.crpsCount / 2);
     // EMA naturally decays, no extra treatment

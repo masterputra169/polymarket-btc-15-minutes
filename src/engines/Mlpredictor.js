@@ -160,6 +160,8 @@ export function unloadMLModel() {
     plattA: 1.0,
     plattB: 0.0,
   });
+  ensembleWeightXgb = 0.5;
+  ensembleWeightLgb = 0.5;
   unloadLgbModel();
   if (IS_DEV) console.log('[ML] Models unloaded');
 }

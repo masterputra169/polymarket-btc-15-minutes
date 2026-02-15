@@ -20,9 +20,6 @@ const roundMoney = (n) => Math.round(n * 100) / 100;
 /** Polymarket fee rate on profit (2%). */
 const POLYMARKET_FEE_RATE = 0.02;
 
-/** H3: Track last settlement time for USDC sync cooldown. */
-let lastSettlementMs = 0;
-
 let state = {
   bankroll: BOT_CONFIG.bankroll,
   startOfDayBankroll: BOT_CONFIG.bankroll,
@@ -36,6 +33,8 @@ let state = {
   trades: [],               // recent trade log
   lastSettledSlug: null,    // Double-settlement guard: last settled market slug
   lastSettledTs: 0,         // Double-settlement guard: timestamp of last settlement
+  lastSettlementMs: 0,      // H3/M4: Track last settlement time for USDC sync cooldown (persisted)
+  cutLossCount: 0,          // L4: Pre-computed count of CUT_LOSS trades (avoids scanning array)
 };
 
 // ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
@@ -58,6 +57,17 @@ export function loadState() {
     if (existsSync(BOT_CONFIG.stateFile)) {
       const data = JSON.parse(readFileSync(BOT_CONFIG.stateFile, 'utf-8'));
       state = { ...state, ...data };
+
+      // L5: Validate critical state fields after merge
+      if (!Number.isFinite(state.bankroll) || state.bankroll < 0) {
+        log.warn(`Invalid bankroll in state.json: ${state.bankroll} — resetting to 0`);
+        state.bankroll = 0;
+      }
+      if (!Array.isArray(state.trades)) {
+        log.warn('Invalid trades in state.json — resetting to []');
+        state.trades = [];
+      }
+
       // Clear stale pendingCost — any pending order from a previous session is dead
       if (state.pendingCost > 0) {
         log.info(`Clearing stale pendingCost $${state.pendingCost.toFixed(2)} from previous session`);
@@ -119,6 +129,16 @@ export function saveState() {
  * Bankroll deducted immediately. If order later fails to fill, call unwindPosition().
  */
 export function recordTrade({ side, tokenId, conditionId, price, size, marketSlug, orderId, actualCost }) {
+  // NaN guard — reject invalid inputs before they corrupt bankroll
+  if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(size) || size <= 0) {
+    log.error(`recordTrade REJECTED: invalid params price=${price} size=${size} — trade NOT recorded`);
+    return;
+  }
+  if (actualCost != null && (!Number.isFinite(actualCost) || actualCost <= 0)) {
+    log.warn(`recordTrade: invalid actualCost=${actualCost} — using theoretical cost`);
+    actualCost = null;
+  }
+
   // SAFETY: If there's an unsettled position from a DIFFERENT market, force-settle it first.
   // This prevents silent cost loss when a stale position gets overwritten.
   if (state.currentPosition && !state.currentPosition.settled && state.currentPosition.marketSlug !== marketSlug) {
@@ -248,7 +268,7 @@ export function settleTrade(won) {
     `Bankroll: $${state.bankroll.toFixed(2)} | Streak: ${state.consecutiveLosses} consec losses`
   );
 
-  lastSettlementMs = Date.now(); // H3: Track for USDC sync cooldown
+  state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
   saveState();
   return true;
@@ -264,6 +284,12 @@ export function settleTrade(won) {
  */
 export function settleTradeEarlyExit(recoveredUsdc) {
   if (!state.currentPosition) return false;
+
+  // NaN guard — prevent bankroll corruption from malformed CLOB response
+  if (!Number.isFinite(recoveredUsdc) || recoveredUsdc < 0) {
+    log.error(`settleTradeEarlyExit ABORTED: invalid recoveredUsdc=${recoveredUsdc}`);
+    return false;
+  }
 
   // Dedup guard — same as settleTrade
   if (state.currentPosition.settled) {
@@ -291,6 +317,8 @@ export function settleTradeEarlyExit(recoveredUsdc) {
     state.losses++;
     state.consecutiveLosses++;
   }
+
+  state.cutLossCount = (state.cutLossCount || 0) + 1; // L4: pre-computed counter
 
   state.trades.push({
     type: 'CUT_LOSS',
@@ -321,7 +349,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
     `Bankroll: $${state.bankroll.toFixed(2)}`
   );
 
-  lastSettlementMs = Date.now(); // H3: Track for USDC sync cooldown
+  state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
   saveState();
   return true;
@@ -342,6 +370,11 @@ export function settleTradeEarlyExit(recoveredUsdc) {
  * @param {string|null} params.orderId - Order ID from first leg
  */
 export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }) {
+  // NaN guard — reject invalid arb costs before they corrupt bankroll
+  if (!Number.isFinite(upCost) || upCost < 0 || !Number.isFinite(downCost) || downCost < 0 || !Number.isFinite(shares) || shares <= 0) {
+    log.error(`recordArbTrade REJECTED: invalid params upCost=${upCost} downCost=${downCost} shares=${shares}`);
+    return;
+  }
   const totalCost = roundMoney(upCost + downCost);
 
   // Track arb as a position so USDC auto-sync defers until settlement.
@@ -514,7 +547,8 @@ export function unwindPosition() {
  * Used by guards to prevent overspend on concurrent orders.
  */
 export function setPendingCost(cost) {
-  state.pendingCost = roundMoney(cost);
+  const c = roundMoney(cost);
+  state.pendingCost = (Number.isFinite(c) && c >= 0) ? c : 0;
 }
 
 export function getPendingCost() {
@@ -530,10 +564,11 @@ export function getAvailableBankroll() {
 }
 
 /**
- * H3: Get timestamp of last settlement (for USDC sync cooldown).
+ * H3/M4: Get timestamp of last settlement (for USDC sync cooldown).
+ * Now persisted in state.json so it survives restarts.
  */
 export function getLastSettlementMs() {
-  return lastSettlementMs;
+  return state.lastSettlementMs || 0;
 }
 
 export function getBankroll() {
@@ -604,14 +639,13 @@ export function setLastSettled(slug, ts) {
 }
 
 export function getStats() {
-  const cutLossCount = state.trades.filter(t => t.type === 'CUT_LOSS').length;
   return {
     bankroll: state.bankroll,
     availableBankroll: getAvailableBankroll(),
     totalTrades: state.totalTrades,
     wins: state.wins,
     losses: state.losses,
-    cutLosses: cutLossCount,
+    cutLosses: state.cutLossCount || 0, // L4: pre-computed counter instead of scanning trades[]
     winRate: (state.wins + state.losses) > 0 ? state.wins / (state.wins + state.losses) : 0,
     consecutiveLosses: state.consecutiveLosses,
     dailyPnL: getDailyPnL(),

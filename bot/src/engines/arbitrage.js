@@ -49,10 +49,11 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
   const netProfit = grossProfit - fees;
 
   // Spread health — wide spreads mean bestAsk is unreliable
-  const spreadUp = orderbookUp?.spread ?? 0;
-  const spreadDown = orderbookDown?.spread ?? 0;
-  const maxSpread = Math.max(spreadUp, spreadDown);
-  const spreadHealthy = maxSpread < MAX_SPREAD;
+  // null spread = orderbook unavailable → treat as unhealthy (not 0)
+  const spreadUp = orderbookUp?.spread;
+  const spreadDown = orderbookDown?.spread;
+  const spreadHealthy = spreadUp != null && spreadDown != null
+    && Math.max(spreadUp, spreadDown) < MAX_SPREAD;
 
   return {
     found: netProfit > MIN_NET_PROFIT,

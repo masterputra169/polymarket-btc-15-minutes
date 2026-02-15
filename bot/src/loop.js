@@ -201,6 +201,7 @@ let entryRegime = null;
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
+let pendingUsdcSync = null;
 
 // ── Double-settlement guard ──
 // Persisted via positionTracker (getLastSettled/setLastSettled) to survive bot restarts.
@@ -271,28 +272,25 @@ function resetMarketCache() {
  * @returns {{ won: boolean, outcome: string|null, source: string }}
  */
 async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
-  // H2: Reduced from 6×5s (30s) to 3×3s (9s) to avoid blocking the main loop
+  // H1: Single attempt with 3s timeout (no retries — BTC price fallback is good enough)
   if (conditionId) {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-          const market = await res.json();
-          if (market.closed) {
-            const tokens = Array.isArray(market.tokens) ? market.tokens : [];
-            const winner = tokens.find(t => t.winner === true);
-            if (winner) {
-              const outcome = winner.outcome.toUpperCase();
-              const won = pos.side === outcome;
-              return { won, outcome, source: 'oracle' };
-            }
+    try {
+      const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const market = await res.json();
+        if (market.closed) {
+          const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+          const winner = tokens.find(t => t.winner === true);
+          if (winner) {
+            const outcome = winner.outcome.toUpperCase();
+            const won = pos.side === outcome;
+            return { won, outcome, source: 'oracle' };
           }
         }
-      } catch { /* retry */ }
-      if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
-    }
-    log.warn('Oracle settlement timed out after 9s — falling back to BTC price comparison');
+      }
+    } catch (err) { log.debug(`Oracle fetch failed: ${err.message}`); }
+    log.warn('Oracle settlement failed — falling back to BTC price comparison');
   }
 
   // 2. Fallback: BTC price comparison (legacy behavior)
@@ -317,6 +315,15 @@ export async function pollOnce() {
     return;
   }
   polling = true;
+  if (pendingUsdcSync !== null) {
+    const syncVal = pendingUsdcSync;
+    pendingUsdcSync = null;
+    const current = getBankroll();
+    if (Math.abs(current - syncVal) > 0.01) {
+      log.info(`USDC sync: $${current.toFixed(2)} → $${syncVal.toFixed(2)}`);
+      setBankroll(syncVal);
+    }
+  }
   pollCounter++;
   const _pollStart = performance.now();
 
@@ -420,6 +427,7 @@ export async function pollOnce() {
       resetCutLossState();
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
+      entryRegime = null; // Prevent stale regime leaking into next trade's cut-loss
     }
 
     // ── 3. Tiered data fetch ──
@@ -550,8 +558,8 @@ export async function pollOnce() {
           if (onChain < 0 || onChain > 100_000) {
             log.warn(`SYNC REJECTED: on-chain=$${onChain.toFixed(2)} looks invalid (out of range)`);
           } else if (drift > 0.01 && !hasPos && !hasPendingCost) {
-            log.info(`AUTO-SYNC: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
-            setBankroll(onChain);
+            log.info(`AUTO-SYNC queued: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
+            pendingUsdcSync = onChain;
           } else if (drift > 1.0 && (hasPos || hasPendingCost)) {
             log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, ${hasPos ? 'position open' : 'pending cost'} — deferring sync)`);
           }
@@ -929,6 +937,7 @@ export async function pollOnce() {
         if (!acquireSellLock()) {
           log.info('Cut-loss skipped — sell already in progress (dashboard?)');
         } else {
+        try {
         // v3: Always full cut (binary options are all-or-nothing)
         const sellSize = pos.size;
 
@@ -977,11 +986,11 @@ export async function pollOnce() {
               log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
             }
           } catch (err) {
-            log.warn(`Cut-loss sell FAILED: ${err.message}`);
+            log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
             resetCutConfirm(); // M7: Reset confirmation counter so next attempt re-confirms
           }
         }
-        releaseSellLock();
+        } finally { releaseSellLock(); } // always release sell lock
         } // end acquireSellLock
       }
     }
@@ -1031,7 +1040,7 @@ export async function pollOnce() {
     // ── 12. Feedback tracking (stale cleanup only — recording moved to after trade execution) ──
     try {
       autoSettle(marketSlug, lastPrice, priceToBeat.value, timeLeftMin);
-    } catch { /* feedback should never break main loop */ }
+    } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
 
     // ── 13. Trade execution ──
     const alreadyHasPosition = hasOpenPosition(marketSlug);
@@ -1246,7 +1255,7 @@ export async function pollOnce() {
               regime: regimeInfo.regime,
               mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
             });
-          } catch { /* feedback should never break main loop */ }
+          } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
         } else {
           try {
             const orderResult = await placeBuyOrder({
@@ -1264,6 +1273,7 @@ export async function pollOnce() {
             const actualPrice = (fillCost && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
             const actualCost = (fillCost && fillCost > 0) ? fillCost : null;
 
+            setPendingCost(0); // Release pending reservation — trade recorded
             recordTrade({
               side: betSide,
               tokenId,
@@ -1292,7 +1302,7 @@ export async function pollOnce() {
                 regime: regimeInfo.regime,
                 mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
               });
-            } catch { /* feedback should never break main loop */ }
+            } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
           } catch (err) {
             setPendingCost(0); // C6: Release pending reservation on failure
             log.error(`Order failed: ${err.message}`);
@@ -1547,7 +1557,7 @@ export async function pollOnce() {
     }
 
   } catch (err) {
-    log.error(`Poll error: ${err.message}`);
+    log.error(`Poll error: ${err.stack || err.message}`);
   } finally {
     polling = false;
   }

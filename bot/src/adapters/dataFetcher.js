@@ -141,9 +141,13 @@ export async function fetchPolymarketSnapshot() {
           upBuy = (upBookSummary.bestBid + upBookSummary.bestAsk) / 2;
         if (downBookSummary.bestBid !== null && downBookSummary.bestAsk !== null)
           downBuy = (downBookSummary.bestBid + downBookSummary.bestAsk) / 2;
-      } catch {
+      } catch (err) {
+        log.warn?.(`Orderbook fetch failed: ${err.message} — using Gamma prices`);
         upBuy = gammaYes;
         downBuy = gammaNo;
+        // Mark orderbook as unavailable so arb engine doesn't see null spread as 0
+        upBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null, error: true };
+        downBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null, error: true };
       }
     }
 
@@ -166,6 +170,8 @@ export async function fetchPolymarketSnapshot() {
 const LATEST_ROUND_DATA_SELECTOR = '0xfeaf968c';
 const DECIMALS_SELECTOR = '0x313ce567';
 let cachedDecimals = null;
+let cachedDecimalsTs = 0;
+const DECIMALS_TTL = 24 * 3600_000; // 24 hours
 let cachedChainlink = { price: null, updatedAt: null, source: 'chainlink_rpc' };
 let chainlinkFetchedAt = 0;
 
@@ -185,7 +191,8 @@ export async function fetchChainlinkBtcUsd() {
   try {
     const rpc = rpcs[0];
 
-    if (cachedDecimals === null) {
+    // L1: Re-fetch decimals if cache is null or expired (24h TTL)
+    if (cachedDecimals === null || (now - cachedDecimalsTs >= DECIMALS_TTL)) {
       const decRes = await fetch(rpc, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -202,6 +209,7 @@ export async function fetchChainlinkBtcUsd() {
         return cachedChainlink; // invalid decimals — abort
       }
       cachedDecimals = parsed;
+      cachedDecimalsTs = now;
     }
 
     const roundRes = await fetch(rpc, {

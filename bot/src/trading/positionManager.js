@@ -3,7 +3,7 @@
  * Provides close/sell operations and JSON persistence.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { createLogger } from '../logger.js';
 import { BOT_CONFIG } from '../config.js';
@@ -188,7 +188,7 @@ export async function pollPositions() {
  */
 export function startPolling(intervalMs = BOT_CONFIG.positionPollIntervalMs ?? 60_000) {
   if (pollTimer) return;
-  pollPositions(); // Initial fetch
+  pollPositions().catch(err => log.warn(`Initial position poll failed: ${err.message}`)); // M6: catch initial poll errors
   pollTimer = setInterval(pollPositions, intervalMs);
   log.info(`Position polling started (every ${intervalMs / 1000}s)`);
 }
@@ -210,10 +210,21 @@ function savePositions() {
   try {
     const filePath = BOT_CONFIG.positionsFile;
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, JSON.stringify({
+    // M5: Atomic write — write to temp then rename to prevent corruption on crash
+    const tmpPath = filePath + '.tmp';
+    writeFileSync(tmpPath, JSON.stringify({
       lastUpdate: lastFetchMs,
       positions: cachedPositions,
     }, null, 2));
+    try {
+      renameSync(tmpPath, filePath);
+    } catch {
+      // Fallback: direct overwrite (rename may fail cross-device on some OS)
+      writeFileSync(filePath, JSON.stringify({
+        lastUpdate: lastFetchMs,
+        positions: cachedPositions,
+      }, null, 2));
+    }
   } catch (err) {
     log.warn(`Failed to save positions: ${err.message}`);
   }

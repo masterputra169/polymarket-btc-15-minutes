@@ -30,6 +30,7 @@ let lastDataMsgMs = 0;
 let subscribed = false;
 let dataReceived = false;
 let intentionalClose = false;
+let _parseErrors = 0;
 
 // Token IDs to subscribe
 let tokenIds = { up: null, down: null };
@@ -46,7 +47,7 @@ const _orderbook = {
 
 export function getUpPrice() { return _upPrice; }
 export function getDownPrice() { return _downPrice; }
-export function getOrderbook() { return _orderbook; }
+export function getOrderbook() { return { up: { ..._orderbook.up }, down: { ..._orderbook.down } }; }
 export function getLastUpdate() { return _lastUpdate; }
 export function isClobConnected() { return _connected; }
 
@@ -255,7 +256,9 @@ export function connect() {
           case 'price_change': handlePriceChange(msg); break;
           case 'last_trade_price': handleLastTradePrice(msg); break;
         }
-      } catch {}
+      } catch (err) {
+        if (++_parseErrors % 100 === 1) log.debug(`WS parse error (${_parseErrors}): ${err.message}`);
+      }
     });
 
     socket.on('close', () => {

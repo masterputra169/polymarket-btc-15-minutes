@@ -19,6 +19,11 @@ const EPSILON = 1e-9;
  * @returns {{ halt: boolean, reason: string }}
  */
 export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
+  // Validate inputs — missing data means we can't verify safety
+  if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(bankroll) || !Number.isFinite(consecutiveLosses)) {
+    return { halt: true, reason: 'Circuit breaker inputs invalid (missing bankroll, PnL, or loss streak data)' };
+  }
+
   if (dailyPnLPct <= -(BOT_CONFIG.maxDailyLossPct - EPSILON)) {
     const reason = `Daily loss ${dailyPnLPct.toFixed(1)}% exceeds max ${BOT_CONFIG.maxDailyLossPct}%`;
     log.error(`CIRCUIT BREAKER: ${reason}`);
@@ -62,6 +67,9 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, available
   }
 
   const betAmount = betSizing.betAmount;
+  if (!Number.isFinite(betAmount)) {
+    return { valid: false, reason: `Bet amount is not a valid number: ${betAmount}` };
+  }
 
   if (betAmount < 0.50) {
     return { valid: false, reason: `Bet too small: $${betAmount.toFixed(2)} (min: $0.50)` };

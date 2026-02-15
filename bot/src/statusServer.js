@@ -5,9 +5,19 @@
 
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
-import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade } from './trading/positionTracker.js';
+import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.js';
+import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.js';
+import { resetCutLossState } from './trading/cutLoss.js';
+import { recordLoss } from './safety/tradeFilters.js';
 
 const log = createLogger('StatusWS');
+
+/** Validate a numeric amount from CLOB response. Returns fallback if invalid. */
+function parseClobAmount(raw, fallback) {
+    const v = parseFloat(raw);
+    if (!Number.isFinite(v) || v < 0 || v > 1_000_000) return fallback;
+    return v;
+}
 
 const STATUS_PORT = parseInt(process.env.STATUS_PORT || '3099', 10);
 const HEARTBEAT_MS = 15_000;             // W4: 30s→15s — faster zombie detection for trading bot
@@ -75,7 +85,7 @@ export function startStatusServer() {
 
   // W5: Catch port-in-use and other startup errors
   try {
-    wss = new WebSocketServer({ port: STATUS_PORT });
+    wss = new WebSocketServer({ port: STATUS_PORT, maxPayload: 16384 });
   } catch (err) {
     log.error(`Failed to create WS server on :${STATUS_PORT}: ${err.message}`);
     wss = null;
@@ -135,11 +145,22 @@ export function startStatusServer() {
             if (!acquireSellLock()) {
               respond('sellPosition', { ok: false, error: 'sell_in_progress' });
             } else {
+              const sellPos = getCurrentPosition();
               _closePosition(tokenId, size, price)
                 .then(result => {
                   // H1: Settle the position with recovered USDC (dashboard sell was missing this)
-                  const recovered = parseFloat(result?.takingAmount) || (price * size);
-                  settleTradeEarlyExit(recovered);
+                  const recovered = parseClobAmount(result?.takingAmount, price * size);
+                  const cost = sellPos?.cost ?? (price * size);
+                  const cutPnl = recovered - cost;
+                  // Only write journal/cleanup if settlement actually happened
+                  // (position may have been settled by loop during the async sell)
+                  const settled = settleTradeEarlyExit(recovered);
+                  if (settled) {
+                    writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
+                    clearEntrySnapshot();
+                    resetCutLossState();
+                    if (cutPnl < 0) recordLoss();
+                  }
                   releaseSellLock();
                   respond('sellPosition', { ok: true, result });
                 })
@@ -152,15 +173,27 @@ export function startStatusServer() {
           const pos = getCurrentPosition();
           if (!pos || pos.settled) {
             respond('forceSettle', { ok: false, error: 'no_open_position' });
+          } else if (!['WIN', 'LOSS', 'UNWIND'].includes(msg.outcome)) {
+            respond('forceSettle', { ok: false, error: `invalid outcome: ${msg.outcome} (must be WIN/LOSS/UNWIND)` });
           } else if (msg.outcome === 'UNWIND') {
             unwindPosition();
+            writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { source: 'forceSettle' } });
+            clearEntrySnapshot();
+            resetCutLossState();
+            setLastSettled(pos.marketSlug, Date.now());
             log.info(`Force UNWIND: returned $${pos.cost.toFixed(2)} to bankroll`);
             respond('forceSettle', { ok: true, action: 'unwind', returned: pos.cost });
           } else {
             const won = msg.outcome === 'WIN';
+            const pnl = won ? (pos.size - pos.cost) : -pos.cost;
             settleTrade(won);
-            log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)}`);
-            respond('forceSettle', { ok: true, action: 'settle', won, side: pos.side });
+            writeJournalEntry({ outcome: won ? 'WIN' : 'LOSS', pnl, exitData: { source: 'forceSettle' } });
+            clearEntrySnapshot();
+            resetCutLossState();
+            if (!won) recordLoss();
+            setLastSettled(pos.marketSlug, Date.now());
+            log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)} pnl=$${pnl.toFixed(2)}`);
+            respond('forceSettle', { ok: true, action: 'settle', won, side: pos.side, pnl });
           }
 
         // ── Trader Discovery commands ──
@@ -197,6 +230,7 @@ export function startStatusServer() {
     log.error(`Status server error: ${err.message}`);
     if (err.code === 'EADDRINUSE') {
       log.error(`Port ${STATUS_PORT} already in use — stopping status server`);
+      if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
       wss.close();
       wss = null;
     }

@@ -86,13 +86,15 @@ export function applyTradeFilters({
     reasons.push(`Low vol: ATR ratio ${atrRatio.toFixed(2)} < ${TRADE_FILTERS.MIN_ATR_RATIO}`);
   }
 
-  // 4. Min time remaining
-  if (timeLeftMin != null && timeLeftMin < TRADE_FILTERS.MIN_TIME_LEFT_MIN) {
+  // 4. Min time remaining (NaN timeLeftMin = unknown → block entry for safety)
+  if (timeLeftMin != null && !Number.isFinite(timeLeftMin)) {
+    reasons.push('timeLeftMin is NaN — cannot verify timing');
+  } else if (timeLeftMin != null && timeLeftMin < TRADE_FILTERS.MIN_TIME_LEFT_MIN) {
     reasons.push(`Too close: ${timeLeftMin.toFixed(1)}min < ${TRADE_FILTERS.MIN_TIME_LEFT_MIN}min`);
   }
 
   // 4b. Max time remaining (early bird filter — indicators stale, BTC near PTB)
-  if (TRADE_FILTERS.MAX_TIME_LEFT_MIN && timeLeftMin != null && timeLeftMin > TRADE_FILTERS.MAX_TIME_LEFT_MIN) {
+  if (TRADE_FILTERS.MAX_TIME_LEFT_MIN && Number.isFinite(timeLeftMin) && timeLeftMin > TRADE_FILTERS.MAX_TIME_LEFT_MIN) {
     reasons.push(`Too early: ${timeLeftMin.toFixed(1)}min left > ${TRADE_FILTERS.MAX_TIME_LEFT_MIN}min (wait for price discovery)`);
   }
 
@@ -120,12 +122,15 @@ export function applyTradeFilters({
   }
 
   // 7. Weekend low-liquidity filter (Saturday/Sunday UTC)
-  // Relaxed: require ML confidence >= 0.35 on weekends (was 0.50 — too aggressive,
-  // blocked most entries since ML confidence typically hovers 40-55%)
+  // Block when ML unavailable (can't assess confidence) or confidence too low.
   const dayOfWeek = new Date().getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  if (isWeekend && Number.isFinite(mlConfidence) && mlConfidence < 0.35) {
-    reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
+  if (isWeekend) {
+    if (!mlAvailable || mlConfidence == null) {
+      reasons.push('Weekend + ML unavailable — cannot assess confidence');
+    } else if (mlConfidence < 0.35) {
+      reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
+    }
   }
 
   // 8. High divergence guard — extreme edge means market strongly disagrees with model.
@@ -185,6 +190,13 @@ export function resetMarketTradeCount(slug) {
     delete tradesThisMarket[slug];
   } else {
     tradesThisMarket = {};
+  }
+  // Prevent unbounded growth — keep only the 20 most recent slugs
+  const keys = Object.keys(tradesThisMarket);
+  if (keys.length > 20) {
+    for (const k of keys.slice(0, keys.length - 20)) {
+      delete tradesThisMarket[k];
+    }
   }
 }
 

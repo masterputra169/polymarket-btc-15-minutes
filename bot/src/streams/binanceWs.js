@@ -21,6 +21,7 @@ let reconnectMs = 500;
 let hbTimer = null;
 let lastMsgMs = 0;
 let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
+let _parseErrors = 0;
 
 // Public state — read by loop.js
 let _price = null;
@@ -82,7 +83,9 @@ export function connect() {
           _prevPrice = _price;
           _price = p;
         }
-      } catch {}
+      } catch (err) {
+        if (++_parseErrors % 100 === 1) log.debug(`WS parse error (${_parseErrors}): ${err.message}`);
+      }
     });
 
     socket.on('close', () => {
