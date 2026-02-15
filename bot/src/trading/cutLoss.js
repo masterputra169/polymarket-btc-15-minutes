@@ -202,7 +202,7 @@ export function evaluateCutLoss({
   const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Emergency fast-track: genuine crash detection ──
-  const crashDrop = cfg.crashDropPct ?? 40;
+  const crashDrop = cfg.crashDropPct ?? 30;
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
   const isCrash = dropPct >= crashDrop && hasPtb && btcDistPct >= crashDist;
 
