@@ -26,10 +26,18 @@ const log = createLogger('Redeemer');
 
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-const POLYGON_RPC = 'https://polygon-rpc.com';
 const DATA_API = 'https://data-api.polymarket.com';
 const PARENT_COLLECTION_ID = '0x' + '0'.repeat(64);
 const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
+
+// Multiple free Polygon RPC endpoints — round-robin to avoid single-endpoint rate limits.
+// publicnode first (most reliable for tx submission), llamarpc + polygon-rpc as fallbacks.
+const RPC_ENDPOINTS = [
+  'https://polygon-bor-rpc.publicnode.com',
+  'https://polygon.llamarpc.com',
+  'https://polygon-rpc.com',
+];
+let rpcIndex = 0;
 
 // Minimal ABIs (ethers v6 human-readable)
 const CTF_ABI = [
@@ -49,24 +57,114 @@ let provider = null;
 let signer = null;
 let redeemedSet = new Set(); // conditionIds already redeemed
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+// ── RPC helpers ──
+
+/** Pick next RPC endpoint (round-robin). */
+function nextRpc() {
+  const url = RPC_ENDPOINTS[rpcIndex % RPC_ENDPOINTS.length];
+  rpcIndex++;
+  return url;
+}
+
+/**
+ * Raw JSON-RPC call with round-robin retry across all endpoints.
+ * Tries each endpoint once, with a 1s pause between retries on rate-limit (429 / "Too many requests").
+ */
+async function rpcCall(method, params) {
+  let lastErr;
+  for (let attempt = 0; attempt < RPC_ENDPOINTS.length; attempt++) {
+    const url = nextRpc();
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method, params, id: 1 }),
+        signal: AbortSignal.timeout(8_000),
+      });
+      const json = await res.json();
+      if (json.error) {
+        const msg = json.error.message ?? JSON.stringify(json.error);
+        if (/rate limit|too many req/i.test(msg)) {
+          log.debug(`RPC rate-limited on ${new URL(url).hostname}, rotating...`);
+          await sleep(1000);
+          continue;
+        }
+        throw new Error(msg);
+      }
+      return json.result;
+    } catch (err) {
+      lastErr = err;
+      log.debug(`RPC ${new URL(url).hostname} failed: ${err.message}`);
+    }
+  }
+  throw lastErr ?? new Error('All RPC endpoints failed');
+}
+
 // ── Provider / Wallet ──
+
+/**
+ * Create ethers provider + signer. Uses a single JsonRpcProvider for tx
+ * submission (rare — only on actual redeem). All read calls go through
+ * rpcCall() with round-robin retry across all endpoints.
+ *
+ * We avoid FallbackProvider because it probes all endpoints at startup
+ * and retries every 1s on rate-limited nodes, spamming the console.
+ */
+/** Polygon mainnet — used as staticNetwork to skip auto-detect probes. */
+const POLYGON_NETWORK = new ethers.Network('matic', 137);
 
 function initProvider() {
   if (provider) return;
   const pk = process.env.POLYMARKET_PRIVATE_KEY;
   if (!pk) throw new Error('POLYMARKET_PRIVATE_KEY not set');
 
-  provider = new ethers.JsonRpcProvider(POLYGON_RPC);
+  provider = new ethers.JsonRpcProvider(RPC_ENDPOINTS[0], POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
   signer = new ethers.Wallet(pk, provider);
-  log.info(`Redeemer wallet: ${signer.address}`);
+  log.info(`Redeemer wallet: ${signer.address} (${RPC_ENDPOINTS.length} RPC endpoints)`);
+}
+
+/**
+ * Create a short-lived provider+signer with staticNetwork (no background probes)
+ * and batching disabled (some free RPCs reject batched requests).
+ */
+function makeSigner(url) {
+  const p = new ethers.JsonRpcProvider(url, POLYGON_NETWORK, {
+    staticNetwork: true,
+    batchMaxCount: 1,  // disable batching — avoids "Batch size too large" from free RPCs
+  });
+  return new ethers.Wallet(process.env.POLYMARKET_PRIVATE_KEY, p);
+}
+
+/**
+ * Try sending a tx via each RPC endpoint until one succeeds.
+ * Uses staticNetwork providers to avoid "failed to detect network" spam.
+ */
+async function sendTxWithFallback(buildTx) {
+  let lastErr;
+  for (const url of RPC_ENDPOINTS) {
+    try {
+      const s = makeSigner(url);
+      const tx = await buildTx(s);
+      const receipt = await tx.wait();
+      return receipt.hash;
+    } catch (err) {
+      lastErr = err;
+      const host = new URL(url).hostname;
+      log.debug(`Tx via ${host} failed: ${err.message}`);
+      await sleep(1000);
+    }
+  }
+  throw lastErr ?? new Error('All RPC endpoints failed for tx');
 }
 
 // ── MATIC balance check ──
 
 async function checkMaticBalance() {
   try {
-    const bal = await provider.getBalance(signer.address);
-    const matic = Number(ethers.formatEther(bal));
+    const result = await rpcCall('eth_getBalance', [signer.address, 'latest']);
+    const matic = Number(ethers.formatEther(BigInt(result)));
     if (matic < 0.01) {
       log.warn(`Low MATIC balance: ${matic.toFixed(4)} MATIC — redemption txs may fail`);
     } else {
@@ -166,15 +264,9 @@ async function queryTokenBalance(tokenId, holder) {
     const id = BigInt(tokenId).toString(16).padStart(64, '0');
     const data = '0x00fdd58e' + addr + id; // balanceOf(address,uint256)
 
-    const res = await fetch(POLYGON_RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: CTF_ADDRESS, data }, 'latest'], id: 1 }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    const json = await res.json();
-    if (!json.result || json.result === '0x' || json.result === '0x0') return 0n;
-    return BigInt(json.result);
+    const result = await rpcCall('eth_call', [{ to: CTF_ADDRESS, data }, 'latest']);
+    if (!result || result === '0x' || result === '0x0') return 0n;
+    return BigInt(result);
   } catch (err) {
     log.warn(`Token balance query failed: ${err.message}`);
     return 0n;
@@ -213,10 +305,10 @@ async function hasRedeemableBalance(conditionId, holder) {
  * EOA mode: call CTF.redeemPositions() directly from signer.
  */
 async function redeemDirect(conditionId) {
-  const ctf = new ethers.Contract(CTF_ADDRESS, CTF_ABI, signer);
-  const tx = await ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS);
-  const receipt = await tx.wait();
-  return receipt.hash;
+  return sendTxWithFallback(async (s) => {
+    const ctf = new ethers.Contract(CTF_ADDRESS, CTF_ABI, s);
+    return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS);
+  });
 }
 
 /**
@@ -229,8 +321,11 @@ async function redeemViaSafe(conditionId, safeAddr) {
     USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS,
   ]);
 
-  const safe = new ethers.Contract(safeAddr, SAFE_ABI, signer);
-  const nonce = await safe.nonce();
+  // Fetch nonce via rpcCall (round-robin)
+  const safeIface = new ethers.Interface(SAFE_ABI);
+  const nonceData = safeIface.encodeFunctionData('nonce', []);
+  const nonceResult = await rpcCall('eth_call', [{ to: safeAddr, data: nonceData }, 'latest']);
+  const nonce = BigInt(nonceResult);
 
   // Build Safe transaction hash for signing
   // operation=0 (CALL), no gas token/refund
@@ -272,23 +367,26 @@ async function redeemViaSafe(conditionId, safeAddr) {
     nonce,
   };
 
-  // Sign with EOA (sole owner)
-  const sig = await signer.signTypedData(domain, types, value);
+  // Sign with EOA (sole owner) — signing is local, no RPC needed
+  const pk = process.env.POLYMARKET_PRIVATE_KEY;
+  const sigWallet = new ethers.Wallet(pk);
+  const sig = await sigWallet.signTypedData(domain, types, value);
 
-  const tx = await safe.execTransaction(
-    CTF_ADDRESS,
-    0, // value
-    callData,
-    0, // operation = CALL
-    safeTxGas,
-    baseGas,
-    gasPrice,
-    gasToken,
-    refundReceiver,
-    sig,
-  );
-  const receipt = await tx.wait();
-  return receipt.hash;
+  return sendTxWithFallback(async (s) => {
+    const safe = new ethers.Contract(safeAddr, SAFE_ABI, s);
+    return safe.execTransaction(
+      CTF_ADDRESS,
+      0, // value
+      callData,
+      0, // operation = CALL
+      safeTxGas,
+      baseGas,
+      gasPrice,
+      gasToken,
+      refundReceiver,
+      sig,
+    );
+  });
 }
 
 /**
@@ -385,9 +483,9 @@ async function redeemCycle() {
       failed++;
     }
 
-    // Sleep 2s between positions to avoid rate limits
+    // Sleep 3s between positions to avoid rate limits
     if (redeemable.indexOf(pos) < redeemable.length - 1) {
-      await new Promise(r => setTimeout(r, 2000));
+      await sleep(3000);
     }
   }
 
