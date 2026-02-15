@@ -19,7 +19,7 @@
  *   6.  Not too close to settlement (< 30s)
  *   6b. LATE FORCE-CUT: <2min left + drop>15% → skip gates 7-12d, go to gate 13
  *   7.  BTC position check — soft zone: BTC within 0.02% of PTB still allows cut
- *   8.  BTC-to-PTB distance — time-scaled, ATR-adjusted, regime-aware
+ *   8.  BTC-to-PTB distance — time-scaled, ATR-adjusted, regime-aware (SKIPPED if drop>20%)
  *   8b. Regime-change accelerator — if regime changed since entry, lower threshold 30%
  *   9.  BTC momentum — ATR-scaled, if BTC is recovering toward PTB, skip cut
  *  10.  EV comparison — regime-aware margin + time-decay multiplier
@@ -221,7 +221,10 @@ export function evaluateCutLoss({
     }
 
     // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
-    if (hasPtb && !btcFavorable) {
+    // v4 override: if token already dropped >20%, skip this gate entirely.
+    // Token market is telling us we're losing even if BTC is still close to PTB.
+    const skipBtcDist = dropPct >= 20;
+    if (hasPtb && !btcFavorable && !skipBtcDist) {
       let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
 
       // ── Gate 8b: Regime-change accelerator ──
