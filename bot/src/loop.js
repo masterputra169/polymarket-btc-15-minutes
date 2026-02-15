@@ -213,7 +213,7 @@ const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
 //   2. Flip detector: block if market is flipping too rapidly (indecisive)
 const SIGNAL_CONFIRM_POLLS = 3;      // Must see same ENTER side N polls in a row (3 × 500ms = 1.5s)
 const FLIP_WINDOW_MS = 15_000;       // Track flips in last 15 seconds
-const MAX_FLIPS_TO_ENTER = 1;        // Block entry if signal flipped > 1 time in window (journal: flips > 0 = 0% win rate)
+const MAX_FLIPS_TO_ENTER = 3;        // Block entry if signal flipped > 3 times in window (relaxed from 1 — volatile markets naturally oscillate)
 
 let signalConfirmCount = 0;           // Consecutive polls with same ENTER+side
 let signalConfirmSide = null;         // Which side is being confirmed ('UP'|'DOWN'|null)

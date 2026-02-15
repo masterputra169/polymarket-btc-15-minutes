@@ -168,6 +168,10 @@ export function decide({
   }
 
   // ═══ Regime-adaptive thresholds ═══
+  // Save base thresholds before adjustments to cap combined penalty
+  const baseMinEdge = minEdge;
+  const baseMinProb = minProb;
+
   if (regimeInfo && regimeInfo.regime) {
     const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.85);
     switch (regimeInfo.regime) {
@@ -201,6 +205,17 @@ export function decide({
       minEdge = Math.max(minEdge + adj.edgeAdj, 0.04);
       minProb = Math.max(Math.min(minProb + adj.probAdj, 0.70), 0.52);
     }
+  }
+
+  // ═══ Cap combined regime+session penalty ═══
+  // Prevent stacking (e.g. choppy +3% + off-hours +3% = +6%) from making entry impossible.
+  // Max combined tightening: +3% edge, +3% prob above phase base.
+  const MAX_COMBINED_PENALTY = 0.03;
+  if (minEdge > baseMinEdge + MAX_COMBINED_PENALTY) {
+    minEdge = baseMinEdge + MAX_COMBINED_PENALTY;
+  }
+  if (minProb > baseMinProb + MAX_COMBINED_PENALTY) {
+    minProb = baseMinProb + MAX_COMBINED_PENALTY;
   }
 
   // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= HIGH),

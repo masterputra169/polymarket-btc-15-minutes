@@ -34,12 +34,12 @@ export const EXECUTION = {
 
 export const TRADE_FILTERS = {
   MIN_ML_CONFIDENCE: 0.50,       // minimum ML confidence to trade (raised from 0.40 — below 50% means model is literally unsure)
-  MARKET_5050_RANGE: [0.45, 0.55], // market price in this range = near 50/50, skip
+  MARKET_5050_RANGE: [0.48, 0.52], // market price in this range = near 50/50, skip (narrowed from 0.45-0.55 — was blocking high-edge opportunities)
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries (widened from 0.25-0.75 — 15-min markets naturally have extreme prices)
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
-  MAX_TIME_LEFT_MIN: 13.0,      // maximum minutes before settlement (block first 2 min — PTB just set, indicators stale)
-  MIN_BTC_DIST_PCT: 0.05,       // minimum BTC distance from PTB to enter (below = coin flip, no directional edge)
+  MAX_TIME_LEFT_MIN: 14.0,      // maximum minutes before settlement (block first 1 min — relaxed from 13, was too aggressive)
+  MIN_BTC_DIST_PCT: 0.02,       // minimum BTC distance from PTB to enter (lowered from 0.05 — redundant with 50/50 filter + edge threshold)
   LOSS_COOLDOWN_MS: 60_000,     // 60s cooldown after a loss before next trade
   MAX_TRADES_PER_MARKET: 1,     // max directional trades per 15-min market
 };
