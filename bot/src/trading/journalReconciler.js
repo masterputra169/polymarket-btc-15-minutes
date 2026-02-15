@@ -19,14 +19,52 @@ const log = createLogger('Reconciler');
 let intervalId = null;
 let lastProcessedTime = 0; // Unix ms — only fetch trades after this
 
+const MONTHS = {
+  January: 0, February: 1, March: 2, April: 3, May: 4, June: 5,
+  July: 6, August: 7, September: 8, October: 9, November: 10, December: 11,
+};
+
 /**
- * Extract market time from the CLOB market question string.
- * e.g. "Bitcoin Up or Down - February 14, 9:15PM-9:30PM ET" → parse start time
- * Falls back to matching a slug-style unix timestamp if present.
+ * Determine ET→UTC offset (5 for EST, 4 for EDT).
+ * DST: 2nd Sunday of March → 1st Sunday of November.
  */
-function parseMarketTimeFromQuestion(question) {
-  // Not easily parseable to exact unix ts from question text alone
-  return null;
+function etOffsetHours(year, month0, day) {
+  if (month0 < 2 || month0 > 10) return 5; // Jan, Feb, Dec → EST
+  if (month0 > 2 && month0 < 10) return 4; // Apr–Oct → EDT
+  if (month0 === 2) { // March
+    const dow1 = new Date(Date.UTC(year, 2, 1)).getUTCDay();
+    const secondSun = dow1 === 0 ? 8 : 15 - dow1;
+    return day >= secondSun ? 4 : 5;
+  }
+  // November
+  const dow1 = new Date(Date.UTC(year, 10, 1)).getUTCDay();
+  const firstSun = dow1 === 0 ? 1 : 8 - dow1;
+  return day < firstSun ? 4 : 5;
+}
+
+/**
+ * Parse market start time from the CLOB question string.
+ * e.g. "Bitcoin Up or Down - February 14, 9:15PM-9:30PM ET" → unix seconds (UTC)
+ */
+function parseQuestionToSlugTs(question) {
+  if (!question) return null;
+  const m = question.match(/- (\w+) (\d+), (\d+):(\d+)(AM|PM)-/);
+  if (!m) return null;
+  const [, monthStr, dayStr, hourStr, minStr, ampm] = m;
+  const month0 = MONTHS[monthStr];
+  if (month0 === undefined) return null;
+
+  let hour = parseInt(hourStr);
+  const min = parseInt(minStr);
+  const day = parseInt(dayStr);
+
+  if (ampm === 'PM' && hour !== 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+
+  const year = new Date().getFullYear();
+  const offset = etOffsetHours(year, month0, day);
+  const utcMs = Date.UTC(year, month0, day, hour + offset, min, 0);
+  return Math.floor(utcMs / 1000);
 }
 
 /**
@@ -106,49 +144,64 @@ function loadLocalTrades() {
 
 /**
  * Find matching local trade entry by marketSlug.
+ * Looks for ENTER, then the next SETTLE/CUT_LOSS/PARTIAL_CUT/UNWIND for that position.
  */
 function findLocalTrade(localTrades, marketSlug) {
   if (!marketSlug) return null;
-  const enter = localTrades.find(t => t.type === 'ENTER' && t.marketSlug === marketSlug);
-  if (!enter) return null;
+  const enterIdx = localTrades.findIndex(t => t.type === 'ENTER' && t.marketSlug === marketSlug);
+  if (enterIdx === -1) return null;
 
-  const enterTs = enter.timestamp;
-  const settle = localTrades.find(
-    t => (t.type === 'SETTLE' || t.type === 'CUT_LOSS') && t.timestamp > enterTs
-  );
+  const enter = localTrades[enterIdx];
+  // Find the next exit event after this ENTER (before the next ENTER)
+  let settle = null;
+  for (let i = enterIdx + 1; i < localTrades.length; i++) {
+    const t = localTrades[i];
+    if (t.type === 'ENTER') break; // Next position — stop searching
+    if (['SETTLE', 'CUT_LOSS', 'PARTIAL_CUT', 'UNWIND'].includes(t.type)) {
+      settle = t;
+      break;
+    }
+  }
 
   return {
     enter,
-    settle: settle ?? null,
+    settle,
     localCost: enter.cost ?? 0,
     localPnl: settle?.pnl ?? null,
   };
 }
 
 /**
- * Try to derive a btc-updown-15m slug from the CLOB market question.
- * e.g. "Bitcoin Up or Down - February 14, 9:15PM-9:30PM ET"
- * We match against local trades by the accepting_order_timestamp or end time.
+ * Derive btc-updown-15m slug from the CLOB market question string.
+ * Primary: parse "February 14, 9:15PM-9:30PM ET" → UTC unix seconds.
+ * Fallback: accepting_order_timestamp (inaccurate, ~24h before market start).
  */
 function deriveSlugFromMarket(market, localTrades) {
   if (!market) return null;
 
-  // Try accepting_order_timestamp → convert to unix seconds for slug
+  // Primary: parse question string for exact market start time
+  const parsedTs = parseQuestionToSlugTs(market.question);
+  if (parsedTs) {
+    // Try exact match first, then ±900s candidates for edge cases
+    for (const candidate of [parsedTs, parsedTs - 900, parsedTs + 900]) {
+      const slug = `btc-updown-15m-${candidate}`;
+      if (localTrades.find(t => t.marketSlug === slug)) return slug;
+    }
+    // No local match — use the parsed value (still correct for journal)
+    return `btc-updown-15m-${parsedTs}`;
+  }
+
+  // Fallback: accepting_order_timestamp (known to be ~24h off)
   const acceptTs = market.accepting_order_timestamp;
   if (acceptTs) {
     const ms = new Date(acceptTs).getTime();
     if (Number.isFinite(ms)) {
-      // BTC 15-min markets: slug timestamp = market start (accepting_order_timestamp)
-      // Try rounding to nearest 15-min boundary (900s)
       const sec = Math.round(ms / 1000);
       const rounded = Math.round(sec / 900) * 900;
-      // Check a few candidates around this time
-      for (const candidate of [rounded, rounded - 900, rounded + 900, sec]) {
+      for (const candidate of [rounded, rounded - 900, rounded + 900]) {
         const slug = `btc-updown-15m-${candidate}`;
-        const match = localTrades.find(t => t.marketSlug === slug);
-        if (match) return slug;
+        if (localTrades.find(t => t.marketSlug === slug)) return slug;
       }
-      // No local match — use the rounded value as best guess
       return `btc-updown-15m-${rounded}`;
     }
   }
