@@ -41,6 +41,7 @@ import { pollOnce, pauseBot, resumeBot, registerPositionCallback } from './src/l
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery } from './src/statusServer.js';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.js';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.js';
+import { startReconciler, stopReconciler } from './src/trading/journalReconciler.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -67,6 +68,8 @@ async function main() {
       log.error('Cannot trade without CLOB client. Exiting.');
       process.exit(1);
     }
+    // Start verified journal reconciler (on-chain trade history)
+    startReconciler();
   } else {
     log.info('DRY RUN mode — CLOB client not initialized');
   }
@@ -140,9 +143,10 @@ async function main() {
     disconnectPolyLiveWs();
     disconnectChainlinkWss();
 
-    // Stop status server + position polling
+    // Stop status server + position polling + reconciler
     stopStatusServer();
     stopPositionPolling();
+    stopReconciler();
 
     // Cancel open orders (live mode only)
     if (!BOT_CONFIG.dryRun) {

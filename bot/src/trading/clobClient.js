@@ -260,3 +260,24 @@ export function getWalletAddress() {
 export function isClientReady() {
   return client !== null;
 }
+
+/**
+ * Fetch trade history from the CLOB API.
+ * Returns real on-chain fill data for the authenticated wallet.
+ *
+ * @param {Object} [params]
+ * @param {string} [params.market] - Filter by market/conditionId
+ * @param {string} [params.assetId] - Filter by asset (token) ID
+ * @param {string} [params.after] - ISO timestamp — only trades after this time
+ * @param {string} [params.before] - ISO timestamp — only trades before this time
+ * @returns {Promise<Array>} Array of Trade objects from CLOB
+ */
+export async function getTradeHistory({ market, assetId, after, before } = {}) {
+  if (!client) return [];
+  const params = {};
+  if (market) params.market = market;
+  if (assetId) params.asset_id = assetId;
+  if (after) params.after = after;
+  if (before) params.before = before;
+  return await client.getTrades(params);
+}

@@ -56,6 +56,10 @@ const BOT_CONFIG = {
   // Trade journal (post-trade analysis)
   journalFile: resolve(__dirname, '..', 'data', 'trade_journal.jsonl'),
 
+  // Verified journal (on-chain reconciliation via CLOB getTrades)
+  verifiedJournalFile: resolve(__dirname, '..', 'data', 'verified_journal.jsonl'),
+  reconcileIntervalMs: 30 * 60 * 1000,  // 30 minutes
+
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
