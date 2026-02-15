@@ -61,6 +61,7 @@ import {
   getAccuracyStats,
   getDetailedStats,
   recordPrediction,
+  settlePrediction,
   autoSettle,
   onMarketSwitch,
   saveFeedbackToDisk,
@@ -407,6 +408,8 @@ export async function pollOnce() {
             exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
+          // Settle feedback predictions using oracle result (not Binance price)
+          if (outcome) settlePrediction(pos.marketSlug, outcome);
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -599,6 +602,8 @@ export async function pollOnce() {
             exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
+          // Settle feedback predictions using oracle result (not Binance price)
+          if (outcome) settlePrediction(pos.marketSlug, outcome);
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -959,19 +964,9 @@ export async function pollOnce() {
       executionContext,
     });
 
-    // ── 12. Feedback tracking ──
+    // ── 12. Feedback tracking (stale cleanup only — recording moved to after trade execution) ──
     try {
       autoSettle(marketSlug, lastPrice, priceToBeat.value, timeLeftMin);
-      if (rec.action === 'ENTER' && rec.side && marketSlug) {
-        recordPrediction({
-          side: rec.side,
-          modelProb: rec.side === 'UP' ? ensembleUp : ensembleDown,
-          marketPrice: rec.side === 'UP' ? marketUp : marketDown,
-          btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug,
-          regime: regimeInfo.regime,
-          mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
-        });
-      }
     } catch { /* feedback should never break main loop */ }
 
     // ── 13. Trade execution ──
@@ -1174,7 +1169,16 @@ export async function pollOnce() {
             `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +
             `Conf: ${rec.confidence}${flowTag} | ${betSizing.rationale}`
           );
-          // DRY_RUN: log only, no journal entry (was writing ~2/sec = 1,000+ spam rows/session)
+          // DRY_RUN: record prediction for accuracy tracking (only actual trades, not all ENTER signals)
+          try {
+            recordPrediction({
+              side: betSide, modelProb: betEnsembleProb,
+              marketPrice: betMarketPrice, btcPrice: lastPrice,
+              priceToBeat: priceToBeat.value, marketSlug,
+              regime: regimeInfo.regime,
+              mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+            });
+          } catch { /* feedback should never break main loop */ }
         } else {
           try {
             const orderResult = await placeBuyOrder({
@@ -1211,6 +1215,16 @@ export async function pollOnce() {
             recordTradeForMarket(marketSlug);
             // Journal: capture entry snapshot (written at settlement)
             captureEntrySnapshot(entryData);
+            // Record prediction for accuracy tracking (only actual trades, not all ENTER signals)
+            try {
+              recordPrediction({
+                side: betSide, modelProb: betEnsembleProb,
+                marketPrice: betMarketPrice, btcPrice: lastPrice,
+                priceToBeat: priceToBeat.value, marketSlug,
+                regime: regimeInfo.regime,
+                mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+              });
+            } catch { /* feedback should never break main loop */ }
           } catch (err) {
             setPendingCost(0); // C6: Release pending reservation on failure
             log.error(`Order failed: ${err.message}`);

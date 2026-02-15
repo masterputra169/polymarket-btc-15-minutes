@@ -21,6 +21,7 @@ import * as FeedbackState from '../../../src/engines/feedback/state.js';
 // Re-export all feedback functions — they work unchanged after state is injected
 export {
   recordPrediction,
+  settlePrediction,
   autoSettle,
   loadHistory,
   flushHistory,
