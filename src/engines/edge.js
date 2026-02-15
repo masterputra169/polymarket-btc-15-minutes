@@ -145,13 +145,13 @@ export function decide({
     phase = 'EARLY';
     minEdge = 0.08;
     minProb = 0.60;
-    minAgreement = 3;
+    minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 5) {
     phase = 'MID';
     minEdge = 0.10;
     minProb = 0.58;
-    minAgreement = 3;
+    minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
