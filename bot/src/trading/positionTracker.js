@@ -119,6 +119,29 @@ export function saveState() {
  * Bankroll deducted immediately. If order later fails to fill, call unwindPosition().
  */
 export function recordTrade({ side, tokenId, conditionId, price, size, marketSlug, orderId, actualCost }) {
+  // SAFETY: If there's an unsettled position from a DIFFERENT market, force-settle it first.
+  // This prevents silent cost loss when a stale position gets overwritten.
+  if (state.currentPosition && !state.currentPosition.settled && state.currentPosition.marketSlug !== marketSlug) {
+    const stale = state.currentPosition;
+    log.warn(
+      `OVERWRITE GUARD: unsettled ${stale.side} position on ${stale.marketSlug} (cost $${stale.cost.toFixed(2)}) — ` +
+      `force-unwinding before recording new trade on ${marketSlug}`
+    );
+    // Unwind inline (return cost to bankroll) — we can't determine outcome here
+    state.bankroll = roundMoney(state.bankroll + stale.cost);
+    state.trades.push({
+      type: 'FORCE_UNWIND',
+      side: stale.side,
+      cost: stale.cost,
+      marketSlug: stale.marketSlug,
+      reason: 'overwritten_by_new_trade',
+      bankrollAfter: state.bankroll,
+      timestamp: Date.now(),
+    });
+    auditLog({ type: 'FORCE_UNWIND', side: stale.side, cost: stale.cost, marketSlug: stale.marketSlug, reason: 'overwritten_by_new_trade', bankrollAfter: state.bankroll });
+    state.currentPosition = null;
+  }
+
   // Use actual fill cost from CLOB response when available, fallback to theoretical
   const cost = actualCost != null ? roundMoney(actualCost) : roundMoney(price * size);
 
@@ -167,6 +190,7 @@ export function confirmFill() {
     state.currentPosition.fillConfirmed = true;
     auditLog({ type: 'FILL_CONFIRMED', orderId: state.currentPosition.orderId });
     log.debug('Position fill confirmed');
+    saveState(); // Persist immediately so fillConfirmed survives restart
   }
 }
 
@@ -428,12 +452,17 @@ export function partialExit(sellSize, recoveredUsdc) {
 }
 
 /**
- * Check if we have an open position for a given market.
+ * Check if we have an open (unsettled) position.
+ * Checks ANY market, not just the given slug — prevents new trades
+ * while a stale position from a different market exists.
  */
 export function hasOpenPosition(marketSlug) {
-  return state.currentPosition !== null &&
-    !state.currentPosition.settled &&
-    state.currentPosition.marketSlug === marketSlug;
+  if (!state.currentPosition || state.currentPosition.settled) return false;
+  // Warn if position is from a different market (stale)
+  if (state.currentPosition.marketSlug !== marketSlug) {
+    log.warn(`hasOpenPosition: stale position from ${state.currentPosition.marketSlug} (current: ${marketSlug}) — blocking new trades`);
+  }
+  return true;
 }
 
 export function getCurrentPosition() {

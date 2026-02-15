@@ -504,8 +504,10 @@ export async function pollOnce() {
           if (Number.isFinite(endMs)) currentMarketEndMs = endMs;
         }
         // Store conditionId for oracle settlement
-        if (polyFetched.market?.condition_id) {
-          currentConditionId = polyFetched.market.condition_id;
+        // Gamma API uses camelCase `conditionId`, NOT snake_case `condition_id`
+        const mktCondId = polyFetched.market?.conditionId ?? polyFetched.market?.condition_id;
+        if (mktCondId) {
+          currentConditionId = mktCondId;
         }
       } else {
         // Error — allow retry on next poll (don't set polyLastFetchMs)
@@ -638,6 +640,49 @@ export async function pollOnce() {
     }
 
     if (marketSlug) currentMarketSlug = marketSlug;
+
+    // ── 4b. Stale position recovery (bot restart with position from past market) ──
+    // On restart, currentMarketSlug starts as null → slugChanged is always false →
+    // positions from old markets are never settled. This block catches that case.
+    // Also handles any missed market switch settlement.
+    const stalePos = getCurrentPosition();
+    if (stalePos && !stalePos.settled && currentMarketSlug && stalePos.marketSlug !== currentMarketSlug) {
+      log.warn(`STALE POSITION detected: ${stalePos.side} on ${stalePos.marketSlug} (current market: ${currentMarketSlug})`);
+      const oracleCondId = stalePos.conditionId;
+      if (oracleCondId) {
+        // Has conditionId → try oracle settlement
+        const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
+        const currentBtcPrice = oraclePrice || getBinancePrice();
+        const { won, outcome, source } = await settleViaOracle(stalePos, oracleCondId, currentBtcPrice, null);
+        log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
+        settleTrade(won);
+        writeJournalEntry({
+          outcome: won ? 'WIN' : 'LOSS',
+          pnl: won ? (stalePos.size - stalePos.cost) : -stalePos.cost,
+          exitData: { outcome, source, staleRecovery: true },
+        });
+        if (!won) recordLoss();
+        if (outcome) settlePrediction(stalePos.marketSlug, outcome);
+        setLastSettled(stalePos.marketSlug, Date.now());
+      } else if (!stalePos.fillConfirmed) {
+        // No conditionId + fill never confirmed → order likely never filled → unwind
+        log.warn('Stale position has no conditionId and fill was never confirmed — unwinding (returning $' + stalePos.cost.toFixed(2) + ')');
+        unwindPosition();
+        writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { staleRecovery: true, reason: 'no_conditionId_no_fill' } });
+        clearEntrySnapshot();
+      } else {
+        // No conditionId but fill was confirmed → can't verify outcome → settle as loss (conservative)
+        log.warn('Stale position has no conditionId but fill was confirmed — settling as LOSS (conservative)');
+        settleTrade(false);
+        writeJournalEntry({
+          outcome: 'LOSS', pnl: -stalePos.cost,
+          exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
+        });
+        recordLoss();
+        setLastSettled(stalePos.marketSlug, Date.now());
+      }
+      resetCutLossState();
+    }
 
     if (!poly?.ok) {
       log.warn(`Polymarket: ${poly?.reason ?? 'no snapshot'}`);

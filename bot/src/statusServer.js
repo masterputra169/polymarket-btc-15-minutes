@@ -5,7 +5,7 @@
 
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
-import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit } from './trading/positionTracker.js';
+import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade } from './trading/positionTracker.js';
 
 const log = createLogger('StatusWS');
 
@@ -145,6 +145,22 @@ export function startStatusServer() {
                 })
                 .catch(err => { releaseSellLock(); respond('sellPosition', { ok: false, error: err.message }); });
             }
+          }
+
+        // ── Force Settle (stuck positions from expired markets) ──
+        } else if (msg.type === 'forceSettle') {
+          const pos = getCurrentPosition();
+          if (!pos || pos.settled) {
+            respond('forceSettle', { ok: false, error: 'no_open_position' });
+          } else if (msg.outcome === 'UNWIND') {
+            unwindPosition();
+            log.info(`Force UNWIND: returned $${pos.cost.toFixed(2)} to bankroll`);
+            respond('forceSettle', { ok: true, action: 'unwind', returned: pos.cost });
+          } else {
+            const won = msg.outcome === 'WIN';
+            settleTrade(won);
+            log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)}`);
+            respond('forceSettle', { ok: true, action: 'settle', won, side: pos.side });
           }
 
         // ── Trader Discovery commands ──
