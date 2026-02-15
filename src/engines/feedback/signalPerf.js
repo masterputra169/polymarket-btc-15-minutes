@@ -83,7 +83,7 @@ export function extractSignalSnapshot(breakdown) {
   const snap = {};
   for (const key of SIGNAL_KEYS) {
     const entry = breakdown[key];
-    if (!entry || entry.weight === 0) {
+    if (!entry || entry.weight <= 0) {
       snap[key] = null;
       continue;
     }
@@ -245,6 +245,8 @@ export function flushSignalPerf() {
  */
 export function clearSignalPerf() {
   store = emptyStore();
-  dirty = true;
+  dirty = false;
+  clearTimeout(persistTimer);
+  persistTimer = null;
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* */ }
 }
