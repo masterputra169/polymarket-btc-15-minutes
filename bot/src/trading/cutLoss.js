@@ -1,13 +1,14 @@
 /**
- * Cut-loss (stop-loss) evaluator — v3 Smart Cut-Loss.
+ * Cut-loss (stop-loss) evaluator — v4 Aggressive Cut-Loss.
  *
- * v3 changes over v2.1:
- *   - Removed partial cuts (always full exit — binary options are all-or-nothing)
- *   - ATR-scaled momentum threshold (Gate 9) replaces fixed $5/min
- *   - Time-decay EV multiplier (Gate 10) — holding value decreases as time expires
- *   - Regime-change detection (Gate 8b) — lowers threshold if regime changed since entry
- *   - Expanded token trajectory buffer (12 polls) + higher recovery magnitude (2 cent)
- *   - minTokenDropPct raised 15% → 25%
+ * v4 changes over v3:
+ *   - minTokenDropPct 25% → 12% (cut earlier, save more)
+ *   - Gate 7 softened: BTC within 0.02% of PTB no longer hard-vetoes
+ *   - ML veto threshold raised 55% → 65% (only high-conf ML can veto)
+ *   - consecutivePolls 3 → 2 (easier to confirm)
+ *   - Time-decay early bonus 1.15 → 1.05 (less over-protective)
+ *   - Token recovery threshold 2¢ → 3¢ (ignore noise bounces)
+ *   - NEW: Late force-cut — <2min left + drop>15% → skip soft gates
  *
  * Gate chain (all must pass for shouldCut = true):
  *   1.  Feature enabled
@@ -16,17 +17,18 @@
  *   4.  Cooldown elapsed since last failed sell
  *   5.  Min hold time met (60s)
  *   6.  Not too close to settlement (< 30s)
- *   7.  BTC position check — if BTC is on our side of PTB, never cut
+ *   6b. LATE FORCE-CUT: <2min left + drop>15% → skip gates 7-12d, go to gate 13
+ *   7.  BTC position check — soft zone: BTC within 0.02% of PTB still allows cut
  *   8.  BTC-to-PTB distance — time-scaled, ATR-adjusted, regime-aware
  *   8b. Regime-change accelerator — if regime changed since entry, lower threshold 30%
  *   9.  BTC momentum — ATR-scaled, if BTC is recovering toward PTB, skip cut
  *  10.  EV comparison — regime-aware margin + time-decay multiplier
- *  11.  ML veto — if ML confidence >= 55% and agrees with position, block cut
- *  12.  Token drop minimum — token must have dropped at least 25%
+ *  11.  ML veto — if ML confidence >= 65% and agrees with position, block cut
+ *  12.  Token drop minimum — token must have dropped at least 12%
  *  12b. Token price above minimum ($0.05)
  *  12c. Orderbook liquidity — don't sell into thin books or wide spreads
- *  12d. Token trajectory — if token is recovering (>2¢ over 12 polls), skip cut
- *  13.  Consecutive poll confirmation — 3 consecutive polls where all gates pass
+ *  12d. Token trajectory — if token is recovering (>3¢ over 12 polls), skip cut
+ *  13.  Consecutive poll confirmation — 2 consecutive polls where all gates pass
  */
 
 import { BOT_CONFIG } from '../config.js';
@@ -100,10 +102,10 @@ function getEvMargin(regime) {
  */
 function getTimeDecay(timeLeftMin) {
   if (timeLeftMin == null) return 1.0;
-  if (timeLeftMin > 8)  return 1.15; // early: holding has bonus value
-  if (timeLeftMin > 4)  return 1.05; // mid: slight bonus
-  if (timeLeftMin > 2)  return 1.00; // late: no bonus
-  return 0.90;                       // very late: penalty (less time to recover)
+  if (timeLeftMin > 8)  return 1.05; // early: small bonus (v4: 1.15→1.05, less protective)
+  if (timeLeftMin > 4)  return 1.00; // mid: no bonus
+  if (timeLeftMin > 2)  return 0.95; // late: slight penalty
+  return 0.85;                       // very late: stronger penalty (less time to recover)
 }
 
 /**
@@ -188,77 +190,85 @@ export function evaluateCutLoss({
     btcDistPct = Math.abs(rawDistPct);
   }
 
-  // ── Gate 7: BTC position check ──
-  if (hasPtb && btcFavorable) {
-    return no(`btc_favorable_${btcDistPct.toFixed(3)}%`);
-  }
-
-  // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
-  let regimeChanged = false;
-  if (hasPtb) {
-    let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
-
-    // ── Gate 8b: Regime-change accelerator ──
-    // If regime changed since entry AND BTC is on wrong side, lower threshold 30%.
-    // Regime change invalidates the original entry signal.
-    if (entryRegime && entryRegime !== regime && !btcFavorable) {
-      threshold *= 0.7;
-      regimeChanged = true;
-    }
-
-    if (btcDistPct < threshold) {
-      return no(`btc_close_${btcDistPct.toFixed(3)}%<${threshold.toFixed(3)}%${regimeChanged ? '_regime_chg' : ''}`);
-    }
-  }
-
-  // ── Gate 9: BTC momentum (ATR-scaled) ──
-  if (hasPtb && btcDelta1m != null && Number.isFinite(btcDelta1m)) {
-    const movingTowardPtb = position.side === 'UP'
-      ? btcDelta1m > 0
-      : btcDelta1m < 0;
-    const momentumThreshold = getMomentumThreshold(atrRatio);
-    if (movingTowardPtb && Math.abs(btcDelta1m) > momentumThreshold) {
-      return no(`btc_recovering_$${btcDelta1m.toFixed(1)}/min>$${momentumThreshold.toFixed(0)}`);
-    }
-  }
-
-  // ── Gate 10: EV comparison (regime-aware margin + time-decay) ──
-  const evMargin = getEvMargin(regime);
-  const timeDecay = getTimeDecay(timeLeftMin);
-  let evHold = null;
-  let evCut = currentTokenPrice;
-  if (modelProbability != null && Number.isFinite(modelProbability)) {
-    evHold = modelProbability * timeDecay;
-    if (evHold >= evCut * evMargin) {
-      return no(`ev_hold_${(evHold * 100).toFixed(1)}%>=cut_${(evCut * 100).toFixed(1)}%×${evMargin}×t${timeDecay}`);
-    }
-  }
-
-  // ── Gate 11: ML veto ──
-  if (mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side) {
-    return no(`ml_veto_${(mlConfidence * 100).toFixed(0)}%_${mlSide}`);
-  }
-
-  // ── Gate 12: Token drop minimum ──
-  if (dropPct < cfg.minTokenDropPct) {
-    return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
-  }
-
-  // ── Gate 12b: Token price above minimum? ──
-  if (currentTokenPrice < cfg.minTokenPrice) {
-    return no(`price_${currentTokenPrice.toFixed(3)}<min_${cfg.minTokenPrice}`);
-  }
+  // ── Gate 6b: LATE FORCE-CUT ──
+  // <2min left + drop >15% → skip soft gates 7-12d, jump straight to confirmation.
+  // At <2min, there's no time for recovery. Holding to expiry = total loss.
+  const LATE_FORCE_CUT_MIN = 2.0;
+  const LATE_FORCE_CUT_DROP = 15;
+  const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Emergency fast-track: genuine crash detection ──
-  // If token dropped hard AND BTC is far from PTB, skip slow gates (12c/12d/13)
-  // and force immediate full cut. In a real crash, liquidity evaporates.
   const crashDrop = cfg.crashDropPct ?? 40;
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
   const isCrash = dropPct >= crashDrop && hasPtb && btcDistPct >= crashDist;
 
+  let regimeChanged = false;
+  let evHold = null;
+  let evCut = currentTokenPrice;
   let tokenSlope = null;
+  const evMargin = getEvMargin(regime);
+  const timeDecay = getTimeDecay(timeLeftMin);
 
-  if (!isCrash) {
+  // Late force-cut and crash skip soft gates entirely
+  if (!isLateForceCut && !isCrash) {
+
+    // ── Gate 7: BTC position check (SOFT ZONE) ──
+    // v4: BTC within 0.02% of PTB is "borderline" — don't hard-veto.
+    // Only veto if BTC is clearly on our side (>0.02% favorable).
+    const BTC_SOFT_ZONE_PCT = 0.02;
+    if (hasPtb && btcFavorable && btcDistPct > BTC_SOFT_ZONE_PCT) {
+      return no(`btc_favorable_${btcDistPct.toFixed(3)}%>${BTC_SOFT_ZONE_PCT}%`);
+    }
+
+    // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
+    if (hasPtb && !btcFavorable) {
+      let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
+
+      // ── Gate 8b: Regime-change accelerator ──
+      if (entryRegime && entryRegime !== regime) {
+        threshold *= 0.7;
+        regimeChanged = true;
+      }
+
+      if (btcDistPct < threshold) {
+        return no(`btc_close_${btcDistPct.toFixed(3)}%<${threshold.toFixed(3)}%${regimeChanged ? '_regime_chg' : ''}`);
+      }
+    }
+
+    // ── Gate 9: BTC momentum (ATR-scaled) ──
+    if (hasPtb && btcDelta1m != null && Number.isFinite(btcDelta1m)) {
+      const movingTowardPtb = position.side === 'UP'
+        ? btcDelta1m > 0
+        : btcDelta1m < 0;
+      const momentumThreshold = getMomentumThreshold(atrRatio);
+      if (movingTowardPtb && Math.abs(btcDelta1m) > momentumThreshold) {
+        return no(`btc_recovering_$${btcDelta1m.toFixed(1)}/min>$${momentumThreshold.toFixed(0)}`);
+      }
+    }
+
+    // ── Gate 10: EV comparison (regime-aware margin + time-decay) ──
+    if (modelProbability != null && Number.isFinite(modelProbability)) {
+      evHold = modelProbability * timeDecay;
+      if (evHold >= evCut * evMargin) {
+        return no(`ev_hold_${(evHold * 100).toFixed(1)}%>=cut_${(evCut * 100).toFixed(1)}%×${evMargin}×t${timeDecay}`);
+      }
+    }
+
+    // ── Gate 11: ML veto (v4: raised threshold 55% → 65%) ──
+    if (mlConfidence != null && mlConfidence >= 0.65 && mlSide === position.side) {
+      return no(`ml_veto_${(mlConfidence * 100).toFixed(0)}%_${mlSide}`);
+    }
+
+    // ── Gate 12: Token drop minimum ──
+    if (dropPct < cfg.minTokenDropPct) {
+      return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
+    }
+
+    // ── Gate 12b: Token price above minimum? ──
+    if (currentTokenPrice < cfg.minTokenPrice) {
+      return no(`price_${currentTokenPrice.toFixed(3)}<min_${cfg.minTokenPrice}`);
+    }
+
     // ── Gate 12c: Orderbook liquidity ──
     if (orderbook) {
       const bidLiq = orderbook.bidLiquidity ?? 0;
@@ -271,24 +281,24 @@ export function evaluateCutLoss({
       }
     }
 
-    // ── Gate 12d: Token price trajectory ──
-    // Require >2¢ recovery over 12 polls (~36s) to veto cut.
-    // Smaller bounces (noise) don't block the cut.
+    // ── Gate 12d: Token price trajectory (v4: 2¢ → 3¢) ──
     tokenSlope = getTokenPriceSlope();
-    if (tokenSlope != null && tokenSlope > 0.02) {
+    if (tokenSlope != null && tokenSlope > 0.03) {
       return no(`token_recovering_+${(tokenSlope * 100).toFixed(1)}¢`);
     }
   }
 
   // ── Gate 13: Consecutive poll confirmation ──
-  // Crash: only 1 poll needed. Normal: full consecutivePolls (3).
-  const requiredPolls = isCrash ? 1 : cfg.consecutivePolls;
+  // Crash: 1 poll. Late force-cut: 1 poll. Normal: consecutivePolls (2).
+  const requiredPolls = (isCrash || isLateForceCut) ? 1 : cfg.consecutivePolls;
   consecutiveCutPolls++;
   if (consecutiveCutPolls < requiredPolls) {
     return {
       shouldCut: false,
       reason: isCrash
         ? `crash_confirming_${consecutiveCutPolls}/${requiredPolls}`
+        : isLateForceCut
+        ? `late_force_confirming_${consecutiveCutPolls}/${requiredPolls}`
         : `confirming_${consecutiveCutPolls}/${cfg.consecutivePolls}`,
     };
   }
@@ -303,7 +313,7 @@ export function evaluateCutLoss({
 
   return {
     shouldCut: true,
-    reason: isCrash ? 'CRASH' : 'triggered',
+    reason: isCrash ? 'CRASH' : isLateForceCut ? 'LATE_FORCE_CUT' : 'triggered',
     sellPrice,
     dropPct,
     recoveryAmount,
@@ -321,6 +331,7 @@ export function evaluateCutLoss({
       atrRatio: atrRatio ?? null,
       tokenSlope,
       isCrash,
+      isLateForceCut,
       momentumThreshold: getMomentumThreshold(atrRatio),
     },
   };
@@ -414,11 +425,11 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     timeDecay: getTimeDecay(timeLeftMin),
     confirmCount: consecutiveCutPolls,
     confirmNeeded: cfg.consecutivePolls,
-    mlVeto: mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side,
+    mlVeto: mlConfidence != null && mlConfidence >= 0.65 && mlSide === position.side,
     regime,
     atrRatio: atrRatio ?? null,
     tokenSlope,
-    tokenRecovering: tokenSlope != null && tokenSlope > 0.02,
+    tokenRecovering: tokenSlope != null && tokenSlope > 0.03,
     momentumThreshold: getMomentumThreshold(atrRatio),
   };
 }
