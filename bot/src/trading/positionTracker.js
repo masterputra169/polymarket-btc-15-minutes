@@ -112,13 +112,14 @@ export function saveState() {
  * Record a new trade (position entry).
  * Bankroll deducted immediately. If order later fails to fill, call unwindPosition().
  */
-export function recordTrade({ side, tokenId, price, size, marketSlug, orderId, actualCost }) {
+export function recordTrade({ side, tokenId, conditionId, price, size, marketSlug, orderId, actualCost }) {
   // Use actual fill cost from CLOB response when available, fallback to theoretical
   const cost = actualCost != null ? roundMoney(actualCost) : roundMoney(price * size);
 
   state.currentPosition = {
     side,
     tokenId,
+    conditionId: conditionId ?? null,
     price: Math.round(price * 1e8) / 1e8,  // Prevent float drift (e.g. 0.21000000000000002)
     size,
     marketSlug,
@@ -146,7 +147,7 @@ export function recordTrade({ side, tokenId, price, size, marketSlug, orderId, a
 
   if (state.trades.length > 100) state.trades = state.trades.slice(-100);
 
-  auditLog({ type: 'ENTER', side, price, size, cost, marketSlug, orderId, bankrollAfter: state.bankroll });
+  auditLog({ type: 'ENTER', side, price, size, cost, marketSlug, orderId, conditionId: conditionId ?? null, bankrollAfter: state.bankroll });
 
   log.info(`Position opened: ${side} ${size} shares @ $${price.toFixed(3)} ($${cost.toFixed(2)}) | Bankroll: $${state.bankroll.toFixed(2)}`);
   saveState();

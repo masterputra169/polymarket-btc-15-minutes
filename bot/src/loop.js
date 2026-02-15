@@ -175,6 +175,7 @@ export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
 // ── Module-level state ──
 let currentMarketSlug = null;
 let currentMarketEndMs = null;
+let currentConditionId = null;
 let priceToBeat = { slug: null, value: null, updatedAt: 0 };
 
 // ── Market transition grace period ──
@@ -244,6 +245,7 @@ function resetMarketCache() {
   polySnapshotCache = null;
   polyLastFetchMs = 0;
   currentMarketEndMs = null;
+  currentConditionId = null;
   priceToBeat = { slug: null, value: null, updatedAt: 0 };
   tokenIdsNotified = false;
   marketUpHistory.buf.fill(0);
@@ -254,6 +256,51 @@ function resetMarketCache() {
   signalConfirmSide = null;
   signalFlipHistory.length = 0;
   lastSignalSide = null;
+}
+
+/**
+ * Settle a position using Polymarket oracle resolution (CLOB /markets/{conditionId}).
+ * Polls up to 6 times (30s total) for oracle to resolve, then falls back to BTC price comparison.
+ *
+ * @param {Object} pos - Current position from positionTracker
+ * @param {string|null} conditionId - Polymarket condition ID for oracle query
+ * @param {number|null} fallbackBtcPrice - BTC price for legacy fallback
+ * @param {number|null} ptbValue - Price-to-beat for legacy fallback
+ * @returns {{ won: boolean, outcome: string|null, source: string }}
+ */
+async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
+  // 1. Try oracle first (poll up to 30s with retries)
+  if (conditionId) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const market = await res.json();
+          if (market.closed) {
+            const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+            const winner = tokens.find(t => t.winner === true);
+            if (winner) {
+              const outcome = winner.outcome.toUpperCase();
+              const won = pos.side === outcome;
+              return { won, outcome, source: 'oracle' };
+            }
+          }
+        }
+      } catch { /* retry */ }
+      if (attempt < 5) await new Promise(r => setTimeout(r, 5000));
+    }
+    log.warn('Oracle settlement timed out after 30s — falling back to BTC price comparison');
+  }
+
+  // 2. Fallback: BTC price comparison (legacy behavior)
+  if (fallbackBtcPrice != null && ptbValue != null) {
+    const outcome = fallbackBtcPrice >= ptbValue ? 'UP' : 'DOWN';
+    return { won: pos.side === outcome, outcome, source: 'price_fallback' };
+  }
+
+  // 3. Last resort: unknown — settle as loss
+  return { won: false, outcome: null, source: 'unknown' };
 }
 
 /**
@@ -341,30 +388,25 @@ export async function pollOnce() {
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
           });
-        } else if (ptbFresh && currentBtcPrice != null) {
-          const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
-          const won = pos.side === actualResult;
-          // Warn if settlement is uncertain (BTC price near PTB boundary)
-          const pctFromPtb = Math.abs(currentBtcPrice - ptbValue) / ptbValue;
-          if (pctFromPtb < 0.001) {
-            log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+        } else {
+          // Oracle-based settlement: query CLOB for definitive resolution
+          const oracleConditionId = pos.conditionId ?? currentConditionId;
+          const { won, outcome, source } = await settleViaOracle(pos, oracleConditionId, currentBtcPrice, ptbFresh ? ptbValue : null);
+          if (source === 'price_fallback') {
+            const pctFromPtb = ptbValue != null && currentBtcPrice != null
+              ? Math.abs(currentBtcPrice - ptbValue) / ptbValue : null;
+            if (pctFromPtb != null && pctFromPtb < 0.001) {
+              log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+            }
           }
-          log.info(`Position expired — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'} (${priceSource})`);
+          log.info(`Position expired — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
+            exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
-        } else {
-          log.warn(`Position expired — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
-          settleTrade(false);
-          writeJournalEntry({
-            outcome: 'LOSS', pnl: -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
-          });
-          recordLoss();
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -448,6 +490,10 @@ export async function pollOnce() {
         if (polyFetched.market?.endDate) {
           const endMs = new Date(polyFetched.market.endDate).getTime();
           if (Number.isFinite(endMs)) currentMarketEndMs = endMs;
+        }
+        // Store conditionId for oracle settlement
+        if (polyFetched.market?.condition_id) {
+          currentConditionId = polyFetched.market.condition_id;
         }
       } else {
         // Error — allow retry on next poll (don't set polyLastFetchMs)
@@ -534,30 +580,25 @@ export async function pollOnce() {
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
           });
-        } else if (ptbFresh && currentBtcPrice != null) {
-          const actualResult = currentBtcPrice >= ptbValue ? 'UP' : 'DOWN';
-          const won = pos.side === actualResult;
-          // Warn if settlement is uncertain (BTC price near PTB boundary)
-          const pctFromPtb = Math.abs(currentBtcPrice - ptbValue) / ptbValue;
-          if (pctFromPtb < 0.001) {
-            log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+        } else {
+          // Oracle-based settlement: query CLOB for definitive resolution
+          const oracleConditionId = pos.conditionId ?? currentConditionId;
+          const { won, outcome, source } = await settleViaOracle(pos, oracleConditionId, currentBtcPrice, ptbFresh ? ptbValue : null);
+          if (source === 'price_fallback') {
+            const pctFromPtb = ptbValue != null && currentBtcPrice != null
+              ? Math.abs(currentBtcPrice - ptbValue) / ptbValue : null;
+            if (pctFromPtb != null && pctFromPtb < 0.001) {
+              log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
+            }
           }
-          log.info(`Position settled on market switch — BTC $${currentBtcPrice.toFixed(0)} vs PTB $${ptbValue.toFixed(0)} → ${actualResult} → ${won ? 'WIN' : 'LOSS'} (${priceSource})`);
+          log.info(`Position settled on switch — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
+            exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
-        } else {
-          log.warn(`Position expired on market switch — ${!ptbFresh ? 'stale/missing PTB' : 'no BTC price'}, settling as loss`);
-          settleTrade(false);
-          writeJournalEntry({
-            outcome: 'LOSS', pnl: -pos.cost,
-            exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
-          });
-          recordLoss();
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -995,6 +1036,7 @@ export async function pollOnce() {
               recordTrade({
                 side: 'UP',
                 tokenId: poly.tokens.upTokenId,
+                conditionId: currentConditionId,
                 price: actualPrice,
                 size: arbShares,
                 marketSlug,
@@ -1152,6 +1194,7 @@ export async function pollOnce() {
             recordTrade({
               side: betSide,
               tokenId,
+              conditionId: currentConditionId,
               price: actualPrice,
               size: actualSize,
               marketSlug,
