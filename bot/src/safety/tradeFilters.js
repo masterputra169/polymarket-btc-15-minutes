@@ -11,7 +11,7 @@
  * 5. Cooldown after loss — avoid tilt/revenge trading
  * 6. Max trades per market
  * 7. Weekend low-liquidity
- * 8. High divergence guard — edge >25% = market disagrees, need strong ML
+ * 8. High divergence guard — regime-aware: trending hard-blocks >20%, others >25% need ML≥65%
  * 9. Counter-trend momentum — don't fight strong BTC moves
  */
 
@@ -52,6 +52,7 @@ export function applyTradeFilters({
   bestEdge,        // best edge from edge engine (model prob - market price)
   delta1m,         // BTC 1-minute price delta ($)
   signalSide,      // the side we want to enter ('UP'|'DOWN')
+  regime,          // market regime ('trending'|'choppy'|'mean_reverting'|'moderate')
 }) {
   const reasons = [];
 
@@ -133,13 +134,20 @@ export function applyTradeFilters({
     }
   }
 
-  // 8. High divergence guard — extreme edge means market strongly disagrees with model.
-  // Edge > 25% typically means token is cheap (30-40¢) and edge is inflated.
-  // Journal data: ALL trades with edge > 25% lost. Require strong ML backing to override market.
-  if (bestEdge != null && bestEdge > 0.25 && mlAvailable) {
-    const minDivergenceConf = 0.65;
-    if (mlConfidence == null || mlConfidence < minDivergenceConf) {
-      reasons.push(`High divergence: edge ${(bestEdge * 100).toFixed(0)}% > 25% but ML conf ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < ${(minDivergenceConf * 100).toFixed(0)}%`);
+  // 8. High divergence guard — regime-aware.
+  // Extreme edge means market strongly disagrees with model — usually model is wrong.
+  // Trending regime: edge >20% is almost always fake (0% win rate in 31-trade journal).
+  //   Indicators lag behind trends, inflating model prob while market correctly prices risk.
+  //   Hard block regardless of ML confidence.
+  // Other regimes: edge >25% requires strong ML backing (≥65%) to override market.
+  if (bestEdge != null && mlAvailable) {
+    if (regime === 'trending' && bestEdge > 0.20) {
+      reasons.push(`Trending high edge: ${(bestEdge * 100).toFixed(0)}% > 20% (unreliable in trend — 0% win rate)`);
+    } else if (bestEdge > 0.25) {
+      const minDivergenceConf = 0.65;
+      if (mlConfidence == null || mlConfidence < minDivergenceConf) {
+        reasons.push(`High divergence: edge ${(bestEdge * 100).toFixed(0)}% > 25% but ML conf ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < ${(minDivergenceConf * 100).toFixed(0)}%`);
+      }
     }
   }
 

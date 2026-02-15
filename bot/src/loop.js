@@ -1182,6 +1182,7 @@ export async function pollOnce() {
         bestEdge: edge.bestEdge,
         delta1m,
         signalSide: rec.side,
+        regime: regimeInfo?.regime ?? 'moderate',
       });
 
       // Orderbook flow alignment check
