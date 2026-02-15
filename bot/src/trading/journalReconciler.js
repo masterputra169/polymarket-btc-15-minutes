@@ -74,7 +74,7 @@ function parseQuestionToSlugTs(question) {
 function resolveTokenSide(assetId, tokens) {
   if (!Array.isArray(tokens) || !assetId) return null;
   const token = tokens.find(t => t.token_id === assetId);
-  return token ? token.outcome.toUpperCase() : null;
+  return token?.outcome ? token.outcome.toUpperCase() : null;
 }
 
 /**
@@ -100,7 +100,7 @@ async function fetchMarketInfo(conditionId) {
     // Determine winner from tokens[].winner field
     const tokens = Array.isArray(market.tokens) ? market.tokens : [];
     const winnerToken = tokens.find(t => t.winner === true);
-    const outcome = winnerToken ? winnerToken.outcome.toUpperCase() : null;
+    const outcome = winnerToken?.outcome ? winnerToken.outcome.toUpperCase() : null;
 
     return { market, outcome, resolved: !!outcome };
   } catch (err) {
@@ -333,9 +333,14 @@ async function buildVerifiedEntry(conditionId, marketTrades, localTrades) {
   let netPnl = 0;
 
   if (resolved && netPosition > 0) {
-    const primarySide = tradeRecords.find(t => t.side === 'BUY')?.tokenSide;
-    const won = primarySide === outcome;
-    totalPayout = won ? netPosition : 0;
+    // Compute payout per token side (handles arb where both UP+DOWN bought)
+    const buysBySide = {};
+    for (const t of tradeRecords) {
+      if (t.side === 'BUY' && t.tokenSide) {
+        buysBySide[t.tokenSide] = (buysBySide[t.tokenSide] || 0) + t.size;
+      }
+    }
+    totalPayout = buysBySide[outcome] || 0; // Only winning side pays out $1/share
     netPnl = Math.round((totalPayout + totalProceeds - totalCost) * 100) / 100;
   } else if (netPosition <= 0 && totalProceeds > 0) {
     netPnl = Math.round((totalProceeds - totalCost) * 100) / 100;

@@ -1089,9 +1089,10 @@ export async function pollOnce() {
       // Signal confirmed — proceed with existing trade filters
 
       // Tilt protection: after cut-loss, temporarily raise ML confidence threshold
+      // (actual blocking happens in applyTradeFilters via tiltMlConfMin param)
       const effectiveMlConf = mlResult.available ? mlResult.mlConfidence : null;
       if (tiltMarketsLeft > 0 && effectiveMlConf != null && effectiveMlConf < TILT_ML_CONF_MIN) {
-        log.info(`Tilt protection: ML conf ${(effectiveMlConf * 100).toFixed(0)}% < ${TILT_ML_CONF_MIN * 100}% (${tiltMarketsLeft} markets left) — blocking entry`);
+        log.info(`Tilt protection active: ML conf ${(effectiveMlConf * 100).toFixed(0)}% < ${TILT_ML_CONF_MIN * 100}% (${tiltMarketsLeft} markets left) — will raise threshold in filters`);
       }
 
       // Smart trade filters (confidence gating, 50/50 filter, volatility, cooldown, session)

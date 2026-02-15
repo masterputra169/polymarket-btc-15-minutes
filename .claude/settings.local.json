@@ -61,7 +61,26 @@
       "Bash(findstr:*)",
       "WebFetch(domain:debank.com)",
       "Bash(printf:*)",
-      "Bash(DRY_RUN=true node:*)"
+      "Bash(DRY_RUN=true node:*)",
+      "Bash(git show:*)",
+      "Bash(ss:*)",
+      "Bash(LOG_LEVEL=info STATUS_PORT=3099 node:*)",
+      "Bash(LOG_LEVEL=debug timeout 15 node:*)",
+      "Bash(DRY_RUN=true timeout 30 node:*)",
+      "Bash(DRY_RUN=true timeout 15 node:*)",
+      "Bash(DRY_RUN=true timeout 12 node:*)",
+      "Bash(OUTPUT_DIR=\"./polymarket_btc15m_data\" INCLUDE_TRADES=false node:*)",
+      "Bash(OUTPUT_DIR=\"./polymarket_btc15m_data\" INCLUDE_TRADES=false INCLUDE_PRICE_HISTORY=true RATE_LIMIT_MS=300 node scrape-polymarket-btc15m.js)",
+      "Bash(where:*)",
+      "Bash(grep:*)",
+      "Bash(DRY_RUN=false timeout 20 node:*)",
+      "Bash(DRY_RUN=false timeout 15 node:*)",
+      "Bash(DRY_RUN=false timeout 10 node:*)",
+      "Bash(DRY_RUN=false timeout 12 node:*)",
+      "Bash(:)",
+      "Bash(DRY_RUN=false timeout 45 node:*)",
+      "Bash(source:*)",
+      "Bash(DRY_RUN=false timeout 60 node:*)"
     ]
   }
 }
