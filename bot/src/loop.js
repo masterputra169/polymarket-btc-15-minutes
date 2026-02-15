@@ -166,8 +166,8 @@ function parseClobAmount(value, fallback = null) {
 // ── Pause/Resume control ──
 let paused = false;
 
-export function pauseBot() { paused = true; log.info('Bot PAUSED by dashboard'); }
-export function resumeBot() { paused = false; log.info('Bot RESUMED by dashboard'); }
+export function pauseBot(source = 'dashboard') { paused = true; log.info(`Bot PAUSED (${source})`); }
+export function resumeBot(source = 'dashboard') { paused = false; log.info(`Bot RESUMED (${source})`); }
 export function isPaused() { return paused; }
 
 // ── Position callback (injected from index.js to avoid circular imports) ──

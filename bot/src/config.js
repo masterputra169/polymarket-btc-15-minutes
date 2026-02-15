@@ -65,6 +65,12 @@ const BOT_CONFIG = {
   redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
   redeemedFile: resolve(__dirname, '..', 'data', 'redeemed.json'),
 
+  // Performance monitoring
+  monitorIntervalMs: envInt(process.env.MONITOR_INTERVAL_MS, 15 * 60 * 1000, 60_000, 60 * 60 * 1000),
+  dailyPnlFile: resolve(__dirname, '..', 'data', 'daily_pnl.jsonl'),
+  winRateWarnThreshold: envNum(process.env.WIN_RATE_WARN, 0.40, 0.10, 0.90),
+  winRatePauseThreshold: envNum(process.env.WIN_RATE_PAUSE, 0.30, 0.10, 0.90),
+
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
