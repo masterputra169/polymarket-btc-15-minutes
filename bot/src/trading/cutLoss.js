@@ -85,13 +85,17 @@ function getBtcDistThreshold(timeLeftMin, atrRatio, regime) {
 
 /**
  * Regime-aware EV margin for Gate 10.
- * Trending: tighter margin (0.85) — if losing in trend, cut faster.
- * Choppy: wider margin (0.95) — expect reversals, hold longer.
+ * NO CUT if: modelProb × timeDecay >= tokenPrice × evMargin
+ * Higher margin = harder to veto (model needs MORE confidence to hold) = easier to cut.
+ * Lower margin = easier to veto (model needs LESS confidence to hold) = easier to hold.
+ *
+ * Trending: if losing in a trend, the trend is against us → cut faster → high margin.
+ * Choppy: prices bounce → expect reversion → hold longer → low margin.
  */
 function getEvMargin(regime) {
-  if (regime === 'trending') return 0.85;
-  if (regime === 'choppy') return 0.95;
-  if (regime === 'mean_reverting') return 0.93;
+  if (regime === 'trending') return 0.95;
+  if (regime === 'choppy') return 0.85;
+  if (regime === 'mean_reverting') return 0.87;
   return 0.90;
 }
 
@@ -307,9 +311,15 @@ export function evaluateCutLoss({
   }
 
   // ═══ All gates passed — compute sell details ═══
-  const sellPrice = (orderbook?.bestBid != null && orderbook.bestBid > 0)
+  // FOK sell price = bestBid with 2% slippage tolerance.
+  // The bid can move between evaluation and the async CLOB call.
+  // Without slippage, the FOK fails, burns a maxAttempt + 10s cooldown,
+  // and after 3 failures the bot gives up and rides to settlement ($0).
+  // The 2% tolerance means we accept fills down to 98% of current bid.
+  const rawSellPrice = (orderbook?.bestBid != null && orderbook.bestBid > 0)
     ? orderbook.bestBid
     : currentTokenPrice;
+  const sellPrice = Math.max(0.01, rawSellPrice * 0.98);
 
   // v3: Always full cut (binary options are all-or-nothing)
   const recoveryAmount = sellPrice * position.size;

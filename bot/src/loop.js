@@ -197,6 +197,7 @@ const TILT_MARKETS = 2;        // number of markets to stay cautious
 // ── Entry regime tracking ──
 // Stored at entry time, passed to cut-loss for regime-change detection.
 let entryRegime = null;
+export function resetEntryRegime() { entryRegime = null; }
 
 let pollCounter = 0;
 let polling = false;

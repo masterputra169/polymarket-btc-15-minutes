@@ -37,7 +37,7 @@ import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from '
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.js';
-import { pollOnce, pauseBot, resumeBot, registerPositionCallback } from './src/loop.js';
+import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime } from './src/loop.js';
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery } from './src/statusServer.js';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.js';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.js';
@@ -113,7 +113,7 @@ async function main() {
 
   // W2: Register ALL callbacks BEFORE starting server — prevents race where
   // dashboard connects and sends commands before callbacks are set
-  registerBotControl(pauseBot, resumeBot);
+  registerBotControl(pauseBot, resumeBot, resetEntryRegime);
   registerPositionManager({ getPositions: () => getMergedPositions(getCurrentPosition()), closePosition });
   registerTraderDiscovery({
     scan: fullScan,

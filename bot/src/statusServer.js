@@ -36,6 +36,7 @@ let lastBroadcastMs = 0;
 // Bot control callbacks — set via registerBotControl() to avoid circular imports
 let _pauseBot = null;
 let _resumeBot = null;
+let _resetEntryRegime = null;
 
 // Position manager callbacks
 let _getPositions = null;
@@ -52,9 +53,10 @@ let _simulateTrader = null;
 /**
  * Register pause/resume callbacks from loop.js (called by index.js).
  */
-export function registerBotControl(pauseFn, resumeFn) {
+export function registerBotControl(pauseFn, resumeFn, resetEntryRegimeFn) {
   _pauseBot = pauseFn;
   _resumeBot = resumeFn;
+  _resetEntryRegime = resetEntryRegimeFn ?? null;
 }
 
 /**
@@ -159,6 +161,7 @@ export function startStatusServer() {
                     writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
                     clearEntrySnapshot();
                     resetCutLossState();
+                    if (_resetEntryRegime) _resetEntryRegime(); // Prevent stale regime leaking into next trade's cut-loss
                     if (cutPnl < 0) recordLoss();
                   }
                   releaseSellLock();
@@ -180,6 +183,7 @@ export function startStatusServer() {
             writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { source: 'forceSettle' } });
             clearEntrySnapshot();
             resetCutLossState();
+            if (_resetEntryRegime) _resetEntryRegime();
             setLastSettled(pos.marketSlug, Date.now());
             log.info(`Force UNWIND: returned $${pos.cost.toFixed(2)} to bankroll`);
             respond('forceSettle', { ok: true, action: 'unwind', returned: pos.cost });
@@ -190,6 +194,7 @@ export function startStatusServer() {
             writeJournalEntry({ outcome: won ? 'WIN' : 'LOSS', pnl, exitData: { source: 'forceSettle' } });
             clearEntrySnapshot();
             resetCutLossState();
+            if (_resetEntryRegime) _resetEntryRegime();
             if (!won) recordLoss();
             setLastSettled(pos.marketSlug, Date.now());
             log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)} pnl=$${pnl.toFixed(2)}`);
