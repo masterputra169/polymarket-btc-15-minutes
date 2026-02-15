@@ -60,6 +60,11 @@ const BOT_CONFIG = {
   verifiedJournalFile: resolve(__dirname, '..', 'data', 'verified_journal.jsonl'),
   reconcileIntervalMs: 30 * 60 * 1000,  // 30 minutes
 
+  // Auto-redeem resolved positions
+  redeemEnabled: process.env.REDEEM_ENABLED !== 'false',
+  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+  redeemedFile: resolve(__dirname, '..', 'data', 'redeemed.json'),
+
   // Cut-loss (stop-loss)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
