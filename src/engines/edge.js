@@ -176,8 +176,11 @@ export function decide({
     const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.85);
     switch (regimeInfo.regime) {
       case 'trending':
-        minEdge = Math.max(minEdge - 0.02 * scale, 0.04);
-        minProb = Math.max(minProb - 0.02 * scale, 0.52);
+        // Journal data: trending regime had 33% win rate, -$6.81 P&L.
+        // Previously relaxed thresholds (easier entry) — now TIGHTENS.
+        // Trend signals are unreliable for 15-min binary options.
+        minEdge = Math.min(minEdge + 0.02 * scale, 0.25);
+        minProb = Math.min(minProb + 0.02 * scale, 0.70);
         break;
       case 'choppy':
         minEdge = Math.min(minEdge + 0.03 * scale, 0.25);

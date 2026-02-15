@@ -33,7 +33,7 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.50,       // minimum ML confidence to trade (raised from 0.40 — below 50% means model is literally unsure)
+  MIN_ML_CONFIDENCE: 0.55,       // minimum ML confidence to trade (raised from 0.50 — journal data: 0-16% win rate below 0.55, 58%+ above 0.60)
   MARKET_5050_RANGE: [0.48, 0.52], // market price in this range = near 50/50, skip (narrowed from 0.45-0.55 — was blocking high-edge opportunities)
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries (widened from 0.25-0.75 — 15-min markets naturally have extreme prices)
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
