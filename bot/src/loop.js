@@ -235,10 +235,10 @@ let chainlinkCache = { price: null, updatedAt: null, source: 'chainlink_rpc' };
 let chainlinkLastFetchMs = 0;
 const CHAINLINK_INTERVAL = 30_000;
 
-// Real USDC balance from Polymarket (every 5 min — on-chain sync)
+// Real USDC balance from Polymarket (every 30s — on-chain sync)
 let usdcBalanceData = null;
 let usdcBalanceLastFetchMs = 0;
-const USDC_BALANCE_INTERVAL = 5 * 60 * 1000;
+const USDC_BALANCE_INTERVAL = 30_000;
 
 function resetMarketCache() {
   polySnapshotCache = null;
