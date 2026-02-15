@@ -294,8 +294,8 @@ export function settleTradeEarlyExit(recoveredUsdc) {
  * Record an arbitrage trade (both legs filled — guaranteed profit).
  *
  * Binary market arb: buy UP + DOWN for < $1.00 combined → guaranteed $1/share payout.
- * Since profit is deterministic, we credit the payout immediately (deducting cost).
- * On-chain: USDC debited at entry, winning tokens redeemed at settlement.
+ * Tracks as a position (side='ARB') so USDC auto-sync defers until settlement.
+ * Payout credited at market expiry/switch via settleTrade(true).
  *
  * @param {Object} params
  * @param {number} params.upCost - Actual USDC spent on UP leg
@@ -306,19 +306,33 @@ export function settleTradeEarlyExit(recoveredUsdc) {
  */
 export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }) {
   const totalCost = roundMoney(upCost + downCost);
-  const payout = roundMoney(shares); // Binary market: guaranteed $1/share
-  const pnl = roundMoney(payout - totalCost);
 
-  state.bankroll = roundMoney(state.bankroll - totalCost + payout);
-  state.pendingCost = 0; // Clear pending reservation (matches recordTrade behavior)
+  // Track arb as a position so USDC auto-sync defers until settlement.
+  // Without this, auto-sync overwrites bankroll with on-chain balance (lower
+  // because USDC was spent but tokens not yet redeemed), erasing arb profit.
+  // Settlement happens at market expiry/switch via the pos.side === 'ARB' branch.
+  state.currentPosition = {
+    side: 'ARB',
+    tokenId: null,  // ARB holds tokens on both sides
+    conditionId: null,
+    price: shares > 0 ? totalCost / shares : 0,
+    size: shares,   // $1/share guaranteed payout at settlement
+    marketSlug,
+    orderId: orderId ?? null,
+    enteredAt: Date.now(),
+    cost: totalCost,
+    settled: false,
+    fillConfirmed: true,  // Both legs verified by successful placement
+  };
+
+  state.bankroll = roundMoney(state.bankroll - totalCost);
+  state.pendingCost = 0; // Clear pending reservation
   state.totalTrades++;
-  state.wins++;
+  // Don't increment wins here — settleTrade(true) at market expiry handles it
 
   state.trades.push({
-    type: 'ARB',
-    pnl,
+    type: 'ARB_ENTRY',
     cost: totalCost,
-    payout,
     shares,
     marketSlug,
     bankrollAfter: state.bankroll,
@@ -327,10 +341,10 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }
 
   if (state.trades.length > 100) state.trades = state.trades.slice(-100);
 
-  auditLog({ type: 'ARB', cost: totalCost, payout, pnl, shares, upCost, downCost, marketSlug, orderId, bankrollAfter: state.bankroll });
+  auditLog({ type: 'ARB_ENTRY', cost: totalCost, shares, upCost, downCost, marketSlug, orderId, bankrollAfter: state.bankroll });
 
   log.info(
-    `ARB settled: cost=$${totalCost.toFixed(2)} payout=$${payout.toFixed(2)} P&L=+$${pnl.toFixed(2)} | Bankroll: $${state.bankroll.toFixed(2)}`
+    `ARB entered: ${shares} pairs @ $${(totalCost / shares).toFixed(3)} (cost $${totalCost.toFixed(2)}) | Bankroll: $${state.bankroll.toFixed(2)}`
   );
   saveState();
 }
@@ -477,12 +491,18 @@ export function getBankroll() {
 }
 
 export function getDailyPnL() {
-  return roundMoney(state.bankroll - state.startOfDayBankroll);
+  // Add back open position's cost — deployed capital is not a realized loss
+  const openCost = (state.currentPosition && !state.currentPosition.settled)
+    ? (state.currentPosition.cost ?? 0) : 0;
+  return roundMoney(state.bankroll + openCost - state.startOfDayBankroll);
 }
 
 export function getDailyPnLPct() {
   if (state.startOfDayBankroll <= 0) return 0;
-  return ((state.bankroll - state.startOfDayBankroll) / state.startOfDayBankroll) * 100;
+  // Add back open position's cost so circuit breaker doesn't trigger on entry alone
+  const openCost = (state.currentPosition && !state.currentPosition.settled)
+    ? (state.currentPosition.cost ?? 0) : 0;
+  return ((state.bankroll + openCost - state.startOfDayBankroll) / state.startOfDayBankroll) * 100;
 }
 
 export function getConsecutiveLosses() {
@@ -490,8 +510,8 @@ export function getConsecutiveLosses() {
 }
 
 export function setBankroll(value) {
-  if (!Number.isFinite(value) || value <= 0) {
-    log.warn(`Invalid bankroll value: ${value} — ignored (must be > 0)`);
+  if (!Number.isFinite(value) || value < 0) {
+    log.warn(`Invalid bankroll value: ${value} — ignored (must be >= 0)`);
     return;
   }
   const prev = state.bankroll;

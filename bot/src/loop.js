@@ -824,9 +824,9 @@ export async function pollOnce() {
       });
     }
 
-    // ── 9c. Cut-loss check ──
+    // ── 9c. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
     const pos = getCurrentPosition();
-    if (pos && !pos.settled) {
+    if (pos && !pos.settled && pos.side !== 'ARB') {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
