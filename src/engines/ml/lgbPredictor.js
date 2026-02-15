@@ -37,7 +37,7 @@ function indexLgbTree(treeStructure) {
     nodeMap.set(id, {
       featureIdx: node.split_feature,
       threshold: node.threshold,
-      defaultLeft: node.default_left !== false, // default true
+      defaultLeft: node.default_left === true, // strict: undefined → false (safer than !== false)
       yes: leftId,   // <= threshold
       no: rightId,   // > threshold
     });

@@ -5,7 +5,7 @@
 
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
-import { setBankroll, acquireSellLock, releaseSellLock } from './trading/positionTracker.js';
+import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit } from './trading/positionTracker.js';
 
 const log = createLogger('StatusWS');
 
@@ -90,7 +90,7 @@ export function startStatusServer() {
     ws.isAlive = true;
 
     ws.on('pong', () => { ws.isAlive = true; });
-    ws.on('error', () => { /* swallow */ });
+    ws.on('error', (err) => { log.debug(`Client error: ${err.message}`); });
 
     // Bidirectional: handle messages from dashboard (rate-limited + validated)
     ws.on('message', (raw) => {
@@ -136,7 +136,13 @@ export function startStatusServer() {
               respond('sellPosition', { ok: false, error: 'sell_in_progress' });
             } else {
               _closePosition(tokenId, size, price)
-                .then(result => { releaseSellLock(); respond('sellPosition', { ok: true, result }); })
+                .then(result => {
+                  // H1: Settle the position with recovered USDC (dashboard sell was missing this)
+                  const recovered = parseFloat(result?.takingAmount) || (price * size);
+                  settleTradeEarlyExit(recovered);
+                  releaseSellLock();
+                  respond('sellPosition', { ok: true, result });
+                })
                 .catch(err => { releaseSellLock(); respond('sellPosition', { ok: false, error: err.message }); });
             }
           }
@@ -161,7 +167,7 @@ export function startStatusServer() {
             .then(result => respond('simulateTrader', result))
             .catch(err => respond('simulateTrader', { error: err.message }));
         }
-      } catch (_e) { /* ignore malformed */ }
+      } catch (err) { log.debug(`Malformed client message: ${err.message}`); }
     });
 
     // Send cached snapshot immediately so new clients get current state
@@ -170,8 +176,14 @@ export function startStatusServer() {
     }
   });
 
+  // M11: Handle async server errors (EADDRINUSE, etc.)
   wss.on('error', (err) => {
     log.error(`Status server error: ${err.message}`);
+    if (err.code === 'EADDRINUSE') {
+      log.error(`Port ${STATUS_PORT} already in use — stopping status server`);
+      wss.close();
+      wss = null;
+    }
   });
 
   // Heartbeat: ping clients every 15s, terminate dead ones

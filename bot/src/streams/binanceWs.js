@@ -20,6 +20,7 @@ let reconnectTimer = null;
 let reconnectMs = 500;
 let hbTimer = null;
 let lastMsgMs = 0;
+let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
 
 // Public state — read by loop.js
 let _price = null;
@@ -45,6 +46,7 @@ function scheduleReconnect() {
 
 export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  intentionalClose = false; // L: Reset before attempt — prevents stuck flag after disconnect+failed connect
 
   try {
     const socket = new WebSocket(WS_URL);
@@ -90,7 +92,8 @@ export function connect() {
         ws = null;
         stopHb();
       }
-      scheduleReconnect();
+      // H4: Don't reconnect if disconnect() was called intentionally
+      if (!intentionalClose) scheduleReconnect();
     });
 
     socket.on('error', () => {
@@ -102,6 +105,7 @@ export function connect() {
 }
 
 export function disconnect() {
+  intentionalClose = true; // H4: Signal to close handler not to reconnect
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopHb();
   if (ws) { try { ws.close(); } catch {} ws = null; }

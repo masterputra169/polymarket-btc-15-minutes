@@ -116,10 +116,11 @@ import {
   setBankroll,
   getLastSettled,
   setLastSettled,
+  getLastSettlementMs,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
-import { evaluateCutLoss, resetCutLossState, recordSellAttempt, getCutLossStatus } from './trading/cutLoss.js';
+import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -270,12 +271,12 @@ function resetMarketCache() {
  * @returns {{ won: boolean, outcome: string|null, source: string }}
  */
 async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
-  // 1. Try oracle first (poll up to 30s with retries)
+  // H2: Reduced from 6×5s (30s) to 3×3s (9s) to avoid blocking the main loop
   if (conditionId) {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
           const market = await res.json();
           if (market.closed) {
@@ -289,9 +290,9 @@ async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
           }
         }
       } catch { /* retry */ }
-      if (attempt < 5) await new Promise(r => setTimeout(r, 5000));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 3000));
     }
-    log.warn('Oracle settlement timed out after 30s — falling back to BTC price comparison');
+    log.warn('Oracle settlement timed out after 9s — falling back to BTC price comparison');
   }
 
   // 2. Fallback: BTC price comparison (legacy behavior)
@@ -343,9 +344,11 @@ export async function pollOnce() {
           log.info(`Fill confirmed (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
         } else if (fillResult.cancelled) {
           log.warn('Stale order cancelled — fill timeout exceeded');
-          // Unwind the pre-recorded position (bankroll was already deducted)
           const pos = getCurrentPosition();
-          if (pos) {
+          // M4: Don't unwind ARB positions — both legs placed on-chain, settlement handles payout
+          if (pos && pos.side === 'ARB') {
+            log.warn('Stale cancel for ARB position — NOT unwinding (on-chain settlement handles it)');
+          } else if (pos) {
             unwindPosition();
             writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: {} });
             clearEntrySnapshot();
@@ -475,6 +478,12 @@ export async function pollOnce() {
     const klines5m = fetchMap.klines5m !== undefined ? results[fetchMap.klines5m] : klines5mCache;
     const lastPrice = wsPrice || (fetchMap.lastPrice !== undefined ? results[fetchMap.lastPrice] : klines1m[klines1m.length - 1]?.close);
 
+    // L4: Null guard — if no price source is available, skip this poll
+    if (lastPrice == null || !Number.isFinite(lastPrice)) {
+      log.warn('No BTC price available from any source — skipping poll');
+      return;
+    }
+
     if (!klines5m) {
       log.warn('No 5m klines available yet');
       return;
@@ -509,7 +518,10 @@ export async function pollOnce() {
     const fundingRate = null;
 
     // ── 3b. USDC balance (every 30s — non-blocking) ──
-    if (now - usdcBalanceLastFetchMs > USDC_BALANCE_INTERVAL && isClientReady()) {
+    // H3: Skip USDC sync for 60s after settlement — on-chain balance is stale after win/loss
+    const SETTLEMENT_SYNC_COOLDOWN_MS = 60_000;
+    const settlementCooldownActive = (now - getLastSettlementMs()) < SETTLEMENT_SYNC_COOLDOWN_MS;
+    if (!settlementCooldownActive && now - usdcBalanceLastFetchMs > USDC_BALANCE_INTERVAL && isClientReady()) {
       usdcBalanceLastFetchMs = now; // Set BEFORE fetch to prevent parallel fetches
       const snapshotBankroll = getBankroll(); // Capture BEFORE async fetch
       getUsdcBalance().then(result => {
@@ -894,27 +906,34 @@ export async function pollOnce() {
 
         if (BOT_CONFIG.dryRun) {
           const recovery = cutResult.sellPrice * sellSize;
+          const cutPnl = recovery - pos.cost;
           settleTradeEarlyExit(recovery);
-          writeJournalEntry({ outcome: 'CUT_LOSS', pnl: recovery - pos.cost, exitData: { ...exitData, cutLossRecovered: recovery } });
+          writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
           resetCutLossState();
-          recordLoss();
-          // Activate tilt protection (+1 because counter decrements on current market's switch too)
-          tiltMarketsLeft = TILT_MARKETS + 1;
-          log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+          // M1: Only record loss + activate tilt if it was actually a loss
+          if (cutPnl < 0) {
+            recordLoss();
+            tiltMarketsLeft = TILT_MARKETS + 1;
+            log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+          }
         } else {
           recordSellAttempt();
           try {
             const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
             const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
+            const cutPnl = actualRecovery - pos.cost;
             settleTradeEarlyExit(actualRecovery);
-            writeJournalEntry({ outcome: 'CUT_LOSS', pnl: actualRecovery - pos.cost, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+            writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
             resetCutLossState();
-            recordLoss();
-            // Activate tilt protection (+1 because counter decrements on current market's switch too)
-            tiltMarketsLeft = TILT_MARKETS + 1;
-            log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+            // M1: Only record loss + activate tilt if it was actually a loss
+            if (cutPnl < 0) {
+              recordLoss();
+              tiltMarketsLeft = TILT_MARKETS + 1;
+              log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+            }
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.message}`);
+            resetCutConfirm(); // M7: Reset confirmation counter so next attempt re-confirms
           }
         }
         releaseSellLock();
@@ -1038,6 +1057,8 @@ export async function pollOnce() {
                 orderId: upOrderId,
                 actualCost: upFillCost,
               });
+              // M3: Track regime at entry for cut-loss regime-change detection
+              entryRegime = regimeInfo?.regime ?? 'moderate';
               recordTradeForMarket(marketSlug);
               // Track fill for the UP order (monitors execution + enables stale cancel)
               if (upOrderId) trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP' });
@@ -1164,6 +1185,8 @@ export async function pollOnce() {
 
         if (BOT_CONFIG.dryRun) {
           setPendingCost(0); // Release reservation in dry-run
+          // M2: Track trade for market to prevent duplicate trades in dry-run mode
+          recordTradeForMarket(marketSlug);
           log.info(
             `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
             `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +

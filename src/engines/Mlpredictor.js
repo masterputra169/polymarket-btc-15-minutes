@@ -101,18 +101,20 @@ export async function loadMLModel(
       );
     }
 
+    // M13: Pre-load ensemble weights BEFORE LGB loads (prevents race with predictions)
+    try {
+      const normResp = await fetch('/ml/norm_browser.json');
+      const norm = await normResp.json();
+      if (norm.ensemble_weights) {
+        ensembleWeightXgb = norm.ensemble_weights.xgb ?? 0.5;
+        ensembleWeightLgb = norm.ensemble_weights.lgb ?? 0.5;
+        console.log(`[ML] Ensemble weights: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
+      }
+    } catch { /* use defaults */ }
+
     // Load LightGBM model (non-blocking, graceful degradation)
     loadLgbModel().then(ok => {
-      if (ok) {
-        // Try to load ensemble weights from norm_browser.json
-        fetch('/ml/norm_browser.json').then(r => r.json()).then(norm => {
-          if (norm.ensemble_weights) {
-            ensembleWeightXgb = norm.ensemble_weights.xgb ?? 0.5;
-            ensembleWeightLgb = norm.ensemble_weights.lgb ?? 0.5;
-            console.log(`[ML] Ensemble weights: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
-          }
-        }).catch(() => {});
-      }
+      if (ok) console.log(`[ML] LightGBM ready, ensemble: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
     });
 
     return true;

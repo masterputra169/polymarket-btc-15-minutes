@@ -17,6 +17,12 @@ const log = createLogger('Position');
 /** Round to 2 decimal places — prevents float drift in money calcs. */
 const roundMoney = (n) => Math.round(n * 100) / 100;
 
+/** Polymarket fee rate on profit (2%). */
+const POLYMARKET_FEE_RATE = 0.02;
+
+/** H3: Track last settlement time for USDC sync cooldown. */
+let lastSettlementMs = 0;
+
 let state = {
   bankroll: BOT_CONFIG.bankroll,
   startOfDayBankroll: BOT_CONFIG.bankroll,
@@ -179,7 +185,11 @@ export function settleTrade(won) {
   }
 
   const pos = state.currentPosition;
-  const payout = roundMoney(won ? pos.size : 0); // Binary: win = $1/share, lose = $0
+  // H6: Polymarket charges 2% fee on profit at redemption
+  const grossPayout = won ? pos.size : 0; // Binary: win = $1/share, lose = $0
+  const profit = Math.max(0, grossPayout - pos.cost);
+  const fee = roundMoney(profit * POLYMARKET_FEE_RATE);
+  const payout = roundMoney(grossPayout - fee);
 
   // Mark as settled BEFORE modifying bankroll (prevents re-entry on async race)
   state.currentPosition.settled = true;
@@ -214,6 +224,7 @@ export function settleTrade(won) {
     `Bankroll: $${state.bankroll.toFixed(2)} | Streak: ${state.consecutiveLosses} consec losses`
   );
 
+  lastSettlementMs = Date.now(); // H3: Track for USDC sync cooldown
   state.currentPosition = null;
   saveState();
   return true;
@@ -279,12 +290,14 @@ export function settleTradeEarlyExit(recoveredUsdc) {
     bankrollAfter: state.bankroll,
   });
 
+  // L2: Show correct sign prefix (+ or -) based on actual P&L
   log.info(
     `CUT-LOSS settled: ${pos.side} | Recovered $${recovered.toFixed(2)} of $${pos.cost.toFixed(2)} | ` +
-    `P&L: -$${Math.abs(pnl).toFixed(2)} (saved $${(pos.cost - Math.abs(pnl)).toFixed(2)} vs full loss) | ` +
+    `P&L: ${pnl >= 0 ? '+' : '-'}$${Math.abs(pnl).toFixed(2)}${pnl < 0 ? ` (saved $${(pos.cost - Math.abs(pnl)).toFixed(2)} vs full loss)` : ''} | ` +
     `Bankroll: $${state.bankroll.toFixed(2)}`
   );
 
+  lastSettlementMs = Date.now(); // H3: Track for USDC sync cooldown
   state.currentPosition = null;
   saveState();
   return true;
@@ -481,9 +494,17 @@ export function getPendingCost() {
 
 /**
  * Get available bankroll (total minus pending allocations).
+ * M6: Floor at 0 — negative available bankroll should never allow new trades.
  */
 export function getAvailableBankroll() {
-  return roundMoney(state.bankroll - state.pendingCost);
+  return Math.max(0, roundMoney(state.bankroll - state.pendingCost));
+}
+
+/**
+ * H3: Get timestamp of last settlement (for USDC sync cooldown).
+ */
+export function getLastSettlementMs() {
+  return lastSettlementMs;
 }
 
 export function getBankroll() {
@@ -514,6 +535,7 @@ export function setBankroll(value) {
     log.warn(`Invalid bankroll value: ${value} — ignored (must be >= 0)`);
     return;
   }
+  if (value === 0) log.warn('Bankroll set to $0 — bot will not place new trades');
   const prev = state.bankroll;
   state.bankroll = roundMoney(value);
   auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, source: 'dashboard' });

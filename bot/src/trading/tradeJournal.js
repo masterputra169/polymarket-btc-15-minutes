@@ -116,9 +116,10 @@ export function getRecentJournal(n = 5) {
 function computeAnalysis(entry, exit, outcome, pnl) {
   const a = { outcome, pnl };
 
-  // Hold duration
+  // Hold duration (clamped to [0, 86400] to guard against clock skew)
   if (entry.enteredAt && exit.exitedAt) {
-    a.holdDurationSec = Math.round((exit.exitedAt - entry.enteredAt) / 1000);
+    const raw = Math.round((exit.exitedAt - entry.enteredAt) / 1000);
+    a.holdDurationSec = Math.max(0, Math.min(raw, 86400));
   }
 
   // Price movements

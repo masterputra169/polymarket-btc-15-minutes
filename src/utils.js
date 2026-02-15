@@ -113,11 +113,13 @@ export function getSessionName() {
  */
 export function shallowChanged(prev, next) {
   if (prev === null || prev === undefined) return true;
-  const keys = Object.keys(next);
-  for (let i = 0; i < keys.length; i++) {
-    const k = keys[i];
-    if (prev[k] !== next[k]) return true;
+  const nextKeys = Object.keys(next);
+  for (let i = 0; i < nextKeys.length; i++) {
+    if (prev[nextKeys[i]] !== next[nextKeys[i]]) return true;
   }
+  // Check for removed keys (prev has keys that next doesn't)
+  const prevKeys = Object.keys(prev);
+  if (prevKeys.length !== nextKeys.length) return true;
   return false;
 }
 

@@ -348,6 +348,15 @@ export function recordSellAttempt() {
 }
 
 /**
+ * M7: Reset consecutive confirmation counter after failed sell.
+ * Unlike resetCutLossState(), preserves sellAttempts and lastSellAttemptMs
+ * so Gate 3 (max attempts) and Gate 4 (cooldown) remain active.
+ */
+export function resetCutConfirm() {
+  consecutiveCutPolls = 0;
+}
+
+/**
  * Get cut-loss status for dashboard broadcast.
  * @param {Object|null} position - Current position
  * @param {number|null} currentTokenPrice - Live token price

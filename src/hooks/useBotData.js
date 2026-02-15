@@ -42,6 +42,8 @@ export function useBotData() {
 
   // Response handlers for request/response pattern (cmd→requestId, requestId→resolver)
   const responseHandlersRef = useRef(new Map());
+  // M15: Track pending command timeouts for cleanup on unmount
+  const pendingTimersRef = useRef(new Set());
 
   // Track previous Binance price for tick animation
   const binancePriceRef = useRef(null);
@@ -167,6 +169,9 @@ export function useBotData() {
       clearTimeout(reconnectRef.current);
       stopStaleCheck();
       clearInterval(flushRef.current);
+      // M15: Clear pending command timeouts on unmount
+      for (const t of pendingTimersRef.current) clearTimeout(t);
+      pendingTimersRef.current.clear();
       rawRef.current = null;
       try { wsRef.current?.close(); } catch (_e) { /* */ }
     };
@@ -203,17 +208,20 @@ export function useBotData() {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('Not connected'));
     }
+    // M14: Reject if command of same type already pending (prevents race)
+    if (responseHandlersRef.current.has(type)) {
+      return Promise.reject(new Error(`Command '${type}' already pending`));
+    }
     ws.send(JSON.stringify({ type, ...payload }));
 
     // Return promise that resolves when bot responds
-    // Use unique requestId to avoid overwriting pending handlers of the same type
     const requestId = `${type}_${Date.now()}`;
     return new Promise((resolve) => {
       responseHandlersRef.current.set(requestId, resolve);
-      // Also register by type so the response dispatcher can find it
       responseHandlersRef.current.set(type, requestId);
-      // Timeout after 15s
-      setTimeout(() => {
+      // M15: Track timeout for cleanup on unmount
+      const timerId = setTimeout(() => {
+        pendingTimersRef.current.delete(timerId);
         if (responseHandlersRef.current.has(requestId)) {
           responseHandlersRef.current.delete(requestId);
           if (responseHandlersRef.current.get(type) === requestId) {
@@ -222,6 +230,7 @@ export function useBotData() {
           resolve(null);
         }
       }, 15_000);
+      pendingTimersRef.current.add(timerId);
     });
   }, []);
 

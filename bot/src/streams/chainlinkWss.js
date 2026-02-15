@@ -23,6 +23,7 @@ let pingTimer = null;
 let hbTimer = null;
 let lastMsgMs = 0;
 let urlIdx = 0;
+let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
 
 // Public state — read by loop.js
 let _price = null;
@@ -52,6 +53,7 @@ function scheduleReconnect() {
 
 export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  intentionalClose = false; // L: Reset before attempt — prevents stuck flag after disconnect+failed connect
 
   const url = WS_URLS[urlIdx];
   if (!url) return;
@@ -120,7 +122,8 @@ export function connect() {
           p = Number(BigInt(data.params.result.answer)) / 1e8;
         }
 
-        if (p !== null && Number.isFinite(p) && p > 0) {
+        // M12: BTC price range validation — reject obviously wrong values
+        if (p !== null && Number.isFinite(p) && p > 10_000 && p < 500_000) {
           _prevPrice = _price;
           _price = p;
           _lastUpdate = Date.now();
@@ -135,18 +138,20 @@ export function connect() {
         ws = null;
         stopTimers();
       }
-      scheduleReconnect();
+      // H4: Don't reconnect if disconnect() was called intentionally
+      if (!intentionalClose) scheduleReconnect();
     });
 
     socket.on('error', () => {
       try { socket.close(); } catch {}
     });
   } catch {
-    scheduleReconnect();
+    if (!intentionalClose) scheduleReconnect();
   }
 }
 
 export function disconnect() {
+  intentionalClose = true; // H4: Signal to close handler not to reconnect
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopTimers();
   if (ws) { try { ws.close(); } catch {} ws = null; }

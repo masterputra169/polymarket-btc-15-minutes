@@ -61,7 +61,10 @@ function parseQuestionToSlugTs(question) {
   if (ampm === 'PM' && hour !== 12) hour += 12;
   if (ampm === 'AM' && hour === 12) hour = 0;
 
-  const year = new Date().getFullYear();
+  // M16: Handle year-crossing — if parsed month is far ahead of current month, use previous year
+  const currentMonth = new Date().getMonth();
+  const currentYear = new Date().getFullYear();
+  const year = (month0 - currentMonth > 6) ? currentYear - 1 : currentYear;
   const offset = etOffsetHours(year, month0, day);
   const utcMs = Date.UTC(year, month0, day, hour + offset, min, 0);
   return Math.floor(utcMs / 1000);
@@ -220,8 +223,11 @@ async function reconcile() {
   const now = Date.now();
   const intervalMs = BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000;
   // First run (no journal history): look back 48h to catch all trades
-  const lookbackMs = lastProcessedTime ? intervalMs + 5 * 60 * 1000 : 48 * 60 * 60 * 1000;
-  const afterMs = lastProcessedTime || (now - lookbackMs);
+  const lookbackMs = lastProcessedTime ? 0 : 48 * 60 * 60 * 1000;
+  // M17: 5-min overlap buffer on subsequent runs to catch in-flight trades
+  const afterMs = lastProcessedTime
+    ? lastProcessedTime - 5 * 60 * 1000
+    : now - lookbackMs;
 
   log.info(`Reconciling trades since ${new Date(afterMs).toISOString()}...`);
 
@@ -253,11 +259,23 @@ async function reconcile() {
   log.info(`Grouped into ${byMarket.size} market(s)`);
 
   const localTrades = loadLocalTrades();
+  // L: Dedup — load existing conditionIds to prevent duplicate entries from overlap buffer
+  const processedIds = new Set();
+  try {
+    if (existsSync(BOT_CONFIG.verifiedJournalFile)) {
+      const lines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try { const e = JSON.parse(line); if (e.conditionId) processedIds.add(e.conditionId); } catch {}
+      }
+    }
+  } catch {}
+
   let totalPnl = 0;
   let marketCount = 0;
   let tradeCount = 0;
 
   for (const [conditionId, marketTrades] of byMarket) {
+    if (processedIds.has(conditionId)) continue; // Skip already-reconciled markets
     try {
       const entry = await buildVerifiedEntry(conditionId, marketTrades, localTrades);
       if (!entry) continue;
@@ -333,14 +351,19 @@ async function buildVerifiedEntry(conditionId, marketTrades, localTrades) {
   let netPnl = 0;
 
   if (resolved && netPosition > 0) {
-    // Compute payout per token side (handles arb where both UP+DOWN bought)
-    const buysBySide = {};
+    // H5: Compute NET payout per token side (buys - sells, handles partial exits + arb)
+    const netBuysBySide = {};
     for (const t of tradeRecords) {
-      if (t.side === 'BUY' && t.tokenSide) {
-        buysBySide[t.tokenSide] = (buysBySide[t.tokenSide] || 0) + t.size;
+      if (t.tokenSide) {
+        if (t.side === 'BUY') {
+          netBuysBySide[t.tokenSide] = (netBuysBySide[t.tokenSide] || 0) + t.size;
+        } else if (t.side === 'SELL') {
+          netBuysBySide[t.tokenSide] = (netBuysBySide[t.tokenSide] || 0) - t.size;
+        }
       }
     }
-    totalPayout = buysBySide[outcome] || 0; // Only winning side pays out $1/share
+    const netWinningShares = Math.max(0, netBuysBySide[outcome] || 0);
+    totalPayout = netWinningShares; // Only net remaining winning shares pay out $1/share
     netPnl = Math.round((totalPayout + totalProceeds - totalCost) * 100) / 100;
   } else if (netPosition <= 0 && totalProceeds > 0) {
     netPnl = Math.round((totalProceeds - totalCost) * 100) / 100;

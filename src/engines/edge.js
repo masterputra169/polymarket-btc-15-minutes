@@ -16,8 +16,8 @@ import { ML_CONFIDENCE } from '../config.js';
  * PHASE TABLE v2:
  * | Phase     | Time Left | Min Edge | Min Prob | Min Agreement | MultiTF Req |
  * |-----------|-----------|----------|----------|---------------|-------------|
- * | EARLY     | > 10 min  | 8%       | 60%      | 3             | preferred   |
- * | MID       | 5-10 min  | 10%      | 58%      | 3             | preferred   |
+ * | EARLY     | > 10 min  | 8%       | 60%      | 2             | preferred   |
+ * | MID       | 5-10 min  | 10%      | 58%      | 2             | preferred   |
  * | LATE      | 2-5 min   | 12%      | 57%      | 2             | no          |
  * | VERY_LATE | < 2 min   | 15%      | 56%      | 2             | no          |
  */

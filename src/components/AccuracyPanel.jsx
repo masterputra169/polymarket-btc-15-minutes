@@ -161,8 +161,7 @@ function AccuracyPanel({ data }) {
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Expected</span>
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>Actual</span>
           <span style={{ color: 'var(--text-dim)', fontWeight: 600 }}>n</span>
-          {(df.calibration ?? []).map((c, i) => {
-            if (c.total === 0) return null;
+          {(df.calibration ?? []).filter(c => c.total > 0).map((c, i) => {
             const diff = c.actual !== null ? c.actual - c.predicted : null;
             const diffColor = diff === null ? 'c-muted' : diff >= 0 ? 'c-green' : 'c-red';
             return (

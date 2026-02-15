@@ -22,6 +22,7 @@ let reconnectMs = 500;
 let pingTimer = null;
 let hbTimer = null;
 let lastMsgMs = 0;
+let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
 
 // Public state — read by loop.js
 let _price = null;
@@ -49,6 +50,7 @@ function scheduleReconnect() {
 
 export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  intentionalClose = false; // L: Reset before attempt — prevents stuck flag after disconnect+failed connect
 
   try {
     const socket = new WebSocket(WS_URL);
@@ -102,7 +104,7 @@ export function connect() {
 
         const payload = typeof data.payload === 'string' ? JSON.parse(data.payload) : data.payload || {};
         const sym = String(payload.symbol || payload.pair || payload.ticker || '').toLowerCase();
-        if (!sym.includes('btc')) return;
+        if (!sym.startsWith('btc') && !sym.includes('/btc') && !sym.includes('_btc')) return;
 
         const p = Number(payload.value ?? payload.price ?? payload.current ?? payload.data);
         if (!Number.isFinite(p) || p <= 0) return;
@@ -120,18 +122,20 @@ export function connect() {
         ws = null;
         stopTimers();
       }
-      scheduleReconnect();
+      // H4: Don't reconnect if disconnect() was called intentionally
+      if (!intentionalClose) scheduleReconnect();
     });
 
     socket.on('error', () => {
       try { socket.close(); } catch {}
     });
   } catch {
-    scheduleReconnect();
+    if (!intentionalClose) scheduleReconnect();
   }
 }
 
 export function disconnect() {
+  intentionalClose = true; // H4: Signal to close handler not to reconnect
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopTimers();
   if (ws) { try { ws.close(); } catch {} ws = null; }

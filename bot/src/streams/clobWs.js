@@ -185,9 +185,10 @@ function scheduleReconnect() {
 
 function forceReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  // M10: Always stop timers, even when ws is null (prevents heartbeat re-firing)
+  stopTimers();
   if (ws) {
     intentionalClose = true;
-    stopTimers();
     try { ws.close(); } catch {}
     ws = null;
   }
