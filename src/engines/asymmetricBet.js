@@ -1,4 +1,5 @@
 import { BET_SIZING, EXECUTION } from '../config.js';
+import { computeKellyTune } from './feedback/stats.js';
 
 const {
   KELLY_FRACTION,
@@ -130,8 +131,12 @@ export function computeBetSizing({
     return noBet;
   }
 
+  // Dynamic Kelly fraction from calibration data
+  const kellyTune = computeKellyTune(KELLY_FRACTION);
+  const effectiveKelly = kellyTune.kellyFraction;
+
   // Fractional Kelly (rawKelly is mathematically bounded by p ≤ 1.0, no cap needed)
-  let frac = rawKelly * KELLY_FRACTION;
+  let frac = rawKelly * effectiveKelly;
 
   // ── Multipliers ──
 
@@ -146,9 +151,16 @@ export function computeBetSizing({
     label: `${regime} (${(regimeConf * 100).toFixed(0)}%)`,
   };
 
-  // Accuracy
+  // Accuracy — dampen when kellyTune is active to avoid double-counting
+  // (both react to the same signal: model miscalibration)
   const accRaw = feedbackStats?.accuracy ?? null;
   const accuracyAdj = accuracyMultiplier(accRaw);
+  const kellyTuneActive = kellyTune.reason !== 'insufficient_data' && kellyTune.reason !== 'sparse_buckets';
+  if (kellyTuneActive && accuracyAdj.multiplier !== 1.0) {
+    // Halve the accuracy deviation from 1.0: e.g. 0.50 → 0.75, 1.15 → 1.075
+    accuracyAdj.multiplier = Math.round((1.0 + (accuracyAdj.multiplier - 1.0) * 0.5) * 100) / 100;
+    accuracyAdj.label += ' (damped)';
+  }
 
   // ML
   const mlAdj = mlMultiplier(ml, side);
@@ -192,7 +204,10 @@ export function computeBetSizing({
 
   // Rationale string
   const rationale =
-    `Kelly=${(rawKelly * 100).toFixed(1)}% \u00d7 ${KELLY_FRACTION}` +
+    `Kelly=${(rawKelly * 100).toFixed(1)}% \u00d7 ${effectiveKelly}` +
+    (kellyTune.reason !== 'insufficient_data' && kellyTune.reason !== 'sparse_buckets'
+      ? ` (${kellyTune.reason})`
+      : '') +
     ` \u00d7 regime(${regimeAdj.multiplier})` +
     ` \u00d7 acc(${accuracyAdj.multiplier})` +
     ` \u00d7 ml(${mlAdj.multiplier})` +
@@ -206,7 +221,7 @@ export function computeBetSizing({
     shouldBet: true,
     side,
     rawKelly,
-    kellyFraction: KELLY_FRACTION,
+    kellyFraction: effectiveKelly,
     adjustedFraction,
     betPercent,
     betAmount,
@@ -219,5 +234,6 @@ export function computeBetSizing({
     executionAdj,
     expectedValue,
     rationale,
+    kellyTune,
   };
 }

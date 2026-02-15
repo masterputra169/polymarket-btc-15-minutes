@@ -90,7 +90,28 @@ function BetSizingPanel({ data, setBankroll }) {
               </div>
               <div className="data-row" style={{ borderBottom: 'none', padding: '2px 0' }}>
                 <span className="data-row__label">Kelly (frac)</span>
-                <span className="data-row__value">{bet.rawKelly != null ? (bet.rawKelly * (bet.kellyFraction ?? 0.25) * 100).toFixed(1) : '-'}%</span>
+                <span className="data-row__value" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  {bet.rawKelly != null ? (bet.rawKelly * (bet.kellyFraction ?? 0.25) * 100).toFixed(1) : '-'}%
+                  {bet.kellyTune && (
+                    <span style={{
+                      fontSize: '0.55rem', padding: '1px 4px', borderRadius: 3, fontWeight: 600,
+                      background: bet.kellyTune.reason === 'underconfident' ? 'rgba(0,230,118,0.15)'
+                        : bet.kellyTune.reason === 'well_calibrated' ? 'rgba(255,193,7,0.15)'
+                        : bet.kellyTune.reason === 'overconfident' ? 'rgba(244,67,54,0.15)'
+                        : 'rgba(100,181,246,0.1)',
+                      color: bet.kellyTune.reason === 'underconfident' ? 'var(--green-bright)'
+                        : bet.kellyTune.reason === 'well_calibrated' ? '#ffc107'
+                        : bet.kellyTune.reason === 'overconfident' ? 'var(--red-bright)'
+                        : 'var(--text-dim)',
+                    }}
+                    title={`Calibration ratio: ${bet.kellyTune.calibrationRatio} | Samples: ${bet.kellyTune.sampleCount} | Effective: ${bet.kellyTune.kellyFraction}`}
+                    >
+                      {bet.kellyTune.reason === 'insufficient_data' ? `${bet.kellyTune.sampleCount}/10`
+                        : bet.kellyTune.reason === 'sparse_buckets' ? 'sparse'
+                        : `${bet.kellyTune.kellyFraction}`}
+                    </span>
+                  )}
+                </span>
               </div>
             </div>
             <div>
@@ -213,6 +234,7 @@ export default memo(BetSizingPanel, (prev, next) => {
     a.shouldBet === b.shouldBet &&
     a.riskLevel === b.riskLevel &&
     a.bankroll === b.bankroll &&
-    a.side === b.side
+    a.side === b.side &&
+    a.kellyTune?.kellyFraction === b.kellyTune?.kellyFraction
   );
 });

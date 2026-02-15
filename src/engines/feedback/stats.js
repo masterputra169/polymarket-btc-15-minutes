@@ -187,3 +187,41 @@ export function getDetailedStats() {
     },
   };
 }
+
+export function computeKellyTune(baseKelly = 0.25) {
+  const detailed = getDetailedStats();
+  if (detailed.totalSettled < 30) {
+    return { kellyFraction: baseKelly, reason: 'insufficient_data', calibrationRatio: 1.0, sampleCount: detailed.totalSettled };
+  }
+
+  let weightedPredicted = 0, weightedActual = 0, totalWeight = 0;
+  for (const bucket of detailed.calibration) {
+    if (bucket.total < 3 || bucket.actual === null) continue;
+    const w = bucket.total;
+    weightedPredicted += bucket.predicted * w;
+    weightedActual += bucket.actual * w;
+    totalWeight += w;
+  }
+
+  if (totalWeight < 5) {
+    return { kellyFraction: baseKelly, reason: 'sparse_buckets', calibrationRatio: 1.0, sampleCount: totalWeight };
+  }
+
+  const avgPredicted = weightedPredicted / totalWeight;
+  const avgActual = weightedActual / totalWeight;
+
+  if (avgPredicted < 0.01) {
+    return { kellyFraction: baseKelly, reason: 'zero_predicted', calibrationRatio: 1.0, sampleCount: totalWeight };
+  }
+
+  const rawRatio = avgActual / avgPredicted;
+  const clampedRatio = Math.min(Math.max(rawRatio, 0.50), 2.0);
+  const kellyFraction = Math.round(baseKelly * clampedRatio * 1000) / 1000;
+
+  let reason;
+  if (clampedRatio < 0.85) reason = 'overconfident';
+  else if (clampedRatio > 1.15) reason = 'underconfident';
+  else reason = 'well_calibrated';
+
+  return { kellyFraction, reason, calibrationRatio: Math.round(clampedRatio * 100) / 100, sampleCount: totalWeight };
+}
