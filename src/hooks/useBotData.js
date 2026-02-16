@@ -234,11 +234,17 @@ export function useBotData() {
     });
   }, []);
 
+  // forceSync: force USDC balance reconciliation via sendBotCommand
+  const forceSync = useCallback(() => {
+    return sendBotCommand('forceSync');
+  }, [sendBotCommand]);
+
   return {
     data,
     loading,
     error: null,
     setBankroll,
+    forceSync,
     sendBotCommand,
     botConnected: connected,
     binancePrice,

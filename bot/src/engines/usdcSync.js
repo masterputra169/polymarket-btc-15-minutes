@@ -116,3 +116,41 @@ export function invalidateSync() {
 export function getUsdcBalanceData() {
   return usdcBalanceData;
 }
+
+/**
+ * Force-sync local bankroll with on-chain USDC balance.
+ * Bypasses all guards (settlement cooldown, open position, race detection).
+ * Used by dashboard forceSync command for manual reconciliation.
+ *
+ * @param {Function} fetchBalance - async () => { balance, allowance, fetchedAt } | null
+ * @param {Function} getBankroll
+ * @param {Function} setBankroll
+ * @returns {{ ok, action?, prev?, onChain?, drift?, error? }}
+ */
+export async function forceUsdcSync(fetchBalance, getBankroll, setBankroll) {
+  let result;
+  try {
+    result = await fetchBalance();
+  } catch (err) {
+    log.warn(`forceSync fetch error: ${err.message}`);
+    return { ok: false, error: 'fetch_failed' };
+  }
+  if (!result || !Number.isFinite(result.balance)) {
+    return { ok: false, error: 'fetch_failed' };
+  }
+  const onChain = result.balance;
+  if (onChain < 0 || onChain > 100_000) {
+    return { ok: false, error: 'invalid_balance', balance: onChain };
+  }
+  const prev = getBankroll();
+  const drift = Math.abs(prev - onChain);
+  if (drift < 0.01) {
+    log.info(`forceSync: no change needed (local=$${prev.toFixed(2)}, on-chain=$${onChain.toFixed(2)})`);
+    return { ok: true, action: 'no_change', local: prev, onChain, drift };
+  }
+  setBankroll(onChain);
+  usdcBalanceData = result;   // update cached data
+  pendingUsdcSync = null;     // clear any queued sync
+  log.info(`forceSync: $${prev.toFixed(2)} → $${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
+  return { ok: true, action: 'synced', prev, onChain, drift };
+}

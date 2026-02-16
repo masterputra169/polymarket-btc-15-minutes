@@ -33,13 +33,13 @@ import { loadMLModelFromDisk } from './src/adapters/mlLoader.js';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.js';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.js';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
-import { initClobClient, cancelAllOrders } from './src/trading/clobClient.js';
+import { initClobClient, cancelAllOrders, getUsdcBalance } from './src/trading/clobClient.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.js';
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime } from './src/loop.js';
-import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery } from './src/statusServer.js';
+import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.js';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.js';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.js';
 import { startReconciler, stopReconciler } from './src/trading/journalReconciler.js';
@@ -125,6 +125,7 @@ async function main() {
     removeTracker: removeTrackedTrader,
     simulate: simulateTrader,
   });
+  registerUsdcSync(getUsdcBalance);
 
   // 5c. Start status broadcast server (dashboard integration)
   startStatusServer();

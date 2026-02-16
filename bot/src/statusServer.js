@@ -5,10 +5,11 @@
 
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
-import { setBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.js';
+import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.js';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.js';
 import { resetCutLossState } from './trading/cutLoss.js';
 import { recordLoss } from './safety/tradeFilters.js';
+import { forceUsdcSync } from './engines/usdcSync.js';
 
 const log = createLogger('StatusWS');
 
@@ -42,6 +43,10 @@ let _resetEntryRegime = null;
 let _getPositions = null;
 let _closePosition = null;
 
+// USDC sync callback — set via registerUsdcSync() to avoid circular imports
+let _fetchUsdcBalance = null;
+let lastForceSyncMs = 0;
+
 // Trader discovery callbacks
 let _scanTraders = null;
 let _getTrackedTraders = null;
@@ -65,6 +70,13 @@ export function registerBotControl(pauseFn, resumeFn, resetEntryRegimeFn) {
 export function registerPositionManager({ getPositions, closePosition }) {
   _getPositions = getPositions;
   _closePosition = closePosition;
+}
+
+/**
+ * Register USDC balance fetch function for forceSync command.
+ */
+export function registerUsdcSync(fetchBalanceFn) {
+  _fetchUsdcBalance = fetchBalanceFn;
 }
 
 /**
@@ -203,6 +215,22 @@ export function startStatusServer() {
             releaseSellLock();
             log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)} pnl=$${pnl.toFixed(2)}`);
             respond('forceSettle', { ok: true, action: 'settle', won, side: pos.side, pnl });
+          }
+
+        // ── Force USDC Sync (manual bankroll reconciliation) ──
+        } else if (msg.type === 'forceSync') {
+          if (!_fetchUsdcBalance) {
+            respond('forceSync', { ok: false, error: 'usdc_sync_not_registered' });
+          } else {
+            const now = Date.now();
+            if (now - lastForceSyncMs < SET_BANKROLL_COOLDOWN_MS) {
+              respond('forceSync', { ok: false, error: 'rate_limited' });
+            } else {
+              lastForceSyncMs = now;
+              forceUsdcSync(_fetchUsdcBalance, getBankroll, setBankroll)
+                .then(result => respond('forceSync', result))
+                .catch(err => respond('forceSync', { ok: false, error: err.message }));
+            }
           }
 
         // ── Trader Discovery commands ──
