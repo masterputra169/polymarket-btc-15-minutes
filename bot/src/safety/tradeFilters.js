@@ -11,7 +11,7 @@
  * 5. Cooldown after loss — avoid tilt/revenge trading
  * 6. Max trades per market
  * 7. Weekend low-liquidity
- * 8. High divergence guard — regime-aware: trending hard-blocks >20%, others >25% need ML≥65%
+ * 8. Edge ceiling — hard cap at 20% for all regimes (high edge = 0-14% WR)
  * 9. Counter-trend momentum — don't fight strong BTC moves
  */
 
@@ -134,21 +134,13 @@ export function applyTradeFilters({
     }
   }
 
-  // 8. High divergence guard — regime-aware.
-  // Extreme edge means market strongly disagrees with model — usually model is wrong.
-  // Trending regime: edge >20% is almost always fake (0% win rate in 31-trade journal).
-  //   Indicators lag behind trends, inflating model prob while market correctly prices risk.
-  //   Hard block regardless of ML confidence.
-  // Other regimes: edge >25% requires strong ML backing (≥65%) to override market.
-  if (bestEdge != null && mlAvailable) {
-    if (regime === 'trending' && bestEdge > 0.20) {
-      reasons.push(`Trending high edge: ${(bestEdge * 100).toFixed(0)}% > 20% (unreliable in trend — 0% win rate)`);
-    } else if (bestEdge > 0.25) {
-      const minDivergenceConf = 0.65;
-      if (mlConfidence == null || mlConfidence < minDivergenceConf) {
-        reasons.push(`High divergence: edge ${(bestEdge * 100).toFixed(0)}% > 25% but ML conf ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < ${(minDivergenceConf * 100).toFixed(0)}%`);
-      }
-    }
+  // 8. Edge ceiling — hard cap at 20% for ALL regimes.
+  // Quant analysis (31 trades): edge 10-20% had 50% WR (sweet spot),
+  // edge 20-30% had 14% WR, edge 30%+ had 0% WR.
+  // High edge = model diverges from market = model is usually wrong.
+  // Hard block regardless of ML confidence or regime.
+  if (bestEdge != null && bestEdge > 0.20) {
+    reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > 20% (high edge = 0-14% WR in journal)`);
   }
 
   // 9. Counter-trend momentum guard — don't fight strong BTC moves.

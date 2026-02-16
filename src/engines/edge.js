@@ -229,23 +229,30 @@ export function decide({
     minProb = Math.max(minProb - 0.02, 0.52);
   }
 
+  // ═══ Side bias (quant analysis: DOWN 54% WR +$2.40, UP 24% WR -$2.64) ═══
+  // Tighten UP entries, relax DOWN entries to exploit empirical asymmetry.
+  const upMinEdge = Math.min(minEdge + 0.02, 0.25);   // UP: +2% harder to enter
+  const upMinProb = Math.min(minProb + 0.02, 0.70);
+  const downMinEdge = Math.max(minEdge - 0.01, 0.04);  // DOWN: -1% easier to enter
+  const downMinProb = Math.max(minProb - 0.01, 0.52);
+
   // Count agreements if breakdown available (default 0 = conservative, not 99)
   const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 0;
   const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 0;
 
-  // Check UP side
+  // Check UP side (stricter thresholds)
   // MultiTF waiver: minAgreement+1 indicators can waive multiTF requirement
   const multiTfWaiver = minAgreement + 1;
 
-  const upEdgePass = edgeUp !== null && edgeUp >= minEdge;
-  const upProbPass = modelUp >= minProb;
+  const upEdgePass = edgeUp !== null && edgeUp >= upMinEdge;
+  const upProbPass = modelUp >= upMinProb;
   const upAgreementPass = upAgreement >= minAgreement;
   const upMultiTfPass = !preferMultiTf || multiTfConfirmed || upAgreement >= multiTfWaiver;
   const upPass = upEdgePass && upProbPass && upAgreementPass && upMultiTfPass;
 
-  // Check DOWN side
-  const downEdgePass = edgeDown !== null && edgeDown >= minEdge;
-  const downProbPass = modelDown >= minProb;
+  // Check DOWN side (relaxed thresholds)
+  const downEdgePass = edgeDown !== null && edgeDown >= downMinEdge;
+  const downProbPass = modelDown >= downMinProb;
   const downAgreementPass = downAgreement >= minAgreement;
   const downMultiTfPass = !preferMultiTf || multiTfConfirmed || downAgreement >= multiTfWaiver;
   const downPass = downEdgePass && downProbPass && downAgreementPass && downMultiTfPass;
@@ -254,32 +261,34 @@ export function decide({
 
   if (upPass && downPass) {
     if (edgeUp >= edgeDown) {
-      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
+      return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, upMinEdge, upMinProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
     } else {
-      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
+      return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, downMinEdge, downMinProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
     }
   }
 
   if (upPass) {
-    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
+    return makeEnter('UP', edgeUp, modelUp, upAgreement, phase, upMinEdge, upMinProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
   }
 
   if (downPass) {
-    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, minEdge, minProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
+    return makeEnter('DOWN', edgeDown, modelDown, downAgreement, phase, downMinEdge, downMinProb, mlIsHighConf, mlAgreesWithRules, regimeLabel);
   }
 
-  // No entry — explain why
+  // No entry — explain why (use the side-specific thresholds for the best side)
   const bestEdge = Math.max(edgeUp ?? -Infinity, edgeDown ?? -Infinity);
   const hasValidEdge = Number.isFinite(bestEdge);
   const bestSide = edgeUp == null && edgeDown == null ? null
     : (edgeUp ?? -1) >= (edgeDown ?? -1) ? 'UP' : 'DOWN';
   const bestProb = bestSide === 'UP' ? modelUp : bestSide === 'DOWN' ? modelDown : Math.max(modelUp, modelDown);
   const bestAgree = bestSide === 'UP' ? upAgreement : bestSide === 'DOWN' ? downAgreement : Math.max(upAgreement, downAgreement);
+  const sideMinEdge = bestSide === 'DOWN' ? downMinEdge : upMinEdge;
+  const sideMinProb = bestSide === 'DOWN' ? downMinProb : upMinProb;
 
   const reasons = [];
   if (!hasValidEdge) reasons.push('no valid edge');
-  else if (bestEdge < minEdge) reasons.push(`edge ${(bestEdge * 100).toFixed(1)}% < ${(minEdge * 100).toFixed(0)}%`);
-  if (bestProb < minProb) reasons.push(`prob ${(bestProb * 100).toFixed(0)}% < ${(minProb * 100).toFixed(0)}%`);
+  else if (bestEdge < sideMinEdge) reasons.push(`edge ${(bestEdge * 100).toFixed(1)}% < ${(sideMinEdge * 100).toFixed(0)}%`);
+  if (bestProb < sideMinProb) reasons.push(`prob ${(bestProb * 100).toFixed(0)}% < ${(sideMinProb * 100).toFixed(0)}%`);
   if (bestAgree < minAgreement) reasons.push(`agree ${bestAgree} < ${minAgreement}`);
   if (preferMultiTf && !multiTfConfirmed && bestAgree < multiTfWaiver) reasons.push('no multiTF confirm');
   if (regimeLabel) reasons.push(regimeLabel);

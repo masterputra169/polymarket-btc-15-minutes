@@ -78,7 +78,7 @@ const BOT_CONFIG = {
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 5, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 15, 1, 90),  // 12→15%: journal showed 39% trades cut, many likely would have won (66.7% base win rate)
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 20, 1, 90),  // 15→20%: quant analysis optimal threshold sweep shows 20% maximizes P&L
     consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20),
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
