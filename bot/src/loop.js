@@ -1386,7 +1386,7 @@ export async function pollOnce() {
             });
           } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
           if (BOT_CONFIG.telegramNotifyTrades) {
-            notify('info', `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares}sh ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
+            notify('info', `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares} shares ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
           }
         } else {
           try {
@@ -1437,7 +1437,7 @@ export async function pollOnce() {
             } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
             if (BOT_CONFIG.telegramNotifyTrades) {
               const cost = actualCost ?? (actualPrice * actualSize);
-              notify('info', `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize}sh ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
+              notify('info', `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
             }
           } catch (err) {
             setPendingCost(0); // C6: Release pending reservation on failure
