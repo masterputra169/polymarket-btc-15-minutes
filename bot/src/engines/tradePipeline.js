@@ -9,8 +9,22 @@
 
 import { createLogger } from '../logger.js';
 import { getSessionName } from '../../../src/utils.js';
+import { EXECUTION } from '../../../src/config.js';
 
 const log = createLogger('TradePipeline');
+
+/**
+ * Compute FOK buy limit price with slippage tolerance.
+ * FOK fills at the best available price UP TO the limit — adding slippage
+ * just prevents rejection when the ask moves slightly between signal
+ * computation and order reaching the CLOB. You still pay the actual ask.
+ * Polymarket prices: [0.01, 0.99], precision 0.001.
+ */
+function fokBuyPrice(targetPrice) {
+  const slippage = EXECUTION.FOK_SLIPPAGE ?? 0.01;
+  // Round to Polymarket's 0.001 tick size, cap at 0.99
+  return Math.min(Math.round((targetPrice + slippage) * 1000) / 1000, 0.99);
+}
 
 /**
  * Safely parse a CLOB amount field (makingAmount / takingAmount).
@@ -58,10 +72,10 @@ export async function executeArbitrage({
   // Reserve capital before arb attempt
   deps.setPendingCost(estCost);
   try {
-    // Leg 1: Buy UP
+    // Leg 1: Buy UP (FOK with slippage to prevent rejection on tiny price moves)
     const upResult = await deps.placeBuyOrder({
       tokenId: poly.tokens.upTokenId,
-      price: arb.askUp,
+      price: fokBuyPrice(arb.askUp),
       size: arbShares,
     });
     const upFillCost = parseClobAmount(upResult?.makingAmount, arbShares * arb.askUp);
@@ -72,7 +86,7 @@ export async function executeArbitrage({
     try {
       const downResult = await deps.placeBuyOrder({
         tokenId: poly.tokens.downTokenId,
-        price: arb.askDown,
+        price: fokBuyPrice(arb.askDown),
         size: arbShares,
       });
       const downFillCost = parseClobAmount(downResult?.makingAmount, arbShares * arb.askDown);
@@ -282,11 +296,11 @@ export async function executeDirectionalTrade({
     return true;
   }
 
-  // ── Live order ──
+  // ── Live order (FOK with slippage to prevent rejection on tiny price moves) ──
   try {
     const orderResult = await deps.placeBuyOrder({
       tokenId,
-      price: betMarketPrice,
+      price: fokBuyPrice(betMarketPrice),
       size: shares,
     });
     const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;

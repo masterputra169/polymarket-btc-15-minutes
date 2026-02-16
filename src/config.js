@@ -30,6 +30,7 @@ export const EXECUTION = {
   LIQ_MODERATE: 500,           // $200-500 (mult 0.85)
   FILL_POOR_RATE: 0.5,         // <50% fill rate (mult 0.70)
   FILL_TIMEOUT_MS: 30_000,     // 30s stale order timeout
+  FOK_SLIPPAGE: 0.01,          // 1¢ slippage tolerance on FOK buy limit price
 };
 
 export const TRADE_FILTERS = {
