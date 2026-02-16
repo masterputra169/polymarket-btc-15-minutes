@@ -36,6 +36,7 @@ let state = {
   lastSettledTs: 0,         // Double-settlement guard: timestamp of last settlement
   lastSettlementMs: 0,      // H3/M4: Track last settlement time for USDC sync cooldown (persisted)
   cutLossCount: 0,          // L4: Pre-computed count of CUT_LOSS trades (avoids scanning array)
+  marketTradeCounts: {},     // H7: Per-market trade counts (persisted across restarts)
 };
 
 // ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
@@ -749,4 +750,12 @@ export function getStats() {
     hasPosition: state.currentPosition !== null && !state.currentPosition?.settled,
     pendingCost: state.pendingCost,
   };
+}
+
+/** H7: Get persisted market trade counts. */
+export function getMarketTradeCounts() { return state.marketTradeCounts ?? {}; }
+
+/** H7: Set persisted market trade counts (from tradeFilters). */
+export function setMarketTradeCounts(counts) {
+  state.marketTradeCounts = (counts && typeof counts === 'object') ? counts : {};
 }

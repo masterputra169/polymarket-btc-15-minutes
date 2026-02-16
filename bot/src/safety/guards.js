@@ -20,8 +20,8 @@ const EPSILON = 1e-9;
  */
 export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownPct }) {
   // Validate inputs — missing data means we can't verify safety
-  if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(bankroll) || !Number.isFinite(consecutiveLosses)) {
-    return { halt: true, reason: 'Circuit breaker inputs invalid (missing bankroll, PnL, or loss streak data)' };
+  if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(bankroll) || !Number.isFinite(consecutiveLosses) || !Number.isFinite(drawdownPct)) {
+    return { halt: true, reason: 'Circuit breaker inputs invalid (missing bankroll, PnL, loss streak, or drawdown data)' };
   }
 
   if (dailyPnLPct <= -(BOT_CONFIG.maxDailyLossPct - EPSILON)) {
@@ -31,7 +31,7 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownP
   }
 
   // Max drawdown from peak bankroll (catches slow multi-day bleed)
-  if (Number.isFinite(drawdownPct) && drawdownPct >= BOT_CONFIG.maxDrawdownPct - EPSILON) {
+  if (drawdownPct >= BOT_CONFIG.maxDrawdownPct - EPSILON) {
     const reason = `Drawdown ${drawdownPct.toFixed(1)}% from peak exceeds max ${BOT_CONFIG.maxDrawdownPct}%`;
     log.error(`CIRCUIT BREAKER: ${reason}`);
     return { halt: true, reason };

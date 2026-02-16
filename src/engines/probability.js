@@ -387,8 +387,8 @@ export function scoreDirection({
     switch (regime.regime) {
       case 'trending': {
         // M7: Direction-aware — boost when signal aligns with trend, dampen when counter-trend
-        const trendUp = regime.label?.includes('UP');
-        const trendDown = regime.label?.includes('DOWN');
+        const trendUp = regime.direction === 'UP';
+        const trendDown = regime.direction === 'DOWN';
         const signalUp = upScore > downScore;
         const aligned = (trendUp && signalUp) || (trendDown && !signalUp);
         regimeMultiplier = aligned ? 1.25 : 0.85;

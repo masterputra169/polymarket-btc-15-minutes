@@ -96,6 +96,7 @@ export function countAgreement(breakdown, side) {
   const signalKeys = [
     'ptbDistance', 'ptbMomentum', 'momentum', 'rsi', 'macdHist', 'macdLine',
     'vwapPos', 'vwapSlope', 'heikenAshi', 'failedVwap', 'orderbook', 'multiTf',
+    'bbPos', 'atrExpand',
   ];
 
   for (const key of signalKeys) {
@@ -218,17 +219,6 @@ export function decide({
     }
   }
 
-  // ═══ Cap combined regime+session penalty ═══
-  // Prevent stacking (e.g. choppy +3% + off-hours +3% = +6%) from making entry impossible.
-  // Max combined tightening: +3% edge, +3% prob above phase base.
-  const MAX_COMBINED_PENALTY = 0.03;
-  if (minEdge > baseMinEdge + MAX_COMBINED_PENALTY) {
-    minEdge = baseMinEdge + MAX_COMBINED_PENALTY;
-  }
-  if (minProb > baseMinProb + MAX_COMBINED_PENALTY) {
-    minProb = baseMinProb + MAX_COMBINED_PENALTY;
-  }
-
   // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= HIGH),
   // the model's 75%+ accuracy justifies relaxing thresholds by 2%
   const mlIsHighConf = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
@@ -239,10 +229,19 @@ export function decide({
 
   // ═══ Side bias (quant analysis: DOWN 54% WR +$2.40, UP 24% WR -$2.64) ═══
   // Tighten UP entries, relax DOWN entries to exploit empirical asymmetry.
-  const upMinEdge = Math.min(minEdge + 0.02, 0.25);   // UP: +2% harder to enter
-  const upMinProb = Math.min(minProb + 0.02, 0.70);
-  const downMinEdge = Math.max(minEdge - 0.01, 0.04);  // DOWN: -1% easier to enter
-  const downMinProb = Math.max(minProb - 0.01, 0.52);
+  let upMinEdge = Math.min(minEdge + 0.02, 0.25);   // UP: +2% harder to enter
+  let upMinProb = Math.min(minProb + 0.02, 0.70);
+  let downMinEdge = Math.max(minEdge - 0.01, 0.04);  // DOWN: -1% easier to enter
+  let downMinProb = Math.max(minProb - 0.01, 0.52);
+
+  // ═══ Cap combined regime+session+side-bias penalty ═══
+  // Prevent stacking (e.g. choppy +3% + off-hours +3% + UP bias +2% = +8%) from
+  // making entry impossible. Cap AFTER side bias so the final thresholds are bounded.
+  const MAX_COMBINED_PENALTY = 0.05;
+  upMinEdge = Math.min(upMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
+  upMinProb = Math.min(upMinProb, baseMinProb + MAX_COMBINED_PENALTY);
+  downMinEdge = Math.min(downMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
+  downMinProb = Math.min(downMinProb, baseMinProb + MAX_COMBINED_PENALTY);
 
   // Count agreements if breakdown available (default 0 = conservative, not 99)
   const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 0;
@@ -287,7 +286,7 @@ export function decide({
   const bestEdge = Math.max(edgeUp ?? -Infinity, edgeDown ?? -Infinity);
   const hasValidEdge = Number.isFinite(bestEdge);
   const bestSide = edgeUp == null && edgeDown == null ? null
-    : (edgeUp ?? -1) >= (edgeDown ?? -1) ? 'UP' : 'DOWN';
+    : (edgeUp ?? -Infinity) >= (edgeDown ?? -Infinity) ? 'UP' : 'DOWN';
   const bestProb = bestSide === 'UP' ? modelUp : bestSide === 'DOWN' ? modelDown : Math.max(modelUp, modelDown);
   const bestAgree = bestSide === 'UP' ? upAgreement : bestSide === 'DOWN' ? downAgreement : Math.max(upAgreement, downAgreement);
   const sideMinEdge = bestSide === 'DOWN' ? downMinEdge : upMinEdge;

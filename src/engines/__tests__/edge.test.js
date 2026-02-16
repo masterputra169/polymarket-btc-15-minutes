@@ -390,7 +390,7 @@ describe('decide combined penalty cap', () => {
         vwapPos: { signal: 'UP', weight: 1 },
       },
     });
-    // Capped at base + 3% = 0.15, + UP bias 0.02 = 0.17
+    // After regime+session+side-bias, capped at base + 5% = 0.17
     // edgeUp 0.20 >= 0.17 → passes
     expect(result.action).toBe('ENTER');
   });

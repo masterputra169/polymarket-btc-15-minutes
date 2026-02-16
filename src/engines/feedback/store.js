@@ -52,9 +52,10 @@ export function settlePrediction(marketSlug, result) {
 }
 
 export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
-  // M10: Was > 0.15 outer gate + <= 0.1 inner gate → 3s gap where autoSettle
-  // ran but current-slug predictions couldn't settle. Unified to 0.5 min (30s).
-  if (timeLeftMin > 0.5) return;
+  // C4: Was 0.5 min (30s) — BTC can move $50-200 in 30s, so autoSettle with live
+  // price was corrupting feedback accuracy data. Reduced to 0.05 min (3s) so
+  // BTC price is very close to the actual settlement price.
+  if (timeLeftMin > 0.05) return;
   ensureLoaded();
 
   let hasUnsettled = false;
@@ -88,7 +89,7 @@ export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
       continue;
     }
 
-    if (priceToBeat !== null && timeLeftMin <= 0.5 && pred.marketSlug === currentSlug) {
+    if (priceToBeat !== null && timeLeftMin <= 0.05 && pred.marketSlug === currentSlug) {
       const result = btcPrice >= priceToBeat ? 'UP' : 'DOWN';
       pred.settled = true;
       pred.correct = pred.side === result;

@@ -31,6 +31,7 @@ import { BOT_CONFIG, CONFIG } from './src/config.js';
 import { setLogLevel, log } from './src/logger.js';
 import { loadMLModelFromDisk } from './src/adapters/mlLoader.js';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.js';
+import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.js';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
 import { initClobClient, cancelAllOrders } from './src/trading/clobClient.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
@@ -85,8 +86,9 @@ async function main() {
     log.warn('ML model not loaded — running rule-based only');
   }
 
-  // 3. Load feedback history
+  // 3. Load feedback history + signal performance
   loadFeedbackFromDisk();
+  loadSignalPerfFromDisk();
 
   // 4. Load position state
   loadState();
@@ -170,6 +172,7 @@ async function main() {
 
     // Save all state
     saveFeedbackToDisk();
+    saveSignalPerfToDisk();
     savePositionState();
 
     const finalStats = getStats();

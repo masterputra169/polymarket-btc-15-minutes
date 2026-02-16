@@ -74,6 +74,9 @@ import {
   saveFeedbackToDisk,
 } from './adapters/feedbackStore.js';
 
+// Signal performance (JSON file persistence)
+import { saveSignalPerfToDisk } from './adapters/signalPerfStore.js';
+
 // Shared pure JS modules
 import { computeBetSizing } from '../../src/engines/asymmetricBet.js';
 import { decide } from '../../src/engines/edge.js';
@@ -120,6 +123,8 @@ import {
   getLastSettlementMs,
   getDrawdownPct,
   saveState as savePositionState,
+  getMarketTradeCounts,
+  setMarketTradeCounts,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
@@ -133,6 +138,8 @@ import {
   recordTradeForMarket,
   resetMarketTradeCount,
   getFilterStatus,
+  exportMarketTradeCounts,
+  importMarketTradeCounts,
 } from './safety/tradeFilters.js';
 
 // Orderbook flow tracking
@@ -221,6 +228,7 @@ let polling = false;
 let tokenIdsNotified = false;
 let startupUsdcChecked = false;
 let startupOrdersReconciled = false;
+let startupTradeCountsLoaded = false;
 
 function resetMarketCache() {
   resetCaches();
@@ -262,6 +270,12 @@ export async function pollOnce() {
   polling = true;
   applyPendingSync(getBankroll, setBankroll);
   pollCounter++;
+
+  // H7: Restore per-market trade counts from persisted state on first poll
+  if (!startupTradeCountsLoaded) {
+    startupTradeCountsLoaded = true;
+    importMarketTradeCounts(getMarketTradeCounts());
+  }
   const _pollStart = performance.now();
 
   try {
@@ -554,8 +568,9 @@ export async function pollOnce() {
     const stalePos = getCurrentPosition();
     if (stalePos && !stalePos.settled && currentMarketSlug && stalePos.marketSlug !== currentMarketSlug) {
       await handleStalePosition(
-        { pos: stalePos, currentMarketSlug },
+        { pos: stalePos, currentMarketSlug, now },
         {
+          getLastSettled,
           getOraclePrice: () => getPolyLivePrice() || getChainlinkWssPrice(),
           getBinancePrice,
         },
@@ -1046,7 +1061,9 @@ export async function pollOnce() {
 
     // Periodic save
     if (pollCounter % 120 === 0) {
+      setMarketTradeCounts(exportMarketTradeCounts()); // H7: persist trade counts
       saveFeedbackToDisk();
+      saveSignalPerfToDisk();
       savePositionState();
     }
 

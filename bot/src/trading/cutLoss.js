@@ -177,7 +177,7 @@ export function evaluateCutLoss({
   // ── Shared computations for smart gates ──
   if (currentTokenPrice == null || !Number.isFinite(currentTokenPrice)) return no('no_price');
   const entryPrice = position.price;
-  if (entryPrice <= 0) return no('bad_entry_price');
+  if (entryPrice < 1e-8) return no('bad_entry_price');
 
   // Record token price for trajectory tracking
   recordTokenPrice(currentTokenPrice);

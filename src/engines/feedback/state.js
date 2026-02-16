@@ -3,7 +3,7 @@
  */
 
 const STORAGE_KEY = 'btc_prediction_tracker';
-export const MAX_HISTORY = 30;
+export const MAX_HISTORY = 200;
 const PERSIST_DEBOUNCE_MS = 5_000;
 export const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 export const MAX_SLUGS_KEPT = 5;

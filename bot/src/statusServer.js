@@ -178,6 +178,8 @@ export function startStatusServer() {
             respond('forceSettle', { ok: false, error: 'no_open_position' });
           } else if (!['WIN', 'LOSS', 'UNWIND'].includes(msg.outcome)) {
             respond('forceSettle', { ok: false, error: `invalid outcome: ${msg.outcome} (must be WIN/LOSS/UNWIND)` });
+          } else if (!acquireSellLock()) {
+            respond('forceSettle', { ok: false, error: 'sell_in_progress' });
           } else if (msg.outcome === 'UNWIND') {
             unwindPosition();
             writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { source: 'forceSettle' } });
@@ -185,6 +187,7 @@ export function startStatusServer() {
             resetCutLossState();
             if (_resetEntryRegime) _resetEntryRegime();
             setLastSettled(pos.marketSlug, Date.now());
+            releaseSellLock();
             log.info(`Force UNWIND: returned $${pos.cost.toFixed(2)} to bankroll`);
             respond('forceSettle', { ok: true, action: 'unwind', returned: pos.cost });
           } else {
@@ -197,6 +200,7 @@ export function startStatusServer() {
             if (_resetEntryRegime) _resetEntryRegime();
             if (!won) recordLoss();
             setLastSettled(pos.marketSlug, Date.now());
+            releaseSellLock();
             log.info(`Force SETTLE: ${won ? 'WIN' : 'LOSS'} | side=${pos.side} cost=$${pos.cost.toFixed(2)} pnl=$${pnl.toFixed(2)}`);
             respond('forceSettle', { ok: true, action: 'settle', won, side: pos.side, pnl });
           }

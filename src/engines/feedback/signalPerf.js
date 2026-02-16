@@ -127,6 +127,15 @@ export function updateSignalPerf(signalSnapshot, predSide, wasCorrect, modelProb
     // EMA accuracy
     s.emaAccuracy = s.emaAccuracy * (1 - EMA_ALPHA) + (signalCorrect ? 1 : 0) * EMA_ALPHA;
 
+    // H3: Per-signal CRPS (Brier score) — uses overall modelProb since
+    // we don't have signal-specific probability. Still useful for calibration.
+    if (modelProb != null && Number.isFinite(modelProb)) {
+      const actual = signalCorrect ? 1 : 0;
+      const signalProb = dir === predSide ? modelProb : (1 - modelProb);
+      s.crpsSum += (signalProb - actual) ** 2;
+      s.crpsCount++;
+    }
+
     // Recompute modifier
     if (s.fired >= MIN_SAMPLES) {
       s.modifier = Math.max(MODIFIER_MIN, Math.min(MODIFIER_MAX,
@@ -215,11 +224,17 @@ function maybeDecay() {
 
   for (const key of SIGNAL_KEYS) {
     const s = store.signals[key];
-    s.fired = Math.round(s.fired / 2);
-    s.correct = Math.round(s.correct / 2);
+    // H4: Use Math.floor (not Math.round) to prevent immortal entries.
+    // Math.round(1/2)=1 creates entries that never decay (100% accuracy forever).
+    s.fired = Math.floor(s.fired / 2);
+    s.correct = Math.floor(s.correct / 2);
     s.crpsSum /= 2;
     s.crpsCount = Math.floor(s.crpsCount / 2);
-    // EMA naturally decays, no extra treatment
+    // If fired dropped to 0, reset modifier to neutral
+    if (s.fired === 0) {
+      s.modifier = 1.0;
+      s.emaAccuracy = 0.5;
+    }
   }
   store.updatedAt = Date.now();
   dirty = true;
@@ -237,6 +252,31 @@ export function flushSignalPerf() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   } catch { /* */ }
+}
+
+/**
+ * Inject store data from external persistence (bot adapter).
+ * Must be called before any other signalPerf function to bypass localStorage.
+ */
+export function injectStore(data) {
+  if (data && data.version === VERSION && data.signals) {
+    store = data;
+    // Ensure all signal keys exist (forward compat)
+    for (const k of SIGNAL_KEYS) {
+      if (!store.signals[k]) store.signals[k] = emptySignal();
+    }
+    maybeDecay();
+  } else {
+    store = emptyStore();
+  }
+}
+
+/**
+ * Get a snapshot of the current store for external persistence (bot adapter).
+ */
+export function getStoreSnapshot() {
+  ensureLoaded();
+  return store ? JSON.parse(JSON.stringify(store)) : null;
 }
 
 /**

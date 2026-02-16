@@ -201,6 +201,24 @@ export function resetMarketTradeCount(slug) {
 }
 
 /**
+ * Export per-market trade counts for persistence.
+ * Called by loop.js periodic save to include in state.json.
+ */
+export function exportMarketTradeCounts() {
+  return { ...tradesThisMarket };
+}
+
+/**
+ * Import per-market trade counts from persisted state.
+ * Called by loop.js on startup to restore counts across restarts.
+ */
+export function importMarketTradeCounts(data) {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    tradesThisMarket = { ...data };
+  }
+}
+
+/**
  * Get filter status for dashboard broadcast.
  */
 export function getFilterStatus() {

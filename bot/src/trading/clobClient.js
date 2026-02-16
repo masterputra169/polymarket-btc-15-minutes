@@ -138,11 +138,15 @@ export async function placeBuyOrder({ tokenId, price, size }) {
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
   // FOK (Fill-or-Kill): entire order fills immediately or is cancelled.
   // GTC was unsafe — partial fills leave remainder open + loop.js records full size.
-  const result = await client.createAndPostOrder(
-    { tokenID: tokenId, price, side: 'BUY', size },
-    undefined, // options
-    'FOK',     // orderType (3rd param) — fill-or-kill to prevent untracked partial fills
-  );
+  // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
+  const result = await Promise.race([
+    client.createAndPostOrder(
+      { tokenID: tokenId, price, side: 'BUY', size },
+      undefined, // options
+      'FOK',     // orderType (3rd param) — fill-or-kill to prevent untracked partial fills
+    ),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostOrder BUY timeout (15s)')), 15000)),
+  ]);
 
   // Validate — CLOB client swallows HTTP errors, returning { error: "..." }
   validateOrderResponse(result, 'BUY');
@@ -203,11 +207,15 @@ export async function placeSellOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
-  const result = await client.createAndPostOrder(
-    { tokenID: tokenId, price, side: 'SELL', size },
-    undefined, // options
-    'FOK',     // orderType (3rd param) — fill-or-kill for sells
-  );
+  // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
+  const result = await Promise.race([
+    client.createAndPostOrder(
+      { tokenID: tokenId, price, side: 'SELL', size },
+      undefined, // options
+      'FOK',     // orderType (3rd param) — fill-or-kill for sells
+    ),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostOrder SELL timeout (15s)')), 15000)),
+  ]);
 
   validateOrderResponse(result, 'SELL');
 

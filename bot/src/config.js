@@ -47,6 +47,7 @@ const BOT_CONFIG = {
   tradesFile: resolve(__dirname, '..', 'data', 'trades.json'),
   feedbackFile: resolve(__dirname, '..', 'data', 'feedback.json'),
   stateFile: resolve(__dirname, '..', 'data', 'state.json'),
+  signalPerfFile: resolve(__dirname, '..', 'data', 'signal_perf.json'),
 
   // ML model paths (read from frontend public/)
   modelPath: resolve(__dirname, '..', '..', 'public', 'ml', 'xgboost_model.json'),

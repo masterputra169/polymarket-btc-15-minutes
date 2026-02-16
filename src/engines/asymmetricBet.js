@@ -50,11 +50,13 @@ function executionMultiplier(ctx) {
   else if (spread >= EXECUTION.SPREAD_TIGHT) spreadMult = 0.85;
 
   // Liquidity factor: based on ask-side depth (what we'd buy into)
+  // depth=0 or null means empty/unknown orderbook → heavy penalty
   let liqMult = 1.0;
   const depth = ctx.askLiquidity ?? 0;
-  if (depth > 0 && depth < EXECUTION.LIQ_VERY_THIN) liqMult = 0.50;
-  else if (depth > 0 && depth < EXECUTION.LIQ_THIN) liqMult = 0.70;
-  else if (depth > 0 && depth < EXECUTION.LIQ_MODERATE) liqMult = 0.85;
+  if (depth <= 0) liqMult = 0.30;
+  else if (depth < EXECUTION.LIQ_VERY_THIN) liqMult = 0.50;
+  else if (depth < EXECUTION.LIQ_THIN) liqMult = 0.70;
+  else if (depth < EXECUTION.LIQ_MODERATE) liqMult = 0.85;
 
   // Fill rate factor (from fill tracker history)
   let fillMult = 1.0;

@@ -168,7 +168,7 @@ export function predictLgb(features) {
   // Sigmoid
   let prob = 1 / (1 + Math.exp(-logit));
 
-  // Platt calibration
+  // Platt calibration (see calibration.js Bug 2 note — double-sigmoid, consistent with training)
   if (lgbPlattA !== 1.0 || lgbPlattB !== 0.0) {
     prob = 1 / (1 + Math.exp(-(lgbPlattA * prob + lgbPlattB)));
   }

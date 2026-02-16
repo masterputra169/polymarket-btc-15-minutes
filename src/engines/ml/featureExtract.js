@@ -69,7 +69,7 @@ export function computeEngineeredFeaturesInPlace() {
     (sign(haConsec) === deltaDir ? 1 : 0) +
     (sign(macdHist) === deltaDir ? 1 : 0) +
     (sign(featureBuf[FI.vwap_dist]) === deltaDir ? 1 : 0) +
-    ((rsi > 0.5 ? 1 : -1) === deltaDir ? 1 : 0) +
+    ((rsi > 0.5 ? 1 : 0) === (deltaDir > 0 ? 1 : 0) ? 1 : 0) +
     (multiTf > 0.5 ? 1 : 0)
   );
   featureBuf[74] = agreeCount / 5;
@@ -189,6 +189,9 @@ export function extractLiveFeaturesInPlace({
 
   if (S.modelVersion >= 2) {
     computeEngineeredFeaturesInPlace();
+  } else {
+    // Zero out engineered feature slots to prevent stale data from a previous call
+    featureBuf.fill(0, 54, 79);
   }
 
   return featureBuf;

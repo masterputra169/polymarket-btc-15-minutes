@@ -26,12 +26,13 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
   let regime = 'moderate';
   let confidence = 0.5;
   let label = 'Moderate';
+  let direction = null; // 'UP', 'DOWN', or null (non-directional)
 
   const hasVwap = vwap !== null && vwap !== undefined && price !== null && price !== undefined;
   const hasSlope = vwapSlope !== null && vwapSlope !== undefined;
   const hasVolume = volumeRecent !== null && volumeAvg !== null && volumeAvg > 0;
 
-  if (!hasVwap || vwap === 0) return { regime, confidence, label };
+  if (!hasVwap || vwap === 0) return { regime, confidence, label, direction };
 
   const vwapDist = Math.abs(price - vwap) / vwap;
   const volumeRatio = hasVolume ? volumeRecent / volumeAvg : 1;
@@ -44,7 +45,7 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
     regime = 'choppy';
     confidence = 0.3 + Math.min(vwapCrossCount / 8, 0.4);
     label = `Choppy (${vwapCrossCount} crosses)`;
-    return { regime, confidence, label };
+    return { regime, confidence, label, direction };
   }
 
   // ═══ TRENDING: Price far from VWAP + directional slope ═══
@@ -56,16 +57,18 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
     // M3: Use dead zone for slope direction — near-zero slope should fall back to price vs VWAP
     // to avoid random direction flips from noise (e.g. slope +0.00005 * vwap ≈ 0).
     const slopeSignificant = hasSlope && normalizedAbsSlope > 0.0001; // 0.01% of VWAP per candle
-    label = slopeSignificant ? (vwapSlope > 0 ? 'Trending UP' : 'Trending DOWN') : (price > vwap ? 'Trending UP' : 'Trending DOWN');
-    return { regime, confidence, label };
+    direction = slopeSignificant ? (vwapSlope > 0 ? 'UP' : 'DOWN') : (price > vwap ? 'UP' : 'DOWN');
+    label = `Trending ${direction}`;
+    return { regime, confidence, label, direction };
   }
 
   // Also trending if very far from VWAP regardless of slope (weaker — no slope confirmation)
   if (vwapDist > 0.002) {
     regime = 'trending';
     confidence = Math.min(0.50 + vwapDist * 80, 0.75); // lower cap: no slope = less certain
-    label = price > vwap ? 'Trending UP (distance)' : 'Trending DOWN (distance)';
-    return { regime, confidence, label };
+    direction = price > vwap ? 'UP' : 'DOWN';
+    label = `Trending ${direction} (distance)`;
+    return { regime, confidence, label, direction };
   }
 
   // ═══ MEAN REVERTING: Price near VWAP, low slope, few crosses ═══
@@ -73,9 +76,9 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
     regime = 'mean_reverting';
     confidence = 0.5;
     label = 'Mean Reverting';
-    return { regime, confidence, label };
+    return { regime, confidence, label, direction };
   }
 
   // ═══ DEFAULT: Moderate ═══
-  return { regime, confidence, label };
+  return { regime, confidence, label, direction };
 }

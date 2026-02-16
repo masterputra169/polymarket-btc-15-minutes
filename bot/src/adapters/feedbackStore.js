@@ -10,7 +10,7 @@
  * We handle actual persistence ourselves via saveFeedbackToDisk().
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync, unlinkSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -90,6 +90,8 @@ export function saveFeedbackToDisk() {
     } catch (renameErr) {
       log.debug(`Rename failed (${renameErr.message}) — direct write`);
       writeFileSync(BOT_CONFIG.feedbackFile, data);
+      // Clean up orphan temp file
+      try { unlinkSync(tmpPath); } catch { /* */ }
     }
     log.debug(`Saved ${currentCache.length} predictions to disk`);
   } catch (err) {

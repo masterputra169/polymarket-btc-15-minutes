@@ -42,7 +42,13 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
               return { won, outcome, source: 'oracle' };
             }
           }
-          break; // API responded OK but market not closed/no winner — don't retry
+          // H6: Market not closed yet — retry after delay (oracle may need time to settle)
+          if (attempt < MAX_RETRIES) {
+            log.debug(`Oracle: market not closed yet (attempt ${attempt + 1}/${MAX_RETRIES + 1}) — retrying after ${(attempt + 1)}s`);
+            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            continue;
+          }
+          break; // All retries exhausted, market still not closed
         }
       } catch (err) {
         log.debug(`Oracle fetch attempt ${attempt + 1}/${MAX_RETRIES + 1} failed: ${err.message}`);
@@ -51,7 +57,7 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
         }
       }
     }
-    log.warn('Oracle settlement failed after retries — falling back to BTC price comparison');
+    log.warn('Oracle: market not closed or no winner after retries — falling back to BTC price comparison');
   }
 
   // 2. Fallback: BTC price comparison (legacy behavior)
@@ -211,7 +217,14 @@ export async function handleSwitch({ pos, oldSlug, currentConditionId, priceToBe
  * @param {Object} deps - { getOraclePrice, getBinancePrice }
  * @param {Object} actions - Side-effect callbacks including setLastSettled
  */
-export async function handleStalePosition({ pos, currentMarketSlug }, deps, actions) {
+export async function handleStalePosition({ pos, currentMarketSlug, now }, deps, actions) {
+  // Double-settlement guard
+  if (now && deps.getLastSettled && isDoubleSettlement(pos, now ?? Date.now(), deps.getLastSettled)) {
+    log.warn(`Double settlement prevented for stale ${pos.marketSlug}`);
+    if (!pos.settled) actions.unwindPosition();
+    return;
+  }
+
   log.warn(`STALE POSITION detected: ${pos.side} on ${pos.marketSlug} (current market: ${currentMarketSlug})`);
 
   const oracleCondId = pos.conditionId;
@@ -222,6 +235,8 @@ export async function handleStalePosition({ pos, currentMarketSlug }, deps, acti
     const { won, outcome, source } = await settleViaOracle(pos, oracleCondId, btcPrice, null);
     log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     actions.settleTrade(won);
+    actions.invalidateUsdcSync();
+    actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
       pnl: won ? (pos.size - pos.cost) : -pos.cost,
@@ -237,8 +252,9 @@ export async function handleStalePosition({ pos, currentMarketSlug }, deps, acti
     // No conditionId + fill never confirmed → order likely never filled → unwind
     log.warn('Stale position has no conditionId and fill was never confirmed — unwinding (returning $' + pos.cost.toFixed(2) + ')');
     actions.unwindPosition();
-    actions.writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { staleRecovery: true, reason: 'no_conditionId_no_fill' } });
+    actions.invalidateUsdcSync();
     actions.clearEntrySnapshot();
+    actions.writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { staleRecovery: true, reason: 'no_conditionId_no_fill' } });
     return;
   }
 
@@ -263,6 +279,8 @@ export async function handleStalePosition({ pos, currentMarketSlug }, deps, acti
     const { won, outcome, source } = await settleViaOracle(pos, fetchedConditionId, btcPrice, null);
     log.info(`Stale position (Gamma lookup) settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     actions.settleTrade(won);
+    actions.invalidateUsdcSync();
+    actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
       pnl: won ? (pos.size - pos.cost) : -pos.cost,
@@ -274,6 +292,8 @@ export async function handleStalePosition({ pos, currentMarketSlug }, deps, acti
     // Truly no conditionId available → settle as LOSS (conservative)
     log.warn('Stale position: Gamma API lookup failed — settling as LOSS (conservative)');
     actions.settleTrade(false);
+    actions.invalidateUsdcSync();
+    actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: 'LOSS', pnl: -pos.cost,
       exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },

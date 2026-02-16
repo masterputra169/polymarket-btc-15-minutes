@@ -212,6 +212,12 @@ export async function executeDirectionalTrade({
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
   const shares = Math.floor(betSizing.betAmount / betMarketPrice);
 
+  // H9: Guard against 0 shares (e.g. betAmount < marketPrice)
+  if (shares <= 0) {
+    log.info(`Trade skipped: 0 shares (betAmount=$${betSizing.betAmount.toFixed(2)} / price=$${betMarketPrice.toFixed(3)})`);
+    return false;
+  }
+
   // Flow alignment info for logging
   const flowTag = flowAlign.signal !== 'INSUFFICIENT_DATA'
     ? ` | Flow:${flowAlign.signal}${flowAlign.agrees ? '(agree)' : '(DISAGREE)'}`
@@ -252,7 +258,7 @@ export async function executeDirectionalTrade({
   if (dryRun) {
     deps.setPendingCost(0);
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
-    deps.recordTradeForMarket(marketSlug);
+    // H8: Don't call recordTradeForMarket in dry-run — inflates counter, blocks real entries
     log.info(
       `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
       `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +

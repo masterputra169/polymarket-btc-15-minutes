@@ -77,11 +77,16 @@ export async function checkPendingFill() {
             getTradeHistory({ assetId: pending.tokenId, after: pending.placedAt - 5000 }),
             new Promise((_, rej) => setTimeout(() => rej(new Error('trade history timeout')), 5000))
           ]);
-          // Match by tokenId + time window (clock skew buffer 5s)
+          // Match by tokenId + time window + price proximity
           const matchingTrade = Array.isArray(trades) && trades.find(t => {
             const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
             const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
-            return assetMatch && matchTime >= pending.placedAt - 5000;
+            // H10: Add upper time bound (60s after placement) to prevent matching old trades
+            const inWindow = matchTime >= pending.placedAt - 5000 && matchTime <= pending.placedAt + 60000;
+            // H10: Price proximity check — fill price should be near order price (±5%)
+            const tradePrice = parseFloat(t.price ?? t.fill_price ?? 0);
+            const priceOk = !tradePrice || Math.abs(tradePrice - pending.price) / pending.price < 0.05;
+            return assetMatch && inWindow && priceOk;
           });
 
           if (matchingTrade) {

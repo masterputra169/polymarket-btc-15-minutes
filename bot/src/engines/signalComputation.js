@@ -14,6 +14,7 @@ import { analyzeOrderbook } from '../../../src/engines/orderbook.js';
 import { extractPriceToBeat, getSessionName } from '../../../src/utils.js';
 import { detectArbitrage } from './arbitrage.js';
 import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.js';
+import { getSignalModifiers } from '../adapters/signalPerfStore.js';
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -109,7 +110,7 @@ export function computeSignals({
     }
   }
 
-  // ── Score direction ──
+  // ── Score direction (with signal perf modifiers) ──
   const scored = scoreDirection({
     price: lastPrice, priceToBeat: updatedPriceToBeat.value,
     vwap: vwapNow, vwapSlope, rsi: rsiNow, rsiSlope,
@@ -118,6 +119,7 @@ export function computeSignals({
     orderbookSignal, volProfile, multiTfConfirm, feedbackStats,
     bb, atr,
     minutesLeft: timeLeftMin,
+    signalModifiers: getSignalModifiers(),
   });
 
   const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, candleWindowMinutes);

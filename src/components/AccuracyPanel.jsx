@@ -246,12 +246,19 @@ export default memo(AccuracyPanel, (prev, next) => {
   const a = prev.data;
   const b = next.data;
   if (!a || !b) return a === b;
+  const adf = a.detailedFeedback;
+  const bdf = b.detailedFeedback;
   return (
-    a.detailedFeedback?.totalSettled === b.detailedFeedback?.totalSettled &&
+    adf?.totalSettled === bdf?.totalSettled &&
     a.feedbackStats?.accuracy === b.feedbackStats?.accuracy &&
     a.feedbackStats?.confidenceMultiplier === b.feedbackStats?.confidenceMultiplier &&
-    a.detailedFeedback?.streak?.count === b.detailedFeedback?.streak?.count &&
-    a.detailedFeedback?.streak?.type === b.detailedFeedback?.streak?.type &&
-    a.overallCRPS === b.overallCRPS
+    adf?.streak?.count === bdf?.streak?.count &&
+    adf?.streak?.type === bdf?.streak?.type &&
+    a.overallCRPS === b.overallCRPS &&
+    // H12: Include rolling accuracy and regime stats to prevent stale display
+    adf?.rolling?.last20 === bdf?.rolling?.last20 &&
+    adf?.rolling?.last50 === bdf?.rolling?.last50 &&
+    adf?.rolling?.last100 === bdf?.rolling?.last100 &&
+    a.signalPerf === b.signalPerf
   );
 });
