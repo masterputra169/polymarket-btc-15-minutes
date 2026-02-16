@@ -178,6 +178,7 @@ export default memo(PredictPanel, (prev, next) => {
     a.pLong === b.pLong &&
     a.pShort === b.pShort &&
     a.regimeInfo?.regime === b.regimeInfo?.regime &&
+    a.regimeInfo?.label === b.regimeInfo?.label &&
     a.rec?.action === b.rec?.action &&
     a.rec?.side === b.rec?.side &&
     a.rec?.confidence === b.rec?.confidence &&

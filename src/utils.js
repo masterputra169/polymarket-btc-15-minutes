@@ -115,7 +115,27 @@ export function shallowChanged(prev, next) {
   if (prev === null || prev === undefined) return true;
   const nextKeys = Object.keys(next);
   for (let i = 0; i < nextKeys.length; i++) {
-    if (prev[nextKeys[i]] !== next[nextKeys[i]]) return true;
+    const k = nextKeys[i];
+    const pv = prev[k];
+    const nv = next[k];
+    if (pv !== nv) {
+      // M1: For plain objects (1 level deep), compare their own keys before declaring changed.
+      // This prevents re-renders from new object references when content is identical
+      // (e.g. regimeInfo, edge, rec, ml all recreated each poll but often same values).
+      if (pv && nv && typeof pv === 'object' && typeof nv === 'object'
+          && !Array.isArray(pv) && !Array.isArray(nv)) {
+        const pvKeys = Object.keys(pv);
+        const nvKeys = Object.keys(nv);
+        if (pvKeys.length === nvKeys.length) {
+          let objSame = true;
+          for (let j = 0; j < nvKeys.length; j++) {
+            if (pv[nvKeys[j]] !== nv[nvKeys[j]]) { objSame = false; break; }
+          }
+          if (objSame) continue; // Objects are content-equal — skip
+        }
+      }
+      return true;
+    }
   }
   // Check for removed keys (prev has keys that next doesn't)
   const prevKeys = Object.keys(prev);

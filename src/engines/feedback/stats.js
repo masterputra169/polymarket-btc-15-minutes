@@ -24,7 +24,8 @@ function computeStreakFromCache() {
 
 export function getAccuracyStats(windowSize = 20) {
   ensureLoaded();
-  if (!S.statsDirty && S.statsCache) return S.statsCache;
+  // L4: Cache must match requested windowSize — different callers may use different windows
+  if (!S.statsDirty && S.statsCache && S.statsCache._windowSize === windowSize) return S.statsCache;
 
   let settledCount = 0;
   for (let i = 0; i < S.cache.length; i++) {
@@ -44,6 +45,7 @@ export function getAccuracyStats(windowSize = 20) {
       confidenceMultiplier: 1.0,
       streak,
       label: `Tracking (${settledCount}/5 minimum)`,
+      _windowSize: windowSize,
     };
     S.setStatsCache(result);
     return result;
@@ -91,7 +93,7 @@ export function getAccuracyStats(windowSize = 20) {
   if (confidenceMultiplier < 0.50) confidenceMultiplier = 0.50;
   else if (confidenceMultiplier > 1.25) confidenceMultiplier = 1.25;
 
-  const result = { accuracy, total: recentTotal, correct: recentCorrect, confidenceMultiplier, streak, label };
+  const result = { accuracy, total: recentTotal, correct: recentCorrect, confidenceMultiplier, streak, label, _windowSize: windowSize };
   S.setStatsCache(result);
   return result;
 }
@@ -138,7 +140,11 @@ export function getDetailedStats() {
     };
   }
 
-  // Use confidence = max(prob, 1-prob) so both UP and DOWN predictions are included
+  // M5: modelProb is already the probability for the PREDICTED side (stored by recordPrediction).
+  // e.g. if predicted DOWN with 65% conf, modelProb = 0.65 (not 0.35).
+  // Math.max(raw, 1-raw) was wrong: when ensemble disagrees (modelProb < 0.5),
+  // it inflated 0.35 → 0.65 putting it in the wrong calibration bucket.
+  // Use modelProb directly — it IS the confidence for the predicted side.
   const calBuckets = [
     { lo: 0.50, hi: 0.55 }, { lo: 0.55, hi: 0.60 },
     { lo: 0.60, hi: 0.65 }, { lo: 0.65, hi: 0.70 },
@@ -148,8 +154,7 @@ export function getDetailedStats() {
     let correct = 0, total = 0, sumConf = 0;
     for (let i = 0; i < totalSettled; i++) {
       const p = settled[i];
-      const raw = p.modelProb ?? 0.5;
-      const conf = Math.max(raw, 1 - raw); // symmetric: DOWN 0.35 → 0.65 confidence
+      const conf = p.modelProb ?? 0.5;
       if (conf >= lo && conf < hi) {
         total++;
         sumConf += conf;

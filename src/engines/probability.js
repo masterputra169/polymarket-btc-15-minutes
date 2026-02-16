@@ -52,6 +52,8 @@ export function scoreDirection({
   feedbackStats = null,     // from getAccuracyStats()
   minutesLeft = null,       // minutes until settlement (for time-adaptive PTB weight)
   signalModifiers = null,   // from getSignalModifiers() — dynamic weight adaptation
+  bb = null,                // from computeBollinger() — { percentB, squeeze, squeezeIntensity }
+  atr = null,               // from computeATR() — { atrRatio, expanding }
 }) {
   let upScore = 1;   // base
   let downScore = 1;  // base
@@ -341,6 +343,36 @@ export function scoreDirection({
     }
   } else {
     breakdown.multiTf = { signal: multiTfConfirm?.signal ?? 'N/A', weight: 0 };
+  }
+
+  // ═══ 10b. BOLLINGER BANDS (weight: 1) — L1 fix ═══
+  // %B > 0.8 = price near upper band (bullish momentum), < 0.2 = near lower (bearish)
+  // Squeeze = bands tightening → breakout imminent, boost current direction
+  if (bb && bb.percentB != null) {
+    if (bb.percentB > 0.8) {
+      const w = mod('bbPos', bb.squeeze ? 1 : 0.5);
+      upScore += w;
+      breakdown.bbPos = { signal: bb.squeeze ? 'UP (squeeze)' : 'UP', weight: w, percentB: bb.percentB };
+    } else if (bb.percentB < 0.2) {
+      const w = mod('bbPos', bb.squeeze ? 1 : 0.5);
+      downScore += w;
+      breakdown.bbPos = { signal: bb.squeeze ? 'DOWN (squeeze)' : 'DOWN', weight: w, percentB: bb.percentB };
+    } else {
+      breakdown.bbPos = { signal: 'NEUTRAL', weight: 0, percentB: bb.percentB };
+    }
+  } else {
+    breakdown.bbPos = { signal: 'N/A', weight: 0 };
+  }
+
+  // ═══ 10c. ATR EXPANSION (weight: 0.5) — L1 fix ═══
+  // Expanding ATR = strong directional move in progress → boost momentum direction
+  if (atr && atr.expanding && delta1m !== null && delta1m !== 0) {
+    const w = mod('atrExpand', 0.5);
+    if (delta1m > 0) upScore += w;
+    else downScore += w;
+    breakdown.atrExpand = { signal: delta1m > 0 ? 'UP' : 'DOWN', weight: w, atrRatio: atr.atrRatio };
+  } else {
+    breakdown.atrExpand = { signal: atr?.expanding ? 'NO DIR' : 'N/A', weight: 0, atrRatio: atr?.atrRatio ?? null };
   }
 
   // ═══ CALCULATE RAW PROBABILITY ═══

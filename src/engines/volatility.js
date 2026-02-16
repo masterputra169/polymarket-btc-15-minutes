@@ -123,6 +123,9 @@ export function computeRealizedVol(closes, lookback = 15) {
   return {
     realizedVol: stdDev,
     realizedVolPct: vol15m,
-    isAboveExpected: vol15m > profile.expectedRangePct * 1.5,
+    // L2: vol15m is stdDev-scaled (~1σ), expectedRangePct is a range (~2-3σ).
+    // Old: vol15m > range * 1.5 → almost never true (comparing σ to 1.5× range).
+    // Fix: compare σ to half the expected range (≈ 1σ equivalent).
+    isAboveExpected: vol15m > profile.expectedRangePct * 0.5,
   };
 }

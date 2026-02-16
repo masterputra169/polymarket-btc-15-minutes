@@ -52,7 +52,9 @@ export function settlePrediction(marketSlug, result) {
 }
 
 export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
-  if (timeLeftMin > 0.15) return;
+  // M10: Was > 0.15 outer gate + <= 0.1 inner gate → 3s gap where autoSettle
+  // ran but current-slug predictions couldn't settle. Unified to 0.5 min (30s).
+  if (timeLeftMin > 0.5) return;
   ensureLoaded();
 
   let hasUnsettled = false;
@@ -66,7 +68,9 @@ export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
     const pred = S.cache[i];
     if (pred.settled) continue;
 
-    if (pred.marketSlug && pred.marketSlug !== currentSlug) {
+    // L5: Predictions without marketSlug can never match any slug → zombie entries.
+    // Settle them as expired immediately.
+    if (!pred.marketSlug) {
       pred.settled = true;
       pred.correct = null;
       pred.settledAt = Date.now();
@@ -75,7 +79,16 @@ export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
       continue;
     }
 
-    if (priceToBeat !== null && timeLeftMin <= 0.1 && pred.marketSlug === currentSlug) {
+    if (pred.marketSlug !== currentSlug) {
+      pred.settled = true;
+      pred.correct = null;
+      pred.settledAt = Date.now();
+      pred.actualResult = 'expired';
+      changed = true;
+      continue;
+    }
+
+    if (priceToBeat !== null && timeLeftMin <= 0.5 && pred.marketSlug === currentSlug) {
       const result = btcPrice >= priceToBeat ? 'UP' : 'DOWN';
       pred.settled = true;
       pred.correct = pred.side === result;

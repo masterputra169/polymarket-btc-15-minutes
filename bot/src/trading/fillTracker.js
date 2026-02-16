@@ -56,19 +56,24 @@ export async function checkPendingFill() {
     for (const [orderId, pending] of pendingOrders) {
       const elapsed = Date.now() - pending.placedAt;
 
-      if (!openIds.has(orderId) && elapsed < 2000) {
-        // Too early to conclude — order may not be visible in getOpenOrders() API yet.
-        // Skip this check; will re-evaluate on next poll.
+      if (!openIds.has(orderId) && elapsed < 3000) {
+        // M9: Too early to conclude — FOK orders disappear immediately on reject/expire too.
+        // Wait 3s (was 2s) before inferring fill. With FOK order type, rejected orders
+        // vanish from open orders just like filled ones. 3s gives API time to propagate.
         continue;
       }
 
       if (!openIds.has(orderId)) {
-        // Order no longer in open orders after 2s — assumed filled
+        // M9: Order not in open orders after 3s. With FOK, this could be:
+        // 1. Filled (most likely if order was valid + liquidity existed)
+        // 2. Rejected/expired (FOK that couldn't fill immediately)
+        // We assume filled but log a warning. positionTracker's confirmFill + actual
+        // USDC balance checks provide secondary verification.
         const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
         const fill = { orderId, filled: true, timeToFill: elapsed, adverseSelection };
         recordFill(fill);
         log.info(
-          `Order ${orderId} no longer open after ${(elapsed / 1000).toFixed(1)}s — assumed filled` +
+          `Order ${orderId} not in open orders after ${(elapsed / 1000).toFixed(1)}s — assumed filled (FOK)` +
           (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
         );
         pendingOrders.delete(orderId);

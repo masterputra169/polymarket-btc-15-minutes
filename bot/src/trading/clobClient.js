@@ -136,10 +136,12 @@ export async function placeBuyOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
+  // FOK (Fill-or-Kill): entire order fills immediately or is cancelled.
+  // GTC was unsafe — partial fills leave remainder open + loop.js records full size.
   const result = await client.createAndPostOrder(
     { tokenID: tokenId, price, side: 'BUY', size },
     undefined, // options
-    'GTC',     // orderType (3rd param)
+    'FOK',     // orderType (3rd param) — fill-or-kill to prevent untracked partial fills
   );
 
   // Validate — CLOB client swallows HTTP errors, returning { error: "..." }

@@ -144,7 +144,10 @@ export function connect() {
         } else if (data.error) {
           log.debug(`RPC error: ${JSON.stringify(data.error)}`);
         }
-        // Any valid response (even error) counts as connection alive for basic liveness
+        // L7: Any valid JSON-RPC response (even error) means connection is alive.
+        // Without this, persistent RPC errors (bad config) never update lastDataMs
+        // → heartbeat triggers reconnect every 45s → infinite reconnect loop.
+        lastDataMs = Date.now();
       } catch (err) {
         log.debug(`WS parse error: ${err.message}`);
       }

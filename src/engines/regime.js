@@ -53,7 +53,10 @@ export function detectRegime({ price, vwap, vwapSlope, vwapCrossCount, volumeRec
     const volBoost = volumeRatio > 1.2 ? 0.10 : 0;
     regime = 'trending';
     confidence = Math.min(0.6 + vwapDist * 200 + volBoost, 0.95);
-    label = hasSlope ? (vwapSlope > 0 ? 'Trending UP' : 'Trending DOWN') : (price > vwap ? 'Trending UP' : 'Trending DOWN');
+    // M3: Use dead zone for slope direction — near-zero slope should fall back to price vs VWAP
+    // to avoid random direction flips from noise (e.g. slope +0.00005 * vwap ≈ 0).
+    const slopeSignificant = hasSlope && normalizedAbsSlope > 0.0001; // 0.01% of VWAP per candle
+    label = slopeSignificant ? (vwapSlope > 0 ? 'Trending UP' : 'Trending DOWN') : (price > vwap ? 'Trending UP' : 'Trending DOWN');
     return { regime, confidence, label };
   }
 

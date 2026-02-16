@@ -244,7 +244,17 @@ export function settleTrade(won) {
 
   // H6: Polymarket charges 2% fee on profit at redemption
   const grossPayout = won ? pos.size : 0; // Binary: win = $1/share, lose = $0
-  const profit = Math.max(0, grossPayout - pos.cost);
+
+  // ARB fee: Polymarket charges 2% on the WINNING TOKEN's profit, not net arb profit.
+  // For ARB, we don't know which side won, so use worst-case (cheaper leg wins = larger profit = larger fee).
+  // Example: arb cost $97 (UP $46 + DOWN $51), payout $100 → worst-case fee = ($100-$46)×2% = $1.08
+  let profit;
+  if (pos.side === 'ARB' && pos.arbUpCost != null && pos.arbDownCost != null) {
+    const minLegCost = Math.min(pos.arbUpCost, pos.arbDownCost);
+    profit = Math.max(0, grossPayout - minLegCost); // Worst-case winning token profit
+  } else {
+    profit = Math.max(0, grossPayout - pos.cost);
+  }
   const fee = roundMoney(profit * POLYMARKET_FEE_RATE);
   const payout = roundMoney(grossPayout - fee);
 
@@ -382,7 +392,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
  * @param {string} params.marketSlug - Market identifier
  * @param {string|null} params.orderId - Order ID from first leg
  */
-export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }) {
+export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId, conditionId }) {
   // NaN guard — reject invalid arb costs before they corrupt bankroll
   if (!Number.isFinite(upCost) || upCost < 0 || !Number.isFinite(downCost) || downCost < 0 || !Number.isFinite(shares) || shares <= 0) {
     log.error(`recordArbTrade REJECTED: invalid params upCost=${upCost} downCost=${downCost} shares=${shares}`);
@@ -397,13 +407,15 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }
   state.currentPosition = {
     side: 'ARB',
     tokenId: null,  // ARB holds tokens on both sides
-    conditionId: null,
+    conditionId: conditionId ?? null,  // H5: store for oracle settlement
     price: shares > 0 ? Math.round(totalCost / shares * 1e8) / 1e8 : 0,
     size: shares,   // $1/share guaranteed payout at settlement
     marketSlug,
     orderId: orderId ?? null,
     enteredAt: Date.now(),
     cost: totalCost,
+    arbUpCost: roundMoney(upCost),    // H3: individual leg costs for correct fee calculation
+    arbDownCost: roundMoney(downCost), // H3: Polymarket charges 2% on winning token profit, not net arb profit
     settled: false,
     fillConfirmed: true,  // Both legs verified by successful placement
   };

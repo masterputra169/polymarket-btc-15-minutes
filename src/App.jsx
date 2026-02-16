@@ -93,6 +93,8 @@ export default function App() {
 
   // ═══ Browser-side signal perf tracking (bridges bot data → localStorage) ═══
   // Records predictions + settles them client-side so signalPerf accumulates
+  // M8: Added [data] dep — was running every render (~2x/sec from useCountdown).
+  // Now runs once per data update (~2s when bot sends new WS message).
   const prevSlugRef = useRef(null);
   useEffect(() => {
     const d = dataRef.current;
@@ -125,7 +127,7 @@ export default function App() {
         });
       } catch { /* */ }
     }
-  });
+  }, [data]);
 
   // Smooth 1-second countdown (local timer, no network)
   const smoothTimeLeft = useCountdown(data?.settlementMs ?? null);
@@ -197,7 +199,7 @@ export default function App() {
     data?.pLong, data?.pShort, data?.rawUp, data?.rawDown,
     data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
     data?.edge?.bestEdge, data?.edge?.bestSide, data?.timeDecay,
-    data?.regimeInfo?.regime, data?.regimeInfo?.confidence,
+    data?.regimeInfo?.regime, data?.regimeInfo?.confidence, data?.regimeInfo?.label,
     data?.feedbackStats?.accuracy, data?.feedbackStats?.streak,
     data?.haNarrative, data?.rsiNarrative, data?.macdNarrative, data?.vwapNarrative,
     data?.timing, data?.consec?.count, data?.consec?.color,

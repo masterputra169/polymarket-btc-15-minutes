@@ -633,6 +633,8 @@ export async function pollOnce() {
           const arbPnl = pos.size - pos.cost;
           log.info(`ARB position settled on switch — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
           settleTrade(true);
+          pendingUsdcSync = null;   // H6: invalidate stale USDC sync (same as non-ARB path)
+          clearEntrySnapshot();      // H6: clean up journal state
           writeJournalEntry({
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
@@ -713,14 +715,45 @@ export async function pollOnce() {
         writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { staleRecovery: true, reason: 'no_conditionId_no_fill' } });
         clearEntrySnapshot();
       } else {
-        // No conditionId but fill was confirmed → can't verify outcome → settle as loss (conservative)
-        log.warn('Stale position has no conditionId but fill was confirmed — settling as LOSS (conservative)');
-        settleTrade(false);
-        writeJournalEntry({
-          outcome: 'LOSS', pnl: -stalePos.cost,
-          exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
-        });
-        recordLoss();
+        // H7: No conditionId but fill confirmed → try Gamma API lookup by slug for oracle settlement
+        log.warn('Stale position has no conditionId but fill confirmed — attempting Gamma API lookup');
+        let fetchedConditionId = null;
+        try {
+          const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(stalePos.marketSlug)}`;
+          const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(5000) });
+          if (gammaRes.ok) {
+            const gammaMarkets = await gammaRes.json();
+            fetchedConditionId = gammaMarkets?.[0]?.conditionId ?? gammaMarkets?.[0]?.condition_id ?? null;
+            if (fetchedConditionId) log.info(`Gamma API found conditionId for stale position: ${fetchedConditionId}`);
+          }
+        } catch (err) {
+          log.debug(`Gamma API lookup failed for stale position: ${err.message}`);
+        }
+
+        if (fetchedConditionId) {
+          // Oracle settlement with discovered conditionId
+          const oraclePrice = getPolyLivePrice() || getChainlinkWssPrice();
+          const currentBtcPrice = oraclePrice || getBinancePrice();
+          const { won, outcome, source } = await settleViaOracle(stalePos, fetchedConditionId, currentBtcPrice, null);
+          log.info(`Stale position (Gamma lookup) settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
+          settleTrade(won);
+          writeJournalEntry({
+            outcome: won ? 'WIN' : 'LOSS',
+            pnl: won ? (stalePos.size - stalePos.cost) : -stalePos.cost,
+            exitData: { outcome, source, staleRecovery: true, reason: 'gamma_lookup' },
+          });
+          if (!won) recordLoss();
+          if (outcome) settlePrediction(stalePos.marketSlug, outcome);
+        } else {
+          // Truly no conditionId available → settle as LOSS (conservative)
+          log.warn('Stale position: Gamma API lookup failed — settling as LOSS (conservative)');
+          settleTrade(false);
+          writeJournalEntry({
+            outcome: 'LOSS', pnl: -stalePos.cost,
+            exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
+          });
+          recordLoss();
+        }
         setLastSettled(stalePos.marketSlug, Date.now());
       }
       resetCutLossState();
@@ -1130,6 +1163,7 @@ export async function pollOnce() {
                   shares: arbShares,
                   marketSlug,
                   orderId: upOrderId,
+                  conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
                 });
                 recordTradeForMarket(marketSlug);
               } catch (recErr) {

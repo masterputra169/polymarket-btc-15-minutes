@@ -100,11 +100,19 @@ export function countAgreement(breakdown, side) {
 
   for (const key of signalKeys) {
     const entry = breakdown[key];
-    if (!entry || entry.weight <= 0) continue;
+    if (!entry || entry.weight === 0) continue;
 
     const signal = entry.signal?.toUpperCase() ?? '';
-    if (side === 'UP' && signal.includes('UP')) count++;
-    if (side === 'DOWN' && signal.includes('DOWN')) count++;
+    if (entry.weight > 0) {
+      // Positive weight: direct agreement
+      if (side === 'UP' && signal.includes('UP')) count++;
+      if (side === 'DOWN' && signal.includes('DOWN')) count++;
+    } else {
+      // M2: Negative weight (conflict): scoring engine adds weight to OPPOSITE side,
+      // so a conflict against DOWN is effectively support for UP and vice versa.
+      if (side === 'UP' && signal.includes('DOWN')) count++;
+      if (side === 'DOWN' && signal.includes('UP')) count++;
+    }
   }
 
   return count;

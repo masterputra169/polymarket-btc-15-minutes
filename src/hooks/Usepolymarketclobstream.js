@@ -297,6 +297,13 @@ export function usePolymarketClobStream() {
       };
 
       ws.onclose = (evt) => {
+        // H4: Guard against race condition — if forceReconnect already opened a new WS,
+        // this old onclose must NOT clear the new connection's state (wsRef, subscribedRef).
+        if (wsRef.current !== null && wsRef.current !== ws) {
+          if (IS_DEV) console.log(`[CLOB WS] ❌ Old connection closed (code: ${evt.code}) — new connection exists, skipping cleanup`);
+          return;
+        }
+
         if (IS_DEV) console.log(`[CLOB WS] ❌ Closed (code: ${evt.code}, intentional: ${intentionalCloseRef.current})`);
         setConnected(false);
         wsRef.current = null;

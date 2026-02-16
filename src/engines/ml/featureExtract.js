@@ -60,15 +60,18 @@ export function computeEngineeredFeaturesInPlace() {
   featureBuf[72] = volBuy * sign(delta1m) * volRatio;
   featureBuf[73] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
 
+  // L6: Removed `deltaDir !== 0` guard — training computes sign comparisons naturally
+  // (e.g. sign(0) == sign(0) → True in numpy), so browser must match.
+  // When deltaDir == 0, only indicators also at 0 will agree (sign(x) === 0).
   const deltaDir = sign(delta1m);
   const macdHist = featureBuf[FI.macd_hist];
-  const agreeCount = deltaDir !== 0 ? (
+  const agreeCount = (
     (sign(haConsec) === deltaDir ? 1 : 0) +
     (sign(macdHist) === deltaDir ? 1 : 0) +
     (sign(featureBuf[FI.vwap_dist]) === deltaDir ? 1 : 0) +
     ((rsi > 0.5 ? 1 : -1) === deltaDir ? 1 : 0) +
     (multiTf > 0.5 ? 1 : 0)
-  ) : 0;
+  );
   featureBuf[74] = agreeCount / 5;
   featureBuf[75] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
 
