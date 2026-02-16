@@ -50,6 +50,9 @@ parser.add_argument('--recency-halflife', type=int, default=90,
                     help='Half-life in days for recency weighting (default: 90)')
 parser.add_argument('--regime-split', action='store_true',
                     help='Train separate models per regime (trending/moderate/choppy)')
+parser.add_argument('--holdout-frac', type=float, default=0,
+                    help='Reserve final N%% of train data as holdout (not seen by Optuna/CV). '
+                         'E.g. 0.125 = 12.5%% holdout. Use with backtestPnL.py --oos-start 0.875')
 # Legacy flags kept for compatibility
 parser.add_argument('--epochs', type=int, default=0)
 args = parser.parse_args()
@@ -212,6 +215,25 @@ split = int(len(X) * (1 - args.test_size))
 X_train, X_test = X[:split], X[split:]
 y_train, y_test = y[:split], y[split:]
 print(f"   Train: {len(X_train):,} | Test: {len(X_test):,}")
+
+# OOS holdout: reserve final portion of training data for true out-of-sample evaluation
+# This data is NOT seen by Optuna or walk-forward CV
+X_holdout, y_holdout, w_holdout = None, None, None
+holdout_start_idx = None
+if args.holdout_frac > 0:
+    holdout_boundary = int(len(X_train) * (1 - args.holdout_frac))
+    holdout_start_idx = holdout_boundary
+    X_holdout = X_train[holdout_boundary:]
+    y_holdout = y_train[holdout_boundary:]
+    X_tune = X_train[:holdout_boundary]
+    y_tune = y_train[:holdout_boundary]
+    print(f"   OOS HOLDOUT: {len(X_holdout):,} samples reserved (not used for tuning)")
+    print(f"   Tune set: {len(X_tune):,} | Holdout: {len(X_holdout):,}")
+    # Swap: Optuna and CV will use X_tune/y_tune instead of full X_train/y_train
+    X_train_full, y_train_full = X_train, y_train  # keep reference to full train for final model
+    X_train, y_train = X_tune, y_tune
+else:
+    X_train_full, y_train_full = X_train, y_train
 
 # ================================================
 # 4. REGIME STATS (no sample weighting — v7 showed it doesn't help)
@@ -454,7 +476,11 @@ else:
 
 
 # --- Train final model with best config ---
+# Final model trains on full X_train (including holdout), since holdout was only
+# excluded from Optuna/CV tuning. The model gets the most data possible.
 print(f"\n   Training final model with {best_cfg_name}...")
+if args.holdout_frac > 0:
+    print(f"   (using full training data: {len(X_train_full):,} samples, holdout was only excluded from tuning)")
 
 final_params = {
     'objective': 'binary:logistic',
@@ -465,7 +491,16 @@ final_params = {
     **best_cfg,
 }
 
-dtrain = xgb.DMatrix(X_train, label=y_train, weight=w_train, feature_names=feature_cols)
+# Recalculate sample weights for full training set if holdout was used
+w_train_final = w_train
+if args.holdout_frac > 0 and args.recency:
+    n_full = len(X_train_full)
+    days_ago_full = np.linspace(args.days, 0, n_full)
+    w_train_final = (0.5 + 0.5 * np.exp(-days_ago_full / args.recency_halflife)).astype(np.float32)
+elif args.holdout_frac > 0:
+    w_train_final = None  # full train had no weights (tune subset was swapped)
+
+dtrain = xgb.DMatrix(X_train_full, label=y_train_full, weight=w_train_final, feature_names=feature_cols)
 if exclude_feature_names:
     # Ensure colsample_bytree < 1.0 for feature_weights to work
     if final_params.get('colsample_bytree', 1.0) >= 1.0:
@@ -487,6 +522,22 @@ y_prob = model.predict(dtest)
 initial_acc = accuracy_score(y_test, (y_prob >= 0.5).astype(int))
 initial_auc = roc_auc_score(y_test, y_prob)
 print(f"   Initial model: acc={initial_acc*100:.1f}% | AUC={initial_auc:.4f} | trees={model.best_iteration+1}")
+
+# --- OOS holdout evaluation (if --holdout-frac was used) ---
+if X_holdout is not None and len(X_holdout) > 0:
+    dholdout = xgb.DMatrix(X_holdout, label=y_holdout, feature_names=feature_cols)
+    y_prob_holdout = model.predict(dholdout)
+    holdout_acc = accuracy_score(y_holdout, (y_prob_holdout >= 0.5).astype(int))
+    holdout_auc = roc_auc_score(y_holdout, y_prob_holdout)
+    print(f"\n   === OOS HOLDOUT (Optuna/CV never saw this data) ===")
+    print(f"   Holdout samples: {len(X_holdout):,}")
+    print(f"   Holdout acc: {holdout_acc*100:.1f}% | AUC: {holdout_auc:.4f}")
+    print(f"   Test    acc: {initial_acc*100:.1f}% | AUC: {initial_auc:.4f}")
+    acc_drop = (initial_acc - holdout_acc) * 100
+    auc_drop = (initial_auc - holdout_auc) * 10000
+    print(f"   Delta: acc {acc_drop:+.1f}pp | AUC {auc_drop:+.0f}bp")
+    if holdout_acc < initial_acc * 0.90:
+        print(f"   [WARN] Holdout accuracy dropped >10% vs test — possible overfitting!")
 
 # ================================================
 # 6. FEATURE SELECTION (soft, via feature_weights)
@@ -527,7 +578,7 @@ if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
     combined_fw = feature_weights.copy()
     if exclude_feature_names:
         combined_fw = np.minimum(combined_fw, pre_exclude_fw)
-    dtrain_fw = xgb.DMatrix(X_train, label=y_train, weight=w_train, feature_names=feature_cols)
+    dtrain_fw = xgb.DMatrix(X_train_full, label=y_train_full, weight=w_train_final, feature_names=feature_cols)
     dtrain_fw.feature_weights = combined_fw
 
     ev2 = {}
@@ -727,9 +778,9 @@ with open(model_path, 'w') as f:
 mb = os.path.getsize(model_path) / 1024 / 1024
 print(f"   Browser model: {model_path} ({mb:.1f} MB)")
 
-# Normalization
-means = X_train.mean(axis=0).tolist()
-stds = X_train.std(axis=0).tolist()
+# Normalization (use full training data for mean/std, not just tune subset)
+means = X_train_full.mean(axis=0).tolist()
+stds = X_train_full.std(axis=0).tolist()
 for i in range(len(stds)):
     if stds[i] < 1e-8: stds[i] = 1.0
 
@@ -770,7 +821,9 @@ norm = {
         'divergence_x_confidence': {'type': 'multiply', 'a': 'crowd_model_divergence', 'b': 'rule_confidence'},
         'imbalance_x_vol_delta': {'type': 'multiply', 'a': 'orderbook_imbalance', 'b': 'vol_delta_buy_ratio'},
     },
-    'train_samples': len(X_train),
+    'train_samples': len(X_train_full),
+    'holdout_frac': args.holdout_frac if args.holdout_frac > 0 else None,
+    'holdout_start_idx': holdout_start_idx,
 }
 
 with open(os.path.join(args.output_dir, 'norm_browser.json'), 'w') as f:

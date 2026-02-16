@@ -708,6 +708,30 @@ export function setLastSettled(slug, ts) {
   saveState();
 }
 
+/**
+ * Reset internal state to defaults. TEST-ONLY — do not use in production.
+ */
+export function _resetForTest(overrides = {}) {
+  state = {
+    bankroll: overrides.bankroll ?? 100,
+    peakBankroll: overrides.peakBankroll ?? (overrides.bankroll ?? 100),
+    startOfDayBankroll: overrides.startOfDayBankroll ?? (overrides.bankroll ?? 100),
+    dayStartMs: Date.now(),
+    currentPosition: overrides.currentPosition ?? null,
+    pendingCost: overrides.pendingCost ?? 0,
+    consecutiveLosses: overrides.consecutiveLosses ?? 0,
+    totalTrades: overrides.totalTrades ?? 0,
+    wins: overrides.wins ?? 0,
+    losses: overrides.losses ?? 0,
+    trades: overrides.trades ?? [],
+    lastSettledSlug: overrides.lastSettledSlug ?? null,
+    lastSettledTs: overrides.lastSettledTs ?? 0,
+    lastSettlementMs: overrides.lastSettlementMs ?? 0,
+    cutLossCount: overrides.cutLossCount ?? 0,
+  };
+  sellingInProgress = false;
+}
+
 export function getStats() {
   return {
     bankroll: state.bankroll,

@@ -32,6 +32,9 @@ parser.add_argument('--threshold-sweep', action='store_true', help='Run sweep fr
 parser.add_argument('--bankroll', type=float, default=1000, help='Starting bankroll')
 parser.add_argument('--bet-size', type=float, default=10, help='Bet size per trade')
 parser.add_argument('--min-edge', type=float, default=0.05, help='Minimum edge to trade')
+parser.add_argument('--oos-start', type=float, default=0.85,
+                    help='Fraction of data to use as OOS start (default: 0.85 = last 15%%). '
+                         'Use 0.875 with --holdout-frac 0.125 for true OOS backtest.')
 args = parser.parse_args()
 
 # ================================================
@@ -158,10 +161,15 @@ if os.path.exists(norm_path):
 # ================================================
 # 4. PREDICT
 # ================================================
-# Use temporal split: last 15% as test (same as training)
-split = int(len(X) * 0.85)
+# Temporal split: use --oos-start to control test region
+# Default 0.85 = same as training test set (in-sample for Optuna)
+# Use 0.875+ for true OOS (data Optuna never saw, if trained with --holdout-frac)
+split = int(len(X) * args.oos_start)
 X_test = X[split:]
 y_test = y[split:]
+
+oos_mode = 'OUT-OF-SAMPLE' if args.oos_start > 0.85 else 'IN-SAMPLE (overlaps tuning data)'
+print(f"  Split at {args.oos_start:.1%} → test starts at sample {split:,} [{oos_mode}]")
 
 # Regime labels for test set
 regime_idx = {

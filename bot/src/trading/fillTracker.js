@@ -9,7 +9,7 @@
  * Tracks pending orders, detects fills/timeouts, computes rolling fill rate.
  */
 
-import { getOpenOrders, cancelOrder } from './clobClient.js';
+import { getOpenOrders, cancelOrder, getTradeHistory } from './clobClient.js';
 import { createLogger } from '../logger.js';
 import { EXECUTION } from '../../../src/config.js';
 
@@ -67,15 +67,45 @@ export async function checkPendingFill() {
         // M9: Order not in open orders after 3s. With FOK, this could be:
         // 1. Filled (most likely if order was valid + liquidity existed)
         // 2. Rejected/expired (FOK that couldn't fill immediately)
-        // We assume filled but log a warning. positionTracker's confirmFill + actual
-        // USDC balance checks provide secondary verification.
+        // Verify via trade history API before confirming fill.
         const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
-        const fill = { orderId, filled: true, timeToFill: elapsed, adverseSelection };
+        let verified = false;
+        let rejected = false;
+
+        try {
+          const trades = await Promise.race([
+            getTradeHistory({ assetId: pending.tokenId, after: pending.placedAt - 5000 }),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('trade history timeout')), 5000))
+          ]);
+          // Match by tokenId + time window (clock skew buffer 5s)
+          const matchingTrade = Array.isArray(trades) && trades.find(t => {
+            const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
+            const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
+            return assetMatch && matchTime >= pending.placedAt - 5000;
+          });
+
+          if (matchingTrade) {
+            verified = true;
+            log.info(`Order ${orderId} fill CONFIRMED via trade history (${(elapsed / 1000).toFixed(1)}s)`);
+          } else {
+            rejected = true;
+            log.warn(`Order ${orderId} NOT FOUND in trade history after ${(elapsed / 1000).toFixed(1)}s — likely FOK rejection`);
+          }
+        } catch (err) {
+          // API error: fall back to assume filled (conservative — same as old behavior)
+          log.debug(`Trade history check failed (${err.message}) — assuming filled`);
+        }
+
+        const fill = { orderId, filled: !rejected, rejected, verified, timeToFill: elapsed, adverseSelection: !rejected && adverseSelection };
         recordFill(fill);
-        log.info(
-          `Order ${orderId} not in open orders after ${(elapsed / 1000).toFixed(1)}s — assumed filled (FOK)` +
-          (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
-        );
+
+        if (!rejected) {
+          log.info(
+            `Order ${orderId} ${verified ? 'verified' : 'assumed'} filled (${(elapsed / 1000).toFixed(1)}s)` +
+            (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
+          );
+        }
+
         pendingOrders.delete(orderId);
         results.push(fill);
       } else if (elapsed > FILL_TIMEOUT_MS) {
@@ -137,6 +167,21 @@ export function getAdverseSelectionRate() {
   const filled = fillHistory.filter(f => f.filled);
   if (filled.length === 0) return 0;
   return filled.filter(f => f.adverseSelection).length / filled.length;
+}
+
+/**
+ * Register an externally-discovered pending order for fill tracking.
+ * Used by startup reconciliation to inject CLOB open orders found at boot.
+ * Uses Date.now() as placedAt to prevent premature fill inference (the 3s
+ * minimum-elapsed guard in checkPendingFill won't false-positive).
+ */
+export function registerPendingOrder(orderId, { tokenId, price, size, side }) {
+  if (pendingOrders.has(orderId)) {
+    log.debug(`registerPendingOrder: ${orderId} already tracked — skipping`);
+    return;
+  }
+  pendingOrders.set(orderId, { orderId, tokenId, price, size, side, placedAt: Date.now() });
+  log.info(`Registered existing order for tracking: ${orderId} (${side} ${size}@${price})`);
 }
 
 /**
