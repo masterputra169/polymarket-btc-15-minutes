@@ -239,8 +239,8 @@ export async function executeDirectionalTrade({
     ? ` | Flow:${flowAlign.signal}${flowAlign.agrees ? '(agree)' : '(DISAGREE)'}`
     : '';
 
-  // Reserve bankroll
-  const orderCost = shares * betMarketPrice;
+  // Reserve bankroll — FINTECH: round to cents to prevent float drift in available bankroll
+  const orderCost = Math.round(shares * betMarketPrice * 100) / 100;
   deps.setPendingCost(orderCost);
 
   // Build entry snapshot data (shared by DRY_RUN + live paths)

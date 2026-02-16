@@ -125,6 +125,8 @@ import {
   saveState as savePositionState,
   getMarketTradeCounts,
   setMarketTradeCounts,
+  getLastLossTimestamp,
+  setLastLossTimestamp,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
@@ -140,6 +142,8 @@ import {
   getFilterStatus,
   exportMarketTradeCounts,
   importMarketTradeCounts,
+  getLastLossTimestamp as getFilterLastLoss,
+  importLastLossTimestamp,
 } from './safety/tradeFilters.js';
 
 // Orderbook flow tracking
@@ -271,10 +275,11 @@ export async function pollOnce() {
   applyPendingSync(getBankroll, setBankroll);
   pollCounter++;
 
-  // H7: Restore per-market trade counts from persisted state on first poll
+  // H7: Restore per-market trade counts + loss cooldown from persisted state on first poll
   if (!startupTradeCountsLoaded) {
     startupTradeCountsLoaded = true;
     importMarketTradeCounts(getMarketTradeCounts());
+    importLastLossTimestamp(getLastLossTimestamp()); // FINTECH: restore cooldown across restart
   }
   const _pollStart = performance.now();
 
@@ -1062,6 +1067,7 @@ export async function pollOnce() {
     // Periodic save
     if (pollCounter % 120 === 0) {
       setMarketTradeCounts(exportMarketTradeCounts()); // H7: persist trade counts
+      setLastLossTimestamp(getFilterLastLoss());         // FINTECH: persist loss cooldown
       saveFeedbackToDisk();
       saveSignalPerfToDisk();
       savePositionState();

@@ -250,9 +250,11 @@ export async function getUsdcBalance() {
       // USDC.e has 6 decimals — API returns raw microUSDC string
       const rawBalance = parseFloat(result.balance);
       const rawAllowance = parseFloat(result.allowance ?? '0');
-      // Validate: must be finite, non-negative, and reasonable (< $100M)
-      if (!Number.isFinite(rawBalance) || rawBalance < 0) {
-        log.warn(`Invalid USDC balance from API: ${result.balance}`);
+      // FINTECH: Validate range — must be finite, non-negative, and reasonable.
+      // Max 100M microUSDC = $100,000. Anything above is likely API garbage.
+      const MAX_RAW_BALANCE = 100_000 * 1e6; // $100K in microUSDC
+      if (!Number.isFinite(rawBalance) || rawBalance < 0 || rawBalance > MAX_RAW_BALANCE) {
+        log.warn(`Invalid USDC balance from API: ${result.balance} (raw=${rawBalance}, max=${MAX_RAW_BALANCE}) — rejecting, using stale cache`);
       } else {
         balanceCache = {
           balance: rawBalance / 1e6,

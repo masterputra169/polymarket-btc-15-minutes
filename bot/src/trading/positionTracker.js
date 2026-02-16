@@ -17,8 +17,27 @@ const log = createLogger('Position');
 /** Round to 2 decimal places — prevents float drift in money calcs. */
 const roundMoney = (n) => Math.round(n * 100) / 100;
 
+/** Round percentage to 2 decimal places (e.g. 25.00%, not 25.000000000004%). */
+const roundPct = (n) => Math.round(n * 100) / 100;
+
 /** Polymarket fee rate on profit (2%). */
 const POLYMARKET_FEE_RATE = 0.02;
+
+/**
+ * Assert bankroll integrity before any modification.
+ * Returns false and logs error if bankroll is corrupted (NaN/Infinity).
+ * CRITICAL: Prevents cascading NaN corruption through all future arithmetic.
+ */
+function assertBankrollOk(context) {
+  if (!Number.isFinite(state.bankroll)) {
+    log.error(`BANKROLL CORRUPTED (${context}): value=${state.bankroll} — freezing at $0 to prevent further damage`);
+    auditLog({ type: 'BANKROLL_CORRUPT', context, value: state.bankroll });
+    state.bankroll = 0;
+    saveState();
+    return false;
+  }
+  return true;
+}
 
 let state = {
   bankroll: BOT_CONFIG.bankroll,
@@ -37,6 +56,7 @@ let state = {
   lastSettlementMs: 0,      // H3/M4: Track last settlement time for USDC sync cooldown (persisted)
   cutLossCount: 0,          // L4: Pre-computed count of CUT_LOSS trades (avoids scanning array)
   marketTradeCounts: {},     // H7: Per-market trade counts (persisted across restarts)
+  lastLossTimestamp: 0,      // FINTECH: Persisted loss cooldown timestamp (survives restart)
 };
 
 // ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
@@ -199,6 +219,14 @@ export function recordTrade({ side, tokenId, conditionId, price, size, marketSlu
   // Use actual fill cost from CLOB response when available, fallback to theoretical
   const cost = actualCost != null ? roundMoney(actualCost) : roundMoney(price * size);
 
+  // FINTECH: Reject if bankroll corrupted or insufficient
+  if (!assertBankrollOk('recordTrade')) return;
+  if (state.bankroll < cost) {
+    log.error(`recordTrade REJECTED: insufficient bankroll ($${state.bankroll.toFixed(2)} < cost $${cost.toFixed(2)}) — trade NOT recorded`);
+    auditLog({ type: 'TRADE_REJECTED', reason: 'insufficient_bankroll', bankroll: state.bankroll, cost, side, marketSlug });
+    return;
+  }
+
   state.currentPosition = {
     side,
     tokenId,
@@ -287,9 +315,13 @@ export function settleTrade(won) {
   const fee = roundMoney(profit * POLYMARKET_FEE_RATE);
   const payout = roundMoney(grossPayout - fee);
 
+  // FINTECH: Validate bankroll before modification
+  if (!assertBankrollOk('settleTrade')) return false;
+
   // Mark as settled BEFORE modifying bankroll (prevents re-entry on async race)
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
+  saveState(); // FINTECH: Persist settled flag immediately — if crash occurs before bankroll save, position won't be double-settled
 
   state.bankroll = roundMoney(state.bankroll + payout);
 
@@ -303,6 +335,7 @@ export function settleTrade(won) {
   } else {
     state.losses++;
     state.consecutiveLosses++;
+    state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
 
   const pnl = roundMoney(payout - pos.cost);
@@ -317,7 +350,7 @@ export function settleTrade(won) {
     timestamp: Date.now(),
   });
 
-  auditLog({ type: 'SETTLE', side: pos.side, won, payout, pnl, cost: pos.cost, bankrollAfter: state.bankroll });
+  auditLog({ type: 'SETTLE', side: pos.side, won, grossPayout, fee, payout, pnl, cost: pos.cost, bankrollAfter: state.bankroll });
 
   log.info(
     `Position settled: ${won ? 'WIN' : 'LOSS'} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | ` +
@@ -356,9 +389,13 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   const pos = state.currentPosition;
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
 
+  // FINTECH: Validate bankroll before modification
+  if (!assertBankrollOk('settleTradeEarlyExit')) return false;
+
   // Mark as settled before modifying bankroll
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
+  saveState(); // FINTECH: Persist settled flag immediately
 
   state.bankroll = roundMoney(state.bankroll + recovered);
 
@@ -372,6 +409,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   } else {
     state.losses++;
     state.consecutiveLosses++;
+    state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
 
   state.cutLossCount = (state.cutLossCount || 0) + 1; // L4: pre-computed counter
@@ -432,6 +470,14 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId, 
     return;
   }
   const totalCost = roundMoney(upCost + downCost);
+
+  // FINTECH: Reject if bankroll corrupted or insufficient
+  if (!assertBankrollOk('recordArbTrade')) return;
+  if (state.bankroll < totalCost) {
+    log.error(`recordArbTrade REJECTED: insufficient bankroll ($${state.bankroll.toFixed(2)} < cost $${totalCost.toFixed(2)})`);
+    auditLog({ type: 'ARB_REJECTED', reason: 'insufficient_bankroll', bankroll: state.bankroll, totalCost, marketSlug });
+    return;
+  }
 
   // Track arb as a position so USDC auto-sync defers until settlement.
   // Without this, auto-sync overwrites bankroll with on-chain balance (lower
@@ -576,6 +622,13 @@ export function unwindPosition() {
   }
 
   const pos = state.currentPosition;
+
+  // FINTECH: Validate bankroll before modification
+  if (!assertBankrollOk('unwindPosition')) {
+    state.currentPosition = null;
+    return;
+  }
+
   state.bankroll = roundMoney(state.bankroll + pos.cost);
   state.totalTrades = Math.max(0, state.totalTrades - 1);
 
@@ -639,7 +692,7 @@ export function getBankroll() {
  */
 export function getDrawdownPct() {
   if (state.peakBankroll <= 0) return 0;
-  return ((state.peakBankroll - state.bankroll) / state.peakBankroll) * 100;
+  return roundPct(((state.peakBankroll - state.bankroll) / state.peakBankroll) * 100);
 }
 
 export function getDailyPnL() {
@@ -654,7 +707,7 @@ export function getDailyPnLPct() {
   // Add back open position's cost so circuit breaker doesn't trigger on entry alone
   const openCost = (state.currentPosition && !state.currentPosition.settled)
     ? (state.currentPosition.cost ?? 0) : 0;
-  return ((state.bankroll + openCost - state.startOfDayBankroll) / state.startOfDayBankroll) * 100;
+  return roundPct(((state.bankroll + openCost - state.startOfDayBankroll) / state.startOfDayBankroll) * 100);
 }
 
 export function getConsecutiveLosses() {
@@ -750,6 +803,14 @@ export function getStats() {
     hasPosition: state.currentPosition !== null && !state.currentPosition?.settled,
     pendingCost: state.pendingCost,
   };
+}
+
+/** FINTECH: Get persisted loss cooldown timestamp. */
+export function getLastLossTimestamp() { return state.lastLossTimestamp || 0; }
+
+/** FINTECH: Set loss timestamp (called from tradeFilters). */
+export function setLastLossTimestamp(ts) {
+  state.lastLossTimestamp = Number.isFinite(ts) ? ts : 0;
 }
 
 /** H7: Get persisted market trade counts. */

@@ -176,6 +176,20 @@ export function recordLoss() {
 }
 
 /**
+ * FINTECH: Get loss timestamp for persistence.
+ */
+export function getLastLossTimestamp() {
+  return lastLossTimestamp;
+}
+
+/**
+ * FINTECH: Import loss timestamp from persisted state (survives restart).
+ */
+export function importLastLossTimestamp(ts) {
+  if (Number.isFinite(ts) && ts > 0) lastLossTimestamp = ts;
+}
+
+/**
  * Record a trade for per-market limit tracking.
  */
 export function recordTradeForMarket(slug) {

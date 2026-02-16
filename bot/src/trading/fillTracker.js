@@ -125,14 +125,17 @@ export async function checkPendingFill() {
           getTradeHistory({ assetId: pending.tokenId, after: pending.placedAt - 5000 }),
           new Promise((_, rej) => setTimeout(() => rej(new Error('trade history timeout')), 5000))
         ]);
-        // Match by tokenId + time window + price proximity
+        // Match by tokenId + time window + price proximity + size proximity
         const matchingTrade = Array.isArray(trades) && trades.find(t => {
           const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
           const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
           const inWindow = matchTime >= pending.placedAt - 5000 && matchTime <= pending.placedAt + 60000;
           const tradePrice = parseFloat(t.price ?? t.fill_price ?? 0);
           const priceOk = !tradePrice || Math.abs(tradePrice - pending.price) / pending.price < 0.05;
-          return assetMatch && inWindow && priceOk;
+          // FINTECH: Verify fill size matches expected — prevents matching tiny partial fills as full orders
+          const tradeSize = parseFloat(t.size ?? t.amount ?? 0);
+          const sizeOk = !tradeSize || Math.abs(tradeSize - pending.size) / pending.size < 0.10; // 10% tolerance
+          return assetMatch && inWindow && priceOk && sizeOk;
         });
 
         if (matchingTrade) {

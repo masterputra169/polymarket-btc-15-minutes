@@ -93,7 +93,8 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
     }
   }
 
-  const pnl = won ? (pos.size - pos.cost) : -pos.cost;
+  // FINTECH: Round P&L to cents to prevent floating-point noise in journal/dashboard
+  const pnl = Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100;
   log.info(`Position ${context} — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
   actions.settleTrade(won);
   actions.invalidateUsdcSync();
@@ -117,7 +118,7 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
  * Settle an ARB position (guaranteed win).
  */
 function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
-  const arbPnl = pos.size - pos.cost;
+  const arbPnl = Math.round((pos.size - pos.cost) * 100) / 100; // FINTECH: round to cents
   log.info(`ARB position settled (${context}) — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
   actions.settleTrade(true);
   actions.invalidateUsdcSync();
@@ -239,7 +240,7 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
-      pnl: won ? (pos.size - pos.cost) : -pos.cost,
+      pnl: Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100,
       exitData: { outcome, source, staleRecovery: true },
     });
     if (!won) actions.recordLoss();
@@ -283,7 +284,7 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
-      pnl: won ? (pos.size - pos.cost) : -pos.cost,
+      pnl: Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100,
       exitData: { outcome, source, staleRecovery: true, reason: 'gamma_lookup' },
     });
     if (!won) actions.recordLoss();
@@ -295,7 +296,7 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     actions.invalidateUsdcSync();
     actions.clearEntrySnapshot();
     actions.writeJournalEntry({
-      outcome: 'LOSS', pnl: -pos.cost,
+      outcome: 'LOSS', pnl: Math.round(-pos.cost * 100) / 100,
       exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
     });
     actions.recordLoss();
