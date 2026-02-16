@@ -1,12 +1,16 @@
 /**
- * Cut-loss (stop-loss) evaluator — v4 Aggressive Cut-Loss.
+ * Cut-loss (stop-loss) evaluator — v5 Conservative Cut-Loss.
+ *
+ * v5 changes over v4 (quant audit: 68.8% settlement WR, cut-loss destroying edge):
+ *   - minTokenDropPct 20% → 30% (raise bar for cutting — most positions WIN if held)
+ *   - minHoldSec 90s → 180s (give 3min for recovery before considering cut)
+ *   - ML veto threshold lowered 65% → 55% (let ML protect more positions)
+ *   - EV margins lowered across all regimes (harder to trigger cut)
+ *   - Time-decay early bonus raised 1.05 → 1.15 (more option value early)
  *
  * v4 changes over v3:
- *   - minTokenDropPct 25% → 12% (cut earlier, save more)
  *   - Gate 7 softened: BTC within 0.02% of PTB no longer hard-vetoes
- *   - ML veto threshold raised 55% → 65% (only high-conf ML can veto)
  *   - consecutivePolls 3 → 2 (easier to confirm)
- *   - Time-decay early bonus 1.15 → 1.05 (less over-protective)
  *   - Token recovery threshold 2¢ → 3¢ (ignore noise bounces)
  *   - NEW: Late force-cut — <2min left + drop>15% → skip soft gates
  *
@@ -15,7 +19,7 @@
  *   2.  Has open, fill-confirmed position
  *   3.  Max attempts not exceeded
  *   4.  Cooldown elapsed since last failed sell
- *   5.  Min hold time met (60s)
+ *   5.  Min hold time met (180s)
  *   6.  Not too close to settlement (< 30s)
  *   6b. LATE FORCE-CUT: <2min left + drop>15% → skip gates 7-12d, go to gate 13
  *   7.  BTC position check — soft zone: BTC within 0.02% of PTB still allows cut
@@ -23,8 +27,8 @@
  *   8b. Regime-change accelerator — if regime changed since entry, lower threshold 30%
  *   9.  BTC momentum — ATR-scaled, if BTC is recovering toward PTB, skip cut
  *  10.  EV comparison — regime-aware margin + time-decay multiplier
- *  11.  ML veto — if ML confidence >= 65% and agrees with position, block cut
- *  12.  Token drop minimum — token must have dropped at least 12%
+ *  11.  ML veto — if ML confidence >= 55% and agrees with position, block cut
+ *  12.  Token drop minimum — token must have dropped at least 30%
  *  12b. Token price above minimum ($0.05)
  *  12c. Orderbook liquidity — don't sell into thin books or wide spreads
  *  12d. Token trajectory — if token is recovering (>3¢ over 12 polls), skip cut
@@ -93,10 +97,12 @@ function getBtcDistThreshold(timeLeftMin, atrRatio, regime) {
  * Choppy: prices bounce → expect reversion → hold longer → low margin.
  */
 function getEvMargin(regime) {
-  if (regime === 'trending') return 0.95;
-  if (regime === 'choppy') return 0.85;
-  if (regime === 'mean_reverting') return 0.87;
-  return 0.90;
+  // v5: Lowered all margins — makes it HARDER to cut (model needs less confidence to hold).
+  // Quant audit: 68.8% settlement WR means most cuts are destroying winning positions.
+  if (regime === 'trending') return 0.90;     // 0.95→0.90
+  if (regime === 'choppy') return 0.80;       // 0.85→0.80
+  if (regime === 'mean_reverting') return 0.82; // 0.87→0.82
+  return 0.85;                                  // 0.90→0.85
 }
 
 /**
@@ -105,11 +111,13 @@ function getEvMargin(regime) {
  * Late in market: option value drops — if losing, it's likely staying that way.
  */
 function getTimeDecay(timeLeftMin) {
+  // v5: Increased early bonus — positions with more time have higher "option value" to recover.
+  // Quant audit: Most cuts happen early when there's still time to win.
   if (timeLeftMin == null) return 1.0;
-  if (timeLeftMin > 8)  return 1.05; // early: small bonus (v4: 1.15→1.05, less protective)
-  if (timeLeftMin > 4)  return 1.00; // mid: no bonus
+  if (timeLeftMin > 8)  return 1.15; // early: meaningful bonus (v5: 1.05→1.15)
+  if (timeLeftMin > 4)  return 1.05; // mid: small bonus (v5: 1.00→1.05)
   if (timeLeftMin > 2)  return 0.95; // late: slight penalty
-  return 0.85;                       // very late: stronger penalty (less time to recover)
+  return 0.85;                       // very late: stronger penalty
 }
 
 /**
@@ -261,8 +269,10 @@ export function evaluateCutLoss({
       }
     }
 
-    // ── Gate 11: ML veto (v4: raised threshold 55% → 65%) ──
-    if (mlConfidence != null && mlConfidence >= 0.65 && mlSide === position.side) {
+    // ── Gate 11: ML veto (v5: lowered 65% → 55% — let ML protect more positions) ──
+    // Quant audit: 68.8% settlement WR means most positions WIN if held.
+    // Lowering veto threshold lets ML block more cuts, preserving winning positions.
+    if (mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side) {
       return no(`ml_veto_${(mlConfidence * 100).toFixed(0)}%_${mlSide}`);
     }
 
@@ -438,7 +448,7 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     timeDecay: getTimeDecay(timeLeftMin),
     confirmCount: consecutiveCutPolls,
     confirmNeeded: cfg.consecutivePolls,
-    mlVeto: mlConfidence != null && mlConfidence >= 0.65 && mlSide === position.side,
+    mlVeto: mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side,
     regime,
     atrRatio: atrRatio ?? null,
     tokenSlope,

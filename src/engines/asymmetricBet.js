@@ -30,7 +30,7 @@ function mlMultiplier(ml, side) {
   if (!ml || ml.status !== 'ready' || ml.confidence == null) {
     return { multiplier: 1.0, label: 'N/A' };
   }
-  const hiConf = ml.confidence >= 0.40;
+  const hiConf = ml.confidence >= 0.60;  // aligned with MIN_ML_CONFIDENCE (was 0.40 — below trade filter gate)
   const agrees = ml.side === side;
   if (hiConf && agrees) return { multiplier: 1.15, label: 'Hi-Conf \u2713' };
   if (hiConf && !agrees) return { multiplier: 0.70, label: 'Hi-Conf \u2717' };

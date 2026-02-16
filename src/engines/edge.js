@@ -49,10 +49,12 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
 
   // Spread penalty only when using mid/last price (no orderbook bestAsk)
   // Guard: ensure spread is a finite number to prevent NaN propagation
+  // v5: Default 1.5% penalty when no spread data at all (prevents phantom edge from mid-price)
+  const DEFAULT_SPREAD_PENALTY = 0.015;
   const rawSpreadUp = orderbookUp?.spread;
   const rawSpreadDown = orderbookDown?.spread;
-  const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : 0);
-  const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : 0);
+  const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : DEFAULT_SPREAD_PENALTY);
+  const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : DEFAULT_SPREAD_PENALTY);
 
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
     ? modelUp - effectiveUp - spreadPenaltyUp
@@ -323,10 +325,13 @@ function getConfidence(edge, prob, agreement, mlHighConf = false, mlAgrees = fal
   // ML high-conf + rule agreement can boost by one tier
   const mlBoost = mlHighConf && mlAgrees;
 
-  if (edge >= 0.25 && prob >= 0.68 && agreement >= 5) return 'VERY_HIGH';
-  if (mlBoost && edge >= 0.15 && prob >= 0.60 && agreement >= 4) return 'VERY_HIGH';
-  if (edge >= 0.18 && prob >= 0.62 && agreement >= 4) return 'HIGH';
+  // Quant audit: VERY_HIGH at 25% edge had 18.2% WR (inverse!). Edge >20% means model
+  // diverges from market → market is usually right. Lowered to 18% and added 20% ceiling
+  // in trade filters. HIGH/MEDIUM thresholds also lowered for better calibration.
+  if (edge >= 0.18 && prob >= 0.65 && agreement >= 5) return 'VERY_HIGH';
+  if (mlBoost && edge >= 0.14 && prob >= 0.60 && agreement >= 4) return 'VERY_HIGH';
+  if (edge >= 0.14 && prob >= 0.60 && agreement >= 4) return 'HIGH';
   if (mlBoost && edge >= 0.10 && prob >= 0.56 && agreement >= 3) return 'HIGH';
-  if (edge >= 0.12 && prob >= 0.58 && agreement >= 3) return 'MEDIUM';
+  if (edge >= 0.10 && prob >= 0.57 && agreement >= 3) return 'MEDIUM';
   return 'LOW';
 }

@@ -129,8 +129,9 @@ export function applyTradeFilters({
   if (isWeekend) {
     if (!mlAvailable || mlConfidence == null) {
       reasons.push('Weekend + ML unavailable — cannot assess confidence');
-    } else if (mlConfidence < 0.35) {
-      reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}%`);
+    } else if (mlConfidence < 0.65) {
+      // v5: 0.35→0.65 — old threshold was below MIN_ML_CONFIDENCE (0.60), never triggered
+      reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}% < 65%`);
     }
   }
 

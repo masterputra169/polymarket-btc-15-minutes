@@ -8,7 +8,7 @@ export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStal
 
 export const BET_SIZING = {
   KELLY_FRACTION: 0.15,
-  MAX_BET_PCT: 0.08,
+  MAX_BET_PCT: 0.05,
   MIN_BET_PCT: 0.005,
   MIN_EDGE_FOR_BET: 0.03,
   DEFAULT_BANKROLL: 1000,
@@ -34,7 +34,7 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.55,       // minimum ML confidence to trade (raised from 0.50 — journal data: 0-16% win rate below 0.55, 58%+ above 0.60)
+  MIN_ML_CONFIDENCE: 0.60,       // minimum ML confidence to trade (raised from 0.55 — journal: 0-16% WR below 0.55, 58%+ above 0.60)
   MARKET_5050_RANGE: [0.48, 0.52], // market price in this range = near 50/50, skip (narrowed from 0.45-0.55 — was blocking high-edge opportunities)
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries (widened from 0.25-0.75 — 15-min markets naturally have extreme prices)
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
