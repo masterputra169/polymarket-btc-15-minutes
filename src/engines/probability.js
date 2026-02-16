@@ -391,18 +391,18 @@ export function scoreDirection({
         const trendDown = regime.direction === 'DOWN';
         const signalUp = upScore > downScore;
         const aligned = (trendUp && signalUp) || (trendDown && !signalUp);
-        regimeMultiplier = aligned ? 1.25 : 0.85;
+        regimeMultiplier = aligned ? 1.25 : 0.90;  // v3: counter-trend 0.85→0.90 (less harsh)
         regimeEffect = aligned
           ? `BOOST (${regime.label}, aligned)`
           : `DAMPEN (${regime.label}, counter-trend)`;
         break;
       }
       case 'choppy':
-        regimeMultiplier = 0.60;
+        regimeMultiplier = 0.70;  // v3: 0.60→0.70 (0.60 was killing all signals in choppy)
         regimeEffect = `DAMPEN (${regime.label})`;
         break;
       case 'mean_reverting':
-        regimeMultiplier = 0.80;
+        regimeMultiplier = 0.85;  // v3: 0.80→0.85 (mean reversion has edge from VWAP signals)
         regimeEffect = `SLIGHT DAMPEN (${regime.label})`;
         break;
       default:

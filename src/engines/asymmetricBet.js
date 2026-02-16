@@ -9,11 +9,12 @@ const {
 } = BET_SIZING;
 
 // Regime multipliers (scaled by regime confidence)
+// v3: raised choppy 0.50→0.60, mean_reverting 0.70→0.75 — less double-dampening with probability engine
 const REGIME_MULT = {
   trending:       1.00,
   moderate:       0.85,
-  mean_reverting: 0.70,
-  choppy:         0.50,
+  mean_reverting: 0.75,
+  choppy:         0.60,
 };
 
 // Accuracy multipliers
@@ -30,7 +31,7 @@ function mlMultiplier(ml, side) {
   if (!ml || ml.status !== 'ready' || ml.confidence == null) {
     return { multiplier: 1.0, label: 'N/A' };
   }
-  const hiConf = ml.confidence >= 0.60;  // aligned with MIN_ML_CONFIDENCE (was 0.40 — below trade filter gate)
+  const hiConf = ml.confidence >= 0.55;  // v3: aligned with new MIN_ML_CONFIDENCE 0.55
   const agrees = ml.side === side;
   if (hiConf && agrees) return { multiplier: 1.15, label: 'Hi-Conf \u2713' };
   if (hiConf && !agrees) return { multiplier: 0.70, label: 'Hi-Conf \u2717' };
@@ -68,11 +69,12 @@ function executionMultiplier(ctx) {
 }
 
 // Confidence tier multiplier
+// v3: raised LOW 0.30→0.40, MEDIUM 0.55→0.65 — old values killed most bets below MIN_BET_PCT
 const CONF_MULT = {
   VERY_HIGH: 1.00,
   HIGH:      0.80,
-  MEDIUM:    0.55,
-  LOW:       0.30,
+  MEDIUM:    0.65,
+  LOW:       0.40,
 };
 
 function riskLevel(pct) {

@@ -1,4 +1,4 @@
-export const ML_CONFIDENCE = { HIGH: 0.60, MEDIUM: 0.20 };
+export const ML_CONFIDENCE = { HIGH: 0.55, MEDIUM: 0.20 };  // v3: HIGH 0.60→0.55 aligned with MIN_ML_CONFIDENCE
 
 export const WS_DEFAULTS = { throttleMs: 500, reconnectMaxMs: 10_000, heartbeatCheckMs: 10_000 };
 export const WS_BINANCE = { heartbeatDeadMs: 20_000, heartbeatCheckMs: 5_000 };
@@ -9,8 +9,8 @@ export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStal
 export const BET_SIZING = {
   KELLY_FRACTION: 0.15,
   MAX_BET_PCT: 0.05,
-  MIN_BET_PCT: 0.005,
-  MIN_EDGE_FOR_BET: 0.03,
+  MIN_BET_PCT: 0.003,
+  MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
   BANKROLL_STORAGE_KEY: 'btc15m_bankroll',
 };
@@ -34,15 +34,15 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.60,       // minimum ML confidence to trade (raised from 0.55 — journal: 0-16% WR below 0.55, 58%+ above 0.60)
-  MARKET_5050_RANGE: [0.48, 0.52], // market price in this range = near 50/50, skip (narrowed from 0.45-0.55 — was blocking high-edge opportunities)
-  MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries (widened from 0.25-0.75 — 15-min markets naturally have extreme prices)
+  MIN_ML_CONFIDENCE: 0.55,       // lowered from 0.60 — ML 55-60% still profitable, opens more trade opportunities
+  MARKET_5050_RANGE: [0.49, 0.51], // narrowed from [0.48,0.52] — 47-53c still has tradeable edge
+  MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
-  MAX_TIME_LEFT_MIN: 14.0,      // maximum minutes before settlement (block first 1 min — relaxed from 13, was too aggressive)
-  MIN_BTC_DIST_PCT: 0.02,       // minimum BTC distance from PTB to enter (lowered from 0.05 — redundant with 50/50 filter + edge threshold)
-  LOSS_COOLDOWN_MS: 60_000,     // 60s cooldown after a loss before next trade
-  MAX_TRADES_PER_MARKET: 1,     // max directional trades per 15-min market
+  MAX_TIME_LEFT_MIN: 14.5,      // relaxed from 14.0 — open 30s earlier for early signals
+  MIN_BTC_DIST_PCT: 0.015,      // lowered from 0.02 — redundant with 50/50 filter + edge threshold
+  LOSS_COOLDOWN_MS: 30_000,     // halved from 60s — 30s enough for anti-tilt, 60s skips entire market
+  MAX_TRADES_PER_MARKET: 2,     // raised from 1 — allow re-entry on signal change within same market
 };
 
 export const CONFIG = {

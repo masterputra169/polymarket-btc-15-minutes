@@ -3,23 +3,19 @@ import { ML_CONFIDENCE } from '../config.js';
 /**
  * ═══ Edge & Decision Engine v2 ═══
  *
- * v2 changes:
- * 1. Raised probability thresholds (55% → 58-60%)
- * 2. Raised edge thresholds (5-12% → 8-15%)
- * 3. Added quality gates: minimum indicator agreement count
- * 4. Added multiTF confirmation requirement for EARLY/MID phases
+ * v3 changes (frequency + win rate optimization):
+ * 1. Lowered edge thresholds (8-15% → 6-12%) — old thresholds blocked too many profitable trades
+ * 2. Fixed trending regime: now RELAXES aligned signals, TIGHTENS counter-trend (was tightening all)
+ * 3. Reduced regime/session penalties to prevent stacking to impossible levels
+ * 4. Reduced UP side bias (+2% → +1%) to collect more UP trade data
  *
- * Result: Fewer ENTER signals but much higher accuracy.
- * Before: 71% trade rate, 77.7% accuracy
- * Target: ~50% trade rate, 83-85% accuracy
- *
- * PHASE TABLE v2:
+ * PHASE TABLE v3:
  * | Phase     | Time Left | Min Edge | Min Prob | Min Agreement | MultiTF Req |
  * |-----------|-----------|----------|----------|---------------|-------------|
- * | EARLY     | > 10 min  | 8%       | 60%      | 2             | preferred   |
- * | MID       | 5-10 min  | 10%      | 58%      | 2             | preferred   |
- * | LATE      | 2-5 min   | 12%      | 57%      | 2             | no          |
- * | VERY_LATE | < 2 min   | 15%      | 56%      | 2             | no          |
+ * | EARLY     | > 10 min  | 6%       | 58%      | 2             | preferred   |
+ * | MID       | 5-10 min  | 8%       | 56%      | 2             | preferred   |
+ * | LATE      | 2-5 min   | 10%      | 55%      | 2             | no          |
+ * | VERY_LATE | < 2 min   | 12%      | 54%      | 2             | no          |
  */
 
 /**
@@ -149,31 +145,31 @@ export function decide({
   regimeInfo = null,
   session = null,
 }) {
-  // ═══ Phase thresholds v2 (stricter) ═══
+  // ═══ Phase thresholds v3 (balanced: more trades + high accuracy) ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
 
   if (remainingMinutes > 10) {
     phase = 'EARLY';
-    minEdge = 0.08;
-    minProb = 0.60;
+    minEdge = 0.06;
+    minProb = 0.58;
     minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 5) {
     phase = 'MID';
-    minEdge = 0.10;
-    minProb = 0.58;
+    minEdge = 0.08;
+    minProb = 0.56;
     minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
-    minEdge = 0.12;
-    minProb = 0.57;
+    minEdge = 0.10;
+    minProb = 0.55;
     minAgreement = 2;
     preferMultiTf = false;
   } else {
     phase = 'VERY_LATE';
-    minEdge = 0.15;
-    minProb = 0.56;
+    minEdge = 0.12;
+    minProb = 0.54;
     minAgreement = 2;
     preferMultiTf = false;
   }
@@ -187,15 +183,26 @@ export function decide({
     const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.85);
     switch (regimeInfo.regime) {
       case 'trending':
-        // Journal data: trending regime had 33% win rate, -$6.81 P&L.
-        // Previously relaxed thresholds (easier entry) — now TIGHTENS.
-        // Trend signals are unreliable for 15-min binary options.
-        minEdge = Math.min(minEdge + 0.02 * scale, 0.25);
-        minProb = Math.min(minProb + 0.02 * scale, 0.70);
+        // v3: Direction-aware — old code tightened ALL trending (33% WR was from counter-trend entries).
+        // Aligned signals in trends are strong; counter-trend is what loses.
+        // Check if best model side aligns with trend direction.
+        {
+          const trendDir = regimeInfo.direction; // 'UP' or 'DOWN'
+          const bestModelSide = modelUp >= modelDown ? 'UP' : 'DOWN';
+          if (trendDir && bestModelSide === trendDir) {
+            // Aligned with trend: RELAX thresholds (clear signal)
+            minEdge = Math.max(minEdge - 0.01 * scale, 0.04);
+            minProb = Math.max(minProb - 0.01 * scale, 0.52);
+          } else {
+            // Counter-trend: TIGHTEN (risky against momentum)
+            minEdge = Math.min(minEdge + 0.02 * scale, 0.25);
+            minProb = Math.min(minProb + 0.02 * scale, 0.70);
+          }
+        }
         break;
       case 'choppy':
-        minEdge = Math.min(minEdge + 0.03 * scale, 0.25);
-        minProb = Math.min(minProb + 0.03 * scale, 0.70);
+        minEdge = Math.min(minEdge + 0.02 * scale, 0.25);
+        minProb = Math.min(minProb + 0.02 * scale, 0.70);
         break;
       case 'mean_reverting':
         minEdge = Math.min(minEdge + 0.01 * scale, 0.20);
@@ -208,11 +215,11 @@ export function decide({
   // US/EU-US Overlap: relax (predictable trends, high volume)
   if (session) {
     const SESSION_ADJ = {
-      'Asia':          { edgeAdj: +0.02, probAdj: +0.02 },
+      'Asia':          { edgeAdj: +0.01, probAdj: +0.01 },   // v3: reduced from +2%/+2%
       'US':            { edgeAdj: -0.01, probAdj: -0.01 },
       'EU/US Overlap': { edgeAdj: -0.02, probAdj: -0.01 },
       'Europe':        { edgeAdj:  0,    probAdj:  0    },
-      'Off-hours':     { edgeAdj: +0.03, probAdj: +0.02 },
+      'Off-hours':     { edgeAdj: +0.02, probAdj: +0.01 },   // v3: reduced from +3%/+2%
     };
     const adj = SESSION_ADJ[session];
     if (adj) {
@@ -229,17 +236,18 @@ export function decide({
     minProb = Math.max(minProb - 0.02, 0.52);
   }
 
-  // ═══ Side bias (quant analysis: DOWN 54% WR +$2.40, UP 24% WR -$2.64) ═══
-  // Tighten UP entries, relax DOWN entries to exploit empirical asymmetry.
-  let upMinEdge = Math.min(minEdge + 0.02, 0.25);   // UP: +2% harder to enter
-  let upMinProb = Math.min(minProb + 0.02, 0.70);
-  let downMinEdge = Math.max(minEdge - 0.01, 0.04);  // DOWN: -1% easier to enter
-  let downMinProb = Math.max(minProb - 0.01, 0.52);
+  // ═══ Side bias v3 (reduced: UP +1%, DOWN -0.5%) ═══
+  // v2 had UP +2% which blocked almost all UP trades → no new data to recalibrate.
+  // Reduced to collect more UP data while still giving DOWN slight advantage.
+  let upMinEdge = Math.min(minEdge + 0.01, 0.25);   // UP: +1% harder (was +2%)
+  let upMinProb = Math.min(minProb + 0.01, 0.70);
+  let downMinEdge = Math.max(minEdge - 0.005, 0.04); // DOWN: -0.5% easier (was -1%)
+  let downMinProb = Math.max(minProb - 0.005, 0.52);
 
   // ═══ Cap combined regime+session+side-bias penalty ═══
   // Prevent stacking (e.g. choppy +3% + off-hours +3% + UP bias +2% = +8%) from
   // making entry impossible. Cap AFTER side bias so the final thresholds are bounded.
-  const MAX_COMBINED_PENALTY = 0.05;
+  const MAX_COMBINED_PENALTY = 0.04;  // v3: reduced from 5% to prevent impossible thresholds
   upMinEdge = Math.min(upMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
   upMinProb = Math.min(upMinProb, baseMinProb + MAX_COMBINED_PENALTY);
   downMinEdge = Math.min(downMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
@@ -325,13 +333,12 @@ function getConfidence(edge, prob, agreement, mlHighConf = false, mlAgrees = fal
   // ML high-conf + rule agreement can boost by one tier
   const mlBoost = mlHighConf && mlAgrees;
 
-  // Quant audit: VERY_HIGH at 25% edge had 18.2% WR (inverse!). Edge >20% means model
-  // diverges from market → market is usually right. Lowered to 18% and added 20% ceiling
-  // in trade filters. HIGH/MEDIUM thresholds also lowered for better calibration.
-  if (edge >= 0.18 && prob >= 0.65 && agreement >= 5) return 'VERY_HIGH';
-  if (mlBoost && edge >= 0.14 && prob >= 0.60 && agreement >= 4) return 'VERY_HIGH';
-  if (edge >= 0.14 && prob >= 0.60 && agreement >= 4) return 'HIGH';
-  if (mlBoost && edge >= 0.10 && prob >= 0.56 && agreement >= 3) return 'HIGH';
-  if (edge >= 0.10 && prob >= 0.57 && agreement >= 3) return 'MEDIUM';
+  // v3: Lowered confidence tier thresholds to match new edge baselines.
+  // More trades land in MEDIUM/HIGH instead of always LOW (which kills bet sizing via 0.40x mult).
+  if (edge >= 0.16 && prob >= 0.62 && agreement >= 5) return 'VERY_HIGH';
+  if (mlBoost && edge >= 0.12 && prob >= 0.58 && agreement >= 4) return 'VERY_HIGH';
+  if (edge >= 0.12 && prob >= 0.58 && agreement >= 4) return 'HIGH';
+  if (mlBoost && edge >= 0.08 && prob >= 0.55 && agreement >= 3) return 'HIGH';
+  if (edge >= 0.08 && prob >= 0.55 && agreement >= 3) return 'MEDIUM';
   return 'LOW';
 }
