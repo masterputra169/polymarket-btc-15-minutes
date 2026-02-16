@@ -79,7 +79,7 @@ export function connect() {
       try {
         const data = JSON.parse(raw);
         const p = Number(data.c);
-        if (Number.isFinite(p) && p > 0) {
+        if (Number.isFinite(p) && p > 10_000 && p < 500_000) {
           _prevPrice = _price;
           _price = p;
         }

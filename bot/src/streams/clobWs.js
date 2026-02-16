@@ -201,6 +201,7 @@ function forceReconnect() {
 
 export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+  intentionalClose = false; // Reset before attempt — prevents stuck flag after forceReconnect + failed connect
 
   try {
     const socket = new WebSocket(WS_URL);

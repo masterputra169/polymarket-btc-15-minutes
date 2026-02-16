@@ -408,6 +408,8 @@ export async function pollOnce() {
           const arbPnl = pos.size - pos.cost;
           log.info(`ARB position settled — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
           settleTrade(true);
+          pendingUsdcSync = null;
+          clearEntrySnapshot();
           writeJournalEntry({
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
@@ -425,6 +427,8 @@ export async function pollOnce() {
           }
           log.info(`Position expired — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
+          pendingUsdcSync = null; // Invalidate any in-flight USDC sync (stale pre-settlement balance)
+          clearEntrySnapshot();
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
@@ -646,6 +650,8 @@ export async function pollOnce() {
           }
           log.info(`Position settled on switch — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
+          pendingUsdcSync = null; // Invalidate any in-flight USDC sync (stale pre-settlement balance)
+          clearEntrySnapshot();
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
             pnl: won ? (pos.size - pos.cost) : -pos.cost,
@@ -991,6 +997,8 @@ export async function pollOnce() {
           const recovery = cutResult.sellPrice * sellSize;
           const cutPnl = recovery - pos.cost;
           settleTradeEarlyExit(recovery);
+          pendingUsdcSync = null; // Invalidate stale USDC sync
+          clearEntrySnapshot();
           writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
           resetCutLossState();
           // M1: Only record loss + activate tilt if it was actually a loss
@@ -1006,6 +1014,8 @@ export async function pollOnce() {
             const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
             const cutPnl = actualRecovery - pos.cost;
             settleTradeEarlyExit(actualRecovery);
+            pendingUsdcSync = null; // Invalidate stale USDC sync
+            clearEntrySnapshot();
             writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
             resetCutLossState();
             // M1: Only record loss + activate tilt if it was actually a loss
@@ -1137,7 +1147,7 @@ export async function pollOnce() {
               recordTrade({
                 side: 'UP',
                 tokenId: poly.tokens.upTokenId,
-                conditionId: currentConditionId,
+                conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
                 price: actualPrice,
                 size: arbShares,
                 marketSlug,
@@ -1273,11 +1283,12 @@ export async function pollOnce() {
 
         if (BOT_CONFIG.dryRun) {
           setPendingCost(0); // Release reservation in dry-run
+          entryRegime = regimeInfo?.regime ?? 'moderate'; // Track for cut-loss regime-change detection
           // M2: Track trade for market to prevent duplicate trades in dry-run mode
           recordTradeForMarket(marketSlug);
           log.info(
             `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
-            `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${((edge.spreadPenaltyUp + edge.spreadPenaltyDown) * 50).toFixed(1)}%) | ` +
+            `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
             `Conf: ${rec.confidence}${flowTag} | ${betSizing.rationale}`
           );
           // DRY_RUN: record prediction for accuracy tracking (only actual trades, not all ENTER signals)

@@ -187,6 +187,8 @@ export async function fetchChainlinkBtcUsd() {
   if (chainlinkFetchedAt && now - chainlinkFetchedAt < 30_000) {
     return cachedChainlink;
   }
+  // Set BEFORE fetch attempt so cooldown applies even on failure (prevents retry storm)
+  chainlinkFetchedAt = now;
 
   try {
     const rpc = rpcs[0];
@@ -235,14 +237,13 @@ export async function fetchChainlinkBtcUsd() {
     const updatedAt = Number(BigInt('0x' + updatedAtHex)) * 1000;
 
     // W8: Only cache valid prices — prevents null/invalid responses from
-    // overwriting good cache and blocking retries for 30s
+    // overwriting good cache (chainlinkFetchedAt already set above for cooldown)
     if (Number.isFinite(price) && price > 0) {
       cachedChainlink = { price, updatedAt, source: 'chainlink_rpc' };
-      chainlinkFetchedAt = now;
     }
     return cachedChainlink;
   } catch (err) {
-    // Network error — return stale cache, don't update timestamp so retry happens next poll
+    // Network error — return stale cache (chainlinkFetchedAt already set for cooldown)
     log.debug(`Chainlink RPC error: ${err.message}`);
     return cachedChainlink;
   }
