@@ -529,8 +529,11 @@ export async function pollOnce() {
     const fundingRate = null;
 
     // ── 3b. USDC balance (every 30s — non-blocking) ──
-    // H3: Skip USDC sync for 60s after settlement — on-chain balance is stale after win/loss
-    const SETTLEMENT_SYNC_COOLDOWN_MS = 60_000;
+    // H3: Skip USDC sync after settlement — on-chain USDC is stale until ERC1155 tokens
+    // are redeemed. On WIN, tokens are worth $1/share but USDC hasn't increased yet.
+    // Sync during this window would overwrite local bankroll with lower on-chain balance,
+    // erasing the win profit. Cooldown = redeemInterval + 5min buffer.
+    const SETTLEMENT_SYNC_COOLDOWN_MS = (BOT_CONFIG.redeemIntervalMs || 3_600_000) + 5 * 60_000;
     const settlementCooldownActive = (now - getLastSettlementMs()) < SETTLEMENT_SYNC_COOLDOWN_MS;
     if (!settlementCooldownActive && now - usdcBalanceLastFetchMs > USDC_BALANCE_INTERVAL && isClientReady()) {
       usdcBalanceLastFetchMs = now; // Set BEFORE fetch to prevent parallel fetches

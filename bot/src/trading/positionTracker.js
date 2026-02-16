@@ -68,6 +68,11 @@ export function loadState() {
         state.trades = [];
       }
 
+      // H2: Validate pendingCost — reject NaN/Infinity from corrupted state
+      if (!Number.isFinite(state.pendingCost) || state.pendingCost < 0) {
+        log.warn(`Invalid pendingCost in state.json: ${state.pendingCost} — resetting to 0`);
+        state.pendingCost = 0;
+      }
       // Clear stale pendingCost — any pending order from a previous session is dead
       if (state.pendingCost > 0) {
         log.info(`Clearing stale pendingCost $${state.pendingCost.toFixed(2)} from previous session`);
@@ -229,6 +234,14 @@ export function settleTrade(won) {
   }
 
   const pos = state.currentPosition;
+
+  // H4: NaN guard — reject settlement if position data is corrupted
+  if (!Number.isFinite(pos.size) || !Number.isFinite(pos.cost)) {
+    log.error(`Settlement ABORTED: pos.size=${pos.size} pos.cost=${pos.cost} is not finite — would corrupt bankroll`);
+    auditLog({ type: 'SETTLE_ABORTED', reason: 'NaN_guard', size: pos.size, cost: pos.cost });
+    return false;
+  }
+
   // H6: Polymarket charges 2% fee on profit at redemption
   const grossPayout = won ? pos.size : 0; // Binary: win = $1/share, lose = $0
   const profit = Math.max(0, grossPayout - pos.cost);
@@ -385,7 +398,7 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId }
     side: 'ARB',
     tokenId: null,  // ARB holds tokens on both sides
     conditionId: null,
-    price: shares > 0 ? totalCost / shares : 0,
+    price: shares > 0 ? Math.round(totalCost / shares * 1e8) / 1e8 : 0,
     size: shares,   // $1/share guaranteed payout at settlement
     marketSlug,
     orderId: orderId ?? null,

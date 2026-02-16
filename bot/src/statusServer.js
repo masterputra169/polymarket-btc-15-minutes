@@ -165,7 +165,7 @@ export function startStatusServer() {
                     if (cutPnl < 0) recordLoss();
                   }
                   releaseSellLock();
-                  respond('sellPosition', { ok: true, result });
+                  respond('sellPosition', { ok: settled, result, ...(settled ? {} : { error: 'position_settled_elsewhere' }) });
                 })
                 .catch(err => { releaseSellLock(); respond('sellPosition', { ok: false, error: err.message }); });
             }
