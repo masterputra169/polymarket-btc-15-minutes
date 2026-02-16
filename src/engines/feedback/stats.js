@@ -145,19 +145,21 @@ export function getDetailedStats() {
     { lo: 0.70, hi: 0.80 }, { lo: 0.80, hi: 1.00 },
   ];
   const calibration = calBuckets.map(({ lo, hi }) => {
-    let correct = 0, total = 0;
+    let correct = 0, total = 0, sumConf = 0;
     for (let i = 0; i < totalSettled; i++) {
       const p = settled[i];
       const raw = p.modelProb ?? 0.5;
       const conf = Math.max(raw, 1 - raw); // symmetric: DOWN 0.35 → 0.65 confidence
       if (conf >= lo && conf < hi) {
         total++;
+        sumConf += conf;
         if (p.correct) correct++;
       }
     }
     return {
       range: `${(lo * 100).toFixed(0)}-${(hi * 100).toFixed(0)}%`,
-      predicted: (lo + hi) / 2,
+      // H5: Use actual avg confidence, not bucket midpoint — more accurate calibration ratio
+      predicted: total > 0 ? sumConf / total : (lo + hi) / 2,
       actual: total > 0 ? correct / total : null,
       total,
     };

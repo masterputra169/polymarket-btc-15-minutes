@@ -353,10 +353,18 @@ export function scoreDirection({
 
   if (regime && regime.regime) {
     switch (regime.regime) {
-      case 'trending':
-        regimeMultiplier = 1.25;
-        regimeEffect = `BOOST (${regime.label})`;
+      case 'trending': {
+        // M7: Direction-aware — boost when signal aligns with trend, dampen when counter-trend
+        const trendUp = regime.label?.includes('UP');
+        const trendDown = regime.label?.includes('DOWN');
+        const signalUp = upScore > downScore;
+        const aligned = (trendUp && signalUp) || (trendDown && !signalUp);
+        regimeMultiplier = aligned ? 1.25 : 0.85;
+        regimeEffect = aligned
+          ? `BOOST (${regime.label}, aligned)`
+          : `DAMPEN (${regime.label}, counter-trend)`;
         break;
+      }
       case 'choppy':
         regimeMultiplier = 0.60;
         regimeEffect = `DAMPEN (${regime.label})`;
@@ -391,7 +399,10 @@ export function scoreDirection({
 
   // Apply all post-scoring multipliers in one step (avoids per-step clamping
   // artifacts when intermediate values hit [0.02, 0.98] bounds)
-  const combinedMultiplier = regimeMultiplier * volMultiplier * fbMultiplier;
+  // H4: Cap combined multiplier to [0.50, 1.50] to prevent extreme swings
+  const rawCombined = regimeMultiplier * volMultiplier * fbMultiplier;
+  const combinedMultiplier = Math.max(0.50, Math.min(1.50, rawCombined));
+  breakdown.combinedMultiplier = { raw: +rawCombined.toFixed(4), clamped: +combinedMultiplier.toFixed(4) };
   rawUp = Math.max(0.02, Math.min(0.98, 0.5 + (rawUp - 0.5) * combinedMultiplier));
 
   const rawDown = 1 - rawUp;

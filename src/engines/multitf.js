@@ -66,6 +66,9 @@ export function computeMultiTfConfirmation({
     else if (rsi1m < 45 && rsi5m < 45) downVotes++;
   }
 
+  // M6: Track whether we actually have 5m data — if not, agreement is vacuous
+  const has5mData = delta5m !== null || ha5mColor !== null || rsi5m !== null;
+
   // Determine result
   const total = upVotes + downVotes;
   if (total === 0) {
@@ -73,13 +76,15 @@ export function computeMultiTfConfirmation({
   }
 
   const signal = upVotes > downVotes ? 'UP' : upVotes < downVotes ? 'DOWN' : 'NEUTRAL';
-  // Soft agreement: 1m has direction AND 5m doesn't contradict (neutral 5m = no objection)
-  const agreement = tf1mSignal !== 'NEUTRAL' && (tf5mSignal === 'NEUTRAL' || tf1mSignal === tf5mSignal);
+  // Agreement requires actual 5m data — neutral 5m from missing data is not confirmation
+  const agreement = has5mData && tf1mSignal !== 'NEUTRAL' && (tf5mSignal === 'NEUTRAL' || tf1mSignal === tf5mSignal);
   const confidence = Math.max(upVotes, downVotes) / total;
 
-  const detail = agreement
-    ? `1m ${tf1mSignal} ✓ 5m ${tf5mSignal} (${upVotes}U/${downVotes}D)`
-    : `1m ${tf1mSignal} ✗ 5m ${tf5mSignal} (${upVotes}U/${downVotes}D)`;
+  const detail = !has5mData
+    ? `1m ${tf1mSignal} (no 5m data)`
+    : agreement
+      ? `1m ${tf1mSignal} ✓ 5m ${tf5mSignal} (${upVotes}U/${downVotes}D)`
+      : `1m ${tf1mSignal} ✗ 5m ${tf5mSignal} (${upVotes}U/${downVotes}D)`;
 
   return { signal, agreement, detail, confidence };
 }

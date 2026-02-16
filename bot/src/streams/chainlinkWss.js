@@ -1,7 +1,7 @@
 /**
  * Chainlink Direct WSS stream for Node.js bot.
- * Real-time BTC/USD price via Polygon WebSocket RPC.
- * Ported from useChainlinkWssStream.js — same protocol, no React.
+ * Real-time BTC/USD price via Polygon WebSocket RPC (JSON-RPC 2.0).
+ * Uses eth_call with latestRoundData() selector over WSS every 15s.
  */
 
 import { WebSocket } from 'ws';
@@ -11,20 +11,25 @@ import { createLogger } from '../logger.js';
 const log = createLogger('ChainlinkWSS');
 
 const WS_URLS = CONFIG.chainlink?.polygonWssUrls || ['wss://polygon-bor-rpc.publicnode.com'];
-const PING_MS = WS_CHAINLINK.pingMs;                     // 15s
+const AGGREGATOR = CONFIG.chainlink?.btcUsdAggregator ?? '';
+const DECIMALS = CONFIG.chainlink?.decimals ?? 8;
+const POLL_MS = WS_CHAINLINK.pingMs;                     // 15s — reuse as poll interval
 const HEARTBEAT_DEAD_MS = WS_CHAINLINK.heartbeatDeadMs;  // 45s
 const HEARTBEAT_CHECK_MS = WS_DEFAULTS.heartbeatCheckMs;  // 10s
 const RECONNECT_MAX_MS = WS_DEFAULTS.reconnectMaxMs;      // 10s
 
+// M5: latestRoundData() selector for JSON-RPC 2.0
+const LATEST_ROUND_DATA_SELECTOR = '0xfeaf968c';
+
 let ws = null;
 let reconnectTimer = null;
 let reconnectMs = 1000;
-let pingTimer = null;
+let pollTimer = null;
 let hbTimer = null;
-let lastMsgMs = 0;
+let lastDataMs = 0;   // M5: Track last DATA response, not any message
 let urlIdx = 0;
-let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
-let _parseErrors = 0;
+let intentionalClose = false;
+let _rpcId = 1;
 
 // Public state — read by loop.js
 let _price = null;
@@ -37,13 +42,41 @@ export function getPrevPrice() { return _prevPrice; }
 export function isConnected() { return _connected; }
 export function getLastUpdate() { return _lastUpdate; }
 
-function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
+function stopPoll() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 function stopHb() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
-function stopTimers() { stopPing(); stopHb(); }
+function stopTimers() { stopPoll(); stopHb(); }
+
+/**
+ * Parse latestRoundData() hex response.
+ * Returns (roundId, answer, startedAt, updatedAt, answeredInRound)
+ * answer is at offset 64..128 (2nd 32-byte word), updatedAt at 192..256 (4th word).
+ */
+function parseLatestRoundData(hex) {
+  if (!hex || hex.length < 320) return null;
+  const answerHex = hex.slice(64, 128);
+  let answer = BigInt('0x' + answerHex);
+  // Handle signed int256
+  if (answer >= (1n << 255n)) answer = answer - (1n << 256n);
+  const price = Number(answer) / (10 ** DECIMALS);
+  const updatedAtHex = hex.slice(192, 256);
+  const updatedAt = Number(BigInt('0x' + updatedAtHex)) * 1000;
+  return { price, updatedAt };
+}
+
+function sendEthCall(socket) {
+  if (!AGGREGATOR || !socket || socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(JSON.stringify({
+      jsonrpc: '2.0',
+      id: _rpcId++,
+      method: 'eth_call',
+      params: [{ to: AGGREGATOR, data: LATEST_ROUND_DATA_SELECTOR }, 'latest'],
+    }));
+  } catch {}
+}
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  // Rotate to next URL on reconnect
   urlIdx = (urlIdx + 1) % WS_URLS.length;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -54,7 +87,7 @@ function scheduleReconnect() {
 
 export function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-  intentionalClose = false; // L: Reset before attempt — prevents stuck flag after disconnect+failed connect
+  intentionalClose = false;
 
   const url = WS_URLS[urlIdx];
   if (!url) return;
@@ -64,26 +97,26 @@ export function connect() {
     ws = socket;
 
     socket.on('open', () => {
-      // Stale socket guard
       if (ws !== socket) { try { socket.close(); } catch {} return; }
 
       log.info(`Connected to ${url}`);
       _connected = true;
       reconnectMs = 1000;
-      lastMsgMs = Date.now();
+      lastDataMs = Date.now();
 
-      // Ping every 15s (use module-level ws, not local socket, to survive reconnect race)
-      stopPing();
-      pingTimer = setInterval(() => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          try { ws.send(JSON.stringify({ type: 'ping' })); } catch {}
+      // M5: Poll latestRoundData() immediately and every POLL_MS
+      sendEthCall(socket);
+      stopPoll();
+      pollTimer = setInterval(() => {
+        if (ws === socket && socket.readyState === WebSocket.OPEN) {
+          sendEthCall(socket);
         }
-      }, PING_MS);
+      }, POLL_MS);
 
-      // Heartbeat: 45s dead timeout
+      // Heartbeat: check data freshness
       stopHb();
       hbTimer = setInterval(() => {
-        if (Date.now() - lastMsgMs > HEARTBEAT_DEAD_MS) {
+        if (Date.now() - lastDataMs > HEARTBEAT_DEAD_MS) {
           log.warn('Silent — forcing reconnect');
           if (ws === socket) { ws = null; _connected = false; }
           stopTimers();
@@ -91,49 +124,29 @@ export function connect() {
           scheduleReconnect();
         }
       }, HEARTBEAT_CHECK_MS);
-
-      // Subscribe to BTC/USD feed
-      try {
-        socket.send(JSON.stringify({ type: 'subscribe', feed: 'BTC/USD' }));
-      } catch (subErr) {
-        log.warn(`Subscribe failed: ${subErr.message}`);
-      }
     });
 
     socket.on('message', (raw) => {
-      lastMsgMs = Date.now();
       try {
         const str = typeof raw === 'string' ? raw : raw.toString();
         const data = JSON.parse(str);
-        let p = null;
 
-        // Multiple possible formats from different Polygon WSS providers
-        if (data.answer !== undefined) {
-          p = Number(data.answer);
-          // W6: Default decimals to 8 (Chainlink standard) — without this,
-          // a provider returning raw answer (e.g. 5000000000000) without decimals
-          // field would be treated as a valid price of 5 trillion
-          const decimals = Number(data.decimals ?? 8);
-          p = p / Math.pow(10, decimals);
-        } else if (data.price !== undefined) {
-          p = Number(data.price);
-        } else if (data.result !== undefined) {
-          p = Number(data.result);
-        } else if (data.data?.price !== undefined) {
-          p = Number(data.data.price);
-        } else if (data.params?.result?.answer !== undefined) {
-          p = Number(BigInt(data.params.result.answer)) / 1e8;
+        // M5: Parse JSON-RPC 2.0 response from eth_call
+        if (data.result && typeof data.result === 'string' && data.result.startsWith('0x')) {
+          const hex = data.result.slice(2);
+          const parsed = parseLatestRoundData(hex);
+          if (parsed && Number.isFinite(parsed.price) && parsed.price > 10_000 && parsed.price < 500_000) {
+            _prevPrice = _price;
+            _price = parsed.price;
+            _lastUpdate = Date.now();
+            lastDataMs = Date.now();
+          }
+        } else if (data.error) {
+          log.debug(`RPC error: ${JSON.stringify(data.error)}`);
         }
-
-        // M12: BTC price range validation — reject obviously wrong values
-        if (p !== null && Number.isFinite(p) && p > 10_000 && p < 500_000) {
-          _prevPrice = _price;
-          _price = p;
-          _lastUpdate = Date.now();
-        }
+        // Any valid response (even error) counts as connection alive for basic liveness
       } catch (err) {
-        _parseErrors++;
-        if (_parseErrors === 1 || _parseErrors % 500 === 0) log.debug(`WS parse error #${_parseErrors}: ${err.message}`);
+        log.debug(`WS parse error: ${err.message}`);
       }
     });
 
@@ -144,7 +157,6 @@ export function connect() {
         ws = null;
         stopTimers();
       }
-      // H4: Don't reconnect if disconnect() was called intentionally
       if (!intentionalClose) scheduleReconnect();
     });
 
@@ -159,7 +171,7 @@ export function connect() {
 }
 
 export function disconnect() {
-  intentionalClose = true; // H4: Signal to close handler not to reconnect
+  intentionalClose = true;
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopTimers();
   if (ws) { try { ws.close(); } catch {} ws = null; }

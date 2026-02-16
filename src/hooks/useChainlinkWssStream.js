@@ -3,16 +3,35 @@ import { CONFIG, WS_DEFAULTS, WS_CHAINLINK } from '../config.js';
 import { useThrottledPricePair } from './useThrottledState.js';
 
 /**
- * ═══ Chainlink Direct WSS Stream — v3 (Memory Optimized) ═══
+ * ═══ Chainlink Direct WSS Stream — v4 (JSON-RPC 2.0) ═══
+ * M5: Uses eth_call with latestRoundData() selector over WSS.
+ * Fixed: config key polygonWssUrls (was wssUrl which doesn't exist).
  */
 
-const PING_MS           = WS_CHAINLINK.pingMs;
+const POLL_MS           = WS_CHAINLINK.pingMs;            // 15s — reuse as poll interval
 const HEARTBEAT_DEAD_MS = WS_CHAINLINK.heartbeatDeadMs;
 const HEARTBEAT_CHK_MS  = WS_DEFAULTS.heartbeatCheckMs;
 const RECONNECT_MAX_MS  = WS_DEFAULTS.reconnectMaxMs;
 const THROTTLE_MS       = WS_DEFAULTS.throttleMs;
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
+
+// M5: latestRoundData() selector for JSON-RPC 2.0
+const LATEST_ROUND_DATA_SELECTOR = '0xfeaf968c';
+const AGGREGATOR = CONFIG.chainlink?.btcUsdAggregator ?? '';
+const DECIMALS = CONFIG.chainlink?.decimals ?? 8;
+
+/**
+ * Parse latestRoundData() hex response.
+ * answer is at offset 64..128 (2nd 32-byte word).
+ */
+function parseLatestRoundData(hex) {
+  if (!hex || hex.length < 320) return null;
+  const answerHex = hex.slice(64, 128);
+  let answer = BigInt('0x' + answerHex);
+  if (answer >= (1n << 255n)) answer = answer - (1n << 256n);
+  return Number(answer) / (10 ** DECIMALS);
+}
 
 export function useChainlinkWssStream() {
   const { price, prevPrice, pushPrice } = useThrottledPricePair(THROTTLE_MS);
@@ -21,16 +40,30 @@ export function useChainlinkWssStream() {
   const wsRef        = useRef(null);
   const reconnectRef = useRef(null);
   const reconMsRef   = useRef(1000);
-  const pingRef      = useRef(null);
+  const pollRef      = useRef(null);
   const hbRef        = useRef(null);
-  const lastMsgRef   = useRef(Date.now());
+  const lastDataRef  = useRef(Date.now());   // M5: Track data freshness, not any message
+  const rpcIdRef     = useRef(1);
 
-  function stopPing() { if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; } }
+  function stopPoll() { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } }
   function stopHb()   { if (hbRef.current)   { clearInterval(hbRef.current);  hbRef.current   = null; } }
-  function stopAll()  { stopPing(); stopHb(); }
+  function stopAll()  { stopPoll(); stopHb(); }
+
+  const sendEthCall = useCallback((ws) => {
+    if (!AGGREGATOR || !ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({
+        jsonrpc: '2.0',
+        id: rpcIdRef.current++,
+        method: 'eth_call',
+        params: [{ to: AGGREGATOR, data: LATEST_ROUND_DATA_SELECTOR }, 'latest'],
+      }));
+    } catch (_e) { /* */ }
+  }, []);
 
   const connect = useCallback(() => {
-    const url = CONFIG.chainlink?.wssUrl;
+    // M5: Fix config key — was CONFIG.chainlink?.wssUrl (doesn't exist)
+    const url = CONFIG.chainlink?.polygonWssUrls?.[0];
     if (!url) return;
     if (wsRef.current && wsRef.current.readyState <= 1) return;
 
@@ -39,58 +72,49 @@ export function useChainlinkWssStream() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        if (IS_DEV) console.log('[Chainlink WSS] ✅ Connected');
+        if (IS_DEV) console.log('[Chainlink WSS] Connected');
         setConnected(true);
         reconMsRef.current = 1000;
-        lastMsgRef.current = Date.now();
+        lastDataRef.current = Date.now();
 
-        stopPing();
-        pingRef.current = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            try { ws.send(JSON.stringify({ type: 'ping' })); } catch (_e) { /* */ }
-          }
-        }, PING_MS);
+        // M5: Poll latestRoundData() immediately and every POLL_MS
+        sendEthCall(ws);
+        stopPoll();
+        pollRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) sendEthCall(ws);
+        }, POLL_MS);
 
+        // Heartbeat: check data freshness
         stopHb();
         hbRef.current = setInterval(() => {
-          if (Date.now() - lastMsgRef.current > HEARTBEAT_DEAD_MS) {
-            if (wsRef.current !== ws) return; // stale — new WS already connected
-            console.warn('[Chainlink WSS] ⚠️ Silent — forcing reconnect');
+          if (Date.now() - lastDataRef.current > HEARTBEAT_DEAD_MS) {
+            if (wsRef.current !== ws) return;
+            console.warn('[Chainlink WSS] Silent — forcing reconnect');
             try { ws.close(); } catch (_e) { /* */ }
           }
         }, HEARTBEAT_CHK_MS);
-
-        try { ws.send(JSON.stringify({ type: 'subscribe', feed: 'BTC/USD' })); } catch (_e) { /* */ }
       };
 
       ws.onmessage = (evt) => {
-        lastMsgRef.current = Date.now();
         try {
           const data = JSON.parse(evt.data);
-          let p = null;
 
-          if (data.answer !== undefined) {
-            p = Number(data.answer);
-            if (data.decimals) p = p / Math.pow(10, Number(data.decimals));
-          } else if (data.price !== undefined) {
-            p = Number(data.price);
-          } else if (data.result !== undefined) {
-            p = Number(data.result);
-          } else if (data.data?.price !== undefined) {
-            p = Number(data.data.price);
-          } else if (data.params?.result?.answer !== undefined) {
-            p = Number(BigInt(data.params.result.answer)) / 1e8;
+          // M5: Parse JSON-RPC 2.0 response from eth_call
+          if (data.result && typeof data.result === 'string' && data.result.startsWith('0x')) {
+            const hex = data.result.slice(2);
+            const p = parseLatestRoundData(hex);
+            if (p !== null && Number.isFinite(p) && p > 10_000 && p < 500_000) {
+              pushPrice(p);
+              lastDataRef.current = Date.now();
+            }
           }
-
-          if (p !== null && Number.isFinite(p) && p > 0) {
-            pushPrice(p);   // ← ref only
-          }
+          // Ignore RPC errors silently — heartbeat handles staleness
         } catch (_e) { /* */ }
       };
 
       ws.onclose = (evt) => {
-        if (IS_DEV) console.log(`[Chainlink WSS] ❌ Disconnected (code: ${evt.code})`);
-        if (wsRef.current !== ws) return; // stale close from replaced WS
+        if (IS_DEV) console.log(`[Chainlink WSS] Disconnected (code: ${evt.code})`);
+        if (wsRef.current !== ws) return;
         setConnected(false);
         wsRef.current = null;
         stopAll();
@@ -105,19 +129,19 @@ export function useChainlinkWssStream() {
       reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
       reconnectRef.current = setTimeout(connect, wait);
     }
-  }, [pushPrice]);
+  }, [pushPrice, sendEthCall]);
 
   useEffect(() => {
     const h = () => {
       if (document.visibilityState !== 'visible') return;
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        if (IS_DEV) console.log('[Chainlink WSS] 👁️ Tab visible — reconnecting…');
+        if (IS_DEV) console.log('[Chainlink WSS] Tab visible — reconnecting…');
         clearTimeout(reconnectRef.current);
         reconMsRef.current = 1000;
         connect();
       } else {
-        lastMsgRef.current = Date.now();
+        lastDataRef.current = Date.now();
       }
     };
     document.addEventListener('visibilitychange', h);

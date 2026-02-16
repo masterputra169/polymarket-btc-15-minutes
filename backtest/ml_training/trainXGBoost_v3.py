@@ -1039,11 +1039,13 @@ if HAS_LGB:
     label_mean = float(np.average(y_train, weights=w_train)) if w_train is not None else float(y_train.mean())
     lgb_init_score = float(np.log(label_mean / (1 - label_mean)))
 
+    # C2: Use len(sliced_trees) for num_trees to avoid off-by-one
+    sliced_tree_info = lgb_dump['tree_info'][:lgb_n_trees]
     lgb_browser = {
         'format': 'lightgbm_json_v1',
         'version': 1,
         'num_features': len(feature_cols),
-        'num_trees': lgb_n_trees,
+        'num_trees': len(sliced_tree_info),
         'feature_names': feature_cols,
         'init_score': lgb_init_score,
         'platt_a': lgb_platt_a,
@@ -1053,7 +1055,7 @@ if HAS_LGB:
             'auc': round(lgb_auc, 4),
         },
         'ensemble_weights': {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
-        'tree_info': lgb_dump['tree_info'][:lgb_n_trees],
+        'tree_info': sliced_tree_info,
     }
 
     lgb_path = os.path.join(args.output_dir, 'lightgbm_model.json')
