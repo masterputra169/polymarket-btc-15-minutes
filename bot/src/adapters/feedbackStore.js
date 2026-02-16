@@ -10,7 +10,7 @@
  * We handle actual persistence ourselves via saveFeedbackToDisk().
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, copyFileSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -56,6 +56,15 @@ export function loadFeedbackFromDisk() {
     }
   } catch (err) {
     log.warn(`Could not load feedback file: ${err.message}`);
+    // Backup corrupted file so data isn't silently lost
+    if (existsSync(BOT_CONFIG.feedbackFile)) {
+      try {
+        copyFileSync(BOT_CONFIG.feedbackFile, BOT_CONFIG.feedbackFile + '.bak');
+        log.warn(`Corrupted feedback file backed up to ${BOT_CONFIG.feedbackFile}.bak`);
+      } catch (bakErr) {
+        log.warn(`Could not backup corrupted feedback file: ${bakErr.message}`);
+      }
+    }
   }
   FeedbackState.setCache([]);
 }

@@ -94,9 +94,10 @@ export async function checkPendingFill() {
 
   // Evict stale pending orders (>10min) to prevent unbounded Map growth on API failures
   const STALE_ORDER_MS = 10 * 60 * 1000;
+  const evictNow = Date.now();
   for (const [id, order] of pendingOrders) {
-    if (now - order.placedAt > STALE_ORDER_MS) {
-      log.warn(`Evicting stale pending order ${id} (${Math.round((now - order.placedAt) / 1000)}s old)`);
+    if (evictNow - order.placedAt > STALE_ORDER_MS) {
+      log.warn(`Evicting stale pending order ${id} (${Math.round((evictNow - order.placedAt) / 1000)}s old)`);
       pendingOrders.delete(id);
     }
   }

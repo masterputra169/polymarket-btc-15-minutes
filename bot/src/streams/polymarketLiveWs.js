@@ -92,7 +92,9 @@ export function connect() {
           action: 'subscribe',
           subscriptions: [{ topic: 'crypto_prices_chainlink', type: '*', filters: '' }],
         }));
-      } catch {}
+      } catch (subErr) {
+        log.warn(`Subscribe failed: ${subErr.message}`);
+      }
     });
 
     socket.on('message', (raw) => {
@@ -114,7 +116,8 @@ export function connect() {
         _price = p;
         _lastUpdate = Date.now();
       } catch (err) {
-        if (++_parseErrors % 100 === 1) log.debug(`WS parse error (${_parseErrors}): ${err.message}`);
+        _parseErrors++;
+        if (_parseErrors === 1 || _parseErrors % 500 === 0) log.debug(`WS parse error #${_parseErrors}: ${err.message}`);
       }
     });
 
@@ -129,10 +132,12 @@ export function connect() {
       if (!intentionalClose) scheduleReconnect();
     });
 
-    socket.on('error', () => {
+    socket.on('error', (err) => {
+      log.debug(`WS error: ${err?.message || err}`);
       try { socket.close(); } catch {}
     });
-  } catch {
+  } catch (connErr) {
+    log.debug(`Connect failed: ${connErr?.message || connErr}`);
     if (!intentionalClose) scheduleReconnect();
   }
 }

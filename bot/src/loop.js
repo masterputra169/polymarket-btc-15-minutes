@@ -260,6 +260,9 @@ function resetMarketCache() {
   signalConfirmSide = null;
   signalFlipHistory.length = 0;
   lastSignalSide = null;
+  // Force fresh klines on next poll (prevents stale data after market gap)
+  klines5mCache = null;
+  klines5mLastFetchMs = 0;
 }
 
 /**
@@ -486,13 +489,25 @@ export async function pollOnce() {
       fetches.push(fetchChainlinkBtcUsd().catch(() => chainlinkCache));
     }
 
-    // Execute all in parallel
-    const results = await Promise.all(fetches.map(p =>
+    // Execute all in parallel — allSettled so one failure doesn't kill the whole poll
+    const settled = await Promise.allSettled(fetches.map(p =>
       p instanceof Promise ? p : Promise.resolve(p)
     ));
+    const results = settled.map(r => r.status === 'fulfilled' ? r.value : null);
+
+    // Log individual fetch failures (but continue with available data)
+    for (const [key, idx] of Object.entries(fetchMap)) {
+      if (settled[idx].status === 'rejected') {
+        log.warn(`Fetch ${key} failed: ${settled[idx].reason?.message || settled[idx].reason}`);
+      }
+    }
 
     // Unpack results
     const klines1m = results[fetchMap.klines1m];
+    if (!klines1m || !Array.isArray(klines1m) || klines1m.length === 0) {
+      log.warn('1m klines fetch failed — skipping poll');
+      return;
+    }
     const klines5m = fetchMap.klines5m !== undefined ? results[fetchMap.klines5m] : klines5mCache;
     const lastPrice = wsPrice || (fetchMap.lastPrice !== undefined ? results[fetchMap.lastPrice] : klines1m[klines1m.length - 1]?.close);
 
@@ -1098,14 +1113,18 @@ export async function pollOnce() {
 
               // Both legs succeeded — record arb with actual fill costs
               setPendingCost(0);
-              recordArbTrade({
-                upCost: upFillCost,
-                downCost: downFillCost,
-                shares: arbShares,
-                marketSlug,
-                orderId: upOrderId,
-              });
-              recordTradeForMarket(marketSlug);
+              try {
+                recordArbTrade({
+                  upCost: upFillCost,
+                  downCost: downFillCost,
+                  shares: arbShares,
+                  marketSlug,
+                  orderId: upOrderId,
+                });
+                recordTradeForMarket(marketSlug);
+              } catch (recErr) {
+                log.error(`Arb recording failed (trades placed but not tracked): ${recErr.message}`);
+              }
               // Track fills for both orders (monitors execution, feeds fill rate stats)
               if (upOrderId) trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP' });
               if (downOrderId) trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN' });

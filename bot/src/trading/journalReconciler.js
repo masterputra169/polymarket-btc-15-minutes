@@ -265,10 +265,12 @@ async function reconcile() {
     if (existsSync(BOT_CONFIG.verifiedJournalFile)) {
       const lines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
       for (const line of lines) {
-        try { const e = JSON.parse(line); if (e.conditionId) processedIds.add(e.conditionId); } catch {}
+        try { const e = JSON.parse(line); if (e.conditionId) processedIds.add(e.conditionId); } catch { /* malformed line — skip */ }
       }
     }
-  } catch {}
+  } catch (err) {
+    log.debug(`Could not load existing verified journal: ${err.message}`);
+  }
 
   let totalPnl = 0;
   let marketCount = 0;

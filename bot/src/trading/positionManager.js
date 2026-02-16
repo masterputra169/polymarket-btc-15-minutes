@@ -218,8 +218,8 @@ function savePositions() {
     }, null, 2));
     try {
       renameSync(tmpPath, filePath);
-    } catch {
-      // Fallback: direct overwrite (rename may fail cross-device on some OS)
+    } catch (renameErr) {
+      log.debug(`Rename failed (${renameErr.message}) — direct write`);
       writeFileSync(filePath, JSON.stringify({
         lastUpdate: lastFetchMs,
         positions: cachedPositions,
@@ -242,7 +242,7 @@ export function loadPositions() {
       lastFetchMs = data.lastUpdate || 0;
       log.info(`Loaded ${cachedPositions.length} positions from disk`);
     }
-  } catch {
-    // No saved positions — fine
+  } catch (err) {
+    log.debug(`No saved positions to load: ${err.message}`);
   }
 }

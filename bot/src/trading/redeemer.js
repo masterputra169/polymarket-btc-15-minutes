@@ -283,8 +283,8 @@ async function findRedeemablePositions() {
         winner: winnerToken.outcome,
         question: market.question ?? '',
       });
-    } catch {
-      // Skip — will retry next cycle
+    } catch (err) {
+      log.debug(`Redeemable check skipped for position: ${err.message}`);
     }
   }
 
@@ -333,7 +333,8 @@ async function hasRedeemableBalance(conditionId, holder) {
       if (bal > 0n) return true;
     }
     return false;
-  } catch {
+  } catch (err) {
+    log.debug(`Token balance check failed: ${err.message}`);
     return false;
   }
 }
@@ -453,8 +454,8 @@ function loadRedeemedSet() {
       redeemedSet = new Set(data);
       log.info(`Loaded ${redeemedSet.size} redeemed conditionId(s) from disk`);
     }
-  } catch {
-    // Fresh start
+  } catch (err) {
+    log.debug(`No redeemed set to load: ${err.message}`);
   }
 }
 
@@ -475,7 +476,8 @@ function saveRedeemedSet() {
     writeFileSync(tmpPath, data);
     try {
       renameSync(tmpPath, filePath);
-    } catch {
+    } catch (renameErr) {
+      log.debug(`Rename failed (${renameErr.message}) — direct write`);
       writeFileSync(filePath, data);
     }
   } catch (err) {

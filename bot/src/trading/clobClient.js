@@ -180,7 +180,13 @@ export async function cancelAllOrders() {
  */
 export async function getOpenOrders() {
   if (!client) throw new Error('CLOB client not initialized');
-  return await client.getOpenOrders();
+  const result = await client.getOpenOrders();
+  // CLOB client may return { error: "..." } instead of array
+  if (result && !Array.isArray(result)) {
+    if (result.error) throw new Error(`getOpenOrders: ${result.error}`);
+    return [];
+  }
+  return result ?? [];
 }
 
 /**

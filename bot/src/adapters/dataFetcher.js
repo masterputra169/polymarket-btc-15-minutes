@@ -241,8 +241,9 @@ export async function fetchChainlinkBtcUsd() {
       chainlinkFetchedAt = now;
     }
     return cachedChainlink;
-  } catch {
+  } catch (err) {
     // Network error — return stale cache, don't update timestamp so retry happens next poll
+    log.debug(`Chainlink RPC error: ${err.message}`);
     return cachedChainlink;
   }
 }
