@@ -78,7 +78,8 @@ export function saveFeedbackToDisk() {
     writeFileSync(tmpPath, data);
     try {
       renameSync(tmpPath, BOT_CONFIG.feedbackFile);
-    } catch {
+    } catch (renameErr) {
+      log.debug(`Rename failed (${renameErr.message}) — direct write`);
       writeFileSync(BOT_CONFIG.feedbackFile, data);
     }
     log.debug(`Saved ${currentCache.length} predictions to disk`);

@@ -218,16 +218,16 @@ export function connect() {
       lastMsgMs = Date.now();
       intentionalClose = false;
 
-      // Ping
-      if (pingTimer) clearInterval(pingTimer);
+      // Ping — nullify before reassign to prevent stale ref leak
+      if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
       pingTimer = setInterval(() => {
         if (ws && ws.readyState === WebSocket.OPEN) {
           try { ws.send('PING'); } catch {}
         }
       }, PING_MS);
 
-      // Heartbeat
-      if (hbTimer) clearInterval(hbTimer);
+      // Heartbeat — nullify before reassign to prevent stale ref leak
+      if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
       hbTimer = setInterval(() => {
         const now = Date.now();
         if (now - lastMsgMs > HEARTBEAT_DEAD_MS) {
@@ -263,17 +263,21 @@ export function connect() {
 
     socket.on('close', () => {
       // Only update module state if this is still the active socket
-      if (ws === socket) {
+      const isActiveSocket = ws === socket;
+      if (isActiveSocket) {
         _connected = false;
         ws = null;
         subscribed = false;
         stopTimers();
       }
       if (intentionalClose) { intentionalClose = false; return; }
-      if (ws === null) scheduleReconnect();
+      if (isActiveSocket) scheduleReconnect();
     });
 
-    socket.on('error', () => { try { socket.close(); } catch {} });
+    socket.on('error', (err) => {
+      log.debug(`WS error: ${err?.message || err}`);
+      try { socket.close(); } catch {}
+    });
   } catch {
     scheduleReconnect();
   }

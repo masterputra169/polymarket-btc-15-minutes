@@ -273,25 +273,34 @@ function resetMarketCache() {
  * @returns {{ won: boolean, outcome: string|null, source: string }}
  */
 async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
-  // H1: Single attempt with 3s timeout (no retries — BTC price fallback is good enough)
+  // Oracle with 2 retries + exponential backoff (was single 3s attempt)
   if (conditionId) {
-    try {
-      const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) {
-        const market = await res.json();
-        if (market.closed) {
-          const tokens = Array.isArray(market.tokens) ? market.tokens : [];
-          const winner = tokens.find(t => t.winner === true);
-          if (winner) {
-            const outcome = winner.outcome.toUpperCase();
-            const won = pos.side === outcome;
-            return { won, outcome, source: 'oracle' };
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          const market = await res.json();
+          if (market.closed) {
+            const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+            const winner = tokens.find(t => t.winner === true);
+            if (winner) {
+              const outcome = winner.outcome.toUpperCase();
+              const won = pos.side === outcome;
+              return { won, outcome, source: 'oracle' };
+            }
           }
+          break; // API responded OK but market not closed/no winner — don't retry
+        }
+      } catch (err) {
+        log.debug(`Oracle fetch attempt ${attempt + 1}/${MAX_RETRIES + 1} failed: ${err.message}`);
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); // 1s, 2s backoff
         }
       }
-    } catch (err) { log.debug(`Oracle fetch failed: ${err.message}`); }
-    log.warn('Oracle settlement failed — falling back to BTC price comparison');
+    }
+    log.warn('Oracle settlement failed after retries — falling back to BTC price comparison');
   }
 
   // 2. Fallback: BTC price comparison (legacy behavior)
@@ -865,10 +874,11 @@ export async function pollOnce() {
       signalFlipHistory.push({ ts: now, from: lastSignalSide, to: currentSide });
     }
     lastSignalSide = currentSide;
-    // Purge old flips outside the window
+    // Purge old flips outside the window + cap max size to prevent unbounded growth
     while (signalFlipHistory.length > 0 && now - signalFlipHistory[0].ts > FLIP_WINDOW_MS) {
       signalFlipHistory.shift();
     }
+    while (signalFlipHistory.length > 50) signalFlipHistory.shift();
     const recentFlipCount = signalFlipHistory.length;
 
     // ── Log real Polymarket data for ML training (every 5s, zero alloc when throttled) ──

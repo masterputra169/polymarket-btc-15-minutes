@@ -92,6 +92,15 @@ export async function checkPendingFill() {
     log.debug(`Fill check error: ${err.message}`);
   }
 
+  // Evict stale pending orders (>10min) to prevent unbounded Map growth on API failures
+  const STALE_ORDER_MS = 10 * 60 * 1000;
+  for (const [id, order] of pendingOrders) {
+    if (now - order.placedAt > STALE_ORDER_MS) {
+      log.warn(`Evicting stale pending order ${id} (${Math.round((now - order.placedAt) / 1000)}s old)`);
+      pendingOrders.delete(id);
+    }
+  }
+
   return results.length > 0 ? results : null;
 }
 
