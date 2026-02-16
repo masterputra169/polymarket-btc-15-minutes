@@ -7,7 +7,7 @@
  * - Append-only audit log for all financial state changes
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -22,6 +22,7 @@ const POLYMARKET_FEE_RATE = 0.02;
 
 let state = {
   bankroll: BOT_CONFIG.bankroll,
+  peakBankroll: BOT_CONFIG.bankroll, // High-water mark for max drawdown circuit breaker
   startOfDayBankroll: BOT_CONFIG.bankroll,
   dayStartMs: Date.now(),
   currentPosition: null,    // { side, tokenId, price, size, marketSlug, enteredAt, cost, settled, fillConfirmed }
@@ -40,10 +41,32 @@ let state = {
 // ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
 let sellingInProgress = false;
 
-// ── Audit log (append-only) ──
+// ── Audit log (append-only with rotation) ──
+const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
+const AUDIT_MAX_BACKUPS = 3;
+
+function rotateAuditLog(auditPath) {
+  try {
+    // Rotate: .3 → delete, .2 → .3, .1 → .2, current → .1
+    for (let i = AUDIT_MAX_BACKUPS; i >= 1; i--) {
+      const src = i === 1 ? auditPath : `${auditPath}.${i - 1}`;
+      const dst = `${auditPath}.${i}`;
+      if (existsSync(src)) {
+        try { renameSync(src, dst); } catch { /* best-effort */ }
+      }
+    }
+  } catch (err) { log.warn(`Audit rotation failed: ${err.message}`); }
+}
+
 function auditLog(entry) {
   try {
     const auditPath = BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl');
+    // Rotate if file exceeds size limit
+    try {
+      if (existsSync(auditPath) && statSync(auditPath).size > AUDIT_MAX_BYTES) {
+        rotateAuditLog(auditPath);
+      }
+    } catch { /* statSync failure — proceed without rotation */ }
     const line = JSON.stringify({ ...entry, _ts: Date.now() }) + '\n';
     appendFileSync(auditPath, line);
   } catch (err) { log.warn(`Audit write failed (financial event may be unrecorded): ${err.message}`); }
@@ -95,8 +118,13 @@ export function loadState() {
         log.info(`New trading day (UTC) — daily stats reset (baseline $${state.startOfDayBankroll.toFixed(2)}${openCost > 0 ? `, incl $${openCost.toFixed(2)} open` : ''})`);
       }
 
-      log.info(`State loaded: bankroll=$${state.bankroll.toFixed(2)}, trades=${state.totalTrades}, W/L=${state.wins}/${state.losses}`);
-      auditLog({ type: 'STATE_LOADED', bankroll: state.bankroll, totalTrades: state.totalTrades, wins: state.wins, losses: state.losses });
+      // Ensure peakBankroll is at least current bankroll (handles upgrades from older state files)
+      if (!Number.isFinite(state.peakBankroll) || state.peakBankroll < state.bankroll) {
+        state.peakBankroll = state.bankroll;
+      }
+
+      log.info(`State loaded: bankroll=$${state.bankroll.toFixed(2)}, peak=$${state.peakBankroll.toFixed(2)}, trades=${state.totalTrades}, W/L=${state.wins}/${state.losses}`);
+      auditLog({ type: 'STATE_LOADED', bankroll: state.bankroll, peakBankroll: state.peakBankroll, totalTrades: state.totalTrades, wins: state.wins, losses: state.losses });
     } else {
       log.info(`No state file found, starting fresh with $${state.bankroll.toFixed(2)} bankroll`);
     }
@@ -267,6 +295,10 @@ export function settleTrade(won) {
   if (won) {
     state.wins++;
     state.consecutiveLosses = 0;
+    // Update high-water mark on winning trade
+    if (state.bankroll > state.peakBankroll) {
+      state.peakBankroll = state.bankroll;
+    }
   } else {
     state.losses++;
     state.consecutiveLosses++;
@@ -600,6 +632,15 @@ export function getBankroll() {
   return state.bankroll;
 }
 
+/**
+ * Get current drawdown from peak bankroll as a percentage.
+ * Example: peak $100, current $75 → drawdown 25%.
+ */
+export function getDrawdownPct() {
+  if (state.peakBankroll <= 0) return 0;
+  return ((state.peakBankroll - state.bankroll) / state.peakBankroll) * 100;
+}
+
 export function getDailyPnL() {
   // Add back open position's cost — deployed capital is not a realized loss
   const openCost = (state.currentPosition && !state.currentPosition.settled)
@@ -627,7 +668,11 @@ export function setBankroll(value) {
   if (value === 0) log.warn('Bankroll set to $0 — bot will not place new trades');
   const prev = state.bankroll;
   state.bankroll = roundMoney(value);
-  auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, source: 'dashboard' });
+  // Update high-water mark if bankroll increased
+  if (state.bankroll > state.peakBankroll) {
+    state.peakBankroll = state.bankroll;
+  }
+  auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, peakBankroll: state.peakBankroll, source: 'dashboard' });
   saveState();
   log.info(`Bankroll updated to $${state.bankroll.toFixed(2)} (via dashboard)`);
 }
@@ -666,6 +711,7 @@ export function setLastSettled(slug, ts) {
 export function getStats() {
   return {
     bankroll: state.bankroll,
+    peakBankroll: state.peakBankroll,
     availableBankroll: getAvailableBankroll(),
     totalTrades: state.totalTrades,
     wins: state.wins,
@@ -675,6 +721,7 @@ export function getStats() {
     consecutiveLosses: state.consecutiveLosses,
     dailyPnL: getDailyPnL(),
     dailyPnLPct: getDailyPnLPct(),
+    drawdownPct: getDrawdownPct(),
     hasPosition: state.currentPosition !== null && !state.currentPosition?.settled,
     pendingCost: state.pendingCost,
   };

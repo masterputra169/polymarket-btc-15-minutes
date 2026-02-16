@@ -14,6 +14,7 @@ import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { getStats } from '../trading/positionTracker.js';
 import { pauseBot } from '../loop.js';
+import { notify } from './notifier.js';
 
 const log = createLogger('Monitor');
 
@@ -83,11 +84,13 @@ function checkWinRate() {
   if (wr < BOT_CONFIG.winRatePauseThreshold) {
     log.error(`WIN RATE CRITICAL: ${tag} — below ${(BOT_CONFIG.winRatePauseThreshold * 100).toFixed(0)}% pause threshold. Auto-pausing bot.`);
     pauseBot('perfMonitor: win rate critical');
+    notify('critical', `Win rate CRITICAL: ${tag} — bot auto-paused`);
     return;
   }
 
   if (wr < BOT_CONFIG.winRateWarnThreshold) {
     log.warn(`WIN RATE LOW: ${tag} — below ${(BOT_CONFIG.winRateWarnThreshold * 100).toFixed(0)}% warning threshold`);
+    notify('warn', `Win rate LOW: ${tag}`);
   } else {
     log.info(`Win rate: ${tag} — OK`);
   }

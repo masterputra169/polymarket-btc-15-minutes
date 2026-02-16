@@ -33,7 +33,14 @@ const BOT_CONFIG = {
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 20, 1, 100),
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
+  maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),
   logLevel: process.env.LOG_LEVEL || 'info',
+
+  // External notifications (optional — no-ops if not set)
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN || '',
+  telegramChatId: process.env.TELEGRAM_CHAT_ID || '',
+  discordWebhookUrl: process.env.DISCORD_WEBHOOK_URL || '',
+  telegramNotifyTrades: process.env.TELEGRAM_NOTIFY_TRADES === 'true',
 
   // File paths for persistence
   dataDir: resolve(__dirname, '..', 'data'),

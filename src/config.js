@@ -7,7 +7,7 @@ export const WS_POLYMARKET_LIVE = { pingMs: 15_000, heartbeatDeadMs: 30_000 };
 export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStaleMs: 20_000 };
 
 export const BET_SIZING = {
-  KELLY_FRACTION: 0.25,
+  KELLY_FRACTION: 0.15,
   MAX_BET_PCT: 0.08,
   MIN_BET_PCT: 0.005,
   MIN_EDGE_FOR_BET: 0.03,

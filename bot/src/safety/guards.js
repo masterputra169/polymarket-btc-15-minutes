@@ -18,7 +18,7 @@ const EPSILON = 1e-9;
  * Circuit breaker — should the bot halt trading?
  * @returns {{ halt: boolean, reason: string }}
  */
-export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
+export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownPct }) {
   // Validate inputs — missing data means we can't verify safety
   if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(bankroll) || !Number.isFinite(consecutiveLosses)) {
     return { halt: true, reason: 'Circuit breaker inputs invalid (missing bankroll, PnL, or loss streak data)' };
@@ -26,6 +26,13 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses }) {
 
   if (dailyPnLPct <= -(BOT_CONFIG.maxDailyLossPct - EPSILON)) {
     const reason = `Daily loss ${dailyPnLPct.toFixed(1)}% exceeds max ${BOT_CONFIG.maxDailyLossPct}%`;
+    log.error(`CIRCUIT BREAKER: ${reason}`);
+    return { halt: true, reason };
+  }
+
+  // Max drawdown from peak bankroll (catches slow multi-day bleed)
+  if (Number.isFinite(drawdownPct) && drawdownPct >= BOT_CONFIG.maxDrawdownPct - EPSILON) {
+    const reason = `Drawdown ${drawdownPct.toFixed(1)}% from peak exceeds max ${BOT_CONFIG.maxDrawdownPct}%`;
     log.error(`CIRCUIT BREAKER: ${reason}`);
     return { halt: true, reason };
   }

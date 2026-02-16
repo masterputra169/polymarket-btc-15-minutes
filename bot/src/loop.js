@@ -117,6 +117,7 @@ import {
   getLastSettled,
   setLastSettled,
   getLastSettlementMs,
+  getDrawdownPct,
   saveState as savePositionState,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
@@ -145,6 +146,9 @@ import {
 
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
+
+// External notifications (Telegram/Discord)
+import { notify } from './monitoring/notifier.js';
 
 // Live Polymarket data logger (writes CSV to backtest/ml_training/)
 import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.js';
@@ -203,6 +207,7 @@ let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
 let pendingUsdcSync = null;
+let startupUsdcChecked = false; // One-time startup USDC balance reconciliation
 
 // ── Double-settlement guard ──
 // Persisted via positionTracker (getLastSettled/setLastSettled) to survive bot restarts.
@@ -346,9 +351,11 @@ export async function pollOnce() {
       dailyPnLPct: getDailyPnLPct(),
       bankroll: getBankroll(),
       consecutiveLosses: getConsecutiveLosses(),
+      drawdownPct: getDrawdownPct(),
     });
     if (haltCheck.halt) {
       log.warn(`HALTED: ${haltCheck.reason}`);
+      notify('critical', `CIRCUIT BREAKER: ${haltCheck.reason} | Bankroll: $${getBankroll().toFixed(2)}`);
       broadcast({ halted: true, haltReason: haltCheck.reason, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
       return;
     }
@@ -375,6 +382,33 @@ export async function pollOnce() {
             log.info('Position unwound after stale order cancel');
           }
         }
+      }
+    }
+
+    // ── 1c. Startup USDC balance reconciliation (runs once) ──
+    if (!startupUsdcChecked && isClientReady()) {
+      startupUsdcChecked = true;
+      try {
+        const result = await getUsdcBalance();
+        if (result) {
+          const localBankroll = getBankroll();
+          const onChain = result.balance;
+          const drift = Math.abs(localBankroll - onChain);
+          log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
+          const pos = getCurrentPosition();
+          const hasPos = pos && !pos.settled;
+          if (drift > 5 && !hasPos) {
+            log.warn(`Startup USDC auto-sync: drift $${drift.toFixed(2)} > $5 (no position) — syncing`);
+            pendingUsdcSync = onChain;
+          } else if (drift > 5 && hasPos) {
+            log.error(`Startup USDC DRIFT: $${drift.toFixed(2)} with open position — manual intervention may be needed`);
+            notify('warn', `Startup USDC drift: $${drift.toFixed(2)} (local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)}) with open position`);
+          } else if (drift > 1) {
+            log.warn(`Startup USDC drift: $${drift.toFixed(2)} (minor, will sync on next idle cycle)`);
+          }
+        }
+      } catch (err) {
+        log.debug(`Startup USDC check failed: ${err.message}`);
       }
     }
 
@@ -414,6 +448,9 @@ export async function pollOnce() {
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
           });
+          if (BOT_CONFIG.telegramNotifyTrades) {
+            notify('info', `✅ ARB WIN | P&L: +$${arbPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`, { key: 'trade:settle' });
+          }
         } else {
           // Oracle-based settlement: query CLOB for definitive resolution
           const oracleConditionId = pos.conditionId ?? currentConditionId;
@@ -425,18 +462,22 @@ export async function pollOnce() {
               log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
             }
           }
+          const pnl = won ? (pos.size - pos.cost) : -pos.cost;
           log.info(`Position expired — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
           pendingUsdcSync = null; // Invalidate any in-flight USDC sync (stale pre-settlement balance)
           clearEntrySnapshot();
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
-            pnl: won ? (pos.size - pos.cost) : -pos.cost,
+            pnl,
             exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
           // Settle feedback predictions using oracle result (not Binance price)
           if (outcome) settlePrediction(pos.marketSlug, outcome);
+          if (BOT_CONFIG.telegramNotifyTrades) {
+            notify('info', `${won ? '✅ WIN' : '❌ LOSS'}: ${pos.side} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | $${getBankroll().toFixed(2)}`, { key: 'trade:settle' });
+          }
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -639,6 +680,9 @@ export async function pollOnce() {
             outcome: 'WIN', pnl: arbPnl,
             exitData: { btcPrice: currentBtcPrice, priceToBeat: ptbValue },
           });
+          if (BOT_CONFIG.telegramNotifyTrades) {
+            notify('info', `✅ ARB WIN | P&L: +$${arbPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`, { key: 'trade:settle' });
+          }
         } else {
           // Oracle-based settlement: query CLOB for definitive resolution
           const oracleConditionId = pos.conditionId ?? currentConditionId;
@@ -650,18 +694,22 @@ export async function pollOnce() {
               log.warn(`Settlement UNCERTAIN: BTC $${currentBtcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
             }
           }
+          const pnl = won ? (pos.size - pos.cost) : -pos.cost;
           log.info(`Position settled on switch — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
           settleTrade(won);
           pendingUsdcSync = null; // Invalidate any in-flight USDC sync (stale pre-settlement balance)
           clearEntrySnapshot();
           writeJournalEntry({
             outcome: won ? 'WIN' : 'LOSS',
-            pnl: won ? (pos.size - pos.cost) : -pos.cost,
+            pnl,
             exitData: { outcome, source, btcPrice: currentBtcPrice, priceToBeat: ptbValue, priceSource },
           });
           if (!won) recordLoss();
           // Settle feedback predictions using oracle result (not Binance price)
           if (outcome) settlePrediction(pos.marketSlug, outcome);
+          if (BOT_CONFIG.telegramNotifyTrades) {
+            notify('info', `${won ? '✅ WIN' : '❌ LOSS'}: ${pos.side} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | $${getBankroll().toFixed(2)}`, { key: 'trade:settle' });
+          }
         }
         // Record for double-settlement guard (persisted to state.json)
         setLastSettled(pos.marketSlug, Date.now());
@@ -1039,6 +1087,7 @@ export async function pollOnce() {
             recordLoss();
             tiltMarketsLeft = TILT_MARKETS + 1;
             log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+            notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
           }
         } else {
           recordSellAttempt();
@@ -1056,6 +1105,7 @@ export async function pollOnce() {
               recordLoss();
               tiltMarketsLeft = TILT_MARKETS + 1;
               log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
+              notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
             }
           } catch (err) {
             log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
@@ -1335,6 +1385,9 @@ export async function pollOnce() {
               mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
             });
           } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
+          if (BOT_CONFIG.telegramNotifyTrades) {
+            notify('info', `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares}sh ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
+          }
         } else {
           try {
             const orderResult = await placeBuyOrder({
@@ -1382,6 +1435,10 @@ export async function pollOnce() {
                 mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
               });
             } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
+            if (BOT_CONFIG.telegramNotifyTrades) {
+              const cost = actualCost ?? (actualPrice * actualSize);
+              notify('info', `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize}sh ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${getBankroll().toFixed(2)}`, { key: 'trade:entry' });
+            }
           } catch (err) {
             setPendingCost(0); // C6: Release pending reservation on failure
             log.error(`Order failed: ${err.message}`);
