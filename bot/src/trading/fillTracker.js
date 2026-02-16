@@ -7,6 +7,11 @@
  * - Adverse selection (quick fills often mean you got picked off)
  *
  * Tracks pending orders, detects fills/timeouts, computes rolling fill rate.
+ *
+ * CRITICAL SAFETY PRINCIPLE: Default to "assumed filled" (conservative).
+ * Unwinding a REAL position = permanent loss (shares exist on-chain but untracked).
+ * Tracking a phantom position = minor cost (settles at expiry as a loss).
+ * Only mark "rejected" with STRONG evidence (multiple failed verifications over 20s+).
  */
 
 import { getOpenOrders, cancelOrder, getTradeHistory } from './clobClient.js';
@@ -19,25 +24,44 @@ const { FILL_TIMEOUT_MS } = EXECUTION;
 const MAX_HISTORY = 50;
 const ADVERSE_SELECTION_MS = 5_000; // filled in <5s = likely adverse
 
+// Fill verification timing — conservative to prevent false rejections
+const FILL_VERIFY_FIRST_CHECK_MS = 5_000;  // Wait 5s before first trade history check
+const FILL_VERIFY_DEADLINE_MS = 20_000;     // Give up verifying after 20s
+const FILL_VERIFY_MIN_ATTEMPTS = 3;         // Need 3+ failed checks before concluding rejected
+
 // ── Module state ──
 // M3: Support multiple concurrent pending orders (e.g. arb legs)
-let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, side, placedAt }
+let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, side, placedAt, confirmed, verifyAttempts }
 let fillHistory = [];            // last N fills
 let fillRate = 1.0;              // rolling fill rate (initially optimistic)
 
 /**
  * Record a newly placed order for tracking.
  * M3: Supports concurrent orders — each tracked independently by orderId.
+ *
+ * @param {string} orderId
+ * @param {Object} info - Order details
+ * @param {boolean} [info.confirmed] - If true, CLOB response included fill data (makingAmount/takingAmount).
+ *   This is direct proof of fill — skip trade history verification entirely.
  */
-export function trackOrderPlacement(orderId, { tokenId, price, size, side }) {
-  pendingOrders.set(orderId, { orderId, tokenId, price, size, side, placedAt: Date.now() });
-  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price} (${pendingOrders.size} pending)`);
+export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false }) {
+  pendingOrders.set(orderId, {
+    orderId, tokenId, price, size, side,
+    placedAt: Date.now(),
+    confirmed,         // CLOB response had fill data → skip verification
+    verifyAttempts: 0, // Number of trade history checks attempted
+  });
+  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price} confirmed=${confirmed} (${pendingOrders.size} pending)`);
 }
 
 /**
  * Check if pending orders have been filled or should be cancelled.
  * M3: Checks ALL pending orders, returns array of results.
- * Called every poll (~2s) — NON-BLOCKING async check.
+ * Called every poll (~500ms) — NON-BLOCKING async check.
+ *
+ * SAFETY: Uses multi-attempt verification with conservative defaults.
+ * Only marks "rejected" after FILL_VERIFY_MIN_ATTEMPTS failed checks
+ * over FILL_VERIFY_DEADLINE_MS. Otherwise assumes filled.
  *
  * @returns {null | Array<{ orderId, filled: boolean, cancelled?: boolean, timeToFill?: number, adverseSelection?: boolean }>}
  */
@@ -56,76 +80,97 @@ export async function checkPendingFill() {
     for (const [orderId, pending] of pendingOrders) {
       const elapsed = Date.now() - pending.placedAt;
 
-      if (!openIds.has(orderId) && elapsed < 3000) {
-        // M9: Too early to conclude — FOK orders disappear immediately on reject/expire too.
-        // Wait 3s (was 2s) before inferring fill. With FOK order type, rejected orders
-        // vanish from open orders just like filled ones. 3s gives API time to propagate.
+      if (openIds.has(orderId)) {
+        // Order still open — check for stale timeout
+        if (elapsed > FILL_TIMEOUT_MS) {
+          try {
+            await cancelOrder(orderId);
+            log.warn(`Stale order cancelled after ${(elapsed / 1000).toFixed(0)}s: ${orderId}`);
+          } catch (err) {
+            log.warn(`Failed to cancel stale order: ${err.message}`);
+          }
+          recordFill({ orderId, filled: false, timeToFill: elapsed, adverseSelection: false });
+          pendingOrders.delete(orderId);
+          results.push({ orderId, filled: false, cancelled: true });
+        }
+        // else: still open, still pending — check next poll
         continue;
       }
 
-      if (!openIds.has(orderId)) {
-        // M9: Order not in open orders after 3s. With FOK, this could be:
-        // 1. Filled (most likely if order was valid + liquidity existed)
-        // 2. Rejected/expired (FOK that couldn't fill immediately)
-        // Verify via trade history API before confirming fill.
+      // Order NOT in open orders — could be filled or rejected (FOK)
+
+      // ── Fast path: CLOB response had fill data → confirmed immediately ──
+      if (pending.confirmed) {
         const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
-        let verified = false;
-        let rejected = false;
-
-        try {
-          const trades = await Promise.race([
-            getTradeHistory({ assetId: pending.tokenId, after: pending.placedAt - 5000 }),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('trade history timeout')), 5000))
-          ]);
-          // Match by tokenId + time window + price proximity
-          const matchingTrade = Array.isArray(trades) && trades.find(t => {
-            const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
-            const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
-            // H10: Add upper time bound (60s after placement) to prevent matching old trades
-            const inWindow = matchTime >= pending.placedAt - 5000 && matchTime <= pending.placedAt + 60000;
-            // H10: Price proximity check — fill price should be near order price (±5%)
-            const tradePrice = parseFloat(t.price ?? t.fill_price ?? 0);
-            const priceOk = !tradePrice || Math.abs(tradePrice - pending.price) / pending.price < 0.05;
-            return assetMatch && inWindow && priceOk;
-          });
-
-          if (matchingTrade) {
-            verified = true;
-            log.info(`Order ${orderId} fill CONFIRMED via trade history (${(elapsed / 1000).toFixed(1)}s)`);
-          } else {
-            rejected = true;
-            log.warn(`Order ${orderId} NOT FOUND in trade history after ${(elapsed / 1000).toFixed(1)}s — likely FOK rejection`);
-          }
-        } catch (err) {
-          // API error: fall back to assume filled (conservative — same as old behavior)
-          log.debug(`Trade history check failed (${err.message}) — assuming filled`);
-        }
-
-        const fill = { orderId, filled: !rejected, rejected, verified, timeToFill: elapsed, adverseSelection: !rejected && adverseSelection };
+        const fill = { orderId, filled: true, rejected: false, verified: true, timeToFill: elapsed, adverseSelection };
         recordFill(fill);
-
-        if (!rejected) {
-          log.info(
-            `Order ${orderId} ${verified ? 'verified' : 'assumed'} filled (${(elapsed / 1000).toFixed(1)}s)` +
-            (adverseSelection ? ' [ADVERSE SELECTION WARNING]' : '')
-          );
-        }
-
+        log.info(`Order ${orderId} fill CONFIRMED via CLOB response data (${(elapsed / 1000).toFixed(1)}s)${adverseSelection ? ' [ADVERSE]' : ''}`);
         pendingOrders.delete(orderId);
         results.push(fill);
-      } else if (elapsed > FILL_TIMEOUT_MS) {
-        // Stale order — cancel it
-        try {
-          await cancelOrder(orderId);
-          log.warn(`Stale order cancelled after ${(elapsed / 1000).toFixed(0)}s: ${orderId}`);
-        } catch (err) {
-          log.warn(`Failed to cancel stale order: ${err.message}`);
-        }
-        recordFill({ orderId, filled: false, timeToFill: elapsed, adverseSelection: false });
-        pendingOrders.delete(orderId);
-        results.push({ orderId, filled: false, cancelled: true });
+        continue;
       }
-      // else: still pending, check next poll
+
+      // ── Wait before first trade history check ──
+      if (elapsed < FILL_VERIFY_FIRST_CHECK_MS) {
+        continue;
+      }
+
+      // ── Trade history verification (multi-attempt) ──
+      const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
+      let tradeFound = false;
+      let apiError = false;
+
+      try {
+        const trades = await Promise.race([
+          getTradeHistory({ assetId: pending.tokenId, after: pending.placedAt - 5000 }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('trade history timeout')), 5000))
+        ]);
+        // Match by tokenId + time window + price proximity
+        const matchingTrade = Array.isArray(trades) && trades.find(t => {
+          const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
+          const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
+          const inWindow = matchTime >= pending.placedAt - 5000 && matchTime <= pending.placedAt + 60000;
+          const tradePrice = parseFloat(t.price ?? t.fill_price ?? 0);
+          const priceOk = !tradePrice || Math.abs(tradePrice - pending.price) / pending.price < 0.05;
+          return assetMatch && inWindow && priceOk;
+        });
+
+        if (matchingTrade) {
+          tradeFound = true;
+        }
+      } catch (err) {
+        apiError = true;
+        log.debug(`Trade history check failed (${err.message}) — will retry or assume filled`);
+      }
+
+      pending.verifyAttempts = (pending.verifyAttempts || 0) + 1;
+
+      if (tradeFound) {
+        // ── Confirmed via trade history ──
+        const fill = { orderId, filled: true, rejected: false, verified: true, timeToFill: elapsed, adverseSelection };
+        recordFill(fill);
+        log.info(`Order ${orderId} fill CONFIRMED via trade history (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s)${adverseSelection ? ' [ADVERSE]' : ''}`);
+        pendingOrders.delete(orderId);
+        results.push(fill);
+      } else if (!apiError && elapsed >= FILL_VERIFY_DEADLINE_MS && pending.verifyAttempts >= FILL_VERIFY_MIN_ATTEMPTS) {
+        // ── Strong evidence of rejection: multiple failed checks, no API errors, past deadline ──
+        const fill = { orderId, filled: false, rejected: true, verified: false, timeToFill: elapsed, adverseSelection: false };
+        recordFill(fill);
+        log.warn(`Order ${orderId} REJECTED: not found after ${pending.verifyAttempts} checks over ${(elapsed / 1000).toFixed(1)}s`);
+        pendingOrders.delete(orderId);
+        results.push(fill);
+      } else if (elapsed >= FILL_VERIFY_DEADLINE_MS * 2) {
+        // ── Absolute deadline (40s): assume filled (conservative safety net) ──
+        // If API keeps failing and we can't verify, better to track phantom than lose real position
+        const fill = { orderId, filled: true, rejected: false, verified: false, timeToFill: elapsed, adverseSelection: false };
+        recordFill(fill);
+        log.warn(`Order ${orderId} ASSUMED FILLED: verification inconclusive after ${(elapsed / 1000).toFixed(1)}s (${pending.verifyAttempts} attempts, API errors present) — defaulting to filled for safety`);
+        pendingOrders.delete(orderId);
+        results.push(fill);
+      } else {
+        // ── Keep checking on next poll ──
+        log.debug(`Order ${orderId} unverified (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s) — will retry`);
+      }
     }
   } catch (err) {
     // API error — don't kill orders, just skip this check
@@ -137,7 +182,8 @@ export async function checkPendingFill() {
   const evictNow = Date.now();
   for (const [id, order] of pendingOrders) {
     if (evictNow - order.placedAt > STALE_ORDER_MS) {
-      log.warn(`Evicting stale pending order ${id} (${Math.round((evictNow - order.placedAt) / 1000)}s old)`);
+      log.warn(`Evicting stale pending order ${id} (${Math.round((evictNow - order.placedAt) / 1000)}s old) — assuming filled`);
+      recordFill({ orderId: id, filled: true, verified: false, timeToFill: evictNow - order.placedAt, adverseSelection: false });
       pendingOrders.delete(id);
     }
   }
@@ -177,7 +223,7 @@ export function getAdverseSelectionRate() {
 /**
  * Register an externally-discovered pending order for fill tracking.
  * Used by startup reconciliation to inject CLOB open orders found at boot.
- * Uses Date.now() as placedAt to prevent premature fill inference (the 3s
+ * Uses Date.now() as placedAt to prevent premature fill inference (the 5s
  * minimum-elapsed guard in checkPendingFill won't false-positive).
  */
 export function registerPendingOrder(orderId, { tokenId, price, size, side }) {
@@ -185,7 +231,7 @@ export function registerPendingOrder(orderId, { tokenId, price, size, side }) {
     log.debug(`registerPendingOrder: ${orderId} already tracked — skipping`);
     return;
   }
-  pendingOrders.set(orderId, { orderId, tokenId, price, size, side, placedAt: Date.now() });
+  pendingOrders.set(orderId, { orderId, tokenId, price, size, side, placedAt: Date.now(), confirmed: false, verifyAttempts: 0 });
   log.info(`Registered existing order for tracking: ${orderId} (${side} ${size}@${price})`);
 }
 

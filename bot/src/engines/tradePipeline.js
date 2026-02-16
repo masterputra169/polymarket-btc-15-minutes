@@ -107,9 +107,11 @@ export async function executeArbitrage({
       } catch (recErr) {
         log.error(`Arb recording failed (trades placed but not tracked): ${recErr.message}`);
       }
-      // Track fills for both orders
-      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP' });
-      if (downOrderId) deps.trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN' });
+      // Track fills for both orders — mark confirmed if CLOB response had fill data
+      const upConfirmed = !!(upResult?.makingAmount || upResult?.takingAmount);
+      const downConfirmed = !!(downResult?.makingAmount || downResult?.takingAmount);
+      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP', confirmed: upConfirmed });
+      if (downOrderId) deps.trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN', confirmed: downConfirmed });
     } catch (downErr) {
       // ONE-LEGGED: Only UP bought, DOWN failed
       arbLeg2Failed = true;
@@ -128,7 +130,7 @@ export async function executeArbitrage({
       });
       deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
       deps.recordTradeForMarket(marketSlug);
-      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP' });
+      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP', confirmed: !!(upResult?.makingAmount || upResult?.takingAmount) });
       deps.captureEntrySnapshot({
         side: 'UP', tokenPrice: arb.askUp, btcPrice: lastPrice,
         priceToBeat: priceToBeat.value, marketSlug,
@@ -320,7 +322,8 @@ export async function executeDirectionalTrade({
     });
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     if (orderId) {
-      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide });
+      const fillConfirmed = !!(orderResult?.makingAmount || orderResult?.takingAmount);
+      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed });
     }
     deps.recordTradeForMarket(marketSlug);
     deps.captureEntrySnapshot(entryData);
