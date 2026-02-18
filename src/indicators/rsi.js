@@ -8,6 +8,12 @@ export { sma, slopeLast } from './math.js';
 
 /**
  * Compute RSI using Wilder's smoothing method.
+ *
+ * RSI SMOOTHING FIX: Previously only used the last (period+1) closes with SMA
+ * (no exponential smoothing), while computeRsiSeries() applied full Wilder
+ * smoothing — causing a spot vs series mismatch. Now uses all available data
+ * with Wilder's smoothing to match the series calculation exactly.
+ *
  * @param {number[]} closes - array of close prices
  * @param {number} period - RSI period (default 8)
  * @returns {number|null} RSI value 0-100, or null if insufficient data
@@ -18,15 +24,26 @@ export function computeRsi(closes, period = 8) {
   let avgGain = 0;
   let avgLoss = 0;
 
-  // Initial average over first `period` changes
+  // Initial SMA seed over first `period` changes
   for (let i = 1; i <= period; i++) {
-    const change = closes[closes.length - period - 1 + i] - closes[closes.length - period - 1 + i - 1];
+    const change = closes[i] - closes[i - 1];
     if (change > 0) avgGain += change;
     else avgLoss += Math.abs(change);
   }
 
   avgGain /= period;
   avgLoss /= period;
+
+  // Apply Wilder's exponential smoothing for all subsequent data points
+  // (matching computeRsiSeries exactly)
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    const gain = change > 0 ? change : 0;
+    const loss = change < 0 ? Math.abs(change) : 0;
+
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+  }
 
   if (avgGain === 0 && avgLoss === 0) return 50;
   if (avgLoss === 0) return 100;

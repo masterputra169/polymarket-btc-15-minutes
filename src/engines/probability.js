@@ -8,7 +8,7 @@
  * 8. Feedback confidence adjustment (recent accuracy tracking)
  *
  * WEIGHT TABLE:
- *   Price to PTB distance:    +2..5 (time-adaptive: 2 at 15min, 5 at 0min)
+ *   Price to PTB distance:    +1.5..5 (constant — time decay via applyTimeAwareness)
  *   PTB momentum:             +1.5  (price moving away/toward PTB)
  *   Delta momentum (1m/3m):   +3
  *   Orderbook imbalance:      +2    (real money signal)
@@ -66,17 +66,10 @@ export function scoreDirection({
     return (m != null && Number.isFinite(m)) ? +(baseWeight * m).toFixed(2) : baseWeight;
   };
 
-  // ═══ 1. DISTANCE TO PRICE TO BEAT (weight: 2-5, TIME-ADAPTIVE) ═══
-  // Near expiry PTB distance is highly predictive (less time to reverse).
-  // Far from expiry it's weaker (price can still move significantly).
-  //   15min left → timeScale 0.4 → max weight 2.0
-  //   10min left → timeScale 0.6 → max weight 3.0
-  //    5min left → timeScale 0.8 → max weight 4.0
-  //    1min left → timeScale 0.96 → max weight 4.8
-  //    0min left → timeScale 1.0 → max weight 5.0
-  const ptbTimeScale = minutesLeft != null && Number.isFinite(minutesLeft)
-    ? Math.min(1, 0.4 + 0.6 * Math.max(0, 1 - minutesLeft / 15))
-    : 0.7; // default when time unknown
+  // ═══ 1. DISTANCE TO PRICE TO BEAT (weight: 1.5-5) ═══
+  // Audit M fix: removed ptbTimeScale to fix double-count with applyTimeAwareness().
+  // Both were scaling PTB by time remaining — net effect was double-decay near expiry.
+  // Now PTB uses constant base weights; applyTimeAwareness() handles global time decay.
 
   if (priceToBeat !== null && price !== null && priceToBeat > 0) {
     const distance = price - priceToBeat;
@@ -85,25 +78,24 @@ export function scoreDirection({
     // Use session-adaptive thresholds if available, else defaults
     const thr = volProfile?.ptbThresholds ?? { strong: 0.003, moderate: 0.0015, slight: 0.0005 };
 
-    // Base weights scaled by time remaining, then by signal modifier
-    const wStrong = mod('ptbDistance', 5 * ptbTimeScale);
-    const wModerate = mod('ptbDistance', 3 * ptbTimeScale);
-    const wSlight = mod('ptbDistance', 1.5 * ptbTimeScale);
+    const wStrong = mod('ptbDistance', 5);
+    const wModerate = mod('ptbDistance', 3);
+    const wSlight = mod('ptbDistance', 1.5);
 
     if (Math.abs(distPct) > thr.strong) {
       if (distance > 0) upScore += wStrong;
       else downScore += wStrong;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'STRONG UP' : 'STRONG DOWN', weight: +wStrong.toFixed(1), distPct, timeScale: ptbTimeScale };
+      breakdown.ptbDistance = { signal: distance > 0 ? 'STRONG UP' : 'STRONG DOWN', weight: +wStrong.toFixed(1), distPct };
     } else if (Math.abs(distPct) > thr.moderate) {
       if (distance > 0) upScore += wModerate;
       else downScore += wModerate;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'UP' : 'DOWN', weight: +wModerate.toFixed(1), distPct, timeScale: ptbTimeScale };
+      breakdown.ptbDistance = { signal: distance > 0 ? 'UP' : 'DOWN', weight: +wModerate.toFixed(1), distPct };
     } else if (Math.abs(distPct) > thr.slight) {
       if (distance > 0) upScore += wSlight;
       else downScore += wSlight;
-      breakdown.ptbDistance = { signal: distance > 0 ? 'LEAN UP' : 'LEAN DOWN', weight: +wSlight.toFixed(1), distPct, timeScale: ptbTimeScale };
+      breakdown.ptbDistance = { signal: distance > 0 ? 'LEAN UP' : 'LEAN DOWN', weight: +wSlight.toFixed(1), distPct };
     } else {
-      breakdown.ptbDistance = { signal: 'NEUTRAL', weight: 0, distPct, timeScale: ptbTimeScale };
+      breakdown.ptbDistance = { signal: 'NEUTRAL', weight: 0, distPct };
     }
 
     // ═══ 1b. PTB MOMENTUM (weight: 1.5) ═══
@@ -421,11 +413,25 @@ export function scoreDirection({
     label: volProfile?.label ?? '',
   };
 
-  // ═══ 13. FEEDBACK ACCURACY ADJUSTMENT — NEW ═══
-  const fbMultiplier = feedbackStats?.confidenceMultiplier ?? 1.0;
+  // ═══ 13. FEEDBACK ACCURACY ADJUSTMENT ═══
+  // Audit fix M: Use accuracy-only multiplier for probability scoring.
+  // Win/loss streak effects should only affect bet SIZING (via asymmetricBet.js),
+  // not probability estimation — applying streaks to both is double-counting.
+  const fbMultiplierRaw = feedbackStats?.confidenceMultiplier ?? 1.0;
+  const fbAccuracy = feedbackStats?.accuracy ?? null;
+  // Strip streak component: compute accuracy-only multiplier directly
+  let fbMultiplier;
+  if (fbAccuracy == null) fbMultiplier = 1.0;
+  else if (fbAccuracy >= 0.70) fbMultiplier = 1.15;
+  else if (fbAccuracy >= 0.55) fbMultiplier = 1.05;
+  else if (fbAccuracy >= 0.45) fbMultiplier = 1.0;
+  else if (fbAccuracy >= 0.35) fbMultiplier = 0.85;
+  else fbMultiplier = 0.70;
+  // Clamp same as stats.js
+  fbMultiplier = Math.max(0.50, Math.min(1.25, fbMultiplier));
   breakdown.feedback = {
     multiplier: fbMultiplier,
-    accuracy: feedbackStats?.accuracy ?? null,
+    accuracy: fbAccuracy,
     label: feedbackStats?.label ?? 'No data',
   };
 

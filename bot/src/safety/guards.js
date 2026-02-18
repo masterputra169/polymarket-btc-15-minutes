@@ -53,6 +53,32 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownP
 }
 
 /**
+ * Audit fix M: Emergency cut-loss check — circuit breaker re-evaluated while position is open.
+ * Returns true if drawdown/daily loss exceeds thresholds, meaning caller should initiate cut-loss.
+ * @returns {{ shouldCut: boolean, reason: string }}
+ */
+export function shouldEmergencyCut({ dailyPnLPct, drawdownPct }) {
+  if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(drawdownPct)) {
+    return { shouldCut: false, reason: '' };
+  }
+  // Trigger emergency cut at 90% of circuit breaker thresholds (give margin to actually execute)
+  const dailyThreshold = BOT_CONFIG.maxDailyLossPct * 0.90;
+  const drawdownThreshold = BOT_CONFIG.maxDrawdownPct * 0.90;
+
+  if (dailyPnLPct <= -(dailyThreshold - EPSILON)) {
+    const reason = `Emergency: daily loss ${dailyPnLPct.toFixed(1)}% approaching circuit breaker (${BOT_CONFIG.maxDailyLossPct}%)`;
+    log.warn(`EMERGENCY CUT: ${reason}`);
+    return { shouldCut: true, reason };
+  }
+  if (drawdownPct >= drawdownThreshold - EPSILON) {
+    const reason = `Emergency: drawdown ${drawdownPct.toFixed(1)}% approaching circuit breaker (${BOT_CONFIG.maxDrawdownPct}%)`;
+    log.warn(`EMERGENCY CUT: ${reason}`);
+    return { shouldCut: true, reason };
+  }
+  return { shouldCut: false, reason: '' };
+}
+
+/**
  * Validate a trade before execution.
  * @returns {{ valid: boolean, reason: string }}
  */

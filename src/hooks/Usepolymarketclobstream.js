@@ -309,6 +309,8 @@ export function usePolymarketClobStream() {
         wsRef.current = null;
         subscribedRef.current = false;
         stopTimers();
+        // Invalidate cached orderbook — stale data must not be used after disconnect
+        clearPrices();
 
         // ═══ FIX 1: Skip auto-reconnect if WE closed it (forceReconnect handles its own) ═══
         if (intentionalCloseRef.current) {

@@ -59,8 +59,13 @@ let state = {
   lastLossTimestamp: 0,      // FINTECH: Persisted loss cooldown timestamp (survives restart)
 };
 
-// ── Sell guard: prevents dashboard sell and loop cut-loss from racing ──
+// ── Sell guard: prevents dashboard sell, cut-loss, and take-profit from racing ──
+// Audit fix H: Added 30s timeout to prevent permanent lock from hung CLOB calls.
+// ALL sell paths (cut-loss, take-profit, dashboard sell) must acquire this lock.
 let sellingInProgress = false;
+let sellLockTs = 0;
+let sellLockSource = '';  // Tracks which caller holds the lock (for dedup logging)
+const SELL_LOCK_TIMEOUT_MS = 30_000;
 
 // ── Audit log (append-only with rotation) ──
 const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -692,7 +697,13 @@ export function getBankroll() {
  */
 export function getDrawdownPct() {
   if (state.peakBankroll <= 0) return 0;
-  return roundPct(((state.peakBankroll - state.bankroll) / state.peakBankroll) * 100);
+  // Audit fix H: Include open position cost in portfolio value.
+  // Without this, placing a $5 trade on a $100 bankroll immediately shows 5% drawdown,
+  // making the circuit breaker trigger prematurely during normal operation.
+  const openCost = (state.currentPosition && !state.currentPosition.settled)
+    ? (state.currentPosition.cost ?? 0) : 0;
+  const portfolioValue = state.bankroll + openCost;
+  return roundPct(((state.peakBankroll - portfolioValue) / state.peakBankroll) * 100);
 }
 
 export function getDailyPnL() {
@@ -722,11 +733,22 @@ export function setBankroll(value) {
   if (value === 0) log.warn('Bankroll set to $0 — bot will not place new trades');
   const prev = state.bankroll;
   state.bankroll = roundMoney(value);
-  // Update high-water mark if bankroll increased
+  // Audit fix M: Only update peakBankroll proportionally for external deposits.
+  // If bankroll jumps by more than $20 without a trade, it's likely a deposit — scale peakBankroll
+  // by the same ratio so drawdown % stays consistent (deposit doesn't erase drawdown).
+  const increase = state.bankroll - prev;
   if (state.bankroll > state.peakBankroll) {
-    state.peakBankroll = state.bankroll;
+    const isLikelyDeposit = increase > 20 && !state.currentPosition;
+    if (isLikelyDeposit) {
+      // Scale peak proportionally: if depositing 50% more, peak also goes up 50%
+      const ratio = prev > 0 ? state.bankroll / prev : 1;
+      state.peakBankroll = roundMoney(state.peakBankroll * ratio);
+      log.info(`Deposit detected (+$${increase.toFixed(2)}) — peakBankroll scaled to $${state.peakBankroll.toFixed(2)} (ratio ${ratio.toFixed(3)})`);
+    } else {
+      state.peakBankroll = state.bankroll;
+    }
   }
-  auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, peakBankroll: state.peakBankroll, source: 'dashboard' });
+  auditLog({ type: 'SET_BANKROLL', prev, next: state.bankroll, peakBankroll: state.peakBankroll, source: 'dashboard', depositDetected: increase > 20 });
   saveState();
   log.info(`Bankroll updated to $${state.bankroll.toFixed(2)} (via dashboard)`);
 }
@@ -735,14 +757,33 @@ export function setBankroll(value) {
  * Sell guard: prevents dashboard sell and loop cut-loss from racing on the same position.
  * Returns true if the lock was acquired, false if a sell is already in progress.
  */
-export function acquireSellLock() {
-  if (sellingInProgress) return false;
+/**
+ * Sell guard: prevents dashboard sell, cut-loss, and take-profit from racing
+ * on the same position. ALL sell paths must acquire this lock before selling.
+ * Returns true if the lock was acquired, false if a sell is already in progress.
+ *
+ * @param {string} [source] - Identifier for the caller (for logging duplicate prevention)
+ */
+export function acquireSellLock(source = 'unknown') {
+  // Audit fix H: Auto-release after 30s to prevent deadlock from hung CLOB calls
+  if (sellingInProgress && (Date.now() - sellLockTs) < SELL_LOCK_TIMEOUT_MS) {
+    const heldMs = Date.now() - sellLockTs;
+    log.info(`Sell lock DENIED (${source}): already held by '${sellLockSource}' for ${(heldMs / 1000).toFixed(1)}s — duplicate sell prevented`);
+    return false;
+  }
+  if (sellingInProgress) {
+    log.warn(`Sell lock auto-released after ${SELL_LOCK_TIMEOUT_MS / 1000}s timeout (held by '${sellLockSource}', requested by '${source}') — possible hung CLOB call`);
+  }
   sellingInProgress = true;
+  sellLockTs = Date.now();
+  sellLockSource = source;
   return true;
 }
 
 export function releaseSellLock() {
   sellingInProgress = false;
+  sellLockTs = 0;
+  sellLockSource = '';
 }
 
 export function isSelling() {
@@ -784,6 +825,7 @@ export function _resetForTest(overrides = {}) {
     cutLossCount: overrides.cutLossCount ?? 0,
   };
   sellingInProgress = false;
+  sellLockSource = '';
 }
 
 export function getStats() {

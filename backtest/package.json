@@ -4,6 +4,8 @@
   "name": "btc-ml-pipeline",
   "description": "ML training pipeline for BTC 15-min prediction",
   "dependencies": {
-    "@tensorflow/tfjs-node": "^4.22.0"
+    "@polymarket/clob-client": "^5.2.3",
+    "@tensorflow/tfjs-node": "^4.22.0",
+    "dotenv": "^17.3.1"
   }
 }

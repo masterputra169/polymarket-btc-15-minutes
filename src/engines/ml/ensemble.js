@@ -24,13 +24,14 @@ export function ensemblePrediction(mlProbUp, mlConfidence, ruleProbUp, isHighCon
   const mlSide = mlProbUp >= 0.5;
   const ruleSide = ruleProbUp >= 0.5;
 
+  // Audit fix C5: Removed non-Bayesian agreement bonus (+3%) and conflict shrinkage (0.75x).
+  // The rule_prob_up is already an ML feature — boosting when both agree double-counts
+  // shared biases. The weighted blend via alpha already handles confidence weighting.
   let ensembleProbUp = alpha * mlProbUp + (1 - alpha) * ruleProbUp;
 
   if (mlSide === ruleSide) {
-    ensembleProbUp += (mlSide ? 1 : -1) * 0.03;
     source += '+agree';
   } else {
-    ensembleProbUp = 0.5 + (ensembleProbUp - 0.5) * 0.75;
     source += '+conflict';
   }
 

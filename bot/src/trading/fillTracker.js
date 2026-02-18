@@ -8,10 +8,14 @@
  *
  * Tracks pending orders, detects fills/timeouts, computes rolling fill rate.
  *
- * CRITICAL SAFETY PRINCIPLE: Default to "assumed filled" (conservative).
+ * CRITICAL SAFETY PRINCIPLE for BUY fills: Default to "assumed filled" (conservative).
  * Unwinding a REAL position = permanent loss (shares exist on-chain but untracked).
  * Tracking a phantom position = minor cost (settles at expiry as a loss).
  * Only mark "rejected" with STRONG evidence (multiple failed verifications over 20s+).
+ *
+ * CRITICAL SAFETY PRINCIPLE for SELL fills (cut-loss/take-profit): Default to UNCERTAIN.
+ * Assuming a sell filled when it didn't blocks cut-loss retry, stranding the position.
+ * Better to retry a sell (worst case: "not enough balance" error) than strand a position.
  */
 
 import { getOpenOrders, cancelOrder, getTradeHistory } from './clobClient.js';
@@ -34,6 +38,7 @@ const FILL_VERIFY_MIN_ATTEMPTS = 3;         // Need 3+ failed checks before conc
 let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, side, placedAt, confirmed, verifyAttempts }
 let fillHistory = [];            // last N fills
 let fillRate = 1.0;              // rolling fill rate (initially optimistic)
+let uncertainFills = [];         // Track uncertain fills for manual review (sell orders that timed out)
 
 /**
  * Record a newly placed order for tracking.
@@ -163,13 +168,27 @@ export async function checkPendingFill() {
         pendingOrders.delete(orderId);
         results.push(fill);
       } else if (elapsed >= FILL_VERIFY_DEADLINE_MS * 2) {
-        // ── Absolute deadline (40s): assume filled (conservative safety net) ──
-        // If API keeps failing and we can't verify, better to track phantom than lose real position
-        const fill = { orderId, filled: true, rejected: false, verified: false, timeToFill: elapsed, adverseSelection: false };
-        recordFill(fill);
-        log.warn(`Order ${orderId} ASSUMED FILLED: verification inconclusive after ${(elapsed / 1000).toFixed(1)}s (${pending.verifyAttempts} attempts, API errors present) — defaulting to filled for safety`);
-        pendingOrders.delete(orderId);
-        results.push(fill);
+        // ── Absolute deadline (40s) ──
+        // SELL orders: Mark as UNCERTAIN and release sell lock so cut-loss can retry.
+        // Assuming a sell filled when it didn't blocks cut-loss protection entirely.
+        // BUY orders: Assume filled (conservative — better to track phantom than lose real position).
+        const isSellOrder = pending.side === 'SELL' || pending.side === 'CUT_LOSS' || pending.side === 'TAKE_PROFIT';
+        if (isSellOrder) {
+          const fill = { orderId, filled: false, rejected: false, uncertain: true, verified: false, timeToFill: elapsed, adverseSelection: false };
+          recordFill(fill);
+          uncertainFills.push({ orderId, tokenId: pending.tokenId, price: pending.price, size: pending.size, side: pending.side, placedAt: pending.placedAt, uncertainAt: Date.now(), elapsed });
+          if (uncertainFills.length > 50) uncertainFills = uncertainFills.slice(-50);
+          log.warn(`Order ${orderId} UNCERTAIN (sell): verification inconclusive after ${(elapsed / 1000).toFixed(1)}s (${pending.verifyAttempts} attempts) — releasing sell lock for cut-loss retry`);
+          pendingOrders.delete(orderId);
+          results.push(fill);
+        } else {
+          // BUY order: assume filled (conservative safety net)
+          const fill = { orderId, filled: true, rejected: false, verified: false, timeToFill: elapsed, adverseSelection: false };
+          recordFill(fill);
+          log.warn(`Order ${orderId} ASSUMED FILLED (buy): verification inconclusive after ${(elapsed / 1000).toFixed(1)}s (${pending.verifyAttempts} attempts, API errors present) — defaulting to filled for safety`);
+          pendingOrders.delete(orderId);
+          results.push(fill);
+        }
       } else {
         // ── Keep checking on next poll ──
         log.debug(`Order ${orderId} unverified (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s) — will retry`);
@@ -246,6 +265,14 @@ export function hasPendingOrder() {
 }
 
 /**
+ * Get uncertain fills for manual review.
+ * These are sell orders that couldn't be verified within the deadline.
+ */
+export function getUncertainFills() {
+  return [...uncertainFills];
+}
+
+/**
  * Get summary for dashboard broadcast.
  */
 export function getFillTrackerStatus() {
@@ -262,6 +289,7 @@ export function getFillTrackerStatus() {
     fillRate: Math.round(fillRate * 100) / 100,
     adverseSelectionRate: Math.round(getAdverseSelectionRate() * 100) / 100,
     totalTracked: fillHistory.length,
+    uncertainFillCount: uncertainFills.length,
     lastFillTime: fillHistory.length > 0 ? fillHistory[fillHistory.length - 1].ts : null,
   };
 }

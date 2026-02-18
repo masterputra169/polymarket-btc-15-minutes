@@ -32,16 +32,25 @@ parser.add_argument('--threshold-sweep', action='store_true', help='Run sweep fr
 parser.add_argument('--bankroll', type=float, default=1000, help='Starting bankroll')
 parser.add_argument('--bet-size', type=float, default=10, help='Bet size per trade')
 parser.add_argument('--min-edge', type=float, default=0.05, help='Minimum edge to trade')
+parser.add_argument('--spread-pct', type=float, default=1.0,
+                    help='Round-trip spread cost in %% (default: 1.0 = 0.5%% each side)')
+parser.add_argument('--slippage-pct', type=float, default=0.5,
+                    help='Slippage cost in %% (default: 0.5)')
 parser.add_argument('--oos-start', type=float, default=0.85,
                     help='Fraction of data to use as OOS start (default: 0.85 = last 15%%). '
                          'Use 0.875 with --holdout-frac 0.125 for true OOS backtest.')
 args = parser.parse_args()
+
+# Transaction cost: half spread on entry + half spread on exit + slippage
+# e.g. spread=1.0%, slippage=0.5% → 1.5% round-trip cost as fraction of bet
+TXCOST_FRAC = (args.spread_pct + args.slippage_pct) / 100.0
 
 # ================================================
 # 1. LOAD DATA
 # ================================================
 print(f"\n{'='*60}")
 print(f"  Backtest P&L Simulation")
+print(f"  Transaction costs: {args.spread_pct:.1f}% spread + {args.slippage_pct:.1f}% slippage = {TXCOST_FRAC*100:.1f}% round-trip")
 print(f"{'='*60}")
 
 if not os.path.exists(args.input):
@@ -213,8 +222,14 @@ print(f"  Calibrated prob range: [{y_prob.min():.3f}, {y_prob.max():.3f}]")
 # 5. P&L SIMULATION
 # ================================================
 
-def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, bet_size, regimes=None):
-    """Simulate Polymarket trading P&L."""
+def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, bet_size,
+                  regimes=None, txcost_frac=0.0):
+    """Simulate Polymarket trading P&L with transaction costs.
+
+    Args:
+        txcost_frac: Round-trip transaction cost as a fraction of bet_size.
+                     e.g. 0.015 = 1.5% (0.5% spread each side + 0.5% slippage).
+    """
     balance = bankroll
     trades = 0
     wins = 0
@@ -224,9 +239,13 @@ def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, b
     pnl_history = []
     gross_win = 0
     gross_loss = 0
+    total_txcost = 0
 
     # Per-regime tracking
     regime_stats = {}
+
+    # Per-trade cost deducted on every trade
+    trade_cost = txcost_frac * bet_size
 
     for i in range(len(y_prob)):
         prob_up = y_prob[i]
@@ -238,16 +257,20 @@ def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, b
         entry_price = market_prices[i] if side == 'UP' else (1 - market_prices[i])
         entry_price = np.clip(entry_price, 0.05, 0.95)  # bound to valid range
 
-        # Edge = model prob - market price
-        edge = best_prob - entry_price
+        # Edge = model prob - market price (net of transaction costs)
+        edge = best_prob - entry_price - txcost_frac
 
-        # Decision: trade if above threshold AND positive edge
+        # Decision: trade if above threshold AND positive edge (after costs)
         if best_prob < threshold or edge < min_edge:
             continue
 
         trades += 1
         actual_up = y_true[i] == 1
         correct = (side == 'UP' and actual_up) or (side == 'DOWN' and not actual_up)
+
+        # Always pay transaction costs
+        balance -= trade_cost
+        total_txcost += trade_cost
 
         if correct:
             profit = (1 - entry_price) * bet_size
@@ -273,22 +296,23 @@ def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, b
             regime_stats[r]['trades'] += 1
             if correct:
                 regime_stats[r]['wins'] += 1
-                regime_stats[r]['pnl'] += (1 - entry_price) * bet_size
+                regime_stats[r]['pnl'] += (1 - entry_price) * bet_size - trade_cost
             else:
-                regime_stats[r]['pnl'] -= entry_price * bet_size
+                regime_stats[r]['pnl'] -= entry_price * bet_size + trade_cost
 
     win_rate = wins / trades if trades > 0 else 0
     total_pnl = balance - bankroll
     roi = total_pnl / bankroll * 100 if bankroll > 0 else 0
-    profit_factor = gross_win / gross_loss if gross_loss > 0 else (999.99 if gross_win > 0 else 0)
+    profit_factor = gross_win / (gross_loss + total_txcost) if (gross_loss + total_txcost) > 0 else (999.99 if gross_win > 0 else 0)
 
-    # Sharpe annualization: 15-min bars → 96 bars/day × 252 trading days/year
+    # Sharpe annualization: 15-min bars → 96 bars/day × 365.25 days/year (crypto is 24/7)
     if len(pnl_history) > 1:
         returns = np.diff(pnl_history) / np.maximum(np.array(pnl_history[:-1]), 1)
         std = np.std(returns)
-        sharpe = np.mean(returns) / std * np.sqrt(252 * 96) if std > 0 else 0
+        sharpe = np.mean(returns) / std * np.sqrt(365.25 * 96) if std > 0 else 0
     else:
         sharpe = 0
+        returns = np.array([])
 
     return {
         'trades': trades,
@@ -303,6 +327,56 @@ def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, b
         'trade_ratio': trades / len(y_prob) * 100 if len(y_prob) > 0 else 0,
         'regime_stats': regime_stats,
         'final_balance': balance,
+        'total_txcost': total_txcost,
+        'pnl_history': pnl_history,
+        'returns': returns,
+    }
+
+
+# ================================================
+# 5b. BOOTSTRAP CONFIDENCE INTERVALS
+# ================================================
+
+def bootstrap_ci(returns, bankroll, n_boot=1000, ci=0.95, seed=42):
+    """Bootstrap 95% CI for Sharpe ratio and total ROI.
+
+    Resamples trade-level returns with replacement, recomputes Sharpe and ROI
+    for each bootstrap sample, then returns percentile confidence intervals.
+    """
+    if len(returns) < 10:
+        return {'sharpe_ci': (np.nan, np.nan), 'roi_ci': (np.nan, np.nan), 'n_trades': len(returns)}
+
+    rng = np.random.RandomState(seed)
+    alpha = (1 - ci) / 2  # 0.025 for 95% CI
+
+    sharpe_samples = np.empty(n_boot)
+    roi_samples = np.empty(n_boot)
+
+    # Annualization factor: 96 bars/day × 365.25 days/year (crypto 24/7)
+    ann_factor = np.sqrt(365.25 * 96)
+
+    for b in range(n_boot):
+        idx = rng.randint(0, len(returns), size=len(returns))
+        boot_ret = returns[idx]
+
+        # Sharpe
+        std = np.std(boot_ret)
+        sharpe_samples[b] = (np.mean(boot_ret) / std * ann_factor) if std > 0 else 0
+
+        # ROI: sum of dollar returns → pct of bankroll
+        # returns are fractional (dollar P&L / balance), convert to total dollar P&L approx
+        # We approximate total P&L as sum(returns) * bankroll (since each return ~ pnl/balance)
+        roi_samples[b] = np.sum(boot_ret) * 100  # as percentage
+
+    sharpe_lo = np.percentile(sharpe_samples, alpha * 100)
+    sharpe_hi = np.percentile(sharpe_samples, (1 - alpha) * 100)
+    roi_lo = np.percentile(roi_samples, alpha * 100)
+    roi_hi = np.percentile(roi_samples, (1 - alpha) * 100)
+
+    return {
+        'sharpe_ci': (sharpe_lo, sharpe_hi),
+        'roi_ci': (roi_lo, roi_hi),
+        'n_trades': len(returns),
     }
 
 
@@ -312,7 +386,7 @@ def simulate_pnl(y_prob, y_true, market_prices, threshold, min_edge, bankroll, b
 
 if args.threshold_sweep:
     print(f"\n{'='*80}")
-    print(f"  THRESHOLD SWEEP — Bankroll: ${args.bankroll:.0f} | Bet: ${args.bet_size:.0f} | Min Edge: {args.min_edge*100:.0f}%")
+    print(f"  THRESHOLD SWEEP — Bankroll: ${args.bankroll:.0f} | Bet: ${args.bet_size:.0f} | Min Edge: {args.min_edge*100:.0f}% | TxCost: {TXCOST_FRAC*100:.1f}%")
     print(f"{'='*80}")
     print(f"  {'Thresh':>7} | {'Trades':>7} | {'Rate':>6} | {'WinR':>6} | {'P&L':>10} | {'ROI':>7} | {'MaxDD':>7} | {'PF':>6} | {'Sharpe':>7}")
     print(f"  {'-'*7}-+-{'-'*7}-+-{'-'*6}-+-{'-'*6}-+-{'-'*10}-+-{'-'*7}-+-{'-'*7}-+-{'-'*6}-+-{'-'*7}")
@@ -320,7 +394,7 @@ if args.threshold_sweep:
     sweep_results = []
     for thresh in np.arange(0.50, 0.81, 0.025):
         r = simulate_pnl(y_prob, y_test, market_prices, thresh, args.min_edge,
-                         args.bankroll, args.bet_size, test_regimes)
+                         args.bankroll, args.bet_size, test_regimes, TXCOST_FRAC)
         sweep_results.append((thresh, r))
 
         pnl_str = f"${r['total_pnl']:+.2f}"
@@ -342,7 +416,7 @@ if args.threshold_sweep:
 
     # Per-regime breakdown at optimal threshold
     optimal = simulate_pnl(y_prob, y_test, market_prices, best_thresh, args.min_edge,
-                           args.bankroll, args.bet_size, test_regimes)
+                           args.bankroll, args.bet_size, test_regimes, TXCOST_FRAC)
 
     print(f"\n{'='*60}")
     print(f"  PER-REGIME BREAKDOWN @ threshold={best_thresh:.3f}")
@@ -363,10 +437,22 @@ if args.threshold_sweep:
                 wr = rs['wins'] / rs['trades'] * 100
                 print(f"  {rname:<15} | {rs['trades']:>7,} | {wr:>5.1f}% | ${rs['pnl']:>+9.2f}")
 
+    # Transaction cost summary for optimal threshold
+    print(f"\n  Tx Costs Paid @ optimal: ${optimal['total_txcost']:.2f} ({TXCOST_FRAC*100:.1f}% x {optimal['trades']} trades)")
+
+    # Bootstrap CI for optimal threshold
+    ci = bootstrap_ci(optimal['returns'], args.bankroll)
+    if not np.isnan(ci['sharpe_ci'][0]):
+        print(f"\n  Bootstrap 95% CI (1000 samples) @ threshold={best_thresh:.3f}:")
+        print(f"    Sharpe:  [{ci['sharpe_ci'][0]:.2f}, {ci['sharpe_ci'][1]:.2f}]  (point: {optimal['sharpe']:.2f})")
+        print(f"    ROI:     [{ci['roi_ci'][0]:+.1f}%, {ci['roi_ci'][1]:+.1f}%]  (point: {optimal['roi']:+.1f}%)")
+    else:
+        print(f"\n  Bootstrap CI: insufficient trades ({ci['n_trades']}) for reliable intervals")
+
 else:
     # Single threshold run
     r = simulate_pnl(y_prob, y_test, market_prices, args.threshold, args.min_edge,
-                     args.bankroll, args.bet_size, test_regimes)
+                     args.bankroll, args.bet_size, test_regimes, TXCOST_FRAC)
 
     print(f"\n{'='*60}")
     print(f"  RESULTS @ threshold={args.threshold:.3f}")
@@ -374,11 +460,21 @@ else:
     print(f"  Trades:         {r['trades']:,} ({r['trade_ratio']:.1f}% of samples)")
     print(f"  Win Rate:       {r['win_rate']*100:.1f}%")
     print(f"  Total P&L:      ${r['total_pnl']:+.2f}")
+    print(f"  Tx Costs Paid:  ${r['total_txcost']:.2f} ({TXCOST_FRAC*100:.1f}% x {r['trades']} trades)")
     print(f"  ROI:            {r['roi']:+.1f}%")
     print(f"  Max Drawdown:   {r['max_drawdown']*100:.1f}%")
     print(f"  Profit Factor:  {r['profit_factor']:.2f}")
     print(f"  Sharpe:         {r['sharpe']:.2f}")
     print(f"  Final Balance:  ${r['final_balance']:.2f}")
+
+    # Bootstrap confidence intervals
+    ci = bootstrap_ci(r['returns'], args.bankroll)
+    if not np.isnan(ci['sharpe_ci'][0]):
+        print(f"\n  Bootstrap 95% CI (1000 samples):")
+        print(f"    Sharpe:  [{ci['sharpe_ci'][0]:.2f}, {ci['sharpe_ci'][1]:.2f}]")
+        print(f"    ROI:     [{ci['roi_ci'][0]:+.1f}%, {ci['roi_ci'][1]:+.1f}%]")
+    else:
+        print(f"\n  Bootstrap CI: insufficient trades ({ci['n_trades']}) for reliable intervals")
 
     print(f"\n  Per-Regime:")
     for rname in ['trending', 'moderate', 'choppy', 'mean_reverting']:

@@ -58,11 +58,19 @@ export function fmtEtTime(now = new Date()) {
   }
 }
 
-export function getBtcSession(now = new Date()) {
+// Audit M fix: configurable session boundaries (UTC hours) — no longer hardcoded.
+// Standard BTC trading sessions match traditional financial market hours.
+export const DEFAULT_SESSION_HOURS = {
+  asia: [0, 8],       // Tokyo/Hong Kong/Singapore
+  europe: [7, 16],    // London/Frankfurt
+  us: [13, 22],       // New York/Chicago
+};
+
+export function getBtcSession(now = new Date(), hours = DEFAULT_SESSION_HOURS) {
   const h = now.getUTCHours();
-  const inAsia = h >= 0 && h < 8;
-  const inEurope = h >= 7 && h < 16;
-  const inUs = h >= 13 && h < 22;
+  const inAsia = h >= hours.asia[0] && h < hours.asia[1];
+  const inEurope = h >= hours.europe[0] && h < hours.europe[1];
+  const inUs = h >= hours.us[0] && h < hours.us[1];
 
   if (inEurope && inUs) return 'Europe/US Overlap';
   if (inAsia && inEurope) return 'Asia/Europe Overlap';
@@ -97,13 +105,12 @@ export function narrativeFromSlope(slope) {
   return Number(slope) > 0 ? 'LONG' : 'SHORT';
 }
 
-export function getSessionName() {
-  const h = new Date().getUTCHours();
-  if (h >= 13 && h < 16) return 'EU/US Overlap';
-  if (h >= 13 && h < 22) return 'US';
-  if (h >= 8 && h < 16) return 'Europe';
-  if (h >= 0 && h < 8) return 'Asia';
-  return 'Off-hours';
+export function getSessionName(now = new Date(), hours = DEFAULT_SESSION_HOURS) {
+  // Audit M fix: unified with getBtcSession — single source of truth for session boundaries.
+  const session = getBtcSession(now, hours);
+  if (session === 'Europe/US Overlap') return 'EU/US Overlap';
+  if (session === 'Asia/Europe Overlap') return 'Asia';  // backward compat with ML training data
+  return session;
 }
 
 /**

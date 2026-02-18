@@ -45,6 +45,10 @@ export function evaluateTreeFast(nodeMap, features) {
   return 0; // safety: max depth exceeded
 }
 
+/**
+ * Returns raw logit (sum of leaf values). Caller applies sigmoid + Platt.
+ * v9: Changed from returning probability to returning logit for proper Platt-on-logits.
+ */
 export function predictXGBoost(features) {
   if (!S.processedTrees) return null;
 
@@ -55,5 +59,5 @@ export function predictXGBoost(features) {
     logit += evaluateTreeFast(trees[i], features);
   }
 
-  return 1 / (1 + Math.exp(-logit));
+  return logit;
 }

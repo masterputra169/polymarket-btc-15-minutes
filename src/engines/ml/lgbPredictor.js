@@ -12,6 +12,7 @@ let lgbNumTrees = 0;
 let lgbInitScore = 0;
 let lgbPlattA = 1.0;
 let lgbPlattB = 0.0;
+let lgbPlattOnLogits = false; // v9: Platt on raw logits
 let lgbLoading = false;
 let lgbError = null;
 
@@ -88,6 +89,7 @@ export function loadLgbModelFromData(raw) {
   lgbInitScore = raw.init_score ?? 0;
   lgbPlattA = raw.platt_a ?? 1.0;
   lgbPlattB = raw.platt_b ?? 0.0;
+  lgbPlattOnLogits = raw.platt_on_logits ?? false;
 
   const treeInfos = raw.tree_info || [];
   const numTrees = Math.min(raw.num_trees ?? treeInfos.length, treeInfos.length);
@@ -165,12 +167,20 @@ export function predictLgb(features) {
     logit += evaluateLgbTree(lgbTrees[i], features);
   }
 
-  // Sigmoid
-  let prob = 1 / (1 + Math.exp(-logit));
-
-  // Platt calibration (see calibration.js Bug 2 note — double-sigmoid, consistent with training)
-  if (lgbPlattA !== 1.0 || lgbPlattB !== 0.0) {
-    prob = 1 / (1 + Math.exp(-(lgbPlattA * prob + lgbPlattB)));
+  let prob;
+  if (lgbPlattOnLogits) {
+    // v9: Platt on raw logits — sigmoid(A*logit + B)
+    if (lgbPlattA !== 1.0 || lgbPlattB !== 0.0) {
+      prob = 1 / (1 + Math.exp(-(lgbPlattA * logit + lgbPlattB)));
+    } else {
+      prob = 1 / (1 + Math.exp(-logit));
+    }
+  } else {
+    // Legacy: sigmoid first, then Platt on probability (double-sigmoid)
+    prob = 1 / (1 + Math.exp(-logit));
+    if (lgbPlattA !== 1.0 || lgbPlattB !== 0.0) {
+      prob = 1 / (1 + Math.exp(-(lgbPlattA * prob + lgbPlattB)));
+    }
   }
 
   return prob;
@@ -185,4 +195,5 @@ export function unloadLgbModel() {
   lgbInitScore = 0;
   lgbPlattA = 1.0;
   lgbPlattB = 0.0;
+  lgbPlattOnLogits = false;
 }

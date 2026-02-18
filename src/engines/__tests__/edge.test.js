@@ -121,23 +121,31 @@ describe('computeEdge', () => {
 // countAgreement
 // ────────────────────────────────────────────
 
-describe('countAgreement', () => {
-  it('counts positive-weight indicators matching side', () => {
+describe('countAgreement (family-based)', () => {
+  it('counts family-level agreement with weighted votes', () => {
+    // H1 FIX: Family-based counting. Indicators grouped into families:
+    //   Momentum (1.5x): rsi + macdHist + macdLine
+    //   Trend (1.5x): heikenAshi + multiTf
+    //   Volume (1.0x): orderbook + vwapPos + vwapSlope
     const breakdown = {
-      rsi: { signal: 'UP', weight: 1 },
-      macdHist: { signal: 'UP', weight: 1 },
-      vwapPos: { signal: 'DOWN', weight: 1 },
-      heikenAshi: { signal: 'UP', weight: 1 },
+      rsi: { signal: 'UP', weight: 1 },       // momentum family → UP
+      macdHist: { signal: 'UP', weight: 1 },   // momentum family → UP (majority)
+      vwapPos: { signal: 'DOWN', weight: 1 },   // volume family → DOWN (sole member active)
+      heikenAshi: { signal: 'UP', weight: 1 },  // trend family → UP (sole member active)
     };
-    expect(countAgreement(breakdown, 'UP')).toBe(3);
-    expect(countAgreement(breakdown, 'DOWN')).toBe(1);
+    // UP: momentum (2/2 UP) = 1.5 + trend (1/1 UP) = 1.5 → 3.0
+    // DOWN: volume (1/1 DOWN) = 1.0
+    expect(countAgreement(breakdown, 'UP')).toBe(3.0);
+    expect(countAgreement(breakdown, 'DOWN')).toBe(1.0);
   });
 
   it('counts negative-weight conflicts as agreement for opposite side', () => {
     const breakdown = {
       rsi: { signal: 'DOWN', weight: -0.5 },  // conflict against DOWN = support UP
     };
-    expect(countAgreement(breakdown, 'UP')).toBe(1);
+    // Momentum family: rsi votes UP (negative weight, opposite side) → 1 member, 1 vote UP
+    // Family majority → 1.5 for UP
+    expect(countAgreement(breakdown, 'UP')).toBe(1.5);
     expect(countAgreement(breakdown, 'DOWN')).toBe(0);
   });
 
@@ -157,6 +165,27 @@ describe('countAgreement', () => {
       rsi: { weight: 1 },  // no signal property
     };
     expect(countAgreement(breakdown, 'UP')).toBe(0);
+  });
+
+  it('max agreement with all families voting same direction', () => {
+    const breakdown = {
+      rsi: { signal: 'UP', weight: 1 },
+      macdHist: { signal: 'UP', weight: 1 },
+      macdLine: { signal: 'UP', weight: 1 },
+      heikenAshi: { signal: 'UP', weight: 1 },
+      multiTf: { signal: 'UP', weight: 1 },
+      bbPos: { signal: 'UP', weight: 1 },
+      atrExpand: { signal: 'UP', weight: 1 },
+      orderbook: { signal: 'UP', weight: 1 },
+      vwapPos: { signal: 'UP', weight: 1 },
+      vwapSlope: { signal: 'UP', weight: 1 },
+      ptbDistance: { signal: 'UP', weight: 1 },
+      ptbMomentum: { signal: 'UP', weight: 1 },
+      momentum: { signal: 'UP', weight: 1 },
+      failedVwap: { signal: 'N/A', weight: 0 },
+    };
+    // All 5 families vote UP: 1.5 + 1.5 + 1.0 + 1.0 + 1.0 = 6.0
+    expect(countAgreement(breakdown, 'UP')).toBe(6.0);
   });
 });
 
@@ -268,6 +297,9 @@ describe('decide WAIT/ENTER', () => {
   });
 
   it('picks higher-edge side when both pass', () => {
+    // H1: Both sides need family-level agreement >= 2.
+    // UP families: momentum (rsi+macdHist UP) = 1.5, volume (vwapPos+vwapSlope UP) = 1.0 → 2.5
+    // DOWN families: trend (heikenAshi+multiTf DOWN) = 1.5, price (ptbDistance+momentum DOWN) = 1.0 → 2.5
     const result = decide({
       remainingMinutes: 3,
       edgeUp: 0.15,
@@ -276,9 +308,13 @@ describe('decide WAIT/ENTER', () => {
       modelDown: 0.65,
       breakdown: {
         rsi: { signal: 'UP', weight: 1 },
-        macdHist: { signal: 'DOWN', weight: 1 },
+        macdHist: { signal: 'UP', weight: 1 },
         vwapPos: { signal: 'UP', weight: 1 },
+        vwapSlope: { signal: 'UP', weight: 1 },
         heikenAshi: { signal: 'DOWN', weight: 1 },
+        multiTf: { signal: 'DOWN', weight: 1 },
+        ptbDistance: { signal: 'DOWN', weight: 1 },
+        momentum: { signal: 'DOWN', weight: 1 },
       },
     });
     expect(result.action).toBe('ENTER');
@@ -351,6 +387,7 @@ describe('decide session adjustment', () => {
   });
 
   it('Off-hours adds +3% edge threshold', () => {
+    // H1: Need family agreement >= 2. Momentum (rsi+macdHist) = 1.5 + volume (vwapPos) = 1.0 → 2.5
     const result = decide({
       remainingMinutes: 3,
       edgeUp: 0.17,
@@ -361,10 +398,11 @@ describe('decide session adjustment', () => {
       breakdown: {
         rsi: { signal: 'UP', weight: 1 },
         macdHist: { signal: 'UP', weight: 1 },
+        vwapPos: { signal: 'UP', weight: 1 },
       },
     });
-    // LATE: 0.12 + Off-hours 0.03 = 0.15, capped at base+0.03=0.15, +UP bias 0.02 = 0.17
-    // 0.17 >= 0.17 → should pass edge check if prob also passes
+    // LATE: 0.10 + Off-hours 0.02 = 0.12, +UP bias 0.01 = 0.13, capped at base+0.04=0.14
+    // 0.17 >= 0.13 → passes edge check
     expect(result.action).toBe('ENTER');
   });
 });
@@ -402,6 +440,7 @@ describe('decide combined penalty cap', () => {
 
 describe('decide ML high-confidence boost', () => {
   it('relaxes thresholds by 2% when ML agrees at high conf', () => {
+    // H1: Need family agreement >= 2. Momentum (rsi+macdHist) = 1.5 + volume (vwapPos) = 1.0 → 2.5
     const result = decide({
       remainingMinutes: 3,  // LATE: minEdge=0.12, minProb=0.57
       edgeUp: 0.12,         // exactly at base threshold
@@ -413,10 +452,11 @@ describe('decide ML high-confidence boost', () => {
       breakdown: {
         rsi: { signal: 'UP', weight: 1 },
         macdHist: { signal: 'UP', weight: 1 },
+        vwapPos: { signal: 'UP', weight: 1 },
       },
     });
-    // ML boost: -2% edge, -2% prob → UP minEdge=0.12 (base) +0.02 (UP bias) -0.02 (ML) = 0.12
-    // UP minProb: 0.57 + 0.02 (UP bias) -0.02 (ML) = 0.57
+    // ML boost: -2% edge, -2% prob → UP minEdge=0.12 (base) +0.01 (UP bias) -0.02 (ML) = 0.11
+    // UP minProb: 0.55 + 0.01 (UP bias) -0.02 (ML) = 0.54
     expect(result.action).toBe('ENTER');
   });
 
@@ -461,7 +501,8 @@ describe('decide side bias', () => {
   });
 
   it('DOWN has -1% easier entry', () => {
-    // LATE base: 0.12. DOWN: -0.01 = 0.11
+    // LATE base: 0.12. DOWN: -0.005 = 0.115
+    // H1: Need family agreement >= 2. Momentum (rsi+macdHist) = 1.5 + volume (vwapPos) = 1.0 → 2.5
     const result = decide({
       remainingMinutes: 3,
       edgeUp: -0.10,
@@ -471,6 +512,7 @@ describe('decide side bias', () => {
       breakdown: {
         rsi: { signal: 'DOWN', weight: 1 },
         macdHist: { signal: 'DOWN', weight: 1 },
+        vwapPos: { signal: 'DOWN', weight: 1 },
       },
     });
     expect(result.action).toBe('ENTER');
@@ -502,6 +544,8 @@ describe('decide multiTF', () => {
   });
 
   it('LATE/VERY_LATE do not require multiTF', () => {
+    // H1: Need enough family agreement (>= 2). Momentum (rsi+macdHist) = 1.5,
+    // plus volume (vwapPos) = 1.0 → total 2.5 >= 2.
     const result = decide({
       remainingMinutes: 3,
       edgeUp: 0.20,
@@ -512,6 +556,7 @@ describe('decide multiTF', () => {
       breakdown: {
         rsi: { signal: 'UP', weight: 1 },
         macdHist: { signal: 'UP', weight: 1 },
+        vwapPos: { signal: 'UP', weight: 1 },
       },
     });
     expect(result.action).toBe('ENTER');
@@ -543,6 +588,7 @@ describe('decide confidence levels', () => {
   });
 
   it('returns LOW for marginal signals', () => {
+    // H1: Need family agreement >= 2. Momentum (rsi+macdHist) = 1.5 + volume (vwapPos) = 1.0 → 2.5
     const result = decide({
       remainingMinutes: 1,  // VERY_LATE
       edgeDown: 0.155,
@@ -552,6 +598,7 @@ describe('decide confidence levels', () => {
       breakdown: {
         rsi: { signal: 'DOWN', weight: 1 },
         macdHist: { signal: 'DOWN', weight: 1 },
+        vwapPos: { signal: 'DOWN', weight: 1 },
       },
     });
     if (result.action === 'ENTER') {

@@ -9,7 +9,7 @@ import { computeEdge, decide } from '../engines/edge.js';
 import { computeBetSizing } from '../engines/asymmetricBet.js';
 import { analyzeOrderbook } from '../engines/orderbook.js';
 import { getAccuracyStats, getDetailedStats, recordPrediction, autoSettle, onMarketSwitch, getSignalModifiers } from '../engines/feedback.js';
-import { loadMLModel, getMLPrediction, getMLStatus } from '../engines/Mlpredictor.js';
+import { loadMLModel, getMLPrediction, getMLStatus, getTrainedSignalModifiers, getCalibratedPhaseThresholds } from '../engines/Mlpredictor.js';
 import {
   getCandleWindowTiming,
   narrativeFromSign,
@@ -232,8 +232,21 @@ export function useMarketData({ clobWs } = {}) {
       const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
       const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
-      // Signal weight modifiers (from accumulated per-signal accuracy)
-      const signalModifiers = getSignalModifiers();
+      // Signal weight modifiers: merge trained (structural) with live feedback
+      const liveModifiers = getSignalModifiers();
+      const trainedMods = getTrainedSignalModifiers();
+      let signalModifiers;
+      if (trainedMods) {
+        // Multiply structural baseline (from model importance) × live adaptation
+        signalModifiers = {};
+        for (const key of Object.keys(liveModifiers)) {
+          const t = trainedMods[key] ?? 1.0;
+          const l = liveModifiers[key] ?? 1.0;
+          signalModifiers[key] = Math.max(0.3, Math.min(3.0, t * l));
+        }
+      } else {
+        signalModifiers = liveModifiers;
+      }
 
       // Probability
       const scored = scoreDirection({
@@ -333,6 +346,7 @@ export function useMarketData({ clobWs } = {}) {
         mlAgreesWithRules,
         regimeInfo,
         session: getSessionName(),
+        calibratedThresholds: getCalibratedPhaseThresholds(),
       });
       // Map strength + edge onto rec for UI consumption
       rec.strength = rec.confidence;

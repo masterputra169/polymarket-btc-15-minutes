@@ -95,10 +95,11 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
         closes[cLen - 2] > vwapSeries[vwapSeries.length - 2]
       : false;
 
-  // Regime
+  // Regime — H4: pass ATR ratio + volume ratio to reduce "moderate" dead zone
   const regimeInfo = detectRegime({
     price: lastPrice, vwap: vwapNow, vwapSlope, vwapCrossCount,
     volumeRecent, volumeAvg,
+    atrRatio: atr?.atrRatio ?? null,
   });
 
   // Deltas

@@ -26,6 +26,7 @@ const OUTPUT_FILE = ARGS.output || 'training_data.csv';
 const PREDICTION_WINDOW = 15; // minutes ahead for label
 const LIMIT_PER_REQUEST = 1000;
 const MIN_MOVE_PCT = ARGS['min-move'] != null ? parseFloat(ARGS['min-move']) : 0.0008; // 0.08% min move — filters noise while keeping ~55k samples
+const POLYMARKET_LOOKUP_PATH = ARGS['polymarket-lookup'] || './polymarket_lookup.json';
 
 // Proxy support for regions where Binance is blocked (e.g., Indonesia)
 // Usage: --proxy http://localhost:3001  (your local proxy)
@@ -72,6 +73,56 @@ function seededRandom() {
 
 // ═══ HELPERS for Polymarket feature simulation ═══
 function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+// ═══ Polymarket lookup (real data when available) ═══
+let polyLookup = null; // { "slug_ts": { label, spread, liquidity, volume, prices: [[secs,price],...] } }
+
+function loadPolymarketLookup(path) {
+  try {
+    if (!fs.existsSync(path)) {
+      console.log(`⚠️  Polymarket lookup not found at ${path} — using simulation fallback`);
+      return null;
+    }
+    const raw = JSON.parse(fs.readFileSync(path, 'utf-8'));
+    const count = Object.keys(raw).length;
+    console.log(`✅ Polymarket lookup loaded: ${count.toLocaleString()} markets from ${path}`);
+    return raw;
+  } catch (err) {
+    console.log(`⚠️  Failed to load Polymarket lookup: ${err.message} — using simulation fallback`);
+    return null;
+  }
+}
+
+/**
+ * Linear interpolation of UP token price at a given seconds-into-market.
+ * Uses binary search over sorted [[secs, price], ...] array.
+ * Returns null if no price data available.
+ */
+function interpolatePrice(prices, targetSecs) {
+  if (!prices || prices.length === 0) return null;
+
+  // Before first observation: use first price
+  if (targetSecs <= prices[0][0]) return prices[0][1];
+
+  // After last observation: use last price
+  if (targetSecs >= prices[prices.length - 1][0]) return prices[prices.length - 1][1];
+
+  // Binary search for bracket
+  let lo = 0, hi = prices.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (prices[mid][0] <= targetSecs) lo = mid;
+    else hi = mid;
+  }
+
+  const [t0, p0] = prices[lo];
+  const [t1, p1] = prices[hi];
+  if (t1 === t0) return p0;
+
+  // Linear interpolation
+  const frac = (targetSecs - t0) / (t1 - t0);
+  return p0 + frac * (p1 - p0);
+}
 
 function parseArgs() {
   const args = {};
@@ -716,20 +767,23 @@ function computeStochRSI(closes, rsiPeriod = 14, stochPeriod = 14, smoothK = 3, 
   return { k, d, kd: k - d };
 }
 
-// Aligned with live src/engines/regime.js v2 thresholds
-// Returns { regime, confidence } matching live regime engine
+// Audit fix C7: Synced with live src/engines/regime.js v3 thresholds.
+// CRITICAL: Previous version used raw absSlope ($/candle) vs live normalizedAbsSlope (slope/vwap).
+// With BTC at ~$90k, raw slope > 0.05 fired on nearly everything, while live normalized
+// threshold 0.00005 is meaningful. Choppy thresholds also differed (3 vs 4 crosses, 0.0015 vs 0.002).
 function detectRegime(price, vwap, vwapSlope, vwapCrossCount, volumeRatio) {
   if (!vwap || !price) return { regime: 'moderate', confidence: 0.5 };
   const vwapDist = Math.abs(price - vwap) / vwap;
-  const absSlope = Math.abs(vwapSlope || 0);
+  // v3 fix: Normalize slope to percentage of VWAP (matches live regime.js exactly)
+  const normalizedAbsSlope = vwap > 0 ? Math.abs(vwapSlope || 0) / vwap : 0;
 
-  // Choppy: many crosses + price near VWAP
-  if ((vwapCrossCount || 0) >= 3 && vwapDist < 0.0015) {
+  // Choppy: many crosses + price near VWAP (v3: 4+ crosses, dist < 0.002)
+  if ((vwapCrossCount || 0) >= 4 && vwapDist < 0.002) {
     const confidence = 0.3 + Math.min((vwapCrossCount || 0) / 8, 0.4);
     return { regime: 'choppy', confidence };
   }
-  // Trending: price far from VWAP + directional slope
-  if (vwapDist > 0.0008 && absSlope > 0.05) {
+  // Trending: price far from VWAP + directional slope (v3: normalized slope > 0.00005)
+  if (vwapDist > 0.0008 && normalizedAbsSlope > 0.00005) {
     const volBoost = volumeRatio > 1.2 ? 0.10 : 0;
     const confidence = Math.min(0.6 + vwapDist * 200 + volBoost, 0.95);
     return { regime: 'trending', confidence };
@@ -739,8 +793,8 @@ function detectRegime(price, vwap, vwapSlope, vwapCrossCount, volumeRatio) {
     const confidence = Math.min(0.50 + vwapDist * 80, 0.75);
     return { regime: 'trending', confidence };
   }
-  // Mean reverting: price very close to VWAP, low slope, few crosses
-  if (vwapDist < 0.0005 && absSlope < 0.03 && (vwapCrossCount == null || vwapCrossCount < 3))
+  // Mean reverting: price very close to VWAP, low slope, few crosses (v3: normalized slope < 0.00003)
+  if (vwapDist < 0.0005 && normalizedAbsSlope < 0.00003 && (vwapCrossCount == null || vwapCrossCount < 3))
     return { regime: 'mean_reverting', confidence: 0.5 };
   return { regime: 'moderate', confidence: 0.5 };
 }
@@ -781,13 +835,23 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   const price = candles[idx].close;
   const timestamp = candles[idx].openTime;
 
-  // Label: price 15 min later vs now
-  const futurePrice = candles[idx + PREDICTION_WINDOW].close;
-  const label = futurePrice > price ? 1 : 0;
+  // ═══ Match to Polymarket market ═══
+  const candleTimeSec = Math.floor(candles[idx].openTime / 1000);
+  const slugTs = Math.floor(candleTimeSec / 900) * 900;
+  const polyMarket = polyLookup?.[String(slugTs)] ?? null;
 
-  // ═══ Label engineering: skip ambiguous samples ═══
-  const priceMoveAbs = Math.abs(futurePrice - price) / price;
-  if (priceMoveAbs < MIN_MOVE_PCT) return null; // too small to predict reliably
+  // Label: real Polymarket resolution or Binance price direction
+  let label;
+  if (polyMarket) {
+    label = polyMarket.label;
+    // No min-move filter for Polymarket-labeled rows (definitively resolved)
+  } else {
+    const futurePrice = candles[idx + PREDICTION_WINDOW].close;
+    label = futurePrice > price ? 1 : 0;
+    // Label engineering: skip ambiguous samples (simulation only)
+    const priceMoveAbs = Math.abs(futurePrice - price) / price;
+    if (priceMoveAbs < MIN_MOVE_PCT) return null;
+  }
 
   // Use open price of current candle window as "priceToBeat" (simulate)
   // In live: this comes from Polymarket. For training we simulate with price 15 bars ago
@@ -845,8 +909,14 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   // Session
   const session = getSessionName(timestamp);
 
-  // Simulate minutesLeft (seeded PRNG for reproducibility)
-  const minutesLeft = 1 + Math.floor(seededRandom() * 14);
+  // minutesLeft: real remaining time from Polymarket or seeded PRNG fallback
+  let minutesLeft;
+  if (polyMarket) {
+    const secsRemaining = 900 - (candleTimeSec - slugTs);
+    minutesLeft = Math.max(1, Math.min(14, Math.floor(secsRemaining / 60)));
+  } else {
+    minutesLeft = 1 + Math.floor(seededRandom() * 14); // legacy fallback
+  }
 
   // ═══ Bollinger Bands (computed early for rule prob) ═══
   const bb = computeBollingerBands(closes, 20, 2);
@@ -969,29 +1039,54 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   features[42] = Math.sin(hourUTC / 24 * 2 * Math.PI);
   features[43] = Math.cos(hourUTC / 24 * 2 * Math.PI);
 
-  // ═══ Polymarket simulation features (5) — with small correlated noise ═══
-  // Small seeded noise reduces train/inference domain gap
-  const noise = () => (seededRandom() - 0.5) * 0.02; // ±1% jitter
+  // ═══ Polymarket features (5) — real data when available, simulation fallback ═══
+  const secsIntoMarket = polyMarket ? (candleTimeSec - slugTs) : null;
+  const polyPrices = polyMarket?.prices;
+  const realUpPrice = (polyPrices && polyPrices.length > 0) ? interpolatePrice(polyPrices, secsIntoMarket) : null;
 
-  // [44] market_yes_price — simulated crowd probability from price distance
-  const simMarketYes = Math.max(0.01, Math.min(0.99,
-    sigmoid(ptbDistPct * 200) + noise()));
-  features[44] = simMarketYes;
+  if (realUpPrice !== null) {
+    // ═══ REAL Polymarket data path ═══
+    // [44] market_yes_price — interpolated UP token price at observation time
+    features[44] = Math.max(0.01, Math.min(0.99, realUpPrice));
 
-  // [45] market_price_momentum — simulated from 1m delta
-  const delta1mPct = delta1m / price;
-  features[45] = Math.max(-0.1, Math.min(0.1, delta1mPct * 0.5 + noise() * 0.02));
+    // [45] market_price_momentum — delta between current and 5-min-ago price
+    const price5minAgo = interpolatePrice(polyPrices, Math.max(0, secsIntoMarket - 300));
+    features[45] = price5minAgo !== null
+      ? Math.max(-0.1, Math.min(0.1, realUpPrice - price5minAgo))
+      : 0;
 
-  // [46] orderbook_imbalance — simulated from buy ratio
-  const buyRatio = vd?.buyRatio ?? 0.5;
-  features[46] = Math.max(-1, Math.min(1, (buyRatio - 0.5) * 2 + noise() * 0.1));
+    // [46] orderbook_imbalance — price-based proxy (no live orderbook in historical)
+    features[46] = Math.max(-1, Math.min(1, (realUpPrice - 0.5) * 2));
 
-  // [47] spread_pct — simulated from ATR
-  const atrPctVal = atr ? atr.atrPct : 0.5;
-  features[47] = Math.max(0, Math.min(1, Math.min(atrPctVal * 0.6, 1) + noise() * 0.05));
+    // [47] spread_pct — real spread from master data
+    features[47] = Math.max(0, Math.min(1, polyMarket.spread ?? 0));
 
-  // [48] crowd_model_divergence — |rule prob - simulated market yes|
-  features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - simMarketYes);
+    // [48] crowd_model_divergence — |rule prob - real market price|
+    features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - realUpPrice);
+  } else {
+    // ═══ Simulation fallback (no Polymarket data for this window) ═══
+    const noise = () => (seededRandom() - 0.5) * 0.02; // ±1% jitter
+
+    // [44] market_yes_price — simulated crowd probability from price distance
+    const simMarketYes = Math.max(0.01, Math.min(0.99,
+      sigmoid(ptbDistPct * 200) + noise()));
+    features[44] = simMarketYes;
+
+    // [45] market_price_momentum — simulated from 1m delta
+    const delta1mPct = delta1m / price;
+    features[45] = Math.max(-0.1, Math.min(0.1, delta1mPct * 0.5 + noise() * 0.02));
+
+    // [46] orderbook_imbalance — simulated from buy ratio
+    const buyRatio = vd?.buyRatio ?? 0.5;
+    features[46] = Math.max(-1, Math.min(1, (buyRatio - 0.5) * 2 + noise() * 0.1));
+
+    // [47] spread_pct — simulated from ATR
+    const atrPctVal = atr ? atr.atrPct : 0.5;
+    features[47] = Math.max(0, Math.min(1, Math.min(atrPctVal * 0.6, 1) + noise() * 0.05));
+
+    // [48] crowd_model_divergence — |rule prob - simulated market yes|
+    features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - simMarketYes);
+  }
 
   // ═══ Lag features (temporal memory) — [49-51] ═══
 
@@ -1041,7 +1136,7 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   const rate8h = fr8hAgo?.rate ?? 0;
   features[53] = Math.max(-1, Math.min(1, (frRate - rate8h) * 1000)); // funding_rate_change
 
-  return { features, label };
+  return { features, label, slugTs: polyMarket ? slugTs : null };
 }
 
 // ═══ FEATURE NAMES (for CSV header) ═══
@@ -1068,7 +1163,7 @@ const FEATURE_NAMES = [
 
 // ═══ MAIN ═══
 async function main() {
-  console.log(`\n=== Training Data Generator v11 (54 features + funding rate + min-move filter) ===`);
+  console.log(`\n=== Training Data Generator v12 (54 features + real Polymarket data) ===`);
   console.log(`Days: ${DAYS} | Window: ${PREDICTION_WINDOW}min | Min-move: ${(MIN_MOVE_PCT*100).toFixed(3)}% | Output: ${OUTPUT_FILE}`);
   if (PROXY_URL) {
     console.log(`API: ${PROXY_URL} (proxy mode)`);
@@ -1078,7 +1173,10 @@ async function main() {
   }
   console.log();
 
-  // Seed PRNG for reproducible minutesLeft values
+  // Load Polymarket lookup (real data for labels, features 44-48, minutesLeft)
+  polyLookup = loadPolymarketLookup(POLYMARKET_LOOKUP_PATH);
+
+  // Seed PRNG for reproducible minutesLeft values (used as fallback)
   seedRng(42);
 
   // Fetch data
@@ -1107,10 +1205,18 @@ async function main() {
   console.log(`\n✅ Generated ${rows.length} training samples`);
   console.log(`   Filtered ${filteredCount} ambiguous samples (move < ${(MIN_MOVE_PCT*100).toFixed(3)}%, ${(filteredCount/totalCandidates*100).toFixed(1)}% of candidates)`);
 
-  // Write CSV
-  const header = FEATURE_NAMES.join(',') + ',label';
+  // Stats: count real vs simulated
+  const realCount = rows.filter(r => r.slugTs !== null).length;
+  const simCount = rows.length - realCount;
+  console.log(`   Real Polymarket labels: ${realCount} (${(realCount/rows.length*100).toFixed(1)}%)`);
+  console.log(`   Simulated labels: ${simCount} (${(simCount/rows.length*100).toFixed(1)}%)`);
+
+  // Write CSV (slug_timestamp metadata column added after features, before label)
+  const header = FEATURE_NAMES.join(',') + ',slug_timestamp,label';
   const csvRows = rows.map(r =>
-    r.features.map(f => Number.isFinite(f) ? f.toFixed(8) : '0').join(',') + ',' + r.label
+    r.features.map(f => Number.isFinite(f) ? f.toFixed(8) : '0').join(',') +
+    ',' + (r.slugTs ?? '') +
+    ',' + r.label
   );
 
   fs.writeFileSync(OUTPUT_FILE, [header, ...csvRows].join('\n'));

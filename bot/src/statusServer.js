@@ -156,7 +156,7 @@ export function startStatusServer() {
               typeof size === 'number' && Number.isFinite(size) && size > 0 &&
               typeof price === 'number' && Number.isFinite(price) && price > 0 && price <= 1) {
             // Sell lock: prevent dashboard sell and loop cut-loss from racing
-            if (!acquireSellLock()) {
+            if (!acquireSellLock('dashboard_sell')) {
               respond('sellPosition', { ok: false, error: 'sell_in_progress' });
             } else {
               const sellPos = getCurrentPosition();
@@ -190,7 +190,7 @@ export function startStatusServer() {
             respond('forceSettle', { ok: false, error: 'no_open_position' });
           } else if (!['WIN', 'LOSS', 'UNWIND'].includes(msg.outcome)) {
             respond('forceSettle', { ok: false, error: `invalid outcome: ${msg.outcome} (must be WIN/LOSS/UNWIND)` });
-          } else if (!acquireSellLock()) {
+          } else if (!acquireSellLock('force_settle')) {
             respond('forceSettle', { ok: false, error: 'sell_in_progress' });
           } else if (msg.outcome === 'UNWIND') {
             unwindPosition();

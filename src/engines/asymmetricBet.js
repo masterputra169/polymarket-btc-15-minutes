@@ -179,16 +179,31 @@ export function computeBetSizing({
   // Execution risk
   const executionAdj = executionMultiplier(executionContext);
 
-  // Apply all multipliers (5 total: regime, accuracy, ML, confidence, execution)
+  // Audit fix H: Autocorrelation penalty — consecutive same-side trades are correlated,
+  // Kelly assumes independence. Reduce sizing when betting same direction repeatedly.
+  let autoCorr = { multiplier: 1.0, label: 'N/A' };
+  const streak = feedbackStats?.streak;
+  if (streak && streak.count >= 3) {
+    // Check if recent streak is same side as current trade
+    // (side-agnostic: any 3+ streak signals correlated market regime)
+    if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr` }; }
+    else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr` }; }
+  }
+
+  // Apply all multipliers (6 total: regime, accuracy, ML, confidence, execution, autocorrelation)
   // Multiply all together, clamp once at end — per-step clamping loses information
   // when intermediate values hit bounds and later multipliers pull back
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
-  let adjustedFraction = frac
-    * safeMult(regimeAdj.multiplier)
+  const rawMultiplier = safeMult(regimeAdj.multiplier)
     * safeMult(accuracyAdj.multiplier)
     * safeMult(mlAdj.multiplier)
     * safeMult(confidenceAdj.multiplier)
-    * safeMult(executionAdj.multiplier);
+    * safeMult(executionAdj.multiplier)
+    * safeMult(autoCorr.multiplier);
+  // Audit fix M: Cap total multiplier product to [0.30, 3.0] (10x range).
+  // Previously 5 unbounded multipliers could combine to 31x range — too opaque.
+  const clampedMultiplier = Math.max(0.30, Math.min(3.0, rawMultiplier));
+  let adjustedFraction = frac * clampedMultiplier;
   adjustedFraction = Math.min(Math.max(adjustedFraction, 0), MAX_BET_PCT);
 
   // NaN-safe: if adjustedFraction is somehow NaN, default to 0
@@ -217,6 +232,7 @@ export function computeBetSizing({
     ` \u00d7 ml(${mlAdj.multiplier})` +
     ` \u00d7 conf(${confidenceAdj.multiplier})` +
     ` \u00d7 exec(${executionAdj.multiplier})` +
+    (autoCorr.multiplier !== 1.0 ? ` \u00d7 corr(${autoCorr.multiplier})` : '') +
     ` = ${(betPercent * 100).toFixed(1)}%` +
     ` \u2192 $${betAmount.toFixed(2)}` +
     ` [${riskLevel(betPercent)}]`;
@@ -236,6 +252,7 @@ export function computeBetSizing({
     mlAdj,
     confidenceAdj,
     executionAdj,
+    autoCorrAdj: autoCorr,
     expectedValue,
     rationale,
     kellyTune,

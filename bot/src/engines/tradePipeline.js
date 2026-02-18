@@ -14,14 +14,17 @@ import { EXECUTION } from '../../../src/config.js';
 const log = createLogger('TradePipeline');
 
 /**
- * Compute FOK buy limit price with slippage tolerance.
- * FOK fills at the best available price UP TO the limit — adding slippage
- * just prevents rejection when the ask moves slightly between signal
- * computation and order reaching the CLOB. You still pay the actual ask.
+ * Compute FOK buy limit price with adaptive slippage tolerance.
+ * Audit fix H: Fixed slippage (1 cent) was 10% at $0.10 but only 1% at $0.90.
+ * Now uses max(fixed minimum, 2% of target price) for proportional tolerance.
+ * FOK fills at the best available price UP TO the limit — you still pay the actual ask.
  * Polymarket prices: [0.01, 0.99], precision 0.001.
  */
-function fokBuyPrice(targetPrice) {
-  const slippage = EXECUTION.FOK_SLIPPAGE ?? 0.01;
+function fokBuyPrice(targetPrice, spread) {
+  const fixedSlippage = EXECUTION.FOK_SLIPPAGE ?? 0.01;
+  const pctSlippage = targetPrice * 0.02; // 2% of target price
+  const spreadSlippage = (spread != null && Number.isFinite(spread)) ? spread * 0.5 : 0;
+  const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
   return Math.min(Math.round((targetPrice + slippage) * 1000) / 1000, 0.99);
 }
@@ -53,10 +56,28 @@ function parseClobAmount(value, fallback = null) {
  * @param {Object} deps - Dependencies (functions)
  */
 export async function executeArbitrage({
-  arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice, dryRun,
+  arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
+  orderbookUp, orderbookDown, dryRun,
 }, deps) {
   const arbBudget = deps.getAvailableBankroll() * 0.10; // 10% of available bankroll
-  const arbShares = Math.floor(arbBudget / arb.totalCost);
+
+  // Cap arb size to available orderbook liquidity at the target price.
+  // Without this, we'd try to fill more shares than what's available at the ask,
+  // causing FOK rejection or worse price fills.
+  const upAskLiq = orderbookUp?.askLiquidity ?? Infinity;
+  const downAskLiq = orderbookDown?.askLiquidity ?? Infinity;
+  const minAskLiq = Math.min(upAskLiq, downAskLiq);
+
+  const budgetShares = Math.floor(arbBudget / arb.totalCost);
+  const liqShares = Number.isFinite(minAskLiq) && minAskLiq > 0
+    ? Math.floor(minAskLiq) // askLiquidity is in dollar terms (top 5 levels)
+    : budgetShares;
+  const arbShares = Math.min(budgetShares, liqShares);
+
+  if (liqShares < budgetShares && Number.isFinite(minAskLiq)) {
+    log.info(`ARB size capped by liquidity: ${budgetShares} → ${arbShares} shares (ask liq: UP=$${upAskLiq.toFixed(0)} DOWN=$${downAskLiq.toFixed(0)})`);
+  }
+
   const estCost = Math.round(arbShares * arb.totalCost * 100) / 100;
 
   if (arbShares <= 0) return;
@@ -113,34 +134,55 @@ export async function executeArbitrage({
       if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP', confirmed: upConfirmed });
       if (downOrderId) deps.trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN', confirmed: downConfirmed });
     } catch (downErr) {
-      // ONE-LEGGED: Only UP bought, DOWN failed
+      // ONE-LEGGED: Only UP bought, DOWN failed.
+      // Audit fix C9: Attempt to UNWIND leg 1 instead of holding unvalidated directional exposure.
+      // The UP position was entered without any signal validation (edge, ML, stability gates).
       arbLeg2Failed = true;
       deps.setPendingCost(0);
-      log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — recording one-legged UP position`);
-      const actualPrice = upFillCost / arbShares;
-      deps.recordTrade({
-        side: 'UP',
-        tokenId: poly.tokens.upTokenId,
-        conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
-        price: actualPrice,
-        size: arbShares,
-        marketSlug,
-        orderId: upOrderId,
-        actualCost: upFillCost,
-      });
-      deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
-      deps.recordTradeForMarket(marketSlug);
-      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP', confirmed: !!(upResult?.makingAmount || upResult?.takingAmount) });
-      deps.captureEntrySnapshot({
-        side: 'UP', tokenPrice: arb.askUp, btcPrice: lastPrice,
-        priceToBeat: priceToBeat.value, marketSlug,
-        cost: upFillCost, size: arbShares,
-        confidence: 'ARB_ONE_LEG', phase: rec?.phase, reason: 'arb_leg2_failed',
-        timeLeftMin: null, session: getSessionName(),
-      });
-    }
-    if (arbLeg2Failed) {
-      log.warn('One-legged arb recorded as directional UP — continuing loop');
+      log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — attempting to unwind leg 1 (UP)`);
+
+      let unwindSucceeded = false;
+      try {
+        // Try to sell the UP tokens back at a slight discount
+        const unwindResult = await deps.placeSellOrder?.({
+          tokenId: poly.tokens.upTokenId,
+          price: Math.max(0.01, Math.round((arb.askUp - 0.02) * 1000) / 1000), // 2 cent discount for fast fill
+          size: arbShares,
+        });
+        if (unwindResult) {
+          unwindSucceeded = true;
+          const recovered = parseClobAmount(unwindResult?.takingAmount, arbShares * (arb.askUp - 0.02));
+          log.info(`ARB leg 1 unwound: recovered $${(recovered || 0).toFixed(2)} of $${upFillCost.toFixed(2)}`);
+        }
+      } catch (unwindErr) {
+        log.warn(`ARB leg 1 unwind failed: ${unwindErr.message} — falling back to directional position`);
+      }
+
+      if (!unwindSucceeded) {
+        // Fallback: record as directional position (legacy behavior)
+        const actualPrice = upFillCost / arbShares;
+        deps.recordTrade({
+          side: 'UP',
+          tokenId: poly.tokens.upTokenId,
+          conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
+          price: actualPrice,
+          size: arbShares,
+          marketSlug,
+          orderId: upOrderId,
+          actualCost: upFillCost,
+        });
+        deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
+        deps.recordTradeForMarket(marketSlug);
+        if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'UP', confirmed: !!(upResult?.makingAmount || upResult?.takingAmount) });
+        deps.captureEntrySnapshot({
+          side: 'UP', tokenPrice: arb.askUp, btcPrice: lastPrice,
+          priceToBeat: priceToBeat.value, marketSlug,
+          cost: upFillCost, size: arbShares,
+          confidence: 'ARB_ONE_LEG', phase: rec?.phase, reason: 'arb_leg2_failed_unwind_failed',
+          timeLeftMin: null, session: getSessionName(),
+        });
+        log.warn('One-legged arb: unwind failed — recorded as directional UP position');
+      }
     }
   } catch (err) {
     deps.setPendingCost(0); // Release reservation on leg 1 failure
@@ -302,7 +344,7 @@ export async function executeDirectionalTrade({
   try {
     const orderResult = await deps.placeBuyOrder({
       tokenId,
-      price: fokBuyPrice(betMarketPrice),
+      price: fokBuyPrice(betMarketPrice, orderbookUp?.spread),
       size: shares,
     });
     const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;

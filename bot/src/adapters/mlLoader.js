@@ -21,9 +21,11 @@ export {
   isMLReady,
   getMLStatus,
   predictML,
+  getTrainedSignalModifiers,
+  getCalibratedPhaseThresholds,
 } from '../../../src/engines/Mlpredictor.js';
 
-import { setEnsembleWeights } from '../../../src/engines/Mlpredictor.js';
+import { setEnsembleWeights, setCalibratedParams } from '../../../src/engines/Mlpredictor.js';
 
 const log = createLogger('ML');
 
@@ -49,6 +51,7 @@ export function loadMLModelFromDisk() {
       modelMetrics: rawModel.metrics || null,
       plattA: rawModel.platt_a ?? 1.0,
       plattB: rawModel.platt_b ?? 0.0,
+      plattOnLogits: rawModel.platt_on_logits ?? false,
     });
 
     // Build feature name → index lookup
@@ -108,6 +111,13 @@ export function loadMLModelFromDisk() {
       } catch (lgbErr) {
         log.warn(`LightGBM not loaded: ${lgbErr.message}`);
       }
+    }
+
+    // Load calibrated signal modifiers (H2) and phase thresholds (H3) from norm
+    if (rawNorm.signal_modifiers || rawNorm.phase_thresholds) {
+      setCalibratedParams(rawNorm.signal_modifiers, rawNorm.phase_thresholds);
+      if (rawNorm.signal_modifiers) log.info(`Signal modifiers loaded: ${Object.keys(rawNorm.signal_modifiers).length} signals`);
+      if (rawNorm.phase_thresholds) log.info(`Phase thresholds loaded: ${Object.keys(rawNorm.phase_thresholds).join(', ')}`);
     }
 
     return true;

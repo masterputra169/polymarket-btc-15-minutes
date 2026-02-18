@@ -82,39 +82,106 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
 }
 
 /**
- * Count how many indicators agree on a direction from breakdown.
+ * H1 FIX: Family-based agreement count.
+ *
+ * RSI, StochRSI, BB%B, EMA, MACD are highly correlated — counting them as
+ * independent "agreements" inflates signal confidence. We group correlated
+ * indicators into families and count family-level agreement:
+ *
+ *   Momentum family (1.5x): RSI + StochRSI (stochK via bbPos proxy) + MACD hist + MACD line
+ *   Trend family    (1.5x): EMA crossover (heikenAshi) + Heiken Ashi + multiTf
+ *   Volatility fam  (1.0x): Bollinger %B + ATR expansion
+ *   Volume family   (1.0x): Volume Delta (orderbook) + VWAP position + VWAP slope
+ *   Funding/Other   (1.0x): failedVwap + ptbDistance + ptbMomentum + momentum (delta)
+ *
+ * Max family agreement = 5 weighted votes (instead of 14 individual indicators).
+ */
+
+// Helper: check if a breakdown entry signals a given side
+function _entrySignals(entry, side) {
+  if (!entry || entry.weight === 0) return false;
+  const signal = entry.signal?.toUpperCase() ?? '';
+  if (entry.weight > 0) {
+    return side === 'UP' ? signal.includes('UP') : signal.includes('DOWN');
+  }
+  // Negative weight (conflict): opposite side
+  return side === 'UP' ? signal.includes('DOWN') : signal.includes('UP');
+}
+
+/**
+ * Count family-level agreement on a direction from breakdown.
+ * Returns a weighted count where momentum and trend families get 1.5x weight.
+ *
  * @param {Object} breakdown - scoreDirection breakdown
  * @param {string} side - 'UP' or 'DOWN'
- * @returns {number} count of agreeing indicators
+ * @returns {number} weighted family agreement count (max ~7.0)
  */
 export function countAgreement(breakdown, side) {
   if (!breakdown) return 0;
 
-  let count = 0;
-  const signalKeys = [
-    'ptbDistance', 'ptbMomentum', 'momentum', 'rsi', 'macdHist', 'macdLine',
-    'vwapPos', 'vwapSlope', 'heikenAshi', 'failedVwap', 'orderbook', 'multiTf',
-    'bbPos', 'atrExpand',
-  ];
+  let total = 0;
 
-  for (const key of signalKeys) {
-    const entry = breakdown[key];
-    if (!entry || entry.weight === 0) continue;
-
-    const signal = entry.signal?.toUpperCase() ?? '';
-    if (entry.weight > 0) {
-      // Positive weight: direct agreement
-      if (side === 'UP' && signal.includes('UP')) count++;
-      if (side === 'DOWN' && signal.includes('DOWN')) count++;
-    } else {
-      // M2: Negative weight (conflict): scoring engine adds weight to OPPOSITE side,
-      // so a conflict against DOWN is effectively support for UP and vice versa.
-      if (side === 'UP' && signal.includes('DOWN')) count++;
-      if (side === 'DOWN' && signal.includes('UP')) count++;
+  // ═══ Momentum family (weight 1.5): RSI + MACD hist + MACD line ═══
+  {
+    let votes = 0, members = 0;
+    for (const key of ['rsi', 'macdHist', 'macdLine']) {
+      if (breakdown[key] && breakdown[key].weight !== 0) {
+        members++;
+        if (_entrySignals(breakdown[key], side)) votes++;
+      }
     }
+    if (members > 0 && votes > members / 2) total += 1.5;
   }
 
-  return count;
+  // ═══ Trend family (weight 1.5): Heiken Ashi + multiTf ═══
+  {
+    let votes = 0, members = 0;
+    for (const key of ['heikenAshi', 'multiTf']) {
+      if (breakdown[key] && breakdown[key].weight !== 0) {
+        members++;
+        if (_entrySignals(breakdown[key], side)) votes++;
+      }
+    }
+    if (members > 0 && votes > members / 2) total += 1.5;
+  }
+
+  // ═══ Volatility family (weight 1.0): Bollinger %B + ATR expansion ═══
+  {
+    let votes = 0, members = 0;
+    for (const key of ['bbPos', 'atrExpand']) {
+      if (breakdown[key] && breakdown[key].weight !== 0) {
+        members++;
+        if (_entrySignals(breakdown[key], side)) votes++;
+      }
+    }
+    if (members > 0 && votes > members / 2) total += 1.0;
+  }
+
+  // ═══ Volume family (weight 1.0): Orderbook + VWAP position + VWAP slope ═══
+  {
+    let votes = 0, members = 0;
+    for (const key of ['orderbook', 'vwapPos', 'vwapSlope']) {
+      if (breakdown[key] && breakdown[key].weight !== 0) {
+        members++;
+        if (_entrySignals(breakdown[key], side)) votes++;
+      }
+    }
+    if (members > 0 && votes > members / 2) total += 1.0;
+  }
+
+  // ═══ Price/Directional family (weight 1.0): ptbDistance + ptbMomentum + momentum(delta) + failedVwap ═══
+  {
+    let votes = 0, members = 0;
+    for (const key of ['ptbDistance', 'ptbMomentum', 'momentum', 'failedVwap']) {
+      if (breakdown[key] && breakdown[key].weight !== 0) {
+        members++;
+        if (_entrySignals(breakdown[key], side)) votes++;
+      }
+    }
+    if (members > 0 && votes > members / 2) total += 1.0;
+  }
+
+  return total;
 }
 
 /**
@@ -144,32 +211,34 @@ export function decide({
   mlAgreesWithRules = false,
   regimeInfo = null,
   session = null,
+  calibratedThresholds = null,  // from norm_browser.json phase_thresholds (audit H3)
 }) {
-  // ═══ Phase thresholds v3 (balanced: more trades + high accuracy) ═══
+  // ═══ Phase thresholds — calibrated from holdout if available, else v3 defaults ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
+  const cal = calibratedThresholds;
 
   if (remainingMinutes > 10) {
     phase = 'EARLY';
-    minEdge = 0.06;
-    minProb = 0.58;
+    minEdge = cal?.EARLY?.minEdge ?? 0.06;
+    minProb = cal?.EARLY?.minProb ?? 0.58;
     minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 5) {
     phase = 'MID';
-    minEdge = 0.08;
-    minProb = 0.56;
+    minEdge = cal?.MID?.minEdge ?? 0.08;
+    minProb = cal?.MID?.minProb ?? 0.56;
     minAgreement = 2;
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
-    minEdge = 0.10;
-    minProb = 0.55;
+    minEdge = cal?.LATE?.minEdge ?? 0.10;
+    minProb = cal?.LATE?.minProb ?? 0.55;
     minAgreement = 2;
     preferMultiTf = false;
   } else {
     phase = 'VERY_LATE';
-    minEdge = 0.12;
-    minProb = 0.54;
+    minEdge = cal?.VERY_LATE?.minEdge ?? 0.12;
+    minProb = cal?.VERY_LATE?.minProb ?? 0.54;
     minAgreement = 2;
     preferMultiTf = false;
   }
@@ -333,12 +402,13 @@ function getConfidence(edge, prob, agreement, mlHighConf = false, mlAgrees = fal
   // ML high-conf + rule agreement can boost by one tier
   const mlBoost = mlHighConf && mlAgrees;
 
-  // v3: Lowered confidence tier thresholds to match new edge baselines.
-  // More trades land in MEDIUM/HIGH instead of always LOW (which kills bet sizing via 0.40x mult).
-  if (edge >= 0.16 && prob >= 0.62 && agreement >= 5) return 'VERY_HIGH';
-  if (mlBoost && edge >= 0.12 && prob >= 0.58 && agreement >= 4) return 'VERY_HIGH';
-  if (edge >= 0.12 && prob >= 0.58 && agreement >= 4) return 'HIGH';
-  if (mlBoost && edge >= 0.08 && prob >= 0.55 && agreement >= 3) return 'HIGH';
-  if (edge >= 0.08 && prob >= 0.55 && agreement >= 3) return 'MEDIUM';
+  // H1 FIX: Agreement thresholds rescaled for family-based counting.
+  // Old: max ~14 individual indicators → thresholds 3/4/5
+  // New: max ~7.0 weighted family votes → thresholds 2.5/3.5/4.0
+  if (edge >= 0.16 && prob >= 0.62 && agreement >= 4.0) return 'VERY_HIGH';
+  if (mlBoost && edge >= 0.12 && prob >= 0.58 && agreement >= 3.5) return 'VERY_HIGH';
+  if (edge >= 0.12 && prob >= 0.58 && agreement >= 3.5) return 'HIGH';
+  if (mlBoost && edge >= 0.08 && prob >= 0.55 && agreement >= 2.5) return 'HIGH';
+  if (edge >= 0.08 && prob >= 0.55 && agreement >= 2.5) return 'MEDIUM';
   return 'LOW';
 }

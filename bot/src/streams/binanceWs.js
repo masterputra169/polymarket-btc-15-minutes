@@ -31,6 +31,8 @@ let _connected = false;
 export function getPrice() { return _price; }
 export function getPrevPrice() { return _prevPrice; }
 export function isConnected() { return _connected; }
+/** Audit fix H: Expose last message timestamp for staleness check in loop.js */
+export function getLastMsgTime() { return lastMsgMs; }
 
 function stopHb() {
   if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }

@@ -32,6 +32,7 @@ import { createLogger } from './logger.js';
 import {
   getPrice as getBinancePrice,
   isConnected as isBinanceConnected,
+  getLastMsgTime as getBinanceLastMsgTime,
 } from './streams/binanceWs.js';
 import {
   getUpPrice as getClobUpPrice,
@@ -61,7 +62,7 @@ import {
 } from './adapters/dataFetcher.js';
 
 // ML (loaded from disk)
-import { getMLPrediction, isMLReady } from './adapters/mlLoader.js';
+import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds } from './adapters/mlLoader.js';
 
 // Feedback (JSON file persistence)
 import {
@@ -130,10 +131,11 @@ import {
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
+import { evaluateTakeProfit } from './trading/takeProfit.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
-import { shouldHalt, validateTrade, validatePrice } from './safety/guards.js';
+import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice } from './safety/guards.js';
 import {
   applyTradeFilters,
   recordLoss,
@@ -312,6 +314,11 @@ export async function pollOnce() {
             clearEntrySnapshot();
           }
           notify('warning', `FOK order rejected — position unwound | Bankroll: $${getBankroll().toFixed(2)}`);
+        } else if (fillResult.uncertain) {
+          // Sell order couldn't be verified — release sell lock so cut-loss can retry
+          log.warn(`UNCERTAIN FILL: sell order ${fillResult.orderId} unverified after ${(fillResult.timeToFill / 1000).toFixed(1)}s — releasing sell lock for retry`);
+          releaseSellLock();
+          notify('warning', `Uncertain sell fill: ${fillResult.orderId} — cut-loss can retry`);
         } else if (fillResult.filled) {
           confirmFill();
           log.info(`Fill ${fillResult.verified ? 'verified' : 'assumed'} (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
@@ -452,8 +459,13 @@ export async function pollOnce() {
       fetches.push(fetchKlines({ interval: '5m', limit: 48 }));
     }
 
+    // Audit fix H: Validate Binance WS price is fresh (< 5s old).
+    // During WS outage (up to 20s before heartbeat fires), stale price could cause
+    // bad trade decisions. BTC can move $50-200 in 20s during volatile markets.
+    const BINANCE_STALE_MS = 5_000;
     const wsPrice = getBinancePrice();
-    if (!wsPrice) {
+    const wsFresh = wsPrice && isBinanceConnected() && (Date.now() - getBinanceLastMsgTime() < BINANCE_STALE_MS);
+    if (!wsFresh) {
       fetchMap.lastPrice = fetches.length;
       fetches.push(fetchLastPrice());
     }
@@ -486,7 +498,7 @@ export async function pollOnce() {
       return;
     }
     const klines5m = fetchMap.klines5m !== undefined ? results[fetchMap.klines5m] : getKlines5mCache();
-    const lastPrice = wsPrice || (fetchMap.lastPrice !== undefined ? results[fetchMap.lastPrice] : klines1m[klines1m.length - 1]?.close);
+    const lastPrice = (wsFresh ? wsPrice : null) || (fetchMap.lastPrice !== undefined ? results[fetchMap.lastPrice] : klines1m[klines1m.length - 1]?.close);
 
     if (lastPrice == null || !Number.isFinite(lastPrice)) {
       log.warn('No BTC price available from any source — skipping poll');
@@ -684,9 +696,114 @@ export async function pollOnce() {
       });
     }
 
-    // ── 6. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
+    // ── 6. Emergency circuit breaker re-evaluation with open position ──
+    // Audit fix M: Check if approaching circuit breaker thresholds while holding a position.
+    // Triggers emergency cut-loss at 90% of thresholds to ensure we can actually exit before halt.
+    const emergencyPos = getCurrentPosition();
+    if (emergencyPos && !emergencyPos.settled && emergencyPos.side !== 'ARB') {
+      const emergencyCheck = shouldEmergencyCut({
+        dailyPnLPct: getDailyPnLPct(),
+        drawdownPct: getDrawdownPct(),
+      });
+      if (emergencyCheck.shouldCut) {
+        log.warn(`EMERGENCY CUT triggered: ${emergencyCheck.reason}`);
+        const emTokenBook = emergencyPos.side === 'UP' ? orderbookUp : orderbookDown;
+        const emBestBid = emTokenBook?.bids?.[0]?.price ?? null;
+        if (emBestBid && acquireSellLock('emergency_cut')) {
+          try {
+            const result = await closePosition(emergencyPos, emBestBid, 0.03); // 3% aggressive slippage
+            if (result?.success) {
+              settleTradeEarlyExit(result.recoveredUsdc ?? 0);
+              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: (result.recoveredUsdc ?? 0) - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
+              clearEntrySnapshot();
+              resetCutLossState();
+              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Bankroll: $${getBankroll().toFixed(2)}`);
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
+    // ── 6a. Take-profit check (skip ARB — guaranteed profit, let settle) ──
+    let takeProfitTriggered = false;
+    const tpPos = getCurrentPosition();
+    if (tpPos && !tpPos.settled && tpPos.side !== 'ARB') {
+      const tpTokenPrice = tpPos.side === 'UP' ? marketUp : marketDown;
+      const tpTokenBook = tpPos.side === 'UP' ? orderbookUp : orderbookDown;
+
+      const tpResult = evaluateTakeProfit({
+        position: tpPos, currentTokenPrice: tpTokenPrice,
+        orderbook: tpTokenBook, timeLeftMin,
+        modelProbability: tpPos.side === 'UP' ? ensembleUp : ensembleDown,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
+        regime: regimeInfo?.regime ?? 'moderate',
+        entryRegime,
+        btcDelta1m: delta1m,
+      });
+
+      if (pollCounter % 5 === 0 && tpResult.reason !== 'disabled' && tpResult.reason !== 'no_position' && tpResult.reason !== 'arb_position') {
+        const tpGain = tpPos.price > 0 && tpTokenPrice != null
+          ? (((tpTokenPrice - tpPos.price) / tpPos.price) * 100).toFixed(1) : '?';
+        log.debug(`TakeProfit: ${tpResult.reason} | ${tpPos.side} gain=${tpGain}%`);
+      }
+
+      if (tpResult.shouldTakeProfit) {
+        if (!acquireSellLock('take_profit')) {
+          log.info('Take-profit skipped — sell already in progress');
+        } else {
+          try {
+            takeProfitTriggered = true;
+            const sellSize = tpPos.size;
+            log.info(
+              `TAKE-PROFIT: ${tpPos.side} gain ${tpResult.gainPct.toFixed(1)}% | ` +
+              `sell ${sellSize} shares @$${tpResult.sellPrice.toFixed(3)} | ` +
+              `recover $${tpResult.recoveryAmount.toFixed(2)} of $${tpPos.cost.toFixed(2)} | ` +
+              `${tpResult.weakeners.join(', ')}`
+            );
+            const exitData = {
+              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+              marketUp, marketDown, tokenPrice: tpTokenPrice,
+              regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+              entryRegime,
+              rsiNow, vwapDist, timeLeftMin,
+              takeProfitGainPct: tpResult.gainPct,
+              weakeners: tpResult.weakeners,
+            };
+
+            if (BOT_CONFIG.dryRun) {
+              const recovery = tpResult.sellPrice * sellSize;
+              const tpPnl = recovery - tpPos.cost;
+              settleTradeEarlyExit(recovery);
+              invalidateSync();
+              clearEntrySnapshot();
+              writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: recovery } });
+              resetCutLossState();
+              notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+            } else {
+              try {
+                const sellResult = await closePosition(tpPos.tokenId, sellSize, tpResult.sellPrice);
+                const actualRecovery = parseClobAmount(sellResult?.takingAmount, tpResult.sellPrice * sellSize);
+                const tpPnl = actualRecovery - tpPos.cost;
+                settleTradeEarlyExit(actualRecovery);
+                invalidateSync();
+                clearEntrySnapshot();
+                writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: actualRecovery } });
+                resetCutLossState();
+                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+              } catch (err) {
+                log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
+                takeProfitTriggered = false;
+              }
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
+    // ── 6b. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
     const pos = getCurrentPosition();
-    if (pos && !pos.settled && pos.side !== 'ARB') {
+    if (pos && !pos.settled && pos.side !== 'ARB' && !takeProfitTriggered) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
@@ -723,7 +840,7 @@ export async function pollOnce() {
       }
 
       if (cutResult.shouldCut) {
-        if (!acquireSellLock()) {
+        if (!acquireSellLock('cut_loss')) {
           log.info('Cut-loss skipped — sell already in progress (dashboard?)');
         } else {
           try {
@@ -796,6 +913,7 @@ export async function pollOnce() {
       mlAgreesWithRules,
       regimeInfo,
       session: getSessionName(),
+      calibratedThresholds: getCalibratedPhaseThresholds(),
     });
     rec.strength = rec.confidence;
     rec.edge = edge.bestEdge;
@@ -838,11 +956,21 @@ export async function pollOnce() {
       ? (msg) => notify('info', msg, { key: 'trade:entry' })
       : null;
 
+    // Signal staleness check — if too much time passed between signal computation and now,
+    // the signal is stale (market may have moved). Skip the trade.
+    const SIGNAL_STALE_MS = 2000; // 2 seconds
+    const signalAge = sig.computedAt ? Date.now() - sig.computedAt : 0;
+    const signalStale = signalAge > SIGNAL_STALE_MS;
+    if (signalStale) {
+      log.warn(`Signal stale: computed ${signalAge}ms ago (threshold: ${SIGNAL_STALE_MS}ms) — skipping trade execution this poll`);
+    }
+
     // 10a. Arbitrage execution (priority over directional)
-    if (arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!signalStale && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       await executeArbitrage({
         arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
+        orderbookUp, orderbookDown,
         dryRun: BOT_CONFIG.dryRun,
       }, {
         getAvailableBankroll, setPendingCost, placeBuyOrder,
@@ -852,7 +980,7 @@ export async function pollOnce() {
       });
     }
     // 10b. Directional trade
-    else if (rec.action === 'ENTER' && !hasPending) {
+    else if (!signalStale && rec.action === 'ENTER' && !hasPending) {
       await executeDirectionalTrade({
         rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
         ensembleUp, timeAware, mlResult, mlAgreesWithRules,

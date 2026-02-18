@@ -88,7 +88,7 @@ export function getAccuracyStats(windowSize = 20) {
   else { confidenceMultiplier = 0.70; label = `\u2744\uFE0F Ice Cold (${pct}% of last ${recentTotal})`; }
 
   if (streak.type === 'loss' && streak.count >= 3) { confidenceMultiplier *= 0.90; label += ` | ${streak.count}L streak`; }
-  else if (streak.type === 'win' && streak.count >= 3) { confidenceMultiplier *= 1.05; label += ` | ${streak.count}W streak`; }
+  else if (streak.type === 'win' && streak.count >= 3) { confidenceMultiplier *= 0.85; label += ` | ${streak.count}W streak`; }
 
   if (confidenceMultiplier < 0.50) confidenceMultiplier = 0.50;
   else if (confidenceMultiplier > 1.25) confidenceMultiplier = 1.25;

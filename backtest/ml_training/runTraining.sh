@@ -49,7 +49,7 @@ done
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
-echo "║  BTC Prediction ML Training Pipeline v8           ║"
+echo "║  BTC Prediction ML Training Pipeline v9           ║"
 echo "╠══════════════════════════════════════════════════╣"
 echo "║  Days: $DAYS | Epochs: $EPOCHS | Tune: ${TUNE:-no} | Min-move: $MIN_MOVE"
 echo "╚══════════════════════════════════════════════════╝"
@@ -73,15 +73,37 @@ if [ -n "$TUNE" ]; then
 fi
 echo "   ✅ All dependencies OK"
 
+# ═══ Step 0: Prepare Polymarket features (if data available) ═══
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+POLY_DATA_DIR="$SCRIPT_DIR/polymarket_btc15m_data"
+POLY_LOOKUP="$SCRIPT_DIR/polymarket_lookup.json"
+POLY_FLAG=""
+
+if [ -d "$POLY_DATA_DIR" ] && [ -f "$POLY_DATA_DIR/02_btc15m_ml_ready.csv" ]; then
+  echo ""
+  echo "═══ STEP 0: Prepare Polymarket Features ═══"
+  echo ""
+  $PYTHON "$SCRIPT_DIR/preparePolymarketFeatures.py" --data-dir "$POLY_DATA_DIR" --output "$POLY_LOOKUP"
+
+  if [ -f "$POLY_LOOKUP" ]; then
+    POLY_FLAG="--polymarket-lookup $POLY_LOOKUP"
+    echo "   ✅ Polymarket lookup ready"
+  else
+    echo "   ⚠️  Polymarket lookup generation failed, continuing without real data"
+  fi
+else
+  echo ""
+  echo "   ℹ️  No Polymarket data at $POLY_DATA_DIR — using simulation"
+fi
+
 # ═══ Step 1: Generate training data ═══
 echo ""
 echo "═══ STEP 1/3: Generate Training Data ═══"
 echo ""
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_FILE="$SCRIPT_DIR/training_data.csv"
 
-node "$SCRIPT_DIR/generateTrainingData.mjs" --days $DAYS --min-move $MIN_MOVE --output "$DATA_FILE"
+node "$SCRIPT_DIR/generateTrainingData.mjs" --days $DAYS --min-move $MIN_MOVE --output "$DATA_FILE" $POLY_FLAG
 
 if [ ! -f "$DATA_FILE" ]; then
   echo "❌ Training data generation failed"
@@ -102,6 +124,7 @@ $PYTHON "$SCRIPT_DIR/trainXGBoost_v3.py" \
   --output-dir "$OUTPUT_DIR" \
   --epochs $EPOCHS \
   --tune-trials $TUNE_TRIALS \
+  --holdout-frac 0.125 \
   $TUNE
 
 # ═══ Step 3: Deploy (optional) ═══
@@ -127,9 +150,13 @@ if [ "$DEPLOY" = true ]; then
 
   cp "$OUTPUT_DIR/xgboost_model.json" "$PUBLIC_ML/xgboost_model.json"
   cp "$OUTPUT_DIR/norm_browser.json" "$PUBLIC_ML/norm_browser.json"
+  if [ -f "$OUTPUT_DIR/lightgbm_model.json" ]; then
+    cp "$OUTPUT_DIR/lightgbm_model.json" "$PUBLIC_ML/lightgbm_model.json"
+  fi
   echo "   ✅ Deployed to $PUBLIC_ML/"
   echo "      - xgboost_model.json"
   echo "      - norm_browser.json"
+  echo "      - lightgbm_model.json (if LGB trained)"
 else
   echo ""
   echo "═══ STEP 3/3: Manual Deploy ═══"

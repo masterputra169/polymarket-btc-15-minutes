@@ -15,6 +15,7 @@ import { extractPriceToBeat, getSessionName } from '../../../src/utils.js';
 import { detectArbitrage } from './arbitrage.js';
 import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.js';
 import { getSignalModifiers } from '../adapters/signalPerfStore.js';
+import { getTrainedSignalModifiers } from '../adapters/mlLoader.js';
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -91,7 +92,12 @@ export function computeSignals({
   const orderbookSignal = analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketDown });
 
   // ── Arbitrage detection (BEFORE directional logic) ──
-  const arb = detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDown });
+  // Audit fix H: Only detect arb when using live CLOB WebSocket prices.
+  // REST fallback mid-prices systematically understate ask prices,
+  // creating phantom arb from the mid-to-ask gap (MIN_NET_PROFIT is only 0.5 cents).
+  const arb = useClobWs
+    ? detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDown })
+    : { found: false, reason: 'clob_stale' };
 
   // ── Orderbook flow tracking ──
   recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookDown);
@@ -110,7 +116,21 @@ export function computeSignals({
     }
   }
 
-  // ── Score direction (with signal perf modifiers) ──
+  // ── Score direction (merge trained + live signal modifiers) ──
+  const liveModifiers = getSignalModifiers();
+  const trainedMods = getTrainedSignalModifiers();
+  let mergedModifiers;
+  if (trainedMods) {
+    mergedModifiers = {};
+    for (const key of Object.keys(liveModifiers)) {
+      const t = trainedMods[key] ?? 1.0;
+      const l = liveModifiers[key] ?? 1.0;
+      mergedModifiers[key] = Math.max(0.3, Math.min(3.0, t * l));
+    }
+  } else {
+    mergedModifiers = liveModifiers;
+  }
+
   const scored = scoreDirection({
     price: lastPrice, priceToBeat: updatedPriceToBeat.value,
     vwap: vwapNow, vwapSlope, rsi: rsiNow, rsiSlope,
@@ -119,7 +139,7 @@ export function computeSignals({
     orderbookSignal, volProfile, multiTfConfirm, feedbackStats,
     bb, atr,
     minutesLeft: timeLeftMin,
-    signalModifiers: getSignalModifiers(),
+    signalModifiers: mergedModifiers,
   });
 
   const timeAware = applyTimeAwareness(scored.rawUp, timeLeftMin, candleWindowMinutes);
@@ -202,5 +222,8 @@ export function computeSignals({
 
     // Metadata
     session, fundingRate,
+
+    // Signal freshness timestamp — used to detect stale signals before execution
+    computedAt: Date.now(),
   };
 }

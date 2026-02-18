@@ -22,17 +22,12 @@
  *   5.  Min hold time met (180s)
  *   6.  Not too close to settlement (< 30s)
  *   6b. LATE FORCE-CUT: <2min left + drop>15% → skip gates 7-12d, go to gate 13
- *   7.  BTC position check — soft zone: BTC within 0.02% of PTB still allows cut
- *   8.  BTC-to-PTB distance — time-scaled, ATR-adjusted, regime-aware (SKIPPED if drop>20%)
- *   8b. Regime-change accelerator — if regime changed since entry, lower threshold 30%
- *   9.  BTC momentum — ATR-scaled, if BTC is recovering toward PTB, skip cut
- *  10.  EV comparison — regime-aware margin + time-decay multiplier
- *  11.  ML veto — if ML confidence >= 55% and agrees with position, block cut
- *  12.  Token drop minimum — token must have dropped at least 30%
- *  12b. Token price above minimum ($0.05)
- *  12c. Orderbook liquidity — don't sell into thin books or wide spreads
- *  12d. Token trajectory — if token is recovering (>3¢ over 12 polls), skip cut
- *  13.  Consecutive poll confirmation — 2 consecutive polls where all gates pass
+ *   7-12d. WEIGHTED SCORING (audit C6): Each soft gate contributes a hold score.
+ *          Cut blocked only if holdScore >= threshold (default 7).
+ *          Scores: btc_favorable=3, btc_close=2, btc_recovering=2,
+ *                  ev_hold=3, ml_veto=2, drop_low=2, token_recovering=2 (max=16)
+ *          HARD GATES (always AND): 12b min price, 12c orderbook liquidity
+ *  13.  Consecutive poll confirmation — 2 consecutive polls where weighted score allows cut
  */
 
 import { BOT_CONFIG } from '../config.js';
@@ -220,21 +215,26 @@ export function evaluateCutLoss({
   let tokenSlope = null;
   const evMargin = getEvMargin(regime);
   const timeDecay = getTimeDecay(timeLeftMin);
+  let holdScore = 0;
+  const holdReasons = [];
 
   // Late force-cut and crash skip soft gates entirely
   if (!isLateForceCut && !isCrash) {
 
-    // ── Gate 7: BTC position check (SOFT ZONE) ──
-    // v4: BTC within 0.02% of PTB is "borderline" — don't hard-veto.
-    // Only veto if BTC is clearly on our side (>0.02% favorable).
+    // ── Audit C6: Weighted scoring for soft gates 7-12d ──
+    // Instead of any single gate vetoing the cut (AND logic), each gate
+    // contributes a "hold score". Only if total >= threshold is cut blocked.
+    // This prevents a single marginal signal from saving a losing position.
+    const HOLD_THRESHOLD = cfg.holdScoreThreshold ?? 7;
+
+    // ── Gate 7: BTC position check ──
     const BTC_SOFT_ZONE_PCT = 0.02;
     if (hasPtb && btcFavorable && btcDistPct > BTC_SOFT_ZONE_PCT) {
-      return no(`btc_favorable_${btcDistPct.toFixed(3)}%>${BTC_SOFT_ZONE_PCT}%`);
+      holdScore += 3;
+      holdReasons.push('btc_favorable(+3)');
     }
 
     // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
-    // v4 override: if token already dropped >15%, skip this gate entirely.
-    // Token market is telling us we're losing even if BTC is still close to PTB.
     const skipBtcDist = dropPct >= 15;
     if (hasPtb && !btcFavorable && !skipBtcDist) {
       let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
@@ -246,7 +246,8 @@ export function evaluateCutLoss({
       }
 
       if (btcDistPct < threshold) {
-        return no(`btc_close_${btcDistPct.toFixed(3)}%<${threshold.toFixed(3)}%${regimeChanged ? '_regime_chg' : ''}`);
+        holdScore += 2;
+        holdReasons.push('btc_close(+2)');
       }
     }
 
@@ -257,7 +258,8 @@ export function evaluateCutLoss({
         : btcDelta1m < 0;
       const momentumThreshold = getMomentumThreshold(atrRatio);
       if (movingTowardPtb && Math.abs(btcDelta1m) > momentumThreshold) {
-        return no(`btc_recovering_$${btcDelta1m.toFixed(1)}/min>$${momentumThreshold.toFixed(0)}`);
+        holdScore += 2;
+        holdReasons.push('btc_recovering(+2)');
       }
     }
 
@@ -265,28 +267,29 @@ export function evaluateCutLoss({
     if (modelProbability != null && Number.isFinite(modelProbability)) {
       evHold = modelProbability * timeDecay;
       if (evHold >= evCut * evMargin) {
-        return no(`ev_hold_${(evHold * 100).toFixed(1)}%>=cut_${(evCut * 100).toFixed(1)}%×${evMargin}×t${timeDecay}`);
+        holdScore += 3;
+        holdReasons.push('ev_hold(+3)');
       }
     }
 
-    // ── Gate 11: ML veto (v5: lowered 65% → 55% — let ML protect more positions) ──
-    // Quant audit: 68.8% settlement WR means most positions WIN if held.
-    // Lowering veto threshold lets ML block more cuts, preserving winning positions.
-    if (mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side) {
-      return no(`ml_veto_${(mlConfidence * 100).toFixed(0)}%_${mlSide}`);
+    // ── Gate 11: ML veto ──
+    if (mlConfidence != null && mlConfidence >= 0.60 && mlSide === position.side) {
+      holdScore += 2;
+      holdReasons.push('ml_veto(+2)');
     }
 
     // ── Gate 12: Token drop minimum ──
     if (dropPct < cfg.minTokenDropPct) {
-      return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
+      holdScore += 2;
+      holdReasons.push('drop_low(+2)');
     }
 
-    // ── Gate 12b: Token price above minimum? ──
+    // ── Gate 12b: Token price above minimum — HARD GATE (can't sell below min) ──
     if (currentTokenPrice < cfg.minTokenPrice) {
       return no(`price_${currentTokenPrice.toFixed(3)}<min_${cfg.minTokenPrice}`);
     }
 
-    // ── Gate 12c: Orderbook liquidity ──
+    // ── Gate 12c: Orderbook liquidity — HARD GATE (execution risk) ──
     if (orderbook) {
       const bidLiq = orderbook.bidLiquidity ?? 0;
       const spread = orderbook.spread ?? 0;
@@ -298,10 +301,16 @@ export function evaluateCutLoss({
       }
     }
 
-    // ── Gate 12d: Token price trajectory (v4: 2¢ → 3¢) ──
+    // ── Gate 12d: Token price trajectory ──
     tokenSlope = getTokenPriceSlope();
     if (tokenSlope != null && tokenSlope > 0.03) {
-      return no(`token_recovering_+${(tokenSlope * 100).toFixed(1)}¢`);
+      holdScore += 2;
+      holdReasons.push('token_recovering(+2)');
+    }
+
+    // ── Weighted threshold check ──
+    if (holdScore >= HOLD_THRESHOLD) {
+      return no(`hold_score_${holdScore}/${HOLD_THRESHOLD}:${holdReasons.join(',')}`);
     }
   }
 
@@ -321,15 +330,35 @@ export function evaluateCutLoss({
   }
 
   // ═══ All gates passed — compute sell details ═══
-  // FOK sell price = bestBid with 2% slippage tolerance.
+  // FOK sell price = bestBid with progressive slippage tolerance.
   // The bid can move between evaluation and the async CLOB call.
-  // Without slippage, the FOK fails, burns a maxAttempt + 10s cooldown,
-  // and after 3 failures the bot gives up and rides to settlement ($0).
-  // The 2% tolerance means we accept fills down to 98% of current bid.
+  // Without slippage, the FOK fails, burns a maxAttempt + cooldown,
+  // and after all failures the bot gives up and rides to settlement ($0).
+  //
+  // Progressive slippage (attempt-based):
+  //   Attempt 1: 1x base slippage (2%)
+  //   Attempt 2: 2x base slippage (4%)
+  //   Attempt 3: 3x base slippage (6%)
+  //   Attempt 4: 5x base slippage (10%)
+  //   Attempt 5+: market order (bestBid - 3 cents, aggressive)
   const rawSellPrice = (orderbook?.bestBid != null && orderbook.bestBid > 0)
     ? orderbook.bestBid
     : currentTokenPrice;
-  const sellPrice = Math.max(0.01, rawSellPrice * 0.98);
+
+  const attempt = sellAttempts + 1; // next attempt number (0-indexed sellAttempts → 1-indexed attempt)
+  const baseSlippage = 0.02; // 2% base
+  let slippageMultiplier;
+  if (attempt >= 5)      slippageMultiplier = null; // market order mode
+  else if (attempt === 4) slippageMultiplier = 5;
+  else                    slippageMultiplier = attempt; // 1, 2, 3
+
+  let sellPrice;
+  if (slippageMultiplier === null) {
+    // Aggressive market order: bestBid - 3 cents (accept any fill)
+    sellPrice = Math.max(0.01, rawSellPrice - 0.03);
+  } else {
+    sellPrice = Math.max(0.01, rawSellPrice * (1 - baseSlippage * slippageMultiplier));
+  }
 
   // v3: Always full cut (binary options are all-or-nothing)
   const recoveryAmount = sellPrice * position.size;
@@ -353,9 +382,13 @@ export function evaluateCutLoss({
       regimeChanged,
       atrRatio: atrRatio ?? null,
       tokenSlope,
+      holdScore,
+      holdReasons,
       isCrash,
       isLateForceCut,
       momentumThreshold: getMomentumThreshold(atrRatio),
+      sellAttempt: attempt,
+      slippageMode: slippageMultiplier === null ? 'market' : `${slippageMultiplier}x`,
     },
   };
 }
@@ -388,6 +421,13 @@ export function recordSellAttempt() {
  */
 export function resetCutConfirm() {
   consecutiveCutPolls = 0;
+}
+
+/**
+ * Get current sell attempt count (for progressive slippage logging).
+ */
+export function getSellAttempts() {
+  return sellAttempts;
 }
 
 /**
@@ -448,7 +488,7 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     timeDecay: getTimeDecay(timeLeftMin),
     confirmCount: consecutiveCutPolls,
     confirmNeeded: cfg.consecutivePolls,
-    mlVeto: mlConfidence != null && mlConfidence >= 0.55 && mlSide === position.side,
+    mlVeto: mlConfidence != null && mlConfidence >= 0.60 && mlSide === position.side,
     regime,
     atrRatio: atrRatio ?? null,
     tokenSlope,

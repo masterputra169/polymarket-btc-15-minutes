@@ -20,6 +20,7 @@ export let modelMetrics = null;
 export let featureNameToIdx = null;
 export let plattA = 1.0;
 export let plattB = 0.0;
+export let plattOnLogits = false; // v9: Platt applied to raw logits (not post-sigmoid)
 
 // Setters (needed since `let` exports are read-only from outside)
 export function setState(updates) {
@@ -35,4 +36,5 @@ export function setState(updates) {
   if ('featureNameToIdx' in updates) featureNameToIdx = updates.featureNameToIdx;
   if ('plattA' in updates) plattA = updates.plattA;
   if ('plattB' in updates) plattB = updates.plattB;
+  if ('plattOnLogits' in updates) plattOnLogits = updates.plattOnLogits;
 }

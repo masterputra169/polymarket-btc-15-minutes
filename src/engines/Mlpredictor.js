@@ -14,8 +14,8 @@ import { ML_CONFIDENCE } from '../config.js';
 import * as S from './ml/state.js';
 import { BASE_FEATURES } from './ml/state.js';
 import { indexTree, predictXGBoost } from './ml/treeEval.js';
-import { calibrate } from './ml/calibration.js';
-import { featureBuf, extractLiveFeaturesInPlace } from './ml/featureExtract.js';
+import { calibrate, calibrateLogit } from './ml/calibration.js';
+import { featureBuf, extractLiveFeaturesInPlace, getDataQualityScore } from './ml/featureExtract.js';
 import { ensemblePrediction } from './ml/ensemble.js';
 import { loadLgbModel, isLgbReady, predictLgb, unloadLgbModel } from './ml/lgbPredictor.js';
 
@@ -25,10 +25,30 @@ const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'deve
 let ensembleWeightXgb = 0.5;
 let ensembleWeightLgb = 0.5;
 
+// Calibrated params from training (audit H2/H3)
+let trainedSignalModifiers = null;   // { ptbDistance: 1.2, momentum: 0.8, ... }
+let calibratedPhaseThresholds = null; // { EARLY: { minEdge, minProb }, ... }
+
 /** Set ensemble weights (used by bot's disk-based loader). */
 export function setEnsembleWeights(xgb, lgb) {
   ensembleWeightXgb = xgb;
   ensembleWeightLgb = lgb;
+}
+
+/** Set calibrated params (used by bot's disk-based loader). */
+export function setCalibratedParams(signalMods, phaseThresholds) {
+  if (signalMods && typeof signalMods === 'object') trainedSignalModifiers = signalMods;
+  if (phaseThresholds && typeof phaseThresholds === 'object') calibratedPhaseThresholds = phaseThresholds;
+}
+
+/** Get trained signal modifiers for merging with live feedback modifiers. */
+export function getTrainedSignalModifiers() {
+  return trainedSignalModifiers;
+}
+
+/** Get calibrated phase thresholds for edge.js decide(). */
+export function getCalibratedPhaseThresholds() {
+  return calibratedPhaseThresholds;
 }
 
 // ═══ Public API ═══
@@ -58,6 +78,7 @@ export async function loadMLModel(
       modelMetrics: rawModel.metrics || null,
       plattA: rawModel.platt_a ?? 1.0,
       plattB: rawModel.platt_b ?? 0.0,
+      plattOnLogits: rawModel.platt_on_logits ?? false,
     });
 
     // Build feature name → index lookup
@@ -110,6 +131,15 @@ export async function loadMLModel(
         ensembleWeightLgb = norm.ensemble_weights.lgb ?? 0.5;
         console.log(`[ML] Ensemble weights: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
       }
+      // Load calibrated signal modifiers (audit H2) and phase thresholds (audit H3)
+      if (norm.signal_modifiers && typeof norm.signal_modifiers === 'object') {
+        trainedSignalModifiers = norm.signal_modifiers;
+        console.log(`[ML] Trained signal modifiers loaded: ${Object.keys(trainedSignalModifiers).length} signals`);
+      }
+      if (norm.phase_thresholds && typeof norm.phase_thresholds === 'object') {
+        calibratedPhaseThresholds = norm.phase_thresholds;
+        console.log(`[ML] Calibrated phase thresholds loaded: ${Object.keys(calibratedPhaseThresholds).join(', ')}`);
+      }
     } catch { /* use defaults */ }
 
     // Load LightGBM model (non-blocking, graceful degradation)
@@ -159,9 +189,12 @@ export function unloadMLModel() {
     modelMetrics: null,
     plattA: 1.0,
     plattB: 0.0,
+    plattOnLogits: false,
   });
   ensembleWeightXgb = 0.5;
   ensembleWeightLgb = 0.5;
+  trainedSignalModifiers = null;
+  calibratedPhaseThresholds = null;
   unloadLgbModel();
   if (IS_DEV) console.log('[ML] Models unloaded');
 }
@@ -169,10 +202,19 @@ export function unloadMLModel() {
 export function predictML(features) {
   if (!S.processedTrees) return null;
 
-  // XGBoost prediction
-  let xgbProb = predictXGBoost(features);
-  if (xgbProb === null) return null;
-  xgbProb = calibrate(xgbProb);
+  // XGBoost prediction — predictXGBoost returns raw logit (v9+)
+  const xgbLogit = predictXGBoost(features);
+  if (xgbLogit === null) return null;
+
+  // Apply calibration: Platt-on-logits (v9) or legacy double-sigmoid (v2)
+  let xgbProb;
+  if (S.plattOnLogits) {
+    xgbProb = calibrateLogit(xgbLogit);
+  } else {
+    // Legacy: convert logit → prob first, then apply Platt on prob
+    const rawProb = 1 / (1 + Math.exp(-xgbLogit));
+    xgbProb = calibrate(rawProb);
+  }
 
   // LightGBM prediction (if available)
   let probUp;
@@ -227,6 +269,9 @@ export function getMLPrediction(marketState, ruleProbUp) {
     ruleConfidence: Math.abs(ruleProbUp - 0.5) * 2,
   });
 
+  // H5: Get data quality score from feature extraction
+  const dataQuality = getDataQualityScore();
+
   const mlResult = predictML(featureBuf);
   if (!mlResult) {
     return {
@@ -239,6 +284,7 @@ export function getMLPrediction(marketState, ruleProbUp) {
       alpha: 0,
       source: 'Rule-only (ML failed)',
       modelVersion: S.modelVersion,
+      dataQuality,
     };
   }
 
@@ -256,5 +302,6 @@ export function getMLPrediction(marketState, ruleProbUp) {
     alpha: ensemble.alpha,
     source: ensemble.source,
     modelVersion: S.modelVersion,
+    dataQuality,
   };
 }

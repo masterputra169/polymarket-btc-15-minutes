@@ -87,8 +87,28 @@ export function computeEngineeredFeaturesInPlace() {
 }
 
 /**
+ * H5 FIX: Data quality tracking.
+ * Tracks how many features used fallback/default values vs real data.
+ * Exported alongside the feature vector so callers can gate on it.
+ */
+let _lastDataQualityScore = 1.0;
+let _lastFallbackCount = 0;
+
+/** Get the data quality score from the last extractLiveFeaturesInPlace() call. */
+export function getDataQualityScore() {
+  return {
+    dataQualityScore: _lastDataQualityScore,
+    fallbackCount: _lastFallbackCount,
+    isSufficient: _lastDataQualityScore >= 0.7,
+  };
+}
+
+/**
  * Extract 54 base features into featureBuf (in-place, zero alloc).
  * If model is v2, also computes 25 engineered features [54-78].
+ *
+ * H5 FIX: Tracks data freshness — counts how many features used fallback defaults.
+ * Call getDataQualityScore() after this to retrieve the result.
  */
 export function extractLiveFeaturesInPlace({
   price, priceToBeat, rsi, rsiSlope, macd, vwap, vwapSlope,
@@ -104,26 +124,61 @@ export function extractLiveFeaturesInPlace({
   momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   fundingRate,
 }) {
+  // H5: Track fallback usage — each key indicator group that falls back increments this.
+  // We track the 18 "primary data" features (not session/regime one-hots or time/clock).
+  let fallbackCount = 0;
+  const TRACKED_FEATURE_COUNT = 18;
+
   const ptbDistPct = priceToBeat && price ? (price - priceToBeat) / priceToBeat : 0;
+  if (!priceToBeat || !price) fallbackCount++;
+
   const isGreen = heikenColor === 'green';
   const haSignedConsec = isGreen ? (heikenCount || 0) : -(heikenCount || 0);
   const volRatio = volumeAvg > 0 ? (volumeRecent || 0) / volumeAvg : 1;
 
   featureBuf[0]  = ptbDistPct;
+
+  // RSI
+  if (rsi == null) fallbackCount++;
   featureBuf[1]  = (rsi ?? 50) / 100;
   featureBuf[2]  = rsiSlope ?? 0;
+
+  // MACD
+  if (!macd || (macd.hist == null && macd.line == null)) fallbackCount++;
   featureBuf[3]  = macd?.hist ?? 0;
   featureBuf[4]  = macd?.line ?? 0;
+
+  // VWAP
+  if (!vwap) fallbackCount++;
   featureBuf[5]  = vwap ? (price - vwap) / vwap : 0;
   featureBuf[6]  = vwapSlope ?? 0;
+
+  // Heiken Ashi
+  if (!heikenColor) fallbackCount++;
   featureBuf[7]  = haSignedConsec / 15;
+
+  // Deltas
+  if (delta1m == null) fallbackCount++;
+  if (delta3m == null) fallbackCount++;
   featureBuf[8]  = delta1m != null && price > 0 ? delta1m / price : 0;
   featureBuf[9]  = delta3m != null && price > 0 ? delta3m / price : 0;
+
+  // Volume
+  if (!volumeAvg || volumeAvg <= 0) fallbackCount++;
   featureBuf[10] = Math.min(volRatio, 5) / 5;
   featureBuf[11] = (minutesLeft ?? 7.5) / 15;
   featureBuf[12] = Math.max(0, Math.min(1, ruleProbUp ?? 0.5));
   featureBuf[13] = ruleConfidence ?? 0;
   featureBuf[14] = Math.min(vwapCrossCount ?? 0, 10) / 10;
+  // DESIGN NOTE (circular dependency audit): bestEdge is the RULE-based edge from
+  // the SAME tick (ruleEdge = computeEdge(ruleProbUp, marketPrice)). It is NOT a
+  // feedback loop from a prior candle's ML output. The flow is:
+  //   1. Rule engine scores indicators → ruleProbUp
+  //   2. computeEdge(ruleProbUp, marketPrice) → ruleEdge.bestEdge
+  //   3. This value enters the ML feature vector as feature[15]
+  //   4. ML produces mlProbUp → final ensemble edge (separate from ruleEdge)
+  // This is intentional stacking (ML sees how the rule engine rates the current state)
+  // and does NOT create a temporal feedback loop.
   featureBuf[15] = Math.max(0, Math.min(bestEdge ?? 0, 0.5));
 
   featureBuf[16] = regime === 'trending'       ? 1 : 0;
@@ -141,20 +196,30 @@ export function extractLiveFeaturesInPlace({
   featureBuf[26] = multiTfAgreement             ? 1 : 0;
   featureBuf[27] = failedVwapReclaim            ? 1 : 0;
 
+  // Bollinger
+  if (bbPercentB == null && bbWidth == null) fallbackCount++;
   featureBuf[28] = bbWidth ?? 0;
   featureBuf[29] = bbPercentB != null ? bbPercentB : 0.5;
   featureBuf[30] = bbSqueeze ? 1 : 0;
 
+  // ATR
+  if (atrPct == null && atrRatio == null) fallbackCount++;
   featureBuf[31] = atrPct != null ? Math.min(atrPct, 2) / 2 : 0.5;
   featureBuf[32] = atrRatio != null ? Math.min(atrRatio, 3) / 3 : 0.33;
   featureBuf[33] = (atrRatio ?? 1) > 1.1 ? 1 : 0;
 
+  // Volume Delta
+  if (volDeltaBuyRatio == null) fallbackCount++;
   featureBuf[34] = volDeltaBuyRatio != null ? volDeltaBuyRatio : 0.5;
   featureBuf[35] = volDeltaAccel != null ? Math.max(-0.5, Math.min(0.5, volDeltaAccel)) + 0.5 : 0.5;
 
+  // EMA
+  if (emaDistPct == null && emaCrossSignal == null) fallbackCount++;
   featureBuf[36] = emaDistPct != null ? Math.max(-1, Math.min(1, emaDistPct * 10)) / 2 + 0.5 : 0.5;
   featureBuf[37] = emaCrossSignal != null ? (emaCrossSignal + 1) / 2 : 0.5;
 
+  // StochRSI
+  if (stochK == null) fallbackCount++;
   featureBuf[38] = stochK != null ? stochK / 100 : 0.5;
   featureBuf[39] = stochKD != null ? Math.max(-50, Math.min(50, stochKD)) / 100 + 0.5 : 0.5;
 
@@ -170,6 +235,8 @@ export function extractLiveFeaturesInPlace({
   featureBuf[42] = Math.sin(hourUTC / 24 * 2 * Math.PI);
   featureBuf[43] = Math.cos(hourUTC / 24 * 2 * Math.PI);
 
+  // Market price
+  if (marketYesPrice == null) fallbackCount++;
   const mktYes = marketYesPrice ?? 0.5;
   featureBuf[44] = Math.max(0.01, Math.min(0.99, mktYes));
   featureBuf[45] = Math.max(-0.1, Math.min(0.1, marketPriceMomentum ?? 0));
@@ -193,6 +260,10 @@ export function extractLiveFeaturesInPlace({
     // Zero out engineered feature slots to prevent stale data from a previous call
     featureBuf.fill(0, 54, 79);
   }
+
+  // H5: Compute and store data quality score
+  _lastFallbackCount = fallbackCount;
+  _lastDataQualityScore = Math.max(0, 1 - fallbackCount / TRACKED_FEATURE_COUNT);
 
   return featureBuf;
 }

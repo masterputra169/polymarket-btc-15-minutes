@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
-=== XGBoost v8 — Advanced Training Pipeline ===
+=== XGBoost v9 — Advanced Training Pipeline ===
 
-v8 improvements over v5:
-  - Fixed MACD inference bug (histogram/macd → hist/line)
-  - Replaced dead features: regime_choppy→regime_confidence,
-    funding_rate_norm→volume_acceleration, funding_sentiment→bb_squeeze_intensity
-  - Renamed engineered: rsi_x_choppy → rsi_x_regime_conf
-  - Removed regime sample weights (all=1.0, v7 showed weighting doesn't help)
-  - 5-fold walk-forward CV (vs 3)
-  - Boost rounds 1200, early stopping patience 80
-  - Narrowed Optuna search space, 150 default trials
-  - --zero-features flag for variant training (e.g., without MACD)
+v9 improvements (ML-retrain audit fixes):
+  - C1: Real Polymarket market prices (via polymarket_lookup.json)
+  - C3: Threshold sweep on holdout split (default 12.5%), not test
+  - C4: Platt calibration on raw logits (not double-sigmoid)
+  - H: Real minutesLeft, real features 44-48, real labels from Polymarket
+  - M: Early-stop, pruning, calibration evaluated on holdout
+  - Metadata column (slug_timestamp) auto-dropped from features
+
+v8 improvements:
+  - Fixed MACD inference bug, replaced dead features
+  - 5-fold walk-forward CV, Optuna 150 trials
+  - Soft feature pruning + Platt calibration
 
 Strategy: Optuna or 8 hand-tuned seed configs + walk-forward CV
-          + soft feature pruning + Platt calibration.
+          + soft feature pruning + Platt-on-logits calibration.
 """
 
 import argparse, json, os, sys, warnings
@@ -42,17 +44,18 @@ parser.add_argument('--deploy', action='store_true')
 parser.add_argument('--days', type=int, default=540)
 parser.add_argument('--zero-features', type=str, default='',
                     help='Comma-separated feature names to zero out before training (e.g., macd_hist,macd_line)')
-parser.add_argument('--exclude-features', type=str, default='',
-                    help='Comma-separated feature names to pre-exclude via feature_weights=0 (applied before Optuna)')
+parser.add_argument('--exclude-features', type=str, default='funding_rate_change',
+                    help='Comma-separated feature names to pre-exclude via feature_weights=0 (applied before Optuna). '
+                         'Default: funding_rate_change (always zero at inference — audit fix C8)')
 parser.add_argument('--recency', action='store_true',
                     help='Apply recency sample weighting (90-day half-life)')
 parser.add_argument('--recency-halflife', type=int, default=90,
                     help='Half-life in days for recency weighting (default: 90)')
 parser.add_argument('--regime-split', action='store_true',
                     help='Train separate models per regime (trending/moderate/choppy)')
-parser.add_argument('--holdout-frac', type=float, default=0,
+parser.add_argument('--holdout-frac', type=float, default=0.125,
                     help='Reserve final N%% of train data as holdout (not seen by Optuna/CV). '
-                         'E.g. 0.125 = 12.5%% holdout. Use with backtestPnL.py --oos-start 0.875')
+                         'Default 0.125 = 12.5%% holdout (audit fix C3). Set to 0 to disable.')
 # Legacy flags kept for compatibility
 parser.add_argument('--epochs', type=int, default=0)
 args = parser.parse_args()
@@ -73,7 +76,7 @@ exclude_feature_names = [f.strip() for f in args.exclude_features.split(',') if 
 
 print(f"""
 ==================================================
-  XGBoost v8 — Advanced Training Pipeline
+  XGBoost v9 — Advanced Training Pipeline
   {('Optuna (' + str(args.tune_trials) + ' trials)') if USE_OPTUNA else '8 configs (grid)'} | Feat selection | Platt calibration
 ==================================================
   Input:     {args.input}
@@ -90,7 +93,9 @@ print(f"""
 # ================================================
 print("[1/8] Loading data...")
 df = pd.read_csv(args.input)
-feature_cols_orig = [c for c in df.columns if c != 'label']
+# Drop metadata columns (not features, just row identifiers from data generation)
+metadata_cols = ['slug_timestamp']
+feature_cols_orig = [c for c in df.columns if c != 'label' and c not in metadata_cols]
 X_orig = df[feature_cols_orig].values.astype(np.float32)
 y = df['label'].values.astype(np.int32)
 X_orig = np.nan_to_num(X_orig, nan=0.0, posinf=0.0, neginf=0.0)
@@ -286,11 +291,11 @@ N_CV_FOLDS = 5
 # --- Walk-Forward CV ---
 def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False, feat_weights=None):
     """Walk-forward CV: train on folds 1..k, validate on fold k+1.
-    Optionally returns out-of-fold predictions for calibration.
+    Optionally returns out-of-fold predictions AND raw margins for calibration.
     feat_weights: optional per-feature weight array (0=exclude from splits)."""
     fold_size = len(X_tr) // (n_folds + 2)
     aucs, accs = [], []
-    oof_preds, oof_labels = [], []
+    oof_preds, oof_margins, oof_labels = [], [], []
 
     for fold in range(n_folds):
         tr_end = fold_size * (fold + 2)
@@ -351,13 +356,16 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
 
         if return_preds:
             oof_preds.extend(y_prob_f.tolist())
+            # Also collect raw margins (logits) for Platt-on-logits calibration (C4)
+            y_margin_f = model_f.predict(dval_f, output_margin=True)
+            oof_margins.extend(y_margin_f.tolist())
             oof_labels.extend(y_f_val.tolist())
 
     mean_auc = np.mean(aucs) if aucs else 0
     mean_acc = np.mean(accs) if accs else 0
 
     if return_preds:
-        return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_labels)
+        return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels)
     return mean_auc, mean_acc
 
 
@@ -508,11 +516,20 @@ if exclude_feature_names:
     dtrain.feature_weights = pre_exclude_fw
 dtest = xgb.DMatrix(X_test, label=y_test, feature_names=feature_cols)
 
+# Early stopping on holdout (audit fix M-early) to avoid test data leakage
+# If holdout available, monitor it; otherwise fall back to test set
+if X_holdout is not None and len(X_holdout) > 0:
+    dholdout = xgb.DMatrix(X_holdout, label=y_holdout, feature_names=feature_cols)
+    early_stop_set = (dholdout, 'holdout')
+    print(f"   Early stopping monitored on: holdout ({len(X_holdout):,} samples)")
+else:
+    early_stop_set = (dtest, 'eval')
+
 ev = {}
 model = xgb.train(
     final_params, dtrain,
     num_boost_round=NUM_BOOST_ROUND,
-    evals=[(dtrain, 'train'), (dtest, 'eval')],
+    evals=[(dtrain, 'train'), early_stop_set],
     evals_result=ev,
     early_stopping_rounds=EARLY_STOPPING,
     verbose_eval=False,
@@ -525,7 +542,8 @@ print(f"   Initial model: acc={initial_acc*100:.1f}% | AUC={initial_auc:.4f} | t
 
 # --- OOS holdout evaluation (if --holdout-frac was used) ---
 if X_holdout is not None and len(X_holdout) > 0:
-    dholdout = xgb.DMatrix(X_holdout, label=y_holdout, feature_names=feature_cols)
+    if 'dholdout' not in dir() or dholdout is None:
+        dholdout = xgb.DMatrix(X_holdout, label=y_holdout, feature_names=feature_cols)
     y_prob_holdout = model.predict(dholdout)
     holdout_acc = accuracy_score(y_holdout, (y_prob_holdout >= 0.5).astype(int))
     holdout_auc = roc_auc_score(y_holdout, y_prob_holdout)
@@ -581,28 +599,49 @@ if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
     dtrain_fw = xgb.DMatrix(X_train_full, label=y_train_full, weight=w_train_final, feature_names=feature_cols)
     dtrain_fw.feature_weights = combined_fw
 
+    # Early stop on holdout for pruned model too (audit fix M-prune)
+    if X_holdout is not None and len(X_holdout) > 0:
+        prune_early_stop_set = (dholdout, 'holdout')
+    else:
+        prune_early_stop_set = (dtest, 'eval')
+
     ev2 = {}
     model_pruned = xgb.train(
         retrain_params, dtrain_fw,
         num_boost_round=NUM_BOOST_ROUND,
-        evals=[(dtrain_fw, 'train'), (dtest, 'eval')],
+        evals=[(dtrain_fw, 'train'), prune_early_stop_set],
         evals_result=ev2,
         early_stopping_rounds=EARLY_STOPPING,
         verbose_eval=False,
     )
 
-    y_prob_pruned = model_pruned.predict(dtest)
-    pruned_acc = accuracy_score(y_test, (y_prob_pruned >= 0.5).astype(int))
-    pruned_auc = roc_auc_score(y_test, y_prob_pruned)
-    print(f"   Pruned model: acc={pruned_acc*100:.1f}% | AUC={pruned_auc:.4f} | trees={model_pruned.best_iteration+1}")
+    # Evaluate pruned model on holdout (audit fix M-prune) or test as fallback
+    if X_holdout is not None and len(X_holdout) > 0:
+        y_prob_pruned_eval = model_pruned.predict(dholdout)
+        pruned_acc = accuracy_score(y_holdout, (y_prob_pruned_eval >= 0.5).astype(int))
+        pruned_auc = roc_auc_score(y_holdout, y_prob_pruned_eval)
+        eval_set_name = "holdout"
+    else:
+        y_prob_pruned_eval = model_pruned.predict(dtest)
+        pruned_acc = accuracy_score(y_test, (y_prob_pruned_eval >= 0.5).astype(int))
+        pruned_auc = roc_auc_score(y_test, y_prob_pruned_eval)
+        eval_set_name = "test"
+    print(f"   Pruned model ({eval_set_name}): acc={pruned_acc*100:.1f}% | AUC={pruned_auc:.4f} | trees={model_pruned.best_iteration+1}")
+
+    # Compare on same eval set (holdout if available, test otherwise)
+    if X_holdout is not None and len(X_holdout) > 0:
+        initial_eval_prob = model.predict(dholdout)
+        initial_eval_auc = roc_auc_score(y_holdout, initial_eval_prob)
+    else:
+        initial_eval_auc = initial_auc
 
     # Keep better model
-    if pruned_auc >= initial_auc - 0.002:  # allow tiny regression for simpler model
-        print(f"   [OK]Using pruned model (AUC diff: {(pruned_auc-initial_auc)*100:+.2f}%)")
+    if pruned_auc >= initial_eval_auc - 0.002:  # allow tiny regression for simpler model
+        print(f"   [OK]Using pruned model (AUC diff: {(pruned_auc-initial_eval_auc)*100:+.2f}%)")
         model = model_pruned
-        y_prob = y_prob_pruned
+        y_prob = model_pruned.predict(dtest)  # always keep test predictions for final eval
     else:
-        print(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_auc:.4f})")
+        print(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})")
         pruned_features = []  # reset since we're not using pruned model
 else:
     print(f"   No features pruned (all above threshold or too many would be pruned)")
@@ -610,46 +649,63 @@ else:
 # ================================================
 # 7. PLATT CALIBRATION
 # ================================================
-print("\n[7/8] Platt calibration...")
+print("\n[7/8] Platt calibration (on raw logits — audit fix C4)...")
 
-# Get out-of-fold predictions for calibration fitting
-cv_auc_final, cv_acc_final, oof_preds, oof_labels = walk_forward_cv(
+# Get out-of-fold predictions AND raw margins for calibration fitting
+cv_auc_final, cv_acc_final, oof_preds, oof_margins, oof_labels = walk_forward_cv(
     X_train, y_train, best_cfg, w_train, return_preds=True,
     feat_weights=pre_exclude_fw if exclude_feature_names else None
 )
 print(f"   CV AUC: {cv_auc_final:.4f} | CV acc: {cv_acc_final*100:.1f}%")
 print(f"   Out-of-fold predictions: {len(oof_preds)} samples")
+print(f"   Out-of-fold margins: {len(oof_margins)} samples")
 
-# Fit Platt scaling (logistic regression on raw probabilities)
+# Fit Platt scaling on RAW LOGITS (not post-sigmoid probabilities)
+# This is the correct way: sigmoid(A*logit + B) gives properly calibrated probs
 platt_a, platt_b = 1.0, 0.0  # defaults (identity)
-if len(oof_preds) > 100:
+platt_on_logits = True  # flag for browser inference
+
+if len(oof_margins) > 100:
     lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
-    lr.fit(oof_preds.reshape(-1, 1), oof_labels)
+    lr.fit(oof_margins.reshape(-1, 1), oof_labels)
     platt_a = float(lr.coef_[0][0])
     platt_b = float(lr.intercept_[0])
 
-    # Test calibration on held-out test set
-    y_prob_calibrated = 1.0 / (1.0 + np.exp(-(platt_a * y_prob + platt_b)))
-    cal_acc = accuracy_score(y_test, (y_prob_calibrated >= 0.5).astype(int))
-    cal_auc = roc_auc_score(y_test, y_prob_calibrated)
+    # Get raw margins from final model for evaluation
+    y_margin_test = model.predict(dtest, output_margin=True)
+    y_prob_calibrated = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_test + platt_b)))
 
-    # Check calibration quality — does it actually help?
-    raw_acc = accuracy_score(y_test, (y_prob >= 0.5).astype(int))
-    raw_auc = roc_auc_score(y_test, y_prob)
+    # Evaluate calibration on holdout (audit fix M-cal) or test as fallback
+    if X_holdout is not None and len(X_holdout) > 0:
+        y_margin_holdout = model.predict(dholdout, output_margin=True)
+        y_prob_cal_holdout = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_holdout + platt_b)))
+        cal_acc = accuracy_score(y_holdout, (y_prob_cal_holdout >= 0.5).astype(int))
+        cal_auc = roc_auc_score(y_holdout, y_prob_cal_holdout)
+        # Compare vs raw on same holdout set
+        raw_prob_holdout = model.predict(dholdout)
+        raw_acc = accuracy_score(y_holdout, (raw_prob_holdout >= 0.5).astype(int))
+        raw_auc = roc_auc_score(y_holdout, raw_prob_holdout)
+        eval_label = "holdout"
+    else:
+        cal_acc = accuracy_score(y_test, (y_prob_calibrated >= 0.5).astype(int))
+        cal_auc = roc_auc_score(y_test, y_prob_calibrated)
+        raw_acc = accuracy_score(y_test, (y_prob >= 0.5).astype(int))
+        raw_auc = roc_auc_score(y_test, y_prob)
+        eval_label = "test"
 
-    print(f"   Platt params: A={platt_a:.4f}, B={platt_b:.4f}")
-    print(f"   Raw:        acc={raw_acc*100:.1f}% | AUC={raw_auc:.4f}")
-    print(f"   Calibrated: acc={cal_acc*100:.1f}% | AUC={cal_auc:.4f}")
+    print(f"   Platt params (on logits): A={platt_a:.4f}, B={platt_b:.4f}")
+    print(f"   Raw ({eval_label}):        acc={raw_acc*100:.1f}% | AUC={raw_auc:.4f}")
+    print(f"   Calibrated ({eval_label}): acc={cal_acc*100:.1f}% | AUC={cal_auc:.4f}")
 
     if cal_auc < raw_auc - 0.005:
-        print(f"   [WARN] Calibration hurts AUC, disabling (A=1, B=0)")
+        print(f"   [WARN] Calibration hurts AUC on {eval_label}, disabling (A=1, B=0)")
         platt_a, platt_b = 1.0, 0.0
         y_prob_final = y_prob
     else:
-        print(f"   [OK]Calibration active")
-        y_prob_final = y_prob_calibrated
+        print(f"   [OK] Platt-on-logits calibration active")
+        y_prob_final = y_prob_calibrated  # calibrated test probs for final eval
 else:
-    print(f"   [WARN] Not enough OOF predictions ({len(oof_preds)}), skipping calibration")
+    print(f"   [WARN] Not enough OOF margins ({len(oof_margins)}), skipping calibration")
     y_prob_final = y_prob
 
 # ================================================
@@ -694,26 +750,44 @@ for lo, hi in buckets:
         a = accuracy_score(y_test[mask], y_pred[mask])
         print(f"     {lo:.2f}-{hi:.2f}: {a*100:.1f}% acc ({mask.sum():,} samples, {mask.sum()/len(y_test)*100:.1f}%)")
 
-# --- Optimal threshold scan ---
+# --- Optimal threshold scan on holdout (audit fix C3) or test fallback ---
+# Threshold is selected on holdout to prevent information leakage
+if X_holdout is not None and len(X_holdout) > 0:
+    # Use holdout for threshold selection
+    y_margin_ho = model.predict(dholdout, output_margin=True)
+    y_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_ho + platt_b)))
+    y_pred_ho = (y_prob_ho >= 0.5).astype(int)
+    sweep_probs = y_prob_ho
+    sweep_labels = y_holdout
+    sweep_preds = y_pred_ho
+    sweep_name = "holdout"
+else:
+    sweep_probs = y_prob_final
+    sweep_labels = y_test
+    sweep_preds = y_pred
+    sweep_name = "test"
+
 best_threshold = 0.60
 best_score = 0
 for thresh in np.arange(0.55, 0.85, 0.005):
-    hmask = (y_prob_final < (1-thresh)) | (y_prob_final > thresh)
+    hmask = (sweep_probs < (1-thresh)) | (sweep_probs > thresh)
     if hmask.sum() < 50: continue
-    hacc = accuracy_score(y_test[hmask], y_pred[hmask])
-    hratio = hmask.sum() / len(y_test)
+    hacc = accuracy_score(sweep_labels[hmask], sweep_preds[hmask])
+    hratio = hmask.sum() / len(sweep_labels)
     score = hacc * np.sqrt(hratio)
     if score > best_score:
         best_score = score
         best_threshold = thresh
 
+print(f"\n   Optimal Threshold (from {sweep_name}): {best_threshold:.3f}")
+
+# Report HIGH-CONF stats on TEST as read-only (audit fix C3)
 high_mask = (y_prob_final < (1-best_threshold)) | (y_prob_final > best_threshold)
 hc_acc = accuracy_score(y_test[high_mask], y_pred[high_mask]) if high_mask.sum() > 0 else 0
 hc_count = int(high_mask.sum())
 hc_ratio = hc_count / len(y_test) * 100
 
-print(f"\n   Optimal Threshold: {best_threshold:.3f}")
-print(f"   HIGH-CONF: {hc_acc*100:.1f}% accuracy ({hc_count:,} signals, {hc_ratio:.1f}% of test)")
+print(f"   HIGH-CONF (test, read-only): {hc_acc*100:.1f}% accuracy ({hc_count:,} signals, {hc_ratio:.1f}% of test)")
 
 # Feature importance (from final model)
 importance = model.get_score(importance_type='gain')
@@ -730,6 +804,133 @@ print(f"\n   Engineered features in top 20: {new_in_top20}/{len(new_names)}")
 if pruned_features:
     print(f"   Pruned features ({len(pruned_features)}): {', '.join(pruned_features)}")
 
+# ── Data-Driven Calibration (audit Signals H2 + H3) ──
+print("\n   --- Data-Driven Calibration ---")
+
+# === Signal Modifiers (H2): Feature importance → probability.js signal weights ===
+# Map XGBoost feature importances to probability.js signal modifier keys.
+# Each key groups features that inform one scoring signal in scoreDirection().
+SIGNAL_FEATURE_MAP = {
+    'ptbDistance': ['ptb_dist_pct'],
+    'momentum': ['delta_1m_pct', 'delta_3m_pct', 'momentum_5candle_slope',
+                  'delta_1m_capped', 'momentum_accel', 'vol_weighted_momentum',
+                  'delta_1m_atr_adj'],
+    'rsi': ['rsi_norm', 'rsi_slope', 'stoch_k_norm', 'stoch_kd_norm',
+            'rsi_x_trending', 'rsi_x_regime_conf', 'rsi_x_mean_rev',
+            'combined_oscillator', 'oscillator_extreme', 'rsi_divergence',
+            'stoch_rsi_extreme'],
+    'macdHist': ['macd_hist'],
+    'macdLine': ['macd_line', 'macd_x_rsi_slope'],
+    'vwapPos': ['vwap_dist', 'vwap_trend_strength', 'price_position_score'],
+    'vwapSlope': ['vwap_slope'],
+    'heikenAshi': ['ha_signed_consec', 'ha_is_green', 'ha_delta_agree'],
+    'failedVwap': ['failed_vwap_reclaim'],
+    'orderbook': ['orderbook_imbalance', 'imbalance_x_vol_delta'],
+    'multiTf': ['multi_tf_agreement', 'delta1m_x_multitf',
+                'trend_alignment_score', 'multi_indicator_agree'],
+    'bbPos': ['bb_percent_b', 'bb_width', 'bb_squeeze', 'bb_squeeze_intensity',
+              'bb_pctb_x_squeeze', 'squeeze_breakout_potential'],
+    'atrExpand': ['atr_pct_norm', 'atr_ratio_norm', 'atr_expanding'],
+}
+
+signal_importances = {}
+for signal_key, feat_names in SIGNAL_FEATURE_MAP.items():
+    total_gain = sum(importance.get(fn, 0) for fn in feat_names)
+    signal_importances[signal_key] = total_gain
+
+# Normalize: mean modifier = 1.0
+sig_gains = list(signal_importances.values())
+mean_sig_gain = np.mean(sig_gains) if sig_gains else 1.0
+if mean_sig_gain < 1e-8:
+    mean_sig_gain = 1.0
+
+signal_modifiers = {}
+for key, gain in signal_importances.items():
+    mod_val = gain / mean_sig_gain
+    mod_val = max(0.3, min(3.0, mod_val))  # clamp to prevent extreme values
+    signal_modifiers[key] = round(float(mod_val), 2)
+
+print(f"   Signal Modifiers (H2):")
+for k in sorted(signal_modifiers.keys()):
+    bar = '#' * int(signal_modifiers[k] * 15)
+    print(f"     {k:<15s}: {signal_modifiers[k]:.2f}  {bar}")
+
+# === Phase Thresholds (H3): Sweep optimal minEdge/minProb per phase on holdout ===
+calibrated_phase_thresholds = None
+if X_holdout is not None and len(X_holdout) > 200:
+    print(f"\n   Phase Threshold Calibration (H3) on holdout ({len(X_holdout):,} samples)...")
+
+    # Get calibrated probabilities on holdout
+    ho_margin = model.predict(dholdout, output_margin=True)
+    ho_prob = 1.0 / (1.0 + np.exp(-(platt_a * ho_margin + platt_b)))
+
+    # Extract minutesLeft and market_yes_price from holdout features
+    ml_idx = fi.get('minutes_left_norm')   # index 11
+    mkt_idx = fi.get('market_yes_price')   # index 44
+
+    if ml_idx is not None and mkt_idx is not None:
+        ho_minutes = X_holdout[:, ml_idx] * 15  # denormalize
+        ho_mkt_price = X_holdout[:, mkt_idx]
+
+        # Phase brackets (same as edge.js decide())
+        phase_brackets = {
+            'EARLY':     (10, 15.01),
+            'MID':       (5,  10),
+            'LATE':      (2,  5),
+            'VERY_LATE': (0,  2),
+        }
+
+        calibrated_phase_thresholds = {}
+        for phase_name, (lo_min, hi_min) in phase_brackets.items():
+            phase_mask = (ho_minutes > lo_min) & (ho_minutes <= hi_min)
+            n_phase = int(phase_mask.sum())
+            if n_phase < 50:
+                print(f"     {phase_name:10s}: too few samples ({n_phase}), using defaults")
+                continue
+
+            p_probs = ho_prob[phase_mask]
+            p_mkt = ho_mkt_price[phase_mask]
+            p_labels = y_holdout[phase_mask]
+
+            # Best edge and best side for each sample
+            p_edge_abs = np.abs(p_probs - p_mkt)
+            p_model_best = np.maximum(p_probs, 1 - p_probs)
+            p_predicted_up = p_probs > p_mkt
+            p_correct = (p_predicted_up & (p_labels == 1)) | (~p_predicted_up & (p_labels == 0))
+
+            best_score = 0
+            best_me = 0.06
+            best_mp = 0.54
+
+            for me in np.arange(0.02, 0.20, 0.005):
+                for mp in np.arange(0.52, 0.65, 0.005):
+                    entry_mask = (p_edge_abs >= me) & (p_model_best >= mp)
+                    n_entries = entry_mask.sum()
+                    if n_entries < max(20, n_phase * 0.05):
+                        continue
+                    acc = p_correct[entry_mask].mean()
+                    coverage = n_entries / n_phase
+                    score = acc * np.sqrt(coverage)
+                    if score > best_score:
+                        best_score = score
+                        best_me = me
+                        best_mp = mp
+
+            calibrated_phase_thresholds[phase_name] = {
+                'minEdge': round(float(best_me), 3),
+                'minProb': round(float(best_mp), 3),
+            }
+
+            entry_mask = (p_edge_abs >= best_me) & (p_model_best >= best_mp)
+            n_enter = int(entry_mask.sum())
+            acc_val = float(p_correct[entry_mask].mean()) if n_enter > 0 else 0
+            print(f"     {phase_name:10s}: minEdge={best_me:.3f} minProb={best_mp:.3f} | "
+                  f"{n_enter}/{n_phase} entries ({n_enter/n_phase*100:.1f}%), acc={acc_val*100:.1f}%")
+    else:
+        print(f"   [WARN] minutes_left_norm or market_yes_price not found in features")
+else:
+    print(f"   Phase thresholds: skipped (no holdout or too few samples)")
+
 # --- EXPORT ---
 print(f"\n   Exporting model...")
 
@@ -741,8 +942,8 @@ best_trees = all_trees[:model.best_iteration + 1]
 print(f"   Trees: {len(best_trees)} (best) / {len(all_trees)} (total)")
 
 browser_model = {
-    'format': 'xgboost_json_v8',
-    'version': 2,
+    'format': 'xgboost_json_v9',
+    'version': 3,
     'num_features': len(feature_cols),
     'num_trees': len(best_trees),
     'feature_names': feature_cols,
@@ -752,10 +953,13 @@ browser_model = {
     'optimal_threshold': best_threshold,
     'platt_a': platt_a,
     'platt_b': platt_b,
+    'platt_on_logits': platt_on_logits,
     'pruned_features': pruned_features,
     'pre_excluded_features': exclude_feature_names,
     'zero_features': zero_feature_names,
     'recency_weighting': {'enabled': args.recency, 'halflife_days': args.recency_halflife} if args.recency else None,
+    'signal_modifiers': signal_modifiers,
+    'phase_thresholds': calibrated_phase_thresholds,
     'params': {k: str(v) for k, v in final_params.items()},
     'training_method': 'optuna' if USE_OPTUNA else 'grid_search',
     'metrics': {
@@ -785,7 +989,7 @@ for i in range(len(stds)):
     if stds[i] < 1e-8: stds[i] = 1.0
 
 norm = {
-    'version': 2,
+    'version': 3,
     'means': means,
     'stds': stds,
     'feature_names': feature_cols,
@@ -793,6 +997,7 @@ norm = {
     'original_features': len(feature_cols_orig),
     'platt_a': platt_a,
     'platt_b': platt_b,
+    'platt_on_logits': platt_on_logits,
     'pruned_features': pruned_features,
     'engineered_feature_specs': {
         'delta_1m_capped': {'type': 'clip', 'source': 'delta_1m_pct', 'clip_std': 3},
@@ -821,6 +1026,8 @@ norm = {
         'divergence_x_confidence': {'type': 'multiply', 'a': 'crowd_model_divergence', 'b': 'rule_confidence'},
         'imbalance_x_vol_delta': {'type': 'multiply', 'a': 'orderbook_imbalance', 'b': 'vol_delta_buy_ratio'},
     },
+    'signal_modifiers': signal_modifiers,
+    'phase_thresholds': calibrated_phase_thresholds,
     'train_samples': len(X_train_full),
     'holdout_frac': args.holdout_frac if args.holdout_frac > 0 else None,
     'holdout_start_idx': holdout_start_idx,
@@ -831,14 +1038,14 @@ with open(os.path.join(args.output_dir, 'norm_browser.json'), 'w') as f:
 
 # Training report
 report = [
-    f"=== XGBoost v8 Training Report ===",
+    f"=== XGBoost v9 Training Report ===",
     f"Method: {'Optuna (' + str(args.tune_trials) + ' trials)' if USE_OPTUNA else 'Grid search (8 configs)'}",
     f"Winner: {best_cfg_name}",
     f"Accuracy: {accuracy*100:.2f}% | AUC: {auc:.4f}",
     f"High-conf: {hc_acc*100:.1f}% ({hc_count:,} signals, {hc_ratio:.1f}%)",
     f"Threshold: {best_threshold:.3f} | Trees: {len(best_trees)}",
     f"Features: {len(feature_cols)} ({len(feature_cols_orig)} base + {len(new_names)} engineered)",
-    f"Platt calibration: A={platt_a:.4f}, B={platt_b:.4f}",
+    f"Platt calibration (on logits): A={platt_a:.4f}, B={platt_b:.4f}",
     f"Pruned features ({len(pruned_features)}): {', '.join(pruned_features) if pruned_features else 'none'}",
     f"Zero features: {', '.join(zero_feature_names) if zero_feature_names else 'none'}",
     f"Pre-excluded: {', '.join(exclude_feature_names) if exclude_feature_names else 'none'}",
@@ -893,10 +1100,10 @@ if HAS_LGB:
     LGB_OPTUNA_TRIALS = 50
 
     def lgb_walk_forward_cv(X_tr, y_tr, params, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False):
-        """Walk-forward CV for LightGBM."""
+        """Walk-forward CV for LightGBM. Returns margins for Platt-on-logits."""
         fold_size = len(X_tr) // (n_folds + 2)
         aucs, accs = [], []
-        oof_preds, oof_labels = [], []
+        oof_preds, oof_margins, oof_labels = [], [], []
 
         for fold in range(n_folds):
             tr_end = fold_size * (fold + 2)
@@ -943,13 +1150,16 @@ if HAS_LGB:
 
             if return_preds:
                 oof_preds.extend(y_prob_f.tolist())
+                # Raw logits for Platt-on-logits (C4)
+                y_margin_f = model_f.predict(X_f_val, raw_score=True)
+                oof_margins.extend(y_margin_f.tolist())
                 oof_labels.extend(y_f_val.tolist())
 
         mean_auc = np.mean(aucs) if aucs else 0
         mean_acc = np.mean(accs) if accs else 0
 
         if return_preds:
-            return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_labels)
+            return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels)
         return mean_auc, mean_acc
 
     # --- LightGBM Hyperparameter Optimization ---
@@ -1010,12 +1220,18 @@ if HAS_LGB:
         print(f"   Using default LightGBM params (no Optuna)")
 
     # --- Train final LightGBM model ---
+    # Use full training data; early stop on holdout (audit fix M-early)
     print(f"   Training final LightGBM model...")
 
-    lgb_dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train,
+    lgb_dtrain = lgb.Dataset(X_train_full, label=y_train_full, weight=w_train_final,
                              feature_name=feature_cols, free_raw_data=False)
-    lgb_dval = lgb.Dataset(X_test, label=y_test,
-                           feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+    if X_holdout is not None and len(X_holdout) > 0:
+        lgb_dval = lgb.Dataset(X_holdout, label=y_holdout,
+                               feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+        print(f"   LGB early stopping on: holdout ({len(X_holdout):,} samples)")
+    else:
+        lgb_dval = lgb.Dataset(X_test, label=y_test,
+                               feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
 
     lgb_callbacks = [lgb.early_stopping(LGB_EARLY_STOPPING, verbose=False),
                      lgb.log_evaluation(period=0)]
@@ -1033,20 +1249,23 @@ if HAS_LGB:
     lgb_n_trees = lgb_model_final.best_iteration if lgb_model_final.best_iteration > 0 else lgb_model_final.num_trees()
     print(f"   LightGBM: acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f} | trees={lgb_n_trees}")
 
-    # --- LightGBM Platt Calibration ---
-    print(f"   LightGBM Platt calibration...")
-    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_labels = lgb_walk_forward_cv(
+    # --- LightGBM Platt Calibration (on raw logits — audit fix C4) ---
+    print(f"   LightGBM Platt calibration (on logits)...")
+    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_margins, lgb_oof_labels = lgb_walk_forward_cv(
         X_train, y_train, lgb_best_params, w_train, return_preds=True
     )
     print(f"   LGB CV AUC: {lgb_cv_auc:.4f} | CV acc: {lgb_cv_acc*100:.1f}%")
 
-    if len(lgb_oof_preds) > 100:
+    lgb_platt_on_logits = True
+    if len(lgb_oof_margins) > 100:
         lgb_lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
-        lgb_lr.fit(lgb_oof_preds.reshape(-1, 1), lgb_oof_labels)
+        lgb_lr.fit(lgb_oof_margins.reshape(-1, 1), lgb_oof_labels)
         lgb_platt_a = float(lgb_lr.coef_[0][0])
         lgb_platt_b = float(lgb_lr.intercept_[0])
 
-        lgb_y_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_prob + lgb_platt_b)))
+        # Apply Platt on raw logits of test predictions
+        lgb_y_margin_test = lgb_model_final.predict(X_test, raw_score=True)
+        lgb_y_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_test + lgb_platt_b)))
         lgb_cal_acc = accuracy_score(y_test, (lgb_y_cal >= 0.5).astype(int))
         lgb_cal_auc = roc_auc_score(y_test, lgb_y_cal)
 
@@ -1054,31 +1273,55 @@ if HAS_LGB:
             print(f"   [WARN] LGB calibration hurts AUC, disabling")
             lgb_platt_a, lgb_platt_b = 1.0, 0.0
         else:
-            print(f"   LGB Platt: A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
+            print(f"   LGB Platt (on logits): A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
             print(f"   LGB calibrated: acc={lgb_cal_acc*100:.1f}% | AUC={lgb_cal_auc:.4f}")
 
-    # --- Ensemble Weight Optimization ---
-    print(f"\n   Optimizing ensemble weights...")
-    xgb_cal_probs = y_prob_final
-    lgb_cal_probs = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_prob + lgb_platt_b)))
+    # --- Ensemble Weight Optimization (on holdout — audit fix H5) ---
+    # Sweep ensemble weights on holdout to prevent test leakage
+    if X_holdout is not None and len(X_holdout) > 0:
+        print(f"\n   Optimizing ensemble weights (on holdout)...")
+        xgb_margin_ho = model.predict(dholdout, output_margin=True)
+        xgb_cal_ho = 1.0 / (1.0 + np.exp(-(platt_a * xgb_margin_ho + platt_b)))
+        lgb_margin_ho = lgb_model_final.predict(X_holdout, raw_score=True)
+        lgb_cal_ho = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_ho + lgb_platt_b)))
 
-    best_ens_auc = 0
-    best_ens_w = 0.5
-    for w in np.arange(0.25, 0.80, 0.05):
-        ens_prob = w * xgb_cal_probs + (1 - w) * lgb_cal_probs
-        ens_auc_val = roc_auc_score(y_test, ens_prob)
-        if ens_auc_val > best_ens_auc:
-            best_ens_auc = ens_auc_val
-            best_ens_w = w
+        best_ens_auc = 0
+        best_ens_w = 0.5
+        for w in np.arange(0.25, 0.80, 0.05):
+            ens_prob = w * xgb_cal_ho + (1 - w) * lgb_cal_ho
+            ens_auc_val = roc_auc_score(y_holdout, ens_prob)
+            if ens_auc_val > best_ens_auc:
+                best_ens_auc = ens_auc_val
+                best_ens_w = w
+        sweep_label = "holdout"
+    else:
+        print(f"\n   Optimizing ensemble weights (on test, no holdout)...")
+        xgb_cal_test = y_prob_final
+        lgb_margin_test = lgb_model_final.predict(X_test, raw_score=True)
+        lgb_cal_test = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_test + lgb_platt_b)))
+
+        best_ens_auc = 0
+        best_ens_w = 0.5
+        for w in np.arange(0.25, 0.80, 0.05):
+            ens_prob = w * xgb_cal_test + (1 - w) * lgb_cal_test
+            ens_auc_val = roc_auc_score(y_test, ens_prob)
+            if ens_auc_val > best_ens_auc:
+                best_ens_auc = ens_auc_val
+                best_ens_w = w
+        sweep_label = "test"
 
     ens_weight_xgb = round(best_ens_w, 3)
     ens_weight_lgb = round(1 - best_ens_w, 3)
 
+    # Report on test (read-only) regardless of where weights were tuned
+    xgb_cal_probs = y_prob_final
+    lgb_y_margin_ens = lgb_model_final.predict(X_test, raw_score=True)
+    lgb_cal_probs = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_ens + lgb_platt_b)))
     ens_prob_final = ens_weight_xgb * xgb_cal_probs + ens_weight_lgb * lgb_cal_probs
     ens_acc = accuracy_score(y_test, (ens_prob_final >= 0.5).astype(int))
     ens_auc_final = roc_auc_score(y_test, ens_prob_final)
 
-    print(f"\n   === Ensemble Results ===")
+    print(f"\n   === Ensemble Results (weights from {sweep_label}) ===")
     print(f"   XGB weight: {ens_weight_xgb} | LGB weight: {ens_weight_lgb}")
     print(f"   XGB only:   acc={accuracy*100:.1f}% | AUC={auc:.4f}")
     print(f"   LGB only:   acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f}")
@@ -1095,14 +1338,15 @@ if HAS_LGB:
     # C2: Use len(sliced_trees) for num_trees to avoid off-by-one
     sliced_tree_info = lgb_dump['tree_info'][:lgb_n_trees]
     lgb_browser = {
-        'format': 'lightgbm_json_v1',
-        'version': 1,
+        'format': 'lightgbm_json_v2',
+        'version': 2,
         'num_features': len(feature_cols),
         'num_trees': len(sliced_tree_info),
         'feature_names': feature_cols,
         'init_score': lgb_init_score,
         'platt_a': lgb_platt_a,
         'platt_b': lgb_platt_b,
+        'platt_on_logits': lgb_platt_on_logits,
         'metrics': {
             'accuracy': round(lgb_acc, 4),
             'auc': round(lgb_auc, 4),
@@ -1121,6 +1365,7 @@ if HAS_LGB:
     norm['ensemble_weights'] = {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb}
     norm['lgb_platt_a'] = lgb_platt_a
     norm['lgb_platt_b'] = lgb_platt_b
+    norm['lgb_platt_on_logits'] = lgb_platt_on_logits
 
     with open(os.path.join(args.output_dir, 'norm_browser.json'), 'w') as f:
         json.dump(norm, f, indent=2)

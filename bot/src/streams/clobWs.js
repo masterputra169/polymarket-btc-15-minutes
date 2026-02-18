@@ -184,10 +184,22 @@ function scheduleReconnect() {
   reconnectMs = Math.min(RECONNECT_MAX_MS, reconnectMs * 2);
 }
 
+function invalidateOrderbook() {
+  // Clear cached orderbook + prices on disconnect/reconnect so stale data is never used.
+  // Only use orderbook data once fresh data arrives after reconnection.
+  _upPrice = null;
+  _downPrice = null;
+  _orderbook.up = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
+  _orderbook.down = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
+  _lastUpdate = 0;
+}
+
 function forceReconnect() {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   // M10: Always stop timers, even when ws is null (prevents heartbeat re-firing)
   stopTimers();
+  // Invalidate stale orderbook data before reconnecting
+  invalidateOrderbook();
   if (ws) {
     intentionalClose = true;
     try { ws.close(); } catch {}
@@ -270,6 +282,8 @@ export function connect() {
         ws = null;
         subscribed = false;
         stopTimers();
+        // Invalidate cached orderbook — stale data must not be used after disconnect
+        invalidateOrderbook();
       }
       if (intentionalClose) { intentionalClose = false; return; }
       if (isActiveSocket) scheduleReconnect();

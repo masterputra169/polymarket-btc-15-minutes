@@ -31,7 +31,7 @@ function envInt(envVal, defaultVal, min = 0, max = Infinity) {
 const BOT_CONFIG = {
   dryRun: process.env.DRY_RUN !== 'false',
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
-  maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 20, 1, 100),
+  maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
   maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),
   logLevel: process.env.LOG_LEVEL || 'info',
@@ -85,13 +85,23 @@ const BOT_CONFIG = {
     minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),      // 90→180s: quant audit showed 68.8% settlement WR — give positions 3min to recover
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
-    maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 5, 1, 20),
+    maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
     minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 30, 1, 90),  // 20→30%: quant audit — 52% positions cut before settlement destroys 68.8% WR edge
     consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20),
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
     crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 30, 10, 90),
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
+    holdScoreThreshold: envNum(process.env.CUT_LOSS_HOLD_THRESHOLD, 7, 1, 20),  // Audit C6: weighted scoring threshold for soft gates 7-12d
+  },
+
+  // Take-profit (early exit when up but signal weakening)
+  takeProfit: {
+    enabled: process.env.TAKE_PROFIT_ENABLED !== 'false',
+    minHoldSec: envInt(process.env.TAKE_PROFIT_MIN_HOLD_SEC, 60, 0, 600),
+    minGainPct: envNum(process.env.TAKE_PROFIT_MIN_GAIN_PCT, 20, 5, 90),       // token must be up 20%+
+    minProbDrop: envNum(process.env.TAKE_PROFIT_MIN_PROB_DROP, 0.55, 0.40, 0.70), // model prob below this = weakening
+    minTimeLeftMin: envNum(process.env.TAKE_PROFIT_MIN_TIME_LEFT_MIN, 1.0, 0.5, 5.0), // don't sell if <1min (let settlement handle)
   },
 };
 
