@@ -20,6 +20,9 @@
 
 import { BOT_CONFIG } from '../config.js';
 
+// H4: 2-poll confirmation to prevent single-poll false triggers (matches cutLoss pattern)
+let consecutiveTpPolls = 0;
+
 /**
  * Evaluate whether the current position should take profit.
  * @param {Object} params
@@ -40,7 +43,7 @@ export function evaluateTakeProfit({
   modelProbability, mlConfidence, mlSide, regime, entryRegime, btcDelta1m,
 }) {
   const cfg = BOT_CONFIG.takeProfit;
-  const no = (reason) => ({ shouldTakeProfit: false, reason });
+  const no = (reason) => { consecutiveTpPolls = 0; return { shouldTakeProfit: false, reason }; };
 
   // ── Gate 1: Feature enabled? ──
   if (!cfg || !cfg.enabled) return no('disabled');
@@ -58,7 +61,7 @@ export function evaluateTakeProfit({
   // ── Gate 4: Token gain >= threshold? ──
   if (currentTokenPrice == null || !Number.isFinite(currentTokenPrice)) return no('no_price');
   const entryPrice = position.price;
-  if (entryPrice < 1e-8) return no('bad_entry_price');
+  if (entryPrice < 0.01) return no('bad_entry_price'); // M3: min Polymarket token price
 
   const gainPct = ((currentTokenPrice - entryPrice) / entryPrice) * 100;
   if (gainPct < cfg.minGainPct) return no(`gain_${gainPct.toFixed(1)}%<${cfg.minGainPct}%`);
@@ -98,7 +101,14 @@ export function evaluateTakeProfit({
   const bestBid = orderbook?.bestBid;
   if (bestBid == null || bestBid <= 0) return no('no_bid');
   const spread = orderbook?.spread ?? 0;
-  if (spread > 0.15) return no(`wide_spread_${(spread * 100).toFixed(1)}%`);
+  // H5: Tighter spread for take-profit (we're in profit, can afford to be selective)
+  if (spread > 0.10) return no(`wide_spread_${(spread * 100).toFixed(1)}%`);
+
+  // ── H4: 2-poll confirmation ──
+  consecutiveTpPolls++;
+  if (consecutiveTpPolls < 2) {
+    return { shouldTakeProfit: false, reason: `tp_confirming_${consecutiveTpPolls}/2` };
+  }
 
   // ═══ All gates passed — compute sell details ═══
   // Sell at bestBid with 1% slippage (tighter than cut-loss 2% because we're in profit)
@@ -113,4 +123,11 @@ export function evaluateTakeProfit({
     recoveryAmount,
     weakeners,
   };
+}
+
+/**
+ * H4: Reset take-profit confirmation counter. Call on settlement / market switch.
+ */
+export function resetTakeProfitState() {
+  consecutiveTpPolls = 0;
 }

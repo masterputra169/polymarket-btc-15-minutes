@@ -131,7 +131,7 @@ import {
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
-import { evaluateTakeProfit } from './trading/takeProfit.js';
+import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -445,7 +445,7 @@ export async function pollOnce() {
           makeSettlementActions(),
         );
       }
-      resetCutLossState();
+      resetCutLossState(); resetTakeProfitState();
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
       entryRegime = null;
@@ -572,7 +572,7 @@ export async function pollOnce() {
       }
 
       resetMarketCache();
-      resetCutLossState();
+      resetCutLossState(); resetTakeProfitState();
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -599,7 +599,7 @@ export async function pollOnce() {
         },
         makeSettlementActions(),
       );
-      resetCutLossState();
+      resetCutLossState(); resetTakeProfitState();
     }
 
     if (!poly?.ok) {
@@ -742,7 +742,7 @@ export async function pollOnce() {
               settleTradeEarlyExit(emRecovery);
               writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: emRecovery - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
-              resetCutLossState();
+              resetCutLossState(); resetTakeProfitState();
               notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
             }
           } finally { releaseSellLock(); }
@@ -804,7 +804,7 @@ export async function pollOnce() {
               invalidateSync();
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: recovery } });
-              resetCutLossState();
+              resetCutLossState(); resetTakeProfitState();
               notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
             } else {
               try {
@@ -815,7 +815,7 @@ export async function pollOnce() {
                 invalidateSync();
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: actualRecovery } });
-                resetCutLossState();
+                resetCutLossState(); resetTakeProfitState();
                 notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
               } catch (err) {
                 log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
@@ -886,7 +886,7 @@ export async function pollOnce() {
               invalidateSync();
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
-              resetCutLossState();
+              resetCutLossState(); resetTakeProfitState();
               if (sfPnl < 0) recordLoss();
               notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
             } else {
@@ -898,7 +898,7 @@ export async function pollOnce() {
                 invalidateSync();
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
-                resetCutLossState();
+                resetCutLossState(); resetTakeProfitState();
                 if (sfPnl < 0) recordLoss();
                 notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
               } catch (err) {
@@ -993,7 +993,7 @@ export async function pollOnce() {
               invalidateSync();
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
-              resetCutLossState();
+              resetCutLossState(); resetTakeProfitState();
               if (cutPnl < 0) {
                 recordLoss();
                 tiltMarketsLeft = TILT_MARKETS + 1;
@@ -1010,7 +1010,7 @@ export async function pollOnce() {
                 invalidateSync();
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
-                resetCutLossState();
+                resetCutLossState(); resetTakeProfitState();
                 if (cutPnl < 0) {
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;

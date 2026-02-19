@@ -182,6 +182,10 @@ export function startStatusServer() {
                     if (_resetEntryRegime) _resetEntryRegime(); // Prevent stale regime leaking into next trade's cut-loss
                     if (cutPnl < 0) recordLoss();
                   }
+                  // M8: Write journal entry even when position was settled elsewhere (audit trail for CLOB sell)
+                  if (!settled) {
+                    writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: 'position_settled_elsewhere', recovered } });
+                  }
                   releaseSellLock();
                   respond('sellPosition', { ok: settled, result, ...(settled ? {} : { error: 'position_settled_elsewhere' }) });
                 })

@@ -52,11 +52,18 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
   const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : DEFAULT_SPREAD_PENALTY);
   const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : DEFAULT_SPREAD_PENALTY);
 
+  // H3: Subtract expected Polymarket 2% redemption fee from edge.
+  // Fee is on profit (1 - price), so expected fee cost = 0.02 * (1 - price).
+  // Without this, edge is overstated and triggers trades that are actually EV-negative after fees.
+  const POLY_FEE_RATE = 0.02;
+  const feeAdjUp = effectiveUp != null && Number.isFinite(effectiveUp) ? POLY_FEE_RATE * (1 - effectiveUp) : 0;
+  const feeAdjDown = effectiveDown != null && Number.isFinite(effectiveDown) ? POLY_FEE_RATE * (1 - effectiveDown) : 0;
+
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
-    ? modelUp - effectiveUp - spreadPenaltyUp
+    ? modelUp - effectiveUp - spreadPenaltyUp - feeAdjUp
     : null;
   const edgeDown = effectiveDown !== null && Number.isFinite(effectiveDown)
-    ? modelDown - effectiveDown - spreadPenaltyDown
+    ? modelDown - effectiveDown - spreadPenaltyDown - feeAdjDown
     : null;
 
   let bestSide = null;

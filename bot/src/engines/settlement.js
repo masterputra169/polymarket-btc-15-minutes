@@ -244,12 +244,22 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, oracleCondId, btcPrice, null);
     log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
+    // H7: Apply 2% Polymarket fee on profit consistently (matches settleRegularPosition)
+    const POLY_FEE_RATE_STALE = 0.02;
+    let stalePnl;
+    if (won) {
+      const grossProfit = Math.max(0, pos.size - pos.cost);
+      const fee = Math.round(grossProfit * POLY_FEE_RATE_STALE * 100) / 100;
+      stalePnl = Math.round((pos.size - pos.cost - fee) * 100) / 100;
+    } else {
+      stalePnl = Math.round(-pos.cost * 100) / 100;
+    }
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
     actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
-      pnl: Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100,
+      pnl: stalePnl,
       exitData: { outcome, source, staleRecovery: true },
     });
     if (!won) actions.recordLoss();
@@ -287,13 +297,22 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const oraclePrice = deps.getOraclePrice();
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, fetchedConditionId, btcPrice, null);
+    // H7: Apply 2% fee consistently (matches settleRegularPosition)
+    let gammaPnl;
+    if (won) {
+      const gp = Math.max(0, pos.size - pos.cost);
+      const gFee = Math.round(gp * 0.02 * 100) / 100;
+      gammaPnl = Math.round((pos.size - pos.cost - gFee) * 100) / 100;
+    } else {
+      gammaPnl = Math.round(-pos.cost * 100) / 100;
+    }
     log.info(`Stale position (Gamma lookup) settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
     actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
-      pnl: Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100,
+      pnl: gammaPnl,
       exitData: { outcome, source, staleRecovery: true, reason: 'gamma_lookup' },
     });
     if (!won) actions.recordLoss();

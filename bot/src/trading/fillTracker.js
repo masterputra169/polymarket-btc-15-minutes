@@ -50,6 +50,14 @@ let uncertainFills = [];         // Track uncertain fills for manual review (sel
  *   This is direct proof of fill — skip trade history verification entirely.
  */
 export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false }) {
+  // M9: Cap pending orders to prevent unbounded growth if checkPendingFill fails repeatedly
+  const MAX_PENDING = 20;
+  if (pendingOrders.size >= MAX_PENDING && !pendingOrders.has(orderId)) {
+    // Evict oldest entry
+    const oldest = pendingOrders.keys().next().value;
+    log.warn(`Pending orders at cap (${MAX_PENDING}) — evicting oldest: ${oldest}`);
+    pendingOrders.delete(oldest);
+  }
   pendingOrders.set(orderId, {
     orderId, tokenId, price, size, side,
     placedAt: Date.now(),

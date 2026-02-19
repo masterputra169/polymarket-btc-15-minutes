@@ -125,7 +125,7 @@ export function evaluateCutLoss({
   // ── Shared computations ──
   if (currentTokenPrice == null || !Number.isFinite(currentTokenPrice)) return no('no_price');
   const entryPrice = position.price;
-  if (entryPrice < 1e-8) return no('bad_entry_price');
+  if (entryPrice < 0.01) return no('bad_entry_price'); // M3: min Polymarket token price is $0.01
 
   recordTokenPrice(currentTokenPrice);
 
@@ -144,7 +144,9 @@ export function evaluateCutLoss({
   // ── Gate 6b: CRASH fast-track ──
   const crashDrop = cfg.crashDropPct ?? 30;
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
-  const isCrash = dropPct >= crashDrop && hasPtb && btcDistPct >= crashDist;
+  // H10: OR logic — 30%+ token drop is a crash even without BTC data.
+  // BTC distance OR BTC unfavorable confirms, but lack of PTB data shouldn't block crash detection.
+  const isCrash = dropPct >= crashDrop && (!hasPtb || btcDistPct >= crashDist || !btcFavorable);
 
   // ── Gate 6c: LATE FORCE-CUT fast-track ──
   const LATE_FORCE_CUT_MIN = 2.0;
@@ -163,7 +165,8 @@ export function evaluateCutLoss({
     firstLargeDropMs = 0; // Recovered above threshold — reset timer
   }
   const persistentDropDurationMs = firstLargeDropMs > 0 ? now - firstLargeDropMs : 0;
-  const isTimeBased = firstLargeDropMs > 0 && persistentDropDurationMs >= persistentDropMs;
+  // M10: Re-verify dropPct at trigger time — token may have partially recovered since timer started
+  const isTimeBased = firstLargeDropMs > 0 && persistentDropDurationMs >= persistentDropMs && dropPct >= persistentDropPct;
 
   // ── Determine cut reason (skip for fast-tracks) ──
   let cutReason = null;
@@ -177,7 +180,9 @@ export function evaluateCutLoss({
     // This means: even our model (which has 71% WR) says we have less chance
     // of winning than the current market price implies.
     const evBuffer = cfg.evBuffer ?? 0.95;
-    const evThreshold = currentTokenPrice * evBuffer;
+    // M2: Floor prevents EV check from becoming useless at very low token prices.
+    // Without floor, a $0.05 token has threshold $0.045 — any model prob passes.
+    const evThreshold = Math.max(currentTokenPrice * evBuffer, 0.25);
     if (modelProbability != null && Number.isFinite(modelProbability)) {
       if (modelProbability < evThreshold) {
         evNegative = true;
@@ -253,7 +258,10 @@ export function evaluateCutLoss({
 
   let sellPrice;
   if (slippageMultiplier === null) {
-    sellPrice = Math.max(0.01, rawSellPrice - 0.03);
+    // H6: Proportional slippage instead of hardcoded $0.03.
+    // $0.03 is 30% on a $0.10 token but only 3% on a $1.00 token.
+    // 10% market slippage scales correctly across all price levels.
+    sellPrice = Math.max(0.01, rawSellPrice * 0.90);
   } else {
     sellPrice = Math.max(0.01, rawSellPrice * (1 - baseSlippage * slippageMultiplier));
   }
@@ -367,7 +375,7 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
   }
 
   const evBuffer = cfg.evBuffer ?? 0.95;
-  const evThreshold = (currentTokenPrice ?? 0.5) * evBuffer;
+  const evThreshold = Math.max((currentTokenPrice ?? 0.5) * evBuffer, 0.25); // M2: match evaluator floor
   const evNegative = modelProbability != null && modelProbability < evThreshold;
   const mlFlipConf = cfg.mlFlipConfidence ?? 0.55;
   const mlFlipped = mlConfidence != null && mlConfidence >= mlFlipConf && mlSide != null && mlSide !== position.side;

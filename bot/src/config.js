@@ -108,7 +108,7 @@ const BOT_CONFIG = {
     enabled: process.env.TAKE_PROFIT_ENABLED !== 'false',
     minHoldSec: envInt(process.env.TAKE_PROFIT_MIN_HOLD_SEC, 60, 0, 600),
     minGainPct: envNum(process.env.TAKE_PROFIT_MIN_GAIN_PCT, 20, 5, 90),       // token must be up 20%+
-    minProbDrop: envNum(process.env.TAKE_PROFIT_MIN_PROB_DROP, 0.55, 0.40, 0.70), // model prob below this = weakening
+    minProbDrop: envNum(process.env.TAKE_PROFIT_MIN_PROB_DROP, 0.60, 0.40, 0.70), // M1: 0.55→0.60 — tighter threshold reduces false take-profit triggers
     minTimeLeftMin: envNum(process.env.TAKE_PROFIT_MIN_TIME_LEFT_MIN, 1.0, 0.5, 5.0), // don't sell if <1min (let settlement handle)
   },
 };
