@@ -9,7 +9,7 @@
 
 import { ARBITRAGE } from '../../../src/config.js';
 
-const { MIN_NET_PROFIT, FEE_RATE, MAX_SPREAD } = ARBITRAGE;
+const { MIN_NET_PROFIT, FEE_RATE, MAX_SPREAD, MAX_SPREAD_HIGH_PROFIT } = ARBITRAGE;
 
 /**
  * Detect if riskless arbitrage exists by buying both YES and NO at bestAsk.
@@ -48,12 +48,17 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
   const fees = winnerProfit > 0 ? Math.round(winnerProfit * FEE_RATE * 10000) / 10000 : 0;
   const netProfit = grossProfit - fees;
 
-  // Spread health — wide spreads mean bestAsk is unreliable
+  // Spread health — wide spreads mean bestAsk is unreliable.
+  // Adaptive: high-profit arb (>3% net) tolerates wider spreads because imprecision
+  // in bestAsk is small relative to the margin. Low-profit arb requires tighter book.
+  // Whale bots (PBot1, gabagool22) routinely operate at 45-49c/side where spreads are 5-10%.
   // null spread = orderbook unavailable → treat as unhealthy (not 0)
   const spreadUp = orderbookUp?.spread;
   const spreadDown = orderbookDown?.spread;
+  const isHighProfit = netProfit > 0.03;  // >3% net profit = high margin
+  const spreadLimit = isHighProfit ? (MAX_SPREAD_HIGH_PROFIT ?? 0.12) : MAX_SPREAD;
   const spreadHealthy = spreadUp != null && spreadDown != null
-    && Math.max(spreadUp, spreadDown) < MAX_SPREAD;
+    && Math.max(spreadUp, spreadDown) < spreadLimit;
 
   return {
     found: netProfit > MIN_NET_PROFIT,

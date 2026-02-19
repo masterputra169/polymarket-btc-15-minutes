@@ -18,7 +18,8 @@ export const BET_SIZING = {
 export const ARBITRAGE = {
   MIN_NET_PROFIT: 0.005,       // 0.5% minimum net profit to trigger
   FEE_RATE: 0.02,              // Polymarket 2% fee on profit
-  MAX_SPREAD: 0.05,            // max 5% spread for reliable arb
+  MAX_SPREAD: 0.08,            // raised 0.05→0.08 — whale bots (PBot1/gabagool22) operate at 45-49c/side where spread is 5-10%
+  MAX_SPREAD_HIGH_PROFIT: 0.12, // allow up to 12% spread when netProfit >3% (high margin justifies wide book)
 };
 
 export const EXECUTION = {
