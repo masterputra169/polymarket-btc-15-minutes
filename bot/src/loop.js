@@ -548,15 +548,15 @@ export async function pollOnce() {
       fetchBalance: getUsdcBalance, getBankroll, getCurrentPosition, getPendingCost,
     });
 
-    // ── 3c. Auto force-sync every 40 min (bypasses all guards — position open, cooldown, etc.) ──
+    // ── 3c. Auto force-sync every 10 min (bypasses all guards — position open, cooldown, etc.) ──
     // Ensures bankroll stays 100% in sync with on-chain USDC even across long sessions.
-    const AUTO_FORCE_SYNC_INTERVAL_MS = 40 * 60_000;
+    const AUTO_FORCE_SYNC_INTERVAL_MS = 10 * 60_000;
     if (isClientReady() && now - lastAutoForceSyncMs >= AUTO_FORCE_SYNC_INTERVAL_MS) {
       lastAutoForceSyncMs = now;
       forceUsdcSync(getUsdcBalance, getBankroll, setBankroll)
         .then(r => {
           if (r.ok && r.action === 'synced') {
-            log.info(`Auto force-sync (40min): $${r.prev.toFixed(2)} → $${r.onChain.toFixed(2)} (drift $${r.drift.toFixed(2)})`);
+            log.info(`Auto force-sync (10min): $${r.prev.toFixed(2)} → $${r.onChain.toFixed(2)} (drift $${r.drift.toFixed(2)})`);
           }
         })
         .catch(err => log.debug(`Auto force-sync error: ${err.message}`));
