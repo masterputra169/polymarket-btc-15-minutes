@@ -84,13 +84,19 @@ function maybeRotate() {
 
 // ═══ Log a snapshot (only call after shouldLog() returns true) ═══
 
+let _logCount = 0; // session counter, no console spam
+
 export function logSnapshot(row) {
   if (!db) return;
   lastLogMs = Date.now();
   try {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     tx.objectStore(STORE_NAME).add(row);
-    console.log(`[PolyLogger] Logged | BTC $${row.btcPrice} | mktUp=${row.marketUp} | ${row.marketSlug}`);
+    _logCount++;
+    // Log only every 100 snapshots (~50 min) to avoid console memory accumulation
+    if (_logCount % 100 === 1) {
+      console.log(`[PolyLogger] ${_logCount} snapshots logged this session`);
+    }
   } catch (err) {
     if (err?.name === 'QuotaExceededError') {
       console.warn('[PolyLogger] IndexedDB quota exceeded — logging paused. Export and clear data.');

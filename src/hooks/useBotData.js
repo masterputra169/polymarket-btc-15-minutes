@@ -172,6 +172,7 @@ export function useBotData() {
       // M15: Clear pending command timeouts on unmount
       for (const t of pendingTimersRef.current) clearTimeout(t);
       pendingTimersRef.current.clear();
+      responseHandlersRef.current.clear(); // Release pending resolvers on unmount
       rawRef.current = null;
       try { wsRef.current?.close(); } catch (_e) { /* */ }
     };

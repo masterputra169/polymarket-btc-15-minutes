@@ -164,17 +164,20 @@ function PositionPanel({ data, sendBotCommand }) {
     ? (rtPnl / botPosition.cost) * 100
     : null;
 
-  // Auto-updating "Xs ago" timer
+  // Auto-updating "Xs ago" timer — single interval for component lifetime (avoids churn every ~3s)
+  const lastUpdateRef = useRef(lastUpdate);
+  lastUpdateRef.current = lastUpdate;
   useEffect(() => {
-    if (!lastUpdate) { setAgoText(''); return; }
     const tick = () => {
-      const s = Math.round((Date.now() - lastUpdate) / 1000);
+      const lu = lastUpdateRef.current;
+      if (!lu) { setAgoText(''); return; }
+      const s = Math.round((Date.now() - lu) / 1000);
       setAgoText(s < 2 ? 'just now' : `${s}s ago`);
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [lastUpdate]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleRefresh = useCallback(() => {
     sendBotCommand('getPositions');
