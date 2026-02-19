@@ -150,13 +150,19 @@ export function startStatusServer() {
         // ── Position Manager commands ──
         } else if (msg.type === 'getPositions' && _getPositions) {
           respond('getPositions', _getPositions());
-        } else if (msg.type === 'sellPosition' && _closePosition) {
-          const { tokenId, size, price } = msg;
-          if (typeof tokenId === 'string' && tokenId.length > 0 &&
-              typeof size === 'number' && Number.isFinite(size) && size > 0 &&
-              typeof price === 'number' && Number.isFinite(price) && price > 0 && price <= 1) {
-            // Sell lock: prevent dashboard sell and loop cut-loss from racing
-            if (!acquireSellLock('dashboard_sell')) {
+        } else if (msg.type === 'sellPosition') {
+          if (!_closePosition) {
+            respond('sellPosition', { ok: false, error: 'position_manager_not_ready' });
+          } else {
+            const { tokenId, size, price } = msg;
+            if (typeof tokenId !== 'string' || tokenId.length === 0) {
+              respond('sellPosition', { ok: false, error: 'invalid_tokenId' });
+            } else if (typeof size !== 'number' || !Number.isFinite(size) || size <= 0) {
+              respond('sellPosition', { ok: false, error: 'invalid_size' });
+            } else if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price > 1) {
+              respond('sellPosition', { ok: false, error: `invalid_price: ${price}` });
+            } else if (!acquireSellLock('dashboard_sell')) {
+              // Sell lock: prevent dashboard sell and loop cut-loss from racing
               respond('sellPosition', { ok: false, error: 'sell_in_progress' });
             } else {
               const sellPos = getCurrentPosition();

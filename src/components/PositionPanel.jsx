@@ -140,6 +140,7 @@ function JournalEntry({ j }) {
 
 function PositionPanel({ data, sendBotCommand }) {
   const [selling, setSelling] = useState(null);
+  const [sellError, setSellError] = useState(null);
   const [agoText, setAgoText] = useState('');
   const [showJournal, setShowJournal] = useState(true);
 
@@ -166,15 +167,28 @@ function PositionPanel({ data, sendBotCommand }) {
     sendBotCommand('getPositions');
   }, [sendBotCommand]);
 
+  // Auto-clear sell error after 5s
+  useEffect(() => {
+    if (!sellError) return;
+    const t = setTimeout(() => setSellError(null), 5000);
+    return () => clearTimeout(t);
+  }, [sellError]);
+
   const handleSell = useCallback(async (pos) => {
     if (selling) return;
+    setSellError(null);
     setSelling(pos.tokenId);
     try {
-      await sendBotCommand('sellPosition', {
+      const result = await sendBotCommand('sellPosition', {
         tokenId: pos.tokenId,
         size: pos.size,
         price: pos.currentPrice,
       });
+      if (result && !result.ok) {
+        setSellError(result.error || 'Sell failed');
+      }
+    } catch (err) {
+      setSellError(err.message || 'Sell failed');
     } finally {
       setSelling(null);
     }
@@ -268,14 +282,41 @@ function PositionPanel({ data, sendBotCommand }) {
                 {botPosition.side}
               </span>
             </div>
-            {/* Fill status */}
-            <span style={{
-              fontSize: '0.58rem', fontWeight: 600,
-              color: botPosition.fillConfirmed ? 'var(--green-bright)' : '#ffab40',
-              ...(botPosition.fillConfirmed ? {} : { animation: 'pulse 1.5s ease-in-out infinite' }),
-            }}>
-              {botPosition.fillConfirmed ? 'Confirmed' : 'Pending fill...'}
-            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Fill status */}
+              <span style={{
+                fontSize: '0.58rem', fontWeight: 600,
+                color: botPosition.fillConfirmed ? 'var(--green-bright)' : '#ffab40',
+                ...(botPosition.fillConfirmed ? {} : { animation: 'pulse 1.5s ease-in-out infinite' }),
+              }}>
+                {botPosition.fillConfirmed ? 'Confirmed' : 'Pending fill...'}
+              </span>
+              {/* Sell button for bot position */}
+              {botPosition.tokenId && botPosition.fillConfirmed && (
+                <button
+                  onClick={() => handleSell({
+                    tokenId: botPosition.tokenId,
+                    size: botPosition.size,
+                    currentPrice: botPosition.price,
+                  })}
+                  disabled={!!selling}
+                  style={{
+                    background: 'rgba(255,82,82,0.15)',
+                    border: '1px solid rgba(255,82,82,0.35)',
+                    color: 'var(--red-bright)',
+                    padding: '2px 10px',
+                    borderRadius: 4,
+                    fontSize: '0.58rem',
+                    fontWeight: 700,
+                    cursor: selling ? 'wait' : 'pointer',
+                    opacity: selling ? 0.5 : 1,
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {selling === botPosition.tokenId ? 'SELLING...' : 'SELL'}
+                </button>
+              )}
+            </div>
           </div>
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6,
@@ -307,6 +348,30 @@ function PositionPanel({ data, sendBotCommand }) {
               {botPosition.marketSlug}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Sell error banner */}
+      {sellError && (
+        <div style={{
+          background: 'rgba(255,82,82,0.1)',
+          border: '1px solid rgba(255,82,82,0.3)',
+          borderRadius: 4,
+          padding: '4px 8px',
+          marginBottom: 6,
+          fontSize: '0.6rem',
+          color: 'var(--red-bright)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <span>Sell failed: {sellError}</span>
+          <button
+            onClick={() => setSellError(null)}
+            style={{ background: 'none', border: 'none', color: 'var(--red-bright)', cursor: 'pointer', fontSize: '0.7rem', padding: '0 2px' }}
+          >
+            ×
+          </button>
         </div>
       )}
 
@@ -443,10 +508,12 @@ export default memo(PositionPanel, (prev, next) => {
     pp?.list?.length === np?.list?.length &&
     pp?.botPosition?.side === np?.botPosition?.side &&
     pp?.botPosition?.size === np?.botPosition?.size &&
+    pp?.botPosition?.tokenId === np?.botPosition?.tokenId &&
     pp?.botPosition?.fillConfirmed === np?.botPosition?.fillConfirmed &&
     prev.data?.bankroll === next.data?.bankroll &&
     prev.data?.cutLoss?.dropPct === next.data?.cutLoss?.dropPct &&
     prev.data?.cutLoss?.attempts === next.data?.cutLoss?.attempts &&
+    prev.data?.cutLoss?.active === next.data?.cutLoss?.active &&
     prev.data?.recentJournal?.length === next.data?.recentJournal?.length &&
     prev.data?.recentJournal?.[0]?._ts === next.data?.recentJournal?.[0]?._ts
   );

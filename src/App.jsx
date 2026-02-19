@@ -339,10 +339,15 @@ export default function App() {
   }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions,
       data?.detailedFeedback?.totalSettled]);
 
-  // PositionPanel: positions + bankroll from bot
+  // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot
   const positionData = useMemo(() => {
     if (!data) return null;
-    return { positions: data.positions, bankroll: data.bankroll };
+    return {
+      positions: data.positions,
+      bankroll: data.bankroll,
+      cutLoss: data.cutLoss ?? null,
+      recentJournal: data.recentJournal ?? [],
+    };
   }, [
     data?.positions?.lastUpdate,
     data?.positions?.list?.length,
@@ -350,6 +355,11 @@ export default function App() {
     data?.positions?.botPosition?.size,
     data?.positions?.botPosition?.fillConfirmed,
     data?.bankroll,
+    data?.cutLoss?.dropPct,
+    data?.cutLoss?.attempts,
+    data?.cutLoss?.active,
+    data?.recentJournal?.length,
+    data?.recentJournal?.[0]?._ts,
   ]);
 
   // BetSizingPanel: bet sizing output
