@@ -558,6 +558,7 @@ function PositionPanel({ data, sendBotCommand }) {
 
       {/* Recent Trades Journal */}
       {recentJournal.length > 0 && (() => {
+        const displayed = recentJournal.slice(0, 3);
         const wins = recentJournal.filter(j => j.analysis?.outcome === 'WIN' || j.analysis?.outcome === 'TAKE_PROFIT').length;
         const settled = recentJournal.filter(j => j.analysis?.outcome && j.analysis?.outcome !== 'DRY_RUN' && j.analysis?.outcome !== 'UNWIND' && j.analysis?.outcome !== 'REJECTED').length;
         const totalPnl = recentJournal.reduce((s, j) => s + (j.analysis?.pnl ?? 0), 0);
@@ -595,7 +596,7 @@ function PositionPanel({ data, sendBotCommand }) {
               </div>
               <span style={{ fontSize: '0.5rem', color: 'var(--text-dim)' }}>{showJournal ? '\u25BC' : '\u25B6'}</span>
             </div>
-            {showJournal && recentJournal.map((j, i) => (
+            {showJournal && displayed.map((j, i) => (
               <JournalEntry key={j._ts || i} j={j} />
             ))}
           </div>
