@@ -36,13 +36,13 @@ export const EXECUTION = {
 
 export const TRADE_FILTERS = {
   MIN_ML_CONFIDENCE: 0.60,       // raised from 0.55 — ML 55-60% is borderline, accuracy jumps above 60%
-  MARKET_5050_RANGE: [0.49, 0.51], // narrowed from [0.48,0.52] — 47-53c still has tradeable edge
+  MARKET_5050_RANGE: [0.47, 0.53], // widened — 47-53c is genuinely uncertain/random-walk territory
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
   MAX_TIME_LEFT_MIN: 14.5,      // relaxed from 14.0 — open 30s earlier for early signals
-  MIN_BTC_DIST_PCT: 0.015,      // lowered from 0.02 — redundant with 50/50 filter + edge threshold
-  LOSS_COOLDOWN_MS: 30_000,     // halved from 60s — 30s enough for anti-tilt, 60s skips entire market
+  MIN_BTC_DIST_PCT: 0.04,       // raised 0.015→0.04 — at $90k BTC, 0.015% = $13 from PTB = near coin-flip
+  LOSS_COOLDOWN_MS: 60_000,     // restored to 60s — 30s too short, allows immediate reentry into next market
   MAX_TRADES_PER_MARKET: 1,     // lowered from 2 — multi-leg entries have 46% WR vs 60% single-leg
   MIN_ENTRY_PRICE: 0.55,        // skip entries below 55c — data shows cheap-side entries lose consistently
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside

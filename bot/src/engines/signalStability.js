@@ -9,7 +9,7 @@
  */
 
 // ── Constants ──
-export const SIGNAL_CONFIRM_POLLS = 2;  // v3: 3→2 polls (2 × 3s = 6s) — faster entry, 9s was too slow for 15-min markets
+export const SIGNAL_CONFIRM_POLLS = 3;  // v4: 2→3 polls (3 × 3s = 9s) — reduces false triggers from single-poll anomalies
 const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
 const MAX_FLIPS_TO_ENTER = 4;           // v3: 3→4 — 15-min markets are naturally flippy, 3 was too strict
 
