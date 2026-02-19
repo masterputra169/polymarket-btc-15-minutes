@@ -70,7 +70,7 @@ const BOT_CONFIG = {
 
   // Auto-redeem resolved positions
   redeemEnabled: process.env.REDEEM_ENABLED !== 'false',
-  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 37 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
   redeemedFile: resolve(__dirname, '..', 'data', 'redeemed.json'),
 
   // Performance monitoring
