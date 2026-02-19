@@ -67,7 +67,7 @@ let state = {
 let sellingInProgress = false;
 let sellLockTs = 0;
 let sellLockSource = '';  // Tracks which caller holds the lock (for dedup logging)
-const SELL_LOCK_TIMEOUT_MS = 60_000;
+const SELL_LOCK_TIMEOUT_MS = 90_000; // C6: 60s→90s — prevents double-sell when CLOB is slow
 
 // ── Audit log (append-only with rotation) ──
 const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -328,15 +328,23 @@ export function settleTrade(won) {
   const fee = roundMoney(profit * POLYMARKET_FEE_RATE);
   const payout = roundMoney(grossPayout - fee);
 
+  // C7: NaN guard after fee calculation — prevent bankroll corruption
+  if (!Number.isFinite(payout) || payout < 0) {
+    log.error(`Settlement ABORTED: payout=${payout} after fee calc (fee=${fee}, gross=${grossPayout}) — would corrupt bankroll`);
+    auditLog({ type: 'SETTLE_ABORTED', reason: 'payout_NaN', payout, fee, grossPayout });
+    return false;
+  }
+
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTrade')) return false;
 
-  // Mark as settled BEFORE modifying bankroll (prevents re-entry on async race)
+  // C1 FIX: Atomic settlement — update bankroll AND mark settled together, then single save.
+  // Previously: settled=true saved first, bankroll updated second → crash between = lost payout.
+  // Now: both modified in memory first, single saveState() persists both atomically.
+  state.bankroll = roundMoney(state.bankroll + payout);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
-  saveState(); // FINTECH: Persist settled flag immediately — if crash occurs before bankroll save, position won't be double-settled
-
-  state.bankroll = roundMoney(state.bankroll + payout);
+  saveState();
 
   if (won) {
     state.wins++;
@@ -400,17 +408,24 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   }
 
   const pos = state.currentPosition;
+
+  // M4: NaN guard on position data — same check as settleTrade
+  if (!Number.isFinite(pos.size) || !Number.isFinite(pos.cost)) {
+    log.error(`settleTradeEarlyExit ABORTED: pos.size=${pos.size} pos.cost=${pos.cost} not finite`);
+    auditLog({ type: 'EARLY_EXIT_ABORTED', reason: 'NaN_guard', size: pos.size, cost: pos.cost });
+    return false;
+  }
+
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
 
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTradeEarlyExit')) return false;
 
-  // Mark as settled before modifying bankroll
+  // C2 FIX: Atomic settlement — update bankroll AND mark settled together, single save.
+  state.bankroll = roundMoney(state.bankroll + recovered);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
-  saveState(); // FINTECH: Persist settled flag immediately
-
-  state.bankroll = roundMoney(state.bankroll + recovered);
+  saveState();
 
   const pnl = roundMoney(recovered - pos.cost);
   const isWin = pnl >= 0;
@@ -623,6 +638,7 @@ export function getCurrentPosition() {
  * Unwind a position (e.g. stale order cancelled before fill).
  * Returns the cost back to bankroll and clears the position.
  * Will NOT unwind if position was already settled (prevents double-credit).
+ * H1 FIX: Now checks sell lock to prevent concurrent settlement+unwind race.
  */
 export function unwindPosition() {
   if (!state.currentPosition) return;
@@ -631,6 +647,13 @@ export function unwindPosition() {
   if (state.currentPosition.settled) {
     log.warn('Unwind skipped — position already settled');
     state.currentPosition = null;
+    return;
+  }
+
+  // H1 FIX: Check sell lock — if settlement/cut-loss/take-profit is running,
+  // they may modify bankroll concurrently. Defer unwind.
+  if (sellingInProgress && (Date.now() - sellLockTs) < SELL_LOCK_TIMEOUT_MS) {
+    log.warn(`Unwind deferred — sell in progress (held by '${sellLockSource}')`);
     return;
   }
 
@@ -672,6 +695,11 @@ export function unwindPosition() {
  */
 export function setPendingCost(cost) {
   const c = roundMoney(cost);
+  // M7: Reject unrealistic pending cost (> 2× bankroll) — likely malformed input
+  if (Number.isFinite(c) && c > 0 && c > state.bankroll * 2 && state.bankroll > 0) {
+    log.error(`setPendingCost REJECTED: $${c.toFixed(2)} exceeds 2× bankroll $${state.bankroll.toFixed(2)}`);
+    return;
+  }
   state.pendingCost = (Number.isFinite(c) && c >= 0) ? c : 0;
 }
 

@@ -116,6 +116,13 @@ export async function executeArbitrage({
 
       // Both legs succeeded — record arb with actual fill costs
       deps.setPendingCost(0);
+      // H2 FIX: Track order placements BEFORE recording arb position.
+      // If recordArbTrade throws (e.g. bankroll guard), orders are still tracked.
+      // H9 FIX: Check amount > 0 not just truthy (CLOB could return "0")
+      const upConfirmed = parseClobAmount(upResult?.makingAmount, 0) > 0 || parseClobAmount(upResult?.takingAmount, 0) > 0;
+      const downConfirmed = parseClobAmount(downResult?.makingAmount, 0) > 0 || parseClobAmount(downResult?.takingAmount, 0) > 0;
+      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP', confirmed: upConfirmed });
+      if (downOrderId) deps.trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN', confirmed: downConfirmed });
       try {
         deps.recordArbTrade({
           upCost: upFillCost,
@@ -129,17 +136,13 @@ export async function executeArbitrage({
       } catch (recErr) {
         log.error(`Arb recording failed (trades placed but not tracked): ${recErr.message}`);
       }
-      // Track fills for both orders — mark confirmed if CLOB response had fill data
-      const upConfirmed = !!(upResult?.makingAmount || upResult?.takingAmount);
-      const downConfirmed = !!(downResult?.makingAmount || downResult?.takingAmount);
-      if (upOrderId) deps.trackOrderPlacement(upOrderId, { tokenId: poly.tokens.upTokenId, price: arb.askUp, size: arbShares, side: 'ARB_UP', confirmed: upConfirmed });
-      if (downOrderId) deps.trackOrderPlacement(downOrderId, { tokenId: poly.tokens.downTokenId, price: arb.askDown, size: arbShares, side: 'ARB_DOWN', confirmed: downConfirmed });
     } catch (downErr) {
       // ONE-LEGGED: Only UP bought, DOWN failed.
       // Audit fix C9: Attempt to UNWIND leg 1 instead of holding unvalidated directional exposure.
       // The UP position was entered without any signal validation (edge, ML, stability gates).
       arbLeg2Failed = true;
-      deps.setPendingCost(0);
+      // C4 FIX: Don't clear pendingCost here — clear AFTER unwind succeeds or fallback completes.
+      // Previously: cleared immediately → concurrent trade could enter during unwind attempt.
       log.error(`ARB leg 2 (DOWN) failed: ${downErr.message} — attempting to unwind leg 1 (UP)`);
 
       let unwindSucceeded = false;
@@ -152,6 +155,7 @@ export async function executeArbitrage({
         });
         if (unwindResult) {
           unwindSucceeded = true;
+          deps.setPendingCost(0); // C4: Clear only after unwind succeeds
           const recovered = parseClobAmount(unwindResult?.takingAmount, arbShares * (arb.askUp - 0.02));
           log.info(`ARB leg 1 unwound: recovered $${(recovered || 0).toFixed(2)} of $${upFillCost.toFixed(2)}`);
         }
@@ -160,6 +164,7 @@ export async function executeArbitrage({
       }
 
       if (!unwindSucceeded) {
+        deps.setPendingCost(0); // C4: Clear now that we're committing to fallback
         // Fallback: record as directional position (legacy behavior)
         const actualPrice = upFillCost / arbShares;
         deps.recordTrade({
@@ -380,13 +385,25 @@ export async function executeDirectionalTrade({
     });
     const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;
 
+    // C3 FIX: Parse fill data with strict validation. If CLOB returns no fill data,
+    // use theoretical values but log a warning (FOK should either fill fully or reject).
     const fillCost = parseClobAmount(orderResult?.makingAmount, null);
     const fillShares = parseClobAmount(orderResult?.takingAmount, null);
-    const actualSize = (fillShares && fillShares > 0) ? fillShares : shares;
-    const actualPrice = (fillCost && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
-    const actualCost = (fillCost && fillCost > 0) ? fillCost : null;
+    const hasFillData = (fillCost != null && fillCost > 0) || (fillShares != null && fillShares > 0);
+    if (!hasFillData) {
+      log.warn(`Order ${orderId ?? 'unknown'}: no fill data in CLOB response — using theoretical values (cost=$${(shares * betMarketPrice).toFixed(2)}, shares=${shares})`);
+    }
+    const actualSize = (fillShares != null && fillShares > 0) ? fillShares : shares;
+    const actualPrice = (fillCost != null && fillCost > 0 && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
+    const actualCost = (fillCost != null && fillCost > 0) ? fillCost : null;
 
     deps.setPendingCost(0);
+    // H2/H9 FIX: Track order BEFORE recording trade (same pattern as arb fix above)
+    // H9 FIX: Use parseClobAmount > 0 for fill confirmation (not just truthy)
+    const fillConfirmed = parseClobAmount(orderResult?.makingAmount, 0) > 0 || parseClobAmount(orderResult?.takingAmount, 0) > 0;
+    if (orderId) {
+      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed });
+    }
     deps.recordTrade({
       side: betSide, tokenId,
       conditionId: currentConditionId,
@@ -394,10 +411,6 @@ export async function executeDirectionalTrade({
       marketSlug, orderId, actualCost,
     });
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
-    if (orderId) {
-      const fillConfirmed = !!(orderResult?.makingAmount || orderResult?.takingAmount);
-      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed });
-    }
     deps.recordTradeForMarket(marketSlug);
     deps.captureEntrySnapshot(entryData);
     // Record prediction for accuracy tracking

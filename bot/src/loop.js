@@ -1093,8 +1093,16 @@ export async function pollOnce() {
       log.warn(`Signal stale: computed ${signalAge}ms ago (threshold: ${SIGNAL_STALE_MS}ms) — skipping trade execution this poll`);
     }
 
+    // C5 FIX: Guard against trading too close to or after market expiry.
+    // timeLeftMin can be null if timing data unavailable — treat as unsafe.
+    const MIN_TIME_LEFT_FOR_ENTRY = 0.5; // 30 seconds minimum
+    const tooCloseToExpiry = timeLeftMin == null || timeLeftMin < MIN_TIME_LEFT_FOR_ENTRY;
+    if (tooCloseToExpiry && !signalStale) {
+      log.debug(`Trade entry blocked: timeLeftMin=${timeLeftMin ?? 'null'} < ${MIN_TIME_LEFT_FOR_ENTRY}min — too close to expiry`);
+    }
+
     // 10a. Arbitrage execution (priority over directional)
-    if (!signalStale && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       await executeArbitrage({
         arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
@@ -1110,7 +1118,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!signalStale && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
+    else if (!signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
       await executeDirectionalTrade({
         rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
         ensembleUp, timeAware, mlResult, mlAgreesWithRules,

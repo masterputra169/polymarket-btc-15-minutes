@@ -88,6 +88,11 @@ export function applyTradeFilters({
     reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(TRADE_FILTERS.MIN_ENTRY_PRICE * 100).toFixed(0)}c floor`);
   }
 
+  // 2d. Entry price ceiling — data shows entries above 72c have 40% WR (expensive + low upside)
+  if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
+    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling`);
+  }
+
   // 3. Low volatility
   if (atrRatio != null && atrRatio < TRADE_FILTERS.MIN_ATR_RATIO) {
     reasons.push(`Low vol: ATR ratio ${atrRatio.toFixed(2)} < ${TRADE_FILTERS.MIN_ATR_RATIO}`);
@@ -141,13 +146,14 @@ export function applyTradeFilters({
     }
   }
 
-  // 8. Edge ceiling — hard cap at 20% for ALL regimes.
-  // Quant analysis (31 trades): edge 10-20% had 50% WR (sweet spot),
-  // edge 20-30% had 14% WR, edge 30%+ had 0% WR.
+  // 8. Edge ceiling — configurable cap (default 15%) for ALL regimes.
+  // Quant analysis (94 trades): edge 10-15% is sweet spot,
+  // edge 15-20% has poor WR, edge 20%+ had 0-14% WR.
   // High edge = model diverges from market = model is usually wrong.
   // Hard block regardless of ML confidence or regime.
-  if (bestEdge != null && bestEdge > 0.20) {
-    reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > 20% (high edge = 0-14% WR in journal)`);
+  const maxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
+  if (bestEdge != null && bestEdge > maxEdge) {
+    reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > ${(maxEdge * 100).toFixed(0)}% (high edge = poor WR in journal)`);
   }
 
   // 9. Counter-trend momentum guard — don't fight strong BTC moves.

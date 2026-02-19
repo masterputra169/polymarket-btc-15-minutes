@@ -33,7 +33,7 @@ const BOT_CONFIG = {
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
-  maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),
+  maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 50, 5, 80),
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // External notifications (optional — no-ops if not set)

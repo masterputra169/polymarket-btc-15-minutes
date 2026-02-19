@@ -1,4 +1,4 @@
-export const ML_CONFIDENCE = { HIGH: 0.55, MEDIUM: 0.20 };  // v3: HIGH 0.60→0.55 aligned with MIN_ML_CONFIDENCE
+export const ML_CONFIDENCE = { HIGH: 0.60, MEDIUM: 0.20 };  // v4: HIGH raised back to 0.60 aligned with MIN_ML_CONFIDENCE
 
 export const WS_DEFAULTS = { throttleMs: 500, reconnectMaxMs: 10_000, heartbeatCheckMs: 10_000 };
 export const WS_BINANCE = { heartbeatDeadMs: 20_000, heartbeatCheckMs: 5_000 };
@@ -34,7 +34,7 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.55,       // lowered from 0.60 — ML 55-60% still profitable, opens more trade opportunities
+  MIN_ML_CONFIDENCE: 0.60,       // raised from 0.55 — ML 55-60% is borderline, accuracy jumps above 60%
   MARKET_5050_RANGE: [0.49, 0.51], // narrowed from [0.48,0.52] — 47-53c still has tradeable edge
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
@@ -42,9 +42,10 @@ export const TRADE_FILTERS = {
   MAX_TIME_LEFT_MIN: 14.5,      // relaxed from 14.0 — open 30s earlier for early signals
   MIN_BTC_DIST_PCT: 0.015,      // lowered from 0.02 — redundant with 50/50 filter + edge threshold
   LOSS_COOLDOWN_MS: 30_000,     // halved from 60s — 30s enough for anti-tilt, 60s skips entire market
-  MAX_TRADES_PER_MARKET: 2,     // raised from 1 — allow re-entry on signal change within same market
+  MAX_TRADES_PER_MARKET: 1,     // lowered from 2 — multi-leg entries have 46% WR vs 60% single-leg
   MIN_ENTRY_PRICE: 0.55,        // skip entries below 55c — data shows cheap-side entries lose consistently
-  BLACKOUT_HOURS_ET: [3, 7, 9, 10], // skip these ET hours — consistently negative P&L in 94-trade dataset
+  MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
+  MAX_EDGE: 0.15,               // lowered from 0.20 — edge 15-20% has poor WR, model diverges too much
 };
 
 export const CONFIG = {

@@ -221,27 +221,27 @@ export function decide({
 
   if (remainingMinutes > 10) {
     phase = 'EARLY';
-    minEdge = cal?.EARLY?.minEdge ?? 0.06;
-    minProb = cal?.EARLY?.minProb ?? 0.58;
-    minAgreement = 2;
+    minEdge = cal?.EARLY?.minEdge ?? 0.08;
+    minProb = cal?.EARLY?.minProb ?? 0.60;
+    minAgreement = 3;
     preferMultiTf = true;
   } else if (remainingMinutes > 5) {
     phase = 'MID';
-    minEdge = cal?.MID?.minEdge ?? 0.08;
-    minProb = cal?.MID?.minProb ?? 0.56;
-    minAgreement = 2;
+    minEdge = cal?.MID?.minEdge ?? 0.10;
+    minProb = cal?.MID?.minProb ?? 0.58;
+    minAgreement = 3;
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
-    minEdge = cal?.LATE?.minEdge ?? 0.10;
-    minProb = cal?.LATE?.minProb ?? 0.55;
-    minAgreement = 2;
+    minEdge = cal?.LATE?.minEdge ?? 0.12;
+    minProb = cal?.LATE?.minProb ?? 0.57;
+    minAgreement = 3;
     preferMultiTf = false;
   } else {
     phase = 'VERY_LATE';
-    minEdge = cal?.VERY_LATE?.minEdge ?? 0.12;
-    minProb = cal?.VERY_LATE?.minProb ?? 0.54;
-    minAgreement = 2;
+    minEdge = cal?.VERY_LATE?.minEdge ?? 0.15;
+    minProb = cal?.VERY_LATE?.minProb ?? 0.56;
+    minAgreement = 3;
     preferMultiTf = false;
   }
 
