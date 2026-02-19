@@ -1,33 +1,43 @@
 /**
- * Cut-loss (stop-loss) evaluator — v5 Conservative Cut-Loss.
+ * Cut-loss (stop-loss) evaluator — v6 Pure EV Cut-Loss.
  *
- * v5 changes over v4 (quant audit: 68.8% settlement WR, cut-loss destroying edge):
- *   - minTokenDropPct 20% → 30% (raise bar for cutting — most positions WIN if held)
- *   - minHoldSec 90s → 180s (give 3min for recovery before considering cut)
- *   - ML veto threshold lowered 65% → 55% (let ML protect more positions)
- *   - EV margins lowered across all regimes (harder to trigger cut)
- *   - Time-decay early bonus raised 1.05 → 1.15 (more option value early)
+ * v6 rewrite: Data-driven simplification based on 71 real trades analysis.
  *
- * v4 changes over v3:
- *   - Gate 7 softened: BTC within 0.02% of PTB no longer hard-vetoes
- *   - consecutivePolls 3 → 2 (easier to confirm)
- *   - Token recovery threshold 2¢ → 3¢ (ignore noise bounces)
- *   - NEW: Late force-cut — <2min left + drop>15% → skip soft gates
+ * EVIDENCE (71 trades, 24 cut-loss, 38 settlement):
+ *   - Settlement WR: 71.1% (27W/11L) → most positions WIN if held
+ *   - Cut-loss destroyed $28.77 of edge (P&L -$18.21 vs est. +$10.56 if held)
+ *   - v5's 16-gate weighted scoring was too complex and always blocked cuts
+ *     OR cut positions that would have won
+ *
+ * v6 PRINCIPLE: Only cut when the MODEL ITSELF agrees the position will lose.
+ * Binary option EV math: CUT when modelProb < tokenPrice × evBuffer
+ * (i.e., even our model thinks we're worse off than the market implies)
  *
  * Gate chain (all must pass for shouldCut = true):
  *   1.  Feature enabled
- *   2.  Has open, fill-confirmed position
+ *   2.  Has open, fill-confirmed position (not ARB)
  *   3.  Max attempts not exceeded
  *   4.  Cooldown elapsed since last failed sell
- *   5.  Min hold time met (180s)
+ *   5.  Min hold time met (120s)
  *   6.  Not too close to settlement (< 30s)
- *   6b. LATE FORCE-CUT: <2min left + drop>15% → skip gates 7-12d, go to gate 13
- *   7-12d. WEIGHTED SCORING (audit C6): Each soft gate contributes a hold score.
- *          Cut blocked only if holdScore >= threshold (default 7).
- *          Scores: btc_favorable=3, btc_close=2, btc_recovering=2,
- *                  ev_hold=3, ml_veto=2, drop_low=2, token_recovering=2 (max=16)
- *          HARD GATES (always AND): 12b min price, 12c orderbook liquidity
- *  13.  Consecutive poll confirmation — 2 consecutive polls where weighted score allows cut
+ *
+ * FAST TRACKS (skip to confirmation):
+ *   6b. CRASH: drop >= crashDropPct AND BTC distance >= crashBtcDistPct
+ *   6c. LATE FORCE-CUT: <2min left + drop >= 15%
+ *
+ * CUT DECISION (must pass ONE of):
+ *   7a. EV-NEGATIVE: modelProb < tokenPrice × evBuffer (model agrees with market)
+ *   7b. ML FLIPPED: ML now predicts opposite side with confidence >= mlFlipConf
+ *
+ * MINIMUM DAMAGE:
+ *   8.  Token drop >= minTokenDropPct (confirmed real loss, not noise)
+ *
+ * HARD EXECUTION GATES:
+ *   9.  Token price above minimum
+ *  10.  Orderbook liquidity sufficient
+ *
+ * CONFIRMATION:
+ *  11.  2 consecutive polls agreeing
  */
 
 import { BOT_CONFIG } from '../config.js';
@@ -36,8 +46,9 @@ import { BOT_CONFIG } from '../config.js';
 let sellAttempts = 0;
 let lastSellAttemptMs = 0;
 let consecutiveCutPolls = 0;
+let firstLargeDropMs = 0; // Fix D: timestamp when position first crossed persistentDropPct threshold
 
-// Token price ring buffer (for trajectory tracking)
+// Token price ring buffer (for dashboard trajectory tracking)
 const TOKEN_BUF_SIZE = 12; // 12 polls ≈ 36s at 3s interval
 const tokenPriceBuf = new Float64Array(TOKEN_BUF_SIZE);
 let tokenBufIdx = 0;
@@ -51,81 +62,15 @@ function recordTokenPrice(price) {
 }
 
 function getTokenPriceSlope() {
-  if (tokenBufCount < 4) return null; // Need at least 4 samples (~12s)
+  if (tokenBufCount < 4) return null;
   const newest = tokenPriceBuf[(tokenBufIdx - 1 + TOKEN_BUF_SIZE) % TOKEN_BUF_SIZE];
   const oldest = tokenPriceBuf[(tokenBufIdx - tokenBufCount + TOKEN_BUF_SIZE) % TOKEN_BUF_SIZE];
-  return newest - oldest; // positive = recovering, negative = still falling
-}
-
-/**
- * Time-scaled BTC-to-PTB distance thresholds.
- * Scaled by ATR ratio and regime.
- */
-function getBtcDistThreshold(timeLeftMin, atrRatio, regime) {
-  // Base threshold: time-scaled
-  let base;
-  if (timeLeftMin == null) base = 0.05;
-  else if (timeLeftMin > 10) base = 0.10;
-  else if (timeLeftMin > 5)  base = 0.07;
-  else if (timeLeftMin > 2)  base = 0.05;
-  else base = 0.03;
-
-  // ATR scaling — high vol = wider threshold (more patient, BTC can recover)
-  const volScale = Math.max(0.5, Math.min(2.0, atrRatio ?? 1.0));
-
-  // Regime scaling — trending cuts sooner, choppy holds longer
-  const regimeScale = regime === 'trending' ? 0.8
-    : regime === 'choppy' ? 1.3
-    : regime === 'mean_reverting' ? 1.2
-    : 1.0;
-
-  return base * volScale * regimeScale;
-}
-
-/**
- * Regime-aware EV margin for Gate 10.
- * NO CUT if: modelProb × timeDecay >= tokenPrice × evMargin
- * Higher margin = harder to veto (model needs MORE confidence to hold) = easier to cut.
- * Lower margin = easier to veto (model needs LESS confidence to hold) = easier to hold.
- *
- * Trending: if losing in a trend, the trend is against us → cut faster → high margin.
- * Choppy: prices bounce → expect reversion → hold longer → low margin.
- */
-function getEvMargin(regime) {
-  // v5: Lowered all margins — makes it HARDER to cut (model needs less confidence to hold).
-  // Quant audit: 68.8% settlement WR means most cuts are destroying winning positions.
-  if (regime === 'trending') return 0.90;     // 0.95→0.90
-  if (regime === 'choppy') return 0.80;       // 0.85→0.80
-  if (regime === 'mean_reverting') return 0.82; // 0.87→0.82
-  return 0.85;                                  // 0.90→0.85
-}
-
-/**
- * Time-decay multiplier for EV comparison (Gate 10).
- * Early in market: holding has higher "option value" (time to recover).
- * Late in market: option value drops — if losing, it's likely staying that way.
- */
-function getTimeDecay(timeLeftMin) {
-  // v5: Increased early bonus — positions with more time have higher "option value" to recover.
-  // Quant audit: Most cuts happen early when there's still time to win.
-  if (timeLeftMin == null) return 1.0;
-  if (timeLeftMin > 8)  return 1.15; // early: meaningful bonus (v5: 1.05→1.15)
-  if (timeLeftMin > 4)  return 1.05; // mid: small bonus (v5: 1.00→1.05)
-  if (timeLeftMin > 2)  return 0.95; // late: slight penalty
-  return 0.85;                       // very late: stronger penalty
-}
-
-/**
- * ATR-scaled momentum threshold for Gate 9.
- * High volatility = higher threshold (BTC normally moves more, don't veto easily).
- * Low volatility = lower threshold (even small recovery is meaningful).
- */
-function getMomentumThreshold(atrRatio) {
-  return Math.max(10, (atrRatio ?? 1.0) * 15);
+  return newest - oldest;
 }
 
 /**
  * Evaluate whether the current position should be cut.
+ *
  * @param {Object} params
  * @param {Object} params.position - Current position from positionTracker
  * @param {number} params.currentTokenPrice - Live token price (market mid or best bid)
@@ -149,7 +94,6 @@ export function evaluateCutLoss({
 }) {
   const cfg = BOT_CONFIG.cutLoss;
   const no = (reason) => {
-    // Any gate failure resets consecutive confirmation
     consecutiveCutPolls = 0;
     return { shouldCut: false, reason };
   };
@@ -157,9 +101,10 @@ export function evaluateCutLoss({
   // ── Gate 1: Feature enabled? ──
   if (!cfg || !cfg.enabled) return no('disabled');
 
-  // ── Gate 2: Has open, fill-confirmed position? ──
+  // ── Gate 2: Has open, fill-confirmed position (not ARB)? ──
   if (!position || position.settled) return no('no_position');
   if (!position.fillConfirmed) return no('fill_unconfirmed');
+  if (position.side === 'ARB') return no('arb_position');
 
   // ── Gate 3: Max attempts not exceeded? ──
   if (sellAttempts >= cfg.maxAttempts) return no(`max_attempts_${sellAttempts}/${cfg.maxAttempts}`);
@@ -177,18 +122,17 @@ export function evaluateCutLoss({
   // ── Gate 6: Not too close to settlement? ──
   if (timeLeftMin != null && timeLeftMin < 0.5) return no('near_settlement');
 
-  // ── Shared computations for smart gates ──
+  // ── Shared computations ──
   if (currentTokenPrice == null || !Number.isFinite(currentTokenPrice)) return no('no_price');
   const entryPrice = position.price;
   if (entryPrice < 1e-8) return no('bad_entry_price');
 
-  // Record token price for trajectory tracking
   recordTokenPrice(currentTokenPrice);
 
   const dropPct = ((entryPrice - currentTokenPrice) / entryPrice) * 100;
-  const hasPtb = btcPrice != null && priceToBeat != null && Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
+  const hasPtb = btcPrice != null && priceToBeat != null &&
+    Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
 
-  // BTC distance from PTB
   let btcDistPct = null;
   let btcFavorable = null;
   if (hasPtb) {
@@ -197,196 +141,159 @@ export function evaluateCutLoss({
     btcDistPct = Math.abs(rawDistPct);
   }
 
-  // ── Gate 6b: LATE FORCE-CUT ──
-  // <2min left + drop >15% → skip soft gates 7-12d, jump straight to confirmation.
-  // At <2min, there's no time for recovery. Holding to expiry = total loss.
-  const LATE_FORCE_CUT_MIN = 2.0;
-  const LATE_FORCE_CUT_DROP = 15;
-  const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
-
-  // ── Emergency fast-track: genuine crash detection ──
+  // ── Gate 6b: CRASH fast-track ──
   const crashDrop = cfg.crashDropPct ?? 30;
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
   const isCrash = dropPct >= crashDrop && hasPtb && btcDistPct >= crashDist;
 
-  let regimeChanged = false;
-  let evHold = null;
-  let evCut = currentTokenPrice;
-  let tokenSlope = null;
-  const evMargin = getEvMargin(regime);
-  const timeDecay = getTimeDecay(timeLeftMin);
-  let holdScore = 0;
-  const holdReasons = [];
+  // ── Gate 6c: LATE FORCE-CUT fast-track ──
+  const LATE_FORCE_CUT_MIN = 2.0;
+  const LATE_FORCE_CUT_DROP = 15;
+  const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
-  // Late force-cut and crash skip soft gates entirely
-  if (!isLateForceCut && !isCrash) {
+  // ── Gate 6d: TIME-BASED PERSISTENT LOSS fast-track (Fix D) ──
+  // If token has been down >= persistentDropPct% continuously for >= persistentDropMinutes,
+  // cut without waiting for model agreement (skip gates 7a/7b).
+  // Prevents holding a deeply losing position indefinitely while model is slow to flip.
+  const persistentDropPct = cfg.persistentDropPct ?? 20;
+  const persistentDropMs = (cfg.persistentDropMinutes ?? 5) * 60_000;
+  if (dropPct >= persistentDropPct) {
+    if (firstLargeDropMs === 0) firstLargeDropMs = now;
+  } else {
+    firstLargeDropMs = 0; // Recovered above threshold — reset timer
+  }
+  const persistentDropDurationMs = firstLargeDropMs > 0 ? now - firstLargeDropMs : 0;
+  const isTimeBased = firstLargeDropMs > 0 && persistentDropDurationMs >= persistentDropMs;
 
-    // ── Audit C6: Weighted scoring for soft gates 7-12d ──
-    // Instead of any single gate vetoing the cut (AND logic), each gate
-    // contributes a "hold score". Only if total >= threshold is cut blocked.
-    // This prevents a single marginal signal from saving a losing position.
-    const HOLD_THRESHOLD = cfg.holdScoreThreshold ?? 7;
+  // ── Determine cut reason (skip for fast-tracks) ──
+  let cutReason = null;
+  let evNegative = false;
+  let mlFlipped = false;
 
-    // ── Gate 7: BTC position check ──
-    const BTC_SOFT_ZONE_PCT = 0.02;
-    if (hasPtb && btcFavorable && btcDistPct > BTC_SOFT_ZONE_PCT) {
-      holdScore += 3;
-      holdReasons.push('btc_favorable(+3)');
-    }
+  if (!isCrash && !isLateForceCut && !isTimeBased) {
 
-    // ── Gate 8: BTC-to-PTB distance (ATR + regime adjusted) ──
-    const skipBtcDist = dropPct >= 15;
-    if (hasPtb && !btcFavorable && !skipBtcDist) {
-      let threshold = getBtcDistThreshold(timeLeftMin, atrRatio, regime);
-
-      // ── Gate 8b: Regime-change accelerator ──
-      if (entryRegime && entryRegime !== regime) {
-        threshold *= 0.7;
-        regimeChanged = true;
-      }
-
-      if (btcDistPct < threshold) {
-        holdScore += 2;
-        holdReasons.push('btc_close(+2)');
-      }
-    }
-
-    // ── Gate 9: BTC momentum (ATR-scaled) ──
-    if (hasPtb && btcDelta1m != null && Number.isFinite(btcDelta1m)) {
-      const movingTowardPtb = position.side === 'UP'
-        ? btcDelta1m > 0
-        : btcDelta1m < 0;
-      const momentumThreshold = getMomentumThreshold(atrRatio);
-      if (movingTowardPtb && Math.abs(btcDelta1m) > momentumThreshold) {
-        holdScore += 2;
-        holdReasons.push('btc_recovering(+2)');
-      }
-    }
-
-    // ── Gate 10: EV comparison (regime-aware margin + time-decay) ──
+    // ── Gate 7a: EV-NEGATIVE — model agrees position is losing ──
+    // Binary option math: CUT when modelProb < tokenPrice × evBuffer
+    // This means: even our model (which has 71% WR) says we have less chance
+    // of winning than the current market price implies.
+    const evBuffer = cfg.evBuffer ?? 0.95;
+    const evThreshold = currentTokenPrice * evBuffer;
     if (modelProbability != null && Number.isFinite(modelProbability)) {
-      evHold = modelProbability * timeDecay;
-      if (evHold >= evCut * evMargin) {
-        holdScore += 3;
-        holdReasons.push('ev_hold(+3)');
+      if (modelProbability < evThreshold) {
+        evNegative = true;
+        cutReason = `ev_negative(model=${(modelProbability * 100).toFixed(0)}%<market=${(evThreshold * 100).toFixed(0)}%)`;
       }
     }
 
-    // ── Gate 11: ML veto ──
-    if (mlConfidence != null && mlConfidence >= 0.60 && mlSide === position.side) {
-      holdScore += 2;
-      holdReasons.push('ml_veto(+2)');
+    // ── Gate 7b: ML FLIPPED — ML now predicts opposite side ──
+    const mlFlipConf = cfg.mlFlipConfidence ?? 0.55;
+    if (mlConfidence != null && mlConfidence >= mlFlipConf && mlSide != null && mlSide !== position.side) {
+      mlFlipped = true;
+      cutReason = cutReason
+        ? `${cutReason}+ml_flipped(${mlSide}@${(mlConfidence * 100).toFixed(0)}%)`
+        : `ml_flipped(${mlSide}@${(mlConfidence * 100).toFixed(0)}%)`;
     }
 
-    // ── Gate 12: Token drop minimum ──
+    // Must have at least one cut signal
+    if (!evNegative && !mlFlipped) {
+      return no(modelProbability != null
+        ? `model_holds(prob=${(modelProbability * 100).toFixed(0)}%,threshold=${(currentTokenPrice * (cfg.evBuffer ?? 0.95) * 100).toFixed(0)}%)`
+        : 'no_model_data');
+    }
+
+    // ── Gate 8: Minimum damage threshold ──
     if (dropPct < cfg.minTokenDropPct) {
-      holdScore += 2;
-      holdReasons.push('drop_low(+2)');
-    }
-
-    // ── Gate 12b: Token price above minimum — HARD GATE (can't sell below min) ──
-    if (currentTokenPrice < cfg.minTokenPrice) {
-      return no(`price_${currentTokenPrice.toFixed(3)}<min_${cfg.minTokenPrice}`);
-    }
-
-    // ── Gate 12c: Orderbook liquidity — HARD GATE (execution risk) ──
-    if (orderbook) {
-      const bidLiq = orderbook.bidLiquidity ?? 0;
-      const spread = orderbook.spread ?? 0;
-      if (bidLiq > 0 && bidLiq < cfg.minBidLiquidity) {
-        return no(`thin_book_${bidLiq.toFixed(1)}<${cfg.minBidLiquidity}`);
-      }
-      if (spread > cfg.maxCutSpreadPct / 100) {
-        return no(`wide_spread_${(spread * 100).toFixed(1)}%>${cfg.maxCutSpreadPct}%`);
-      }
-    }
-
-    // ── Gate 12d: Token price trajectory ──
-    tokenSlope = getTokenPriceSlope();
-    if (tokenSlope != null && tokenSlope > 0.03) {
-      holdScore += 2;
-      holdReasons.push('token_recovering(+2)');
-    }
-
-    // ── Weighted threshold check ──
-    if (holdScore >= HOLD_THRESHOLD) {
-      return no(`hold_score_${holdScore}/${HOLD_THRESHOLD}:${holdReasons.join(',')}`);
+      return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
     }
   }
 
-  // ── Gate 13: Consecutive poll confirmation ──
-  // Crash: 1 poll. Late force-cut: 1 poll. Normal: consecutivePolls (2).
-  const requiredPolls = (isCrash || isLateForceCut) ? 1 : cfg.consecutivePolls;
+  // ── Gate 9: Token price above minimum — HARD GATE ──
+  if (currentTokenPrice < cfg.minTokenPrice) {
+    return no(`price_${currentTokenPrice.toFixed(3)}<min_${cfg.minTokenPrice}`);
+  }
+
+  // ── Gate 10: Orderbook liquidity — HARD GATE ──
+  if (orderbook) {
+    const bidLiq = orderbook.bidLiquidity ?? 0;
+    const spread = orderbook.spread ?? 0;
+    if (bidLiq > 0 && bidLiq < cfg.minBidLiquidity) {
+      return no(`thin_book_${bidLiq.toFixed(1)}<${cfg.minBidLiquidity}`);
+    }
+    if (spread > cfg.maxCutSpreadPct / 100) {
+      return no(`wide_spread_${(spread * 100).toFixed(1)}%>${cfg.maxCutSpreadPct}%`);
+    }
+  }
+
+  // ── Gate 11: Consecutive poll confirmation ──
+  const requiredPolls = (isCrash || isLateForceCut || isTimeBased) ? 1 : cfg.consecutivePolls;
   consecutiveCutPolls++;
   if (consecutiveCutPolls < requiredPolls) {
+    const tag = isCrash ? 'crash' : isLateForceCut ? 'late_force' : 'ev';
     return {
       shouldCut: false,
-      reason: isCrash
-        ? `crash_confirming_${consecutiveCutPolls}/${requiredPolls}`
-        : isLateForceCut
-        ? `late_force_confirming_${consecutiveCutPolls}/${requiredPolls}`
-        : `confirming_${consecutiveCutPolls}/${cfg.consecutivePolls}`,
+      reason: `${tag}_confirming_${consecutiveCutPolls}/${requiredPolls}`,
     };
   }
 
   // ═══ All gates passed — compute sell details ═══
-  // FOK sell price = bestBid with progressive slippage tolerance.
-  // The bid can move between evaluation and the async CLOB call.
-  // Without slippage, the FOK fails, burns a maxAttempt + cooldown,
-  // and after all failures the bot gives up and rides to settlement ($0).
-  //
   // Progressive slippage (attempt-based):
-  //   Attempt 1: 1x base slippage (2%)
-  //   Attempt 2: 2x base slippage (4%)
-  //   Attempt 3: 3x base slippage (6%)
-  //   Attempt 4: 5x base slippage (10%)
-  //   Attempt 5+: market order (bestBid - 3 cents, aggressive)
+  //   Attempt 1: 1x base (2%)  |  Attempt 2: 2x (4%)
+  //   Attempt 3: 3x (6%)       |  Attempt 4: 5x (10%)
+  //   Attempt 5+: market order (bestBid - 3 cents)
   const rawSellPrice = (orderbook?.bestBid != null && orderbook.bestBid > 0)
     ? orderbook.bestBid
     : currentTokenPrice;
 
-  const attempt = sellAttempts + 1; // next attempt number (0-indexed sellAttempts → 1-indexed attempt)
-  const baseSlippage = 0.02; // 2% base
+  const attempt = sellAttempts + 1;
+  const baseSlippage = 0.02;
   let slippageMultiplier;
-  if (attempt >= 5)      slippageMultiplier = null; // market order mode
+  if (attempt >= 5)      slippageMultiplier = null;
   else if (attempt === 4) slippageMultiplier = 5;
-  else                    slippageMultiplier = attempt; // 1, 2, 3
+  else                    slippageMultiplier = attempt;
 
   let sellPrice;
   if (slippageMultiplier === null) {
-    // Aggressive market order: bestBid - 3 cents (accept any fill)
     sellPrice = Math.max(0.01, rawSellPrice - 0.03);
   } else {
     sellPrice = Math.max(0.01, rawSellPrice * (1 - baseSlippage * slippageMultiplier));
   }
 
-  // v3: Always full cut (binary options are all-or-nothing)
+  // H1: NaN guard — reject if sellPrice is corrupted (e.g. rawSellPrice was NaN from bad orderbook)
+  if (!Number.isFinite(sellPrice) || sellPrice <= 0 || sellPrice > 0.99) {
+    return no(`invalid_sell_price_${sellPrice}`);
+  }
+
   const recoveryAmount = sellPrice * position.size;
+
+  const reason = isCrash ? 'CRASH'
+    : isLateForceCut ? 'LATE_FORCE_CUT'
+    : isTimeBased ? `TIME_BASED(drop=${dropPct.toFixed(1)}%,${(persistentDropDurationMs / 60_000).toFixed(1)}min)`
+    : cutReason ?? 'triggered';
 
   return {
     shouldCut: true,
-    reason: isCrash ? 'CRASH' : isLateForceCut ? 'LATE_FORCE_CUT' : 'triggered',
+    reason,
     sellPrice,
     dropPct,
     recoveryAmount,
     diagnostics: {
       btcDistPct,
       btcFavorable,
-      evHold,
-      evCut,
-      evMargin,
-      timeDecay,
+      modelProbability: modelProbability ?? null,
+      evThreshold: currentTokenPrice * (cfg.evBuffer ?? 0.95),
+      evNegative,
+      mlFlipped,
+      mlSide: mlSide ?? null,
+      mlConfidence: mlConfidence ?? null,
       confirmCount: consecutiveCutPolls,
       regime,
       entryRegime: entryRegime ?? null,
-      regimeChanged,
       atrRatio: atrRatio ?? null,
-      tokenSlope,
-      holdScore,
-      holdReasons,
+      tokenSlope: getTokenPriceSlope(),
       isCrash,
       isLateForceCut,
-      momentumThreshold: getMomentumThreshold(atrRatio),
+      isTimeBased,
+      persistentDropDurationMin: persistentDropDurationMs > 0 ? parseFloat((persistentDropDurationMs / 60_000).toFixed(1)) : null,
       sellAttempt: attempt,
       slippageMode: slippageMultiplier === null ? 'market' : `${slippageMultiplier}x`,
     },
@@ -400,7 +307,7 @@ export function resetCutLossState() {
   sellAttempts = 0;
   lastSellAttemptMs = 0;
   consecutiveCutPolls = 0;
-  // Reset token trajectory buffer
+  firstLargeDropMs = 0;
   tokenPriceBuf.fill(0);
   tokenBufIdx = 0;
   tokenBufCount = 0;
@@ -415,9 +322,8 @@ export function recordSellAttempt() {
 }
 
 /**
- * M7: Reset consecutive confirmation counter after failed sell.
- * Unlike resetCutLossState(), preserves sellAttempts and lastSellAttemptMs
- * so Gate 3 (max attempts) and Gate 4 (cooldown) remain active.
+ * Reset consecutive confirmation counter after failed sell.
+ * Preserves sellAttempts and lastSellAttemptMs for Gate 3/4.
  */
 export function resetCutConfirm() {
   consecutiveCutPolls = 0;
@@ -454,17 +360,17 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
   const { btcPrice, priceToBeat, modelProbability, mlConfidence, mlSide, regime, atrRatio, timeLeftMin } = v2Context;
   let btcDistPct = null;
   let btcFavorable = null;
-  let evHold = null;
-  let evCut = currentTokenPrice;
 
   if (btcPrice != null && priceToBeat != null) {
     btcDistPct = Math.abs(((btcPrice - priceToBeat) / priceToBeat) * 100);
     btcFavorable = position.side === 'UP' ? btcPrice >= priceToBeat : btcPrice < priceToBeat;
   }
-  if (modelProbability != null) {
-    evHold = modelProbability * getTimeDecay(timeLeftMin);
-  }
 
+  const evBuffer = cfg.evBuffer ?? 0.95;
+  const evThreshold = (currentTokenPrice ?? 0.5) * evBuffer;
+  const evNegative = modelProbability != null && modelProbability < evThreshold;
+  const mlFlipConf = cfg.mlFlipConfidence ?? 0.55;
+  const mlFlipped = mlConfidence != null && mlConfidence >= mlFlipConf && mlSide != null && mlSide !== position.side;
   const tokenSlope = getTokenPriceSlope();
 
   return {
@@ -479,20 +385,18 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     attempts: sellAttempts,
     maxAttempts: cfg.maxAttempts,
     fillConfirmed: position.fillConfirmed ?? false,
-    // Smart gate fields
+    // v6 EV-based fields
     btcDistPct,
     btcFavorable,
-    evHold,
-    evCut,
-    evMargin: getEvMargin(regime),
-    timeDecay: getTimeDecay(timeLeftMin),
+    modelProbability: modelProbability ?? null,
+    evThreshold,
+    evNegative,
+    mlFlipped,
     confirmCount: consecutiveCutPolls,
     confirmNeeded: cfg.consecutivePolls,
-    mlVeto: mlConfidence != null && mlConfidence >= 0.60 && mlSide === position.side,
     regime,
     atrRatio: atrRatio ?? null,
     tokenSlope,
     tokenRecovering: tokenSlope != null && tokenSlope > 0.03,
-    momentumThreshold: getMomentumThreshold(atrRatio),
   };
 }

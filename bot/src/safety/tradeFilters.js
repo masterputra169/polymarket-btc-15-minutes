@@ -53,6 +53,7 @@ export function applyTradeFilters({
   delta1m,         // BTC 1-minute price delta ($)
   signalSide,      // the side we want to enter ('UP'|'DOWN')
   regime,          // market regime ('trending'|'choppy'|'mean_reverting'|'moderate')
+  etHour,          // current ET hour (0-23) for blackout filter
 }) {
   const reasons = [];
 
@@ -80,6 +81,11 @@ export function applyTradeFilters({
   const priceRange = TRADE_FILTERS.MARKET_PRICE_RANGE;
   if (priceRange && marketPrice != null && (marketPrice < priceRange[0] || marketPrice > priceRange[1])) {
     reasons.push(`Extreme price ${(marketPrice * 100).toFixed(0)}c outside ${(priceRange[0]*100).toFixed(0)}-${(priceRange[1]*100).toFixed(0)}c range`);
+  }
+
+  // 2c. Entry price floor — data shows entries below 55c are consistently unprofitable
+  if (TRADE_FILTERS.MIN_ENTRY_PRICE && marketPrice != null && marketPrice < TRADE_FILTERS.MIN_ENTRY_PRICE) {
+    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(TRADE_FILTERS.MIN_ENTRY_PRICE * 100).toFixed(0)}c floor`);
   }
 
   // 3. Low volatility
@@ -156,6 +162,12 @@ export function applyTradeFilters({
     if (signalSide === 'DOWN' && delta1m > COUNTER_TREND_THRESHOLD) {
       reasons.push(`Counter-trend: BTC rose $${delta1m.toFixed(0)} in 1m vs DOWN signal`);
     }
+  }
+
+  // 10. Hour-of-day blackout — data shows certain ET hours are consistently unprofitable
+  const blackout = TRADE_FILTERS.BLACKOUT_HOURS_ET;
+  if (blackout && etHour != null && blackout.includes(etHour)) {
+    reasons.push(`Blackout hour: ${etHour}:00 ET (historically unprofitable)`);
   }
 
   // Session quality score (used as multiplier downstream, not a hard filter)

@@ -88,6 +88,8 @@ export function computeBetSizing({
   action, side, ensembleProb, marketPrice, edge,
   confidence, regimeInfo, feedbackStats, ml, bankroll,
   executionContext,
+  smartFlowSignal,   // from smartMoneyTracker { direction, strength, confidence, agreesWithSide }
+  entryTimingScore,  // from smartMoneyTracker.getEntryTimingScore { score, label, inSweetSpot }
 }) {
   const noBet = {
     shouldBet: false, side: null,
@@ -190,7 +192,31 @@ export function computeBetSizing({
     else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr` }; }
   }
 
-  // Apply all multipliers (6 total: regime, accuracy, ML, confidence, execution, autocorrelation)
+  // ── Smart money flow multiplier ──
+  // When smart flow agrees with trade direction and has good confidence, boost sizing.
+  // When it disagrees, dampen.
+  let smartFlowAdj = { multiplier: 1.0, label: 'N/A' };
+  if (smartFlowSignal && smartFlowSignal.confidence > 0.2) {
+    const agrees = smartFlowSignal.agreesWithSide?.(side) ?? true;
+    const str = smartFlowSignal.strength ?? 0;
+    if (agrees && str > 0.3) {
+      smartFlowAdj = { multiplier: 1.10 + str * 0.10, label: `Flow✓ ${smartFlowSignal.direction}` };
+    } else if (!agrees && str > 0.3) {
+      smartFlowAdj = { multiplier: 0.70, label: `Flow✗ ${smartFlowSignal.direction}` };
+    }
+  }
+
+  // ── Entry timing multiplier ──
+  // Sweet spot (3-7 min elapsed): boost. Very late (>12 min): penalize.
+  let timingAdj = { multiplier: 1.0, label: 'N/A' };
+  if (entryTimingScore) {
+    timingAdj = {
+      multiplier: entryTimingScore.score,
+      label: entryTimingScore.label + (entryTimingScore.inSweetSpot ? ' ★' : ''),
+    };
+  }
+
+  // Apply all multipliers (8 total: regime, accuracy, ML, confidence, execution, autocorrelation, smartFlow, timing)
   // Multiply all together, clamp once at end — per-step clamping loses information
   // when intermediate values hit bounds and later multipliers pull back
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
@@ -199,7 +225,9 @@ export function computeBetSizing({
     * safeMult(mlAdj.multiplier)
     * safeMult(confidenceAdj.multiplier)
     * safeMult(executionAdj.multiplier)
-    * safeMult(autoCorr.multiplier);
+    * safeMult(autoCorr.multiplier)
+    * safeMult(smartFlowAdj.multiplier)
+    * safeMult(timingAdj.multiplier);
   // Audit fix M: Cap total multiplier product to [0.30, 3.0] (10x range).
   // Previously 5 unbounded multipliers could combine to 31x range — too opaque.
   const clampedMultiplier = Math.max(0.30, Math.min(3.0, rawMultiplier));
@@ -233,6 +261,8 @@ export function computeBetSizing({
     ` \u00d7 conf(${confidenceAdj.multiplier})` +
     ` \u00d7 exec(${executionAdj.multiplier})` +
     (autoCorr.multiplier !== 1.0 ? ` \u00d7 corr(${autoCorr.multiplier})` : '') +
+    (smartFlowAdj.multiplier !== 1.0 ? ` \u00d7 flow(${smartFlowAdj.multiplier.toFixed(2)})` : '') +
+    (timingAdj.multiplier !== 1.0 ? ` \u00d7 timing(${timingAdj.multiplier})` : '') +
     ` = ${(betPercent * 100).toFixed(1)}%` +
     ` \u2192 $${betAmount.toFixed(2)}` +
     ` [${riskLevel(betPercent)}]`;
@@ -253,6 +283,8 @@ export function computeBetSizing({
     confidenceAdj,
     executionAdj,
     autoCorrAdj: autoCorr,
+    smartFlowAdj,
+    timingAdj,
     expectedValue,
     rationale,
     kellyTune,

@@ -93,8 +93,17 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
     }
   }
 
-  // FINTECH: Round P&L to cents to prevent floating-point noise in journal/dashboard
-  const pnl = Math.round((won ? (pos.size - pos.cost) : -pos.cost) * 100) / 100;
+  // FINTECH: Round P&L to cents. Subtract 2% Polymarket fee on profit (matches positionTracker math).
+  // Without this, journal shows gross profit but bankroll gets net profit after fee.
+  const POLY_FEE_RATE = 0.02;
+  let pnl;
+  if (won) {
+    const grossProfit = Math.max(0, pos.size - pos.cost);
+    const fee = Math.round(grossProfit * POLY_FEE_RATE * 100) / 100;
+    pnl = Math.round((pos.size - pos.cost - fee) * 100) / 100;
+  } else {
+    pnl = Math.round(-pos.cost * 100) / 100;
+  }
   log.info(`Position ${context} — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
   actions.settleTrade(won);
   actions.invalidateUsdcSync();

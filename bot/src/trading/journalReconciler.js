@@ -8,7 +8,7 @@
  * Output: bot/data/verified_journal.jsonl (append-only)
  */
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -260,12 +260,23 @@ async function reconcile() {
 
   const localTrades = loadLocalTrades();
   // L: Dedup — load existing conditionIds to prevent duplicate entries from overlap buffer
+  // Only skip RESOLVED entries; unresolved ones should be re-checked for outcome updates
   const processedIds = new Set();
+  const unresolvedIds = new Set();
   try {
     if (existsSync(BOT_CONFIG.verifiedJournalFile)) {
       const lines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
       for (const line of lines) {
-        try { const e = JSON.parse(line); if (e.conditionId) processedIds.add(e.conditionId); } catch { /* malformed line — skip */ }
+        try {
+          const e = JSON.parse(line);
+          if (e.conditionId) {
+            if (e.resolved) {
+              processedIds.add(e.conditionId);
+            } else {
+              unresolvedIds.add(e.conditionId);
+            }
+          }
+        } catch { /* malformed line — skip */ }
       }
     }
   } catch (err) {
@@ -276,21 +287,56 @@ async function reconcile() {
   let marketCount = 0;
   let tradeCount = 0;
 
+  // Collect updated entries for unresolved markets that are now resolved
+  const updatedEntries = [];
+
   for (const [conditionId, marketTrades] of byMarket) {
-    if (processedIds.has(conditionId)) continue; // Skip already-reconciled markets
+    if (processedIds.has(conditionId)) continue; // Skip already-resolved markets
+
+    const isRecheck = unresolvedIds.has(conditionId);
     try {
       const entry = await buildVerifiedEntry(conditionId, marketTrades, localTrades);
       if (!entry) continue;
 
-      const dir = dirname(BOT_CONFIG.verifiedJournalFile);
-      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      appendFileSync(BOT_CONFIG.verifiedJournalFile, JSON.stringify(entry) + '\n');
+      if (isRecheck && !entry.resolved) continue; // Still unresolved — skip re-write
+
+      if (isRecheck && entry.resolved) {
+        // Was unresolved, now resolved — mark for replacement
+        updatedEntries.push(entry);
+        log.info(`Updated unresolved → resolved: ${conditionId.slice(0, 16)}... outcome=${entry.outcome} pnl=${entry.netPnl}`);
+      } else {
+        // New entry — append
+        const dir = dirname(BOT_CONFIG.verifiedJournalFile);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        appendFileSync(BOT_CONFIG.verifiedJournalFile, JSON.stringify(entry) + '\n');
+      }
 
       totalPnl += entry.netPnl ?? 0;
       marketCount++;
       tradeCount += marketTrades.length;
     } catch (err) {
       log.warn(`Failed to process market ${conditionId.slice(0, 16)}...: ${err.message}`);
+    }
+  }
+
+  // Replace unresolved entries that are now resolved (in-place update)
+  if (updatedEntries.length > 0) {
+    try {
+      const updatedMap = new Map(updatedEntries.map(e => [e.conditionId, e]));
+      const existingLines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
+      const newLines = existingLines.map(line => {
+        try {
+          const e = JSON.parse(line);
+          if (e.conditionId && updatedMap.has(e.conditionId)) {
+            return JSON.stringify(updatedMap.get(e.conditionId));
+          }
+        } catch { /* keep original */ }
+        return line;
+      });
+      writeFileSync(BOT_CONFIG.verifiedJournalFile, newLines.join('\n') + '\n');
+      log.info(`Replaced ${updatedEntries.length} unresolved entries with resolved data`);
+    } catch (err) {
+      log.warn(`Failed to update unresolved entries: ${err.message}`);
     }
   }
 

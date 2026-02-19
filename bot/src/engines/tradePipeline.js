@@ -10,6 +10,7 @@
 import { createLogger } from '../logger.js';
 import { getSessionName } from '../../../src/utils.js';
 import { EXECUTION } from '../../../src/config.js';
+import { BOT_CONFIG } from '../config.js';
 
 const log = createLogger('TradePipeline');
 
@@ -96,7 +97,7 @@ export async function executeArbitrage({
     // Leg 1: Buy UP (FOK with slippage to prevent rejection on tiny price moves)
     const upResult = await deps.placeBuyOrder({
       tokenId: poly.tokens.upTokenId,
-      price: fokBuyPrice(arb.askUp),
+      price: fokBuyPrice(arb.askUp, orderbookUp?.spread), // M1: pass spread for proportional slippage
       size: arbShares,
     });
     const upFillCost = parseClobAmount(upResult?.makingAmount, arbShares * arb.askUp);
@@ -107,7 +108,7 @@ export async function executeArbitrage({
     try {
       const downResult = await deps.placeBuyOrder({
         tokenId: poly.tokens.downTokenId,
-        price: fokBuyPrice(arb.askDown),
+        price: fokBuyPrice(arb.askDown, orderbookDown?.spread), // M1: pass spread for proportional slippage
         size: arbShares,
       });
       const downFillCost = parseClobAmount(downResult?.makingAmount, arbShares * arb.askDown);
@@ -211,6 +212,8 @@ export async function executeDirectionalTrade({
   bb, atr, stochRsi, emaCross, volDelta,
   consec, delta1m, delta3m, orderbookSignal, orderbookUp,
   marketUp, marketDown, obFlow,
+  // Smart money flow
+  smartFlowSignal,
 }, deps) {
   // ── Signal Confirmation Gate ──
   deps.updateConfirmation(rec.side);
@@ -228,6 +231,9 @@ export async function executeDirectionalTrade({
   }
 
   // ── Smart trade filters ──
+  // Compute ET hour for blackout filter (ET = UTC-5, no DST handling needed for hour-level granularity)
+  const etHour = new Date(Date.now() - 5 * 3600_000).getUTCHours();
+
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
     mlAvailable: mlResult.available,
@@ -244,10 +250,22 @@ export async function executeDirectionalTrade({
     delta1m,
     signalSide: rec.side,
     regime: regimeInfo?.regime ?? 'moderate',
+    etHour,
   });
 
   // Orderbook flow alignment check
   const flowAlign = deps.checkFlowAlignment(betSide);
+
+  // Smart money flow gate: if early flow strongly disagrees, block the trade.
+  // Only block when confidence is high (>0.5) and strength is strong (>0.4).
+  // This prevents entering against the dominant early-market flow direction.
+  if (smartFlowSignal && smartFlowSignal.confidence > 0.5 && smartFlowSignal.strength > 0.4) {
+    const flowAgrees = smartFlowSignal.agreesWithSide?.(betSide) ?? true;
+    if (!flowAgrees && smartFlowSignal.window === 'EARLY') {
+      log.info(`Smart flow gate blocked: ${betSide} vs early flow ${smartFlowSignal.direction} (str=${smartFlowSignal.strength} conf=${smartFlowSignal.confidence})`);
+      return false;
+    }
+  }
 
   if (!filterResult.pass) {
     log.info(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
@@ -267,8 +285,15 @@ export async function executeDirectionalTrade({
     return false;
   }
 
+  // Hard dollar cap from BOT_CONFIG (data shows ~$1.30 avg is most consistent)
+  let effectiveBetAmount = betSizing.betAmount;
+  if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {
+    log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${BOT_CONFIG.maxBetAmountUsd.toFixed(2)} (maxBetAmountUsd)`);
+    effectiveBetAmount = BOT_CONFIG.maxBetAmountUsd;
+  }
+
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
-  const shares = Math.floor(betSizing.betAmount / betMarketPrice);
+  const shares = Math.floor(effectiveBetAmount / betMarketPrice);
 
   // H9: Guard against 0 shares (e.g. betAmount < marketPrice)
   if (shares <= 0) {
@@ -279,6 +304,9 @@ export async function executeDirectionalTrade({
   // Flow alignment info for logging
   const flowTag = flowAlign.signal !== 'INSUFFICIENT_DATA'
     ? ` | Flow:${flowAlign.signal}${flowAlign.agrees ? '(agree)' : '(DISAGREE)'}`
+    : '';
+  const smartFlowTag = smartFlowSignal && smartFlowSignal.sampleCount >= 3
+    ? ` | SmartFlow:${smartFlowSignal.direction}(${smartFlowSignal.strength})`
     : '';
 
   // Reserve bankroll — FINTECH: round to cents to prevent float drift in available bankroll
@@ -311,6 +339,9 @@ export async function executeDirectionalTrade({
     betAmount: betSizing.betAmount, kellyFraction: betSizing.kellyFraction,
     riskLevel: betSizing.riskLevel, expectedValue: betSizing.expectedValue,
     signalConfirmCount, recentFlips: recentFlipCount,
+    smartFlowDirection: smartFlowSignal?.direction ?? null,
+    smartFlowStrength: smartFlowSignal?.strength ?? null,
+    smartFlowWindow: smartFlowSignal?.window ?? null,
   };
 
   if (dryRun) {
@@ -320,7 +351,7 @@ export async function executeDirectionalTrade({
     log.info(
       `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
       `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
-      `Conf: ${rec.confidence}${flowTag} | ${betSizing.rationale}`
+      `Conf: ${rec.confidence}${flowTag}${smartFlowTag} | ${betSizing.rationale}`
     );
     // Record prediction for accuracy tracking
     try {

@@ -151,6 +151,9 @@ import {
 // Orderbook flow tracking
 import { checkFlowAlignment, resetFlow } from './engines/orderbookFlow.js';
 
+// Smart money flow tracking (time-windowed CLOB flow analysis)
+import { updateSmartFlow, getSmartFlowSignal, getEntryTimingScore, resetSmartFlow } from './engines/smartMoneyTracker.js';
+
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
 
@@ -534,7 +537,9 @@ export async function pollOnce() {
     const fundingRate = null;
 
     // ── 3b. USDC balance (every 30s — non-blocking) ──
-    const SETTLEMENT_SYNC_COOLDOWN_MS = (BOT_CONFIG.redeemIntervalMs || 3_600_000) + 5 * 60_000;
+    // M1: Cooldown was redeemInterval+5min = 65min — too long. Tokens typically redeem in <15min.
+    // Use 15min fixed cooldown so bankroll syncs sooner after settlement.
+    const SETTLEMENT_SYNC_COOLDOWN_MS = 15 * 60_000;
     const settlementCooldownActive = (now - getLastSettlementMs()) < SETTLEMENT_SYNC_COOLDOWN_MS;
     scheduleUsdcCheck({
       now, settlementCooldownActive, clientReady: isClientReady(),
@@ -569,6 +574,7 @@ export async function pollOnce() {
       resetMarketCache();
       resetCutLossState();
       resetFlow();
+      resetSmartFlow();
       resetMarketTradeCount(oldSlug);
       onMarketSwitch(oldSlug, marketSlug);
 
@@ -657,6 +663,17 @@ export async function pollOnce() {
       edge, session,
     } = sig;
 
+    // ── 5a. Smart money flow update (time-windowed CLOB flow) ──
+    updateSmartFlow({
+      marketSlug,
+      timeLeftMin,
+      imbalanceDelta: obFlow.imbalanceDelta ?? 0,
+      flowSignal: obFlow.flowSignal ?? 'NEUTRAL',
+      marketUpPrice: marketUp,
+    });
+    const smartFlowSignal = getSmartFlowSignal();
+    const entryTimingScore = getEntryTimingScore(timeLeftMin);
+
     // ── 5b. Signal flip tracking (anti-whipsaw) ──
     const currentSide = ensembleUp >= 0.5 ? 'UP' : 'DOWN';
     const recentFlipCount = trackSignal(currentSide, now);
@@ -693,6 +710,10 @@ export async function pollOnce() {
         momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
         ruleEdge: Math.max(ruleEdge.edgeUp ?? 0, ruleEdge.edgeDown ?? 0),
         ensembleUp, mlProbUp: mlResult.mlProbUp, mlConfidence: mlResult.mlConfidence,
+        smartFlowDirection: smartFlowSignal.direction,
+        smartFlowStrength: smartFlowSignal.strength,
+        smartFlowEarlyFlow: smartFlowSignal.earlyFlow,
+        smartFlowWindow: smartFlowSignal.window,
       });
     }
 
@@ -711,13 +732,18 @@ export async function pollOnce() {
         const emBestBid = emTokenBook?.bids?.[0]?.price ?? null;
         if (emBestBid && acquireSellLock('emergency_cut')) {
           try {
-            const result = await closePosition(emergencyPos, emBestBid, 0.03); // 3% aggressive slippage
-            if (result?.success) {
-              settleTradeEarlyExit(result.recoveredUsdc ?? 0);
-              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: (result.recoveredUsdc ?? 0) - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
+            // Fix C1+C2: correct args — closePosition(tokenId, size, price) not (position, bid, slippage)
+            // Apply 3% slippage to bestBid price for aggressive emergency fill
+            const emSellPrice = Math.max(0.01, Math.round(emBestBid * 0.97 * 1000) / 1000);
+            const result = await closePosition(emergencyPos.tokenId, emergencyPos.size, emSellPrice);
+            // closePosition returns takingAmount (USDC received), not .success flag
+            const emRecovery = parseClobAmount(result?.takingAmount, emSellPrice * emergencyPos.size);
+            if (emRecovery !== null) {
+              settleTradeEarlyExit(emRecovery);
+              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: emRecovery - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
               resetCutLossState();
-              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Bankroll: $${getBankroll().toFixed(2)}`);
+              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
             }
           } finally { releaseSellLock(); }
         }
@@ -801,9 +827,107 @@ export async function pollOnce() {
       }
     }
 
-    // ── 6b. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
+    // ── 6b. Smart money sell-first check ──
+    // If holding a position AND strong early smart flow disagrees with our side,
+    // trigger early exit before waiting for full cut-loss conditions.
+    // This catches positions where smart money is flowing against us in the first 5 minutes.
+    let smartSellTriggered = false;
+    const sfPos = getCurrentPosition();
+    // Bug 1 fix: require fillConfirmed — don't try to sell tokens not yet confirmed on-chain
+    if (sfPos && !sfPos.settled && sfPos.fillConfirmed && sfPos.side !== 'ARB' && !takeProfitTriggered) {
+      const sfFlowAgrees = smartFlowSignal.agreesWithSide?.(sfPos.side) ?? true;
+      const sfTokenPrice = sfPos.side === 'UP' ? marketUp : marketDown;
+      const sfTokenBook = sfPos.side === 'UP' ? orderbookUp : orderbookDown;
+      const sfBestBid = sfTokenBook?.bestBid ?? sfTokenPrice;
+      const sfHoldSec = (Date.now() - (sfPos.enteredAt ?? 0)) / 1000;
+
+      // Trigger conditions: strong early flow disagrees + held for at least 60s + token not deeply profitable
+      const sfGainPct = sfPos.price > 0 && sfTokenPrice ? ((sfTokenPrice - sfPos.price) / sfPos.price) * 100 : 0;
+      if (
+        !sfFlowAgrees &&
+        smartFlowSignal.window === 'EARLY' &&
+        smartFlowSignal.confidence > 0.5 &&
+        smartFlowSignal.strength > 0.4 &&
+        sfHoldSec > 60 &&
+        sfGainPct < 15 // Don't sell if already deep in profit (let take-profit handle)
+      ) {
+        if (!acquireSellLock('smart_sell_first')) {
+          log.info('Smart sell-first skipped — sell already in progress');
+        } else {
+          try {
+            // Bug 4 fix: guard null price before proceeding (CLOB WS may be disconnected)
+            const sfRawPrice = sfBestBid ?? sfTokenPrice;
+            if (!sfRawPrice || !Number.isFinite(sfRawPrice)) {
+              log.info('Smart sell-first skipped — no valid token price available');
+              smartSellTriggered = false;
+              // Note: don't return here — fall through to finally { releaseSellLock() }
+              throw new Error('no_valid_price');
+            }
+            smartSellTriggered = true;
+            // Bug 3 fix: apply 1% slippage (same as take-profit) to improve FOK fill rate
+            const sfSellPrice = Math.max(0.01, Math.round(sfRawPrice * 0.99 * 1000) / 1000);
+            const sfSellSize = sfPos.size;
+            const sfRecovery = sfSellPrice * sfSellSize;
+            log.warn(
+              `SMART SELL-FIRST: ${sfPos.side} position vs early flow ${smartFlowSignal.direction} ` +
+              `(str=${smartFlowSignal.strength} conf=${smartFlowSignal.confidence}) | ` +
+              `sell ${sfSellSize} @$${sfSellPrice.toFixed(3)} → recover $${sfRecovery.toFixed(2)}`
+            );
+            const sfExitData = {
+              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+              marketUp, marketDown, tokenPrice: sfTokenPrice,
+              regime: regimeInfo?.regime, timeLeftMin,
+              smartFlowDirection: smartFlowSignal.direction,
+              smartFlowStrength: smartFlowSignal.strength,
+            };
+            if (BOT_CONFIG.dryRun) {
+              const sfPnl = sfRecovery - sfPos.cost;
+              settleTradeEarlyExit(sfRecovery);
+              invalidateSync();
+              clearEntrySnapshot();
+              writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
+              resetCutLossState();
+              if (sfPnl < 0) recordLoss();
+              notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
+            } else {
+              try {
+                const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
+                const sfActualRecovery = parseClobAmount(sfResult?.takingAmount, sfRecovery);
+                const sfPnl = sfActualRecovery - sfPos.cost;
+                settleTradeEarlyExit(sfActualRecovery);
+                invalidateSync();
+                clearEntrySnapshot();
+                writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
+                resetCutLossState();
+                if (sfPnl < 0) recordLoss();
+                notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
+              } catch (err) {
+                log.warn(`Smart sell-first FAILED: ${err.stack || err.message}`);
+                smartSellTriggered = false;
+              }
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
+    // ── Fix C: Auto-confirm fill if position held >= 90s without CLOB verification ──
+    // Covers: fill tracker timeout, bot restart with unconfirmed position, CLOB API errors.
+    // 90s < minHoldSec (120s) so cut-loss can evaluate immediately after auto-confirmation.
+    {
+      const autoPos = getCurrentPosition();
+      if (autoPos && !autoPos.settled && !autoPos.fillConfirmed && autoPos.side !== 'ARB') {
+        const holdSec = (Date.now() - (autoPos.enteredAt ?? 0)) / 1000;
+        if (holdSec >= 90) {
+          log.warn(`Auto-confirm fill: ${autoPos.side} held ${holdSec.toFixed(0)}s without CLOB verification — assuming filled (fill tracker may have missed)`);
+          confirmFill();
+        }
+      }
+    }
+
+    // ── 6c. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
     const pos = getCurrentPosition();
-    if (pos && !pos.settled && pos.side !== 'ARB' && !takeProfitTriggered) {
+    if (pos && !pos.settled && pos.side !== 'ARB' && !takeProfitTriggered && !smartSellTriggered) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
@@ -822,7 +946,8 @@ export async function pollOnce() {
       });
 
       // Log cut-loss gate status every 5th poll
-      if (pollCounter % 5 === 0) {
+      // Fix A: Naikkan ke info level + interval lebih sering (setiap 3 poll ~6s) agar diagnostics visible di production
+      if (pollCounter % 3 === 0) {
         const ep = pos.price;
         const dropPct = ep > 0 && tokenPrice != null
           ? (((ep - tokenPrice) / ep) * 100).toFixed(1) : '?';
@@ -831,8 +956,8 @@ export async function pollOnce() {
         const btcSide = lastPrice && priceToBeat.value
           ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
           : '?';
-        log.debug(
-          `CutLoss v4: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
+        log.info(
+          `CutLoss: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
           `BTC ${btcSide} dist=${btcDist}% | d1m=$${(delta1m ?? 0).toFixed(1)} | ` +
           `ATR=${(atr?.atrRatio ?? 0).toFixed(2)} | ${regimeInfo?.regime ?? '?'}${entryRegime && entryRegime !== regimeInfo?.regime ? `(was ${entryRegime})` : ''} | ` +
           `EV(hold)=${((pos.side === 'UP' ? ensembleUp : ensembleDown) * 100).toFixed(0)}% vs token=${(tokenPrice * 100).toFixed(0)}¢`
@@ -914,6 +1039,7 @@ export async function pollOnce() {
       regimeInfo,
       session: getSessionName(),
       calibratedThresholds: getCalibratedPhaseThresholds(),
+      smartFlowSignal,
     });
     rec.strength = rec.confidence;
     rec.edge = edge.bestEdge;
@@ -941,6 +1067,8 @@ export async function pollOnce() {
       ml: mlResult.available ? { status: 'ready', side: mlResult.mlSide, confidence: mlResult.mlConfidence } : null,
       bankroll,
       executionContext,
+      smartFlowSignal,
+      entryTimingScore,
     });
 
     // ── 9. Feedback tracking (stale cleanup) ──
@@ -980,7 +1108,9 @@ export async function pollOnce() {
       });
     }
     // 10b. Directional trade
-    else if (!signalStale && rec.action === 'ENTER' && !hasPending) {
+    // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
+    // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
+    else if (!signalStale && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
       await executeDirectionalTrade({
         rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
         ensembleUp, timeAware, mlResult, mlAgreesWithRules,
@@ -992,6 +1122,7 @@ export async function pollOnce() {
         bb, atr, stochRsi, emaCross, volDelta,
         consec, delta1m, delta3m, orderbookSignal, orderbookUp,
         marketUp, marketDown, obFlow,
+        smartFlowSignal,
       }, {
         updateConfirmation,
         isSignalStable,
@@ -1046,6 +1177,7 @@ export async function pollOnce() {
     const arbTag = arb.found ? `ARB:${arb.profitPct.toFixed(1)}%` : 'ARB:no';
     const fillTag = `Fill:${(getFillRate() * 100).toFixed(0)}%`;
     const flowTag = obFlow.sampleCount >= 5 ? `Flow:${obFlow.flowSignal}` : '';
+    const sfTag = smartFlowSignal.sampleCount >= 3 ? `SF:${smartFlowSignal.direction}(${smartFlowSignal.strength})` : '';
     const clSrc = chainlinkResolved.source === 'polymarket_ws' ? 'PolyWS'
       : chainlinkResolved.source === 'chainlink_wss' ? 'CLWSS' : 'RPC';
     const srcTag = `${isBinanceConnected() ? 'WS' : 'REST'}+${useClobWs ? 'WS' : 'REST'}+CL:${clSrc}`;
@@ -1057,7 +1189,7 @@ export async function pollOnce() {
       `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
       `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase} | ` +
       `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
-      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} | ${srcTag}`
+      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} | ${srcTag}`
     );
 
     // ── 13. Compute narratives + broadcast full state to dashboard ──
@@ -1128,6 +1260,8 @@ export async function pollOnce() {
       arbitrage: arb,
       fillTracker: getFillTrackerStatus(),
       orderbookFlow: obFlow,
+      smartFlow: smartFlowSignal,
+      entryTiming: entryTimingScore,
       tradeFilters: getFilterStatus(),
       tiltProtection: tiltMarketsLeft > 0 ? { active: true, marketsLeft: tiltMarketsLeft, minMlConf: TILT_ML_CONF_MIN } : { active: false },
 

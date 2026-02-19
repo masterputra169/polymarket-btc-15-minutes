@@ -49,7 +49,7 @@ done
 
 echo ""
 echo "╔══════════════════════════════════════════════════╗"
-echo "║  BTC Prediction ML Training Pipeline v9           ║"
+echo "║  BTC Prediction ML Training Pipeline v10          ║"
 echo "╠══════════════════════════════════════════════════╣"
 echo "║  Days: $DAYS | Epochs: $EPOCHS | Tune: ${TUNE:-no} | Min-move: $MIN_MOVE"
 echo "╚══════════════════════════════════════════════════╝"
@@ -73,7 +73,7 @@ if [ -n "$TUNE" ]; then
 fi
 echo "   ✅ All dependencies OK"
 
-# ═══ Step 0: Prepare Polymarket features (if data available) ═══
+# ═══ Step 0: Prepare Polymarket features + smart money lookup ═══
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 POLY_DATA_DIR="$SCRIPT_DIR/polymarket_btc15m_data"
 POLY_LOOKUP="$SCRIPT_DIR/polymarket_lookup.json"
@@ -81,7 +81,7 @@ POLY_FLAG=""
 
 if [ -d "$POLY_DATA_DIR" ] && [ -f "$POLY_DATA_DIR/02_btc15m_ml_ready.csv" ]; then
   echo ""
-  echo "═══ STEP 0: Prepare Polymarket Features ═══"
+  echo "═══ STEP 0a: Prepare Polymarket Features ═══"
   echo ""
   $PYTHON "$SCRIPT_DIR/preparePolymarketFeatures.py" --data-dir "$POLY_DATA_DIR" --output "$POLY_LOOKUP"
 

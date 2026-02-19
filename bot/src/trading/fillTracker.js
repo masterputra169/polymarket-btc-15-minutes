@@ -199,13 +199,38 @@ export async function checkPendingFill() {
     log.debug(`Fill check error: ${err.message}`);
   }
 
-  // Evict stale pending orders (>10min) to prevent unbounded Map growth on API failures
+  // Evict stale pending orders (>10min) — H2: do ONE final CLOB verification before assuming filled.
+  // Without this, a 10-min network outage followed by recovery would silently create phantom fills.
   const STALE_ORDER_MS = 10 * 60 * 1000;
   const evictNow = Date.now();
   for (const [id, order] of pendingOrders) {
     if (evictNow - order.placedAt > STALE_ORDER_MS) {
-      log.warn(`Evicting stale pending order ${id} (${Math.round((evictNow - order.placedAt) / 1000)}s old) — assuming filled`);
-      recordFill({ orderId: id, filled: true, verified: false, timeToFill: evictNow - order.placedAt, adverseSelection: false });
+      const elapsed = evictNow - order.placedAt;
+      let finalFilled = true; // default: assume filled (conservative for BUY orders)
+      let finalVerified = false;
+      try {
+        const finalTrades = await Promise.race([
+          getTradeHistory({ assetId: order.tokenId, after: order.placedAt - 5000 }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('final-verify timeout')), 3000)),
+        ]);
+        const found = Array.isArray(finalTrades) && finalTrades.find(t => {
+          const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
+          return (t.asset_id === order.tokenId || t.token_id === order.tokenId) &&
+            matchTime >= order.placedAt - 5000 && matchTime <= order.placedAt + 600_000;
+        });
+        if (found) {
+          finalVerified = true;
+          log.warn(`Stale order ${id} (${Math.round(elapsed / 1000)}s) — final verify: FOUND in trade history`);
+        } else {
+          // No match found — mark as NOT filled (safer than phantom position)
+          finalFilled = false;
+          log.warn(`Stale order ${id} (${Math.round(elapsed / 1000)}s) — final verify: NOT in trade history — marking REJECTED`);
+        }
+      } catch (verifyErr) {
+        // API error — fall back to conservative default (assume filled for BUY orders)
+        log.warn(`Stale order ${id} final verify failed: ${verifyErr.message} — defaulting to assumed filled`);
+      }
+      recordFill({ orderId: id, filled: finalFilled, verified: finalVerified, timeToFill: elapsed, adverseSelection: false });
       pendingOrders.delete(id);
     }
   }

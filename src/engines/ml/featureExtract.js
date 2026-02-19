@@ -11,7 +11,6 @@ export const featureBuf = new Float64Array(MAX_FEATURES);
 
 /**
  * Compute 25 engineered features in-place in featureBuf[54..78].
- * (Indices shifted +2 from v10 due to funding_rate_norm/change at 52-53.)
  */
 export function computeEngineeredFeaturesInPlace() {
   const sign = (v) => v > 0 ? 1 : v < 0 ? -1 : 0;
@@ -105,7 +104,7 @@ export function getDataQualityScore() {
 
 /**
  * Extract 54 base features into featureBuf (in-place, zero alloc).
- * If model is v2, also computes 25 engineered features [54-78].
+ * If model is v2+, also computes 25 engineered features [54-78].
  *
  * H5 FIX: Tracks data freshness — counts how many features used fallback defaults.
  * Call getDataQualityScore() after this to retrieve the result.

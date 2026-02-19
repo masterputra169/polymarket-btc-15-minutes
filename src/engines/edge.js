@@ -197,6 +197,7 @@ export function countAgreement(breakdown, side) {
  * @param {boolean} [params.multiTfConfirmed] - whether 1m+5m agree
  * @param {number|null} [params.mlConfidence] - ML model confidence (0-1)
  * @param {boolean} [params.mlAgreesWithRules] - whether ML and rules agree on direction
+ * @param {Object|null} [params.smartFlowSignal] - from smartMoneyTracker { direction, strength, confidence, window }
  * @returns {{ action: string, side: string|null, confidence: string, phase: string, reason: string }}
  */
 export function decide({
@@ -212,6 +213,7 @@ export function decide({
   regimeInfo = null,
   session = null,
   calibratedThresholds = null,  // from norm_browser.json phase_thresholds (audit H3)
+  smartFlowSignal = null,       // from smartMoneyTracker (time-windowed CLOB flow)
 }) {
   // ═══ Phase thresholds — calibrated from holdout if available, else v3 defaults ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
@@ -303,6 +305,25 @@ export function decide({
   if (mlIsHighConf && mlAgreesWithRules) {
     minEdge = Math.max(minEdge - 0.02, 0.04);
     minProb = Math.max(minProb - 0.02, 0.52);
+  }
+
+  // ═══ Smart money flow adjustment ═══
+  // Early flow (82.8% accuracy): relax thresholds when flow agrees with best model side.
+  // Late flow (56.3%): tighten — flow is noise, reduce reliance on it.
+  if (smartFlowSignal && smartFlowSignal.confidence > 0.3) {
+    const bestModelSide = modelUp >= modelDown ? 'UP' : 'DOWN';
+    const flowAgrees = smartFlowSignal.direction === bestModelSide;
+    const flowStrength = smartFlowSignal.strength ?? 0;
+
+    if (smartFlowSignal.window === 'EARLY' && flowAgrees && flowStrength > 0.3) {
+      // Early flow agrees: relax by up to 1.5% (scaled by strength)
+      const relax = 0.015 * flowStrength;
+      minEdge = Math.max(minEdge - relax, 0.04);
+      minProb = Math.max(minProb - relax, 0.52);
+    } else if (smartFlowSignal.window === 'LATE') {
+      // Late flow: tighten by 1% — discount noisy late-market flow signals
+      minEdge = Math.min(minEdge + 0.01, 0.25);
+    }
   }
 
   // ═══ Side bias v3 (reduced: UP +1%, DOWN -0.5%) ═══

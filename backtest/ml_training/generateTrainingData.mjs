@@ -93,6 +93,7 @@ function loadPolymarketLookup(path) {
   }
 }
 
+
 /**
  * Linear interpolation of UP token price at a given seconds-into-market.
  * Uses binary search over sorted [[secs, price], ...] array.
@@ -1163,7 +1164,7 @@ const FEATURE_NAMES = [
 
 // ═══ MAIN ═══
 async function main() {
-  console.log(`\n=== Training Data Generator v12 (54 features + real Polymarket data) ===`);
+  console.log(`\n=== Training Data Generator v12 (54 features + real Polymarket) ===`);
   console.log(`Days: ${DAYS} | Window: ${PREDICTION_WINDOW}min | Min-move: ${(MIN_MOVE_PCT*100).toFixed(3)}% | Output: ${OUTPUT_FILE}`);
   if (PROXY_URL) {
     console.log(`API: ${PROXY_URL} (proxy mode)`);

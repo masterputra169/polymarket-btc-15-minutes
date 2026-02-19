@@ -43,6 +43,8 @@ export const TRADE_FILTERS = {
   MIN_BTC_DIST_PCT: 0.015,      // lowered from 0.02 — redundant with 50/50 filter + edge threshold
   LOSS_COOLDOWN_MS: 30_000,     // halved from 60s — 30s enough for anti-tilt, 60s skips entire market
   MAX_TRADES_PER_MARKET: 2,     // raised from 1 — allow re-entry on signal change within same market
+  MIN_ENTRY_PRICE: 0.55,        // skip entries below 55c — data shows cheap-side entries lose consistently
+  BLACKOUT_HOURS_ET: [3, 7, 9, 10], // skip these ET hours — consistently negative P&L in 94-trade dataset
 };
 
 export const CONFIG = {

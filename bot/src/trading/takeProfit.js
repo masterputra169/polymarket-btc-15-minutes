@@ -45,8 +45,9 @@ export function evaluateTakeProfit({
   // ── Gate 1: Feature enabled? ──
   if (!cfg || !cfg.enabled) return no('disabled');
 
-  // ── Gate 2: Has open position (not settled, not ARB)? ──
+  // ── Gate 2: Has open, fill-confirmed position (not settled, not ARB)? ──
   if (!position || position.settled) return no('no_position');
+  if (!position.fillConfirmed) return no('fill_unconfirmed'); // H1: match cutLoss.js — don't sell unconfirmed tokens
   if (position.side === 'ARB') return no('arb_position');
 
   // ── Gate 3: Min hold time met? ──

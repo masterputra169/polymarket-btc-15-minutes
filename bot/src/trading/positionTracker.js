@@ -60,12 +60,14 @@ let state = {
 };
 
 // ── Sell guard: prevents dashboard sell, cut-loss, and take-profit from racing ──
-// Audit fix H: Added 30s timeout to prevent permanent lock from hung CLOB calls.
+// Audit fix H: Added timeout to prevent permanent lock from hung CLOB calls.
+// C5: Increased 30s→60s — CLOB calls can legitimately take 30s on congested Polygon.
+// At 30s, a slow-but-successful sell would auto-release and allow concurrent sell attempt.
 // ALL sell paths (cut-loss, take-profit, dashboard sell) must acquire this lock.
 let sellingInProgress = false;
 let sellLockTs = 0;
 let sellLockSource = '';  // Tracks which caller holds the lock (for dedup logging)
-const SELL_LOCK_TIMEOUT_MS = 30_000;
+const SELL_LOCK_TIMEOUT_MS = 60_000;
 
 // ── Audit log (append-only with rotation) ──
 const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -191,6 +193,12 @@ export function recordTrade({ side, tokenId, conditionId, price, size, marketSlu
   // NaN guard — reject invalid inputs before they corrupt bankroll
   if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(size) || size <= 0) {
     log.error(`recordTrade REJECTED: invalid params price=${price} size=${size} — trade NOT recorded`);
+    return;
+  }
+  // M2: Size bounds check — CLOB could return malformed size (e.g. 1e18) that overflows cost calc
+  const MAX_REASONABLE_SIZE = 100_000; // 100k shares is unrealistically large for any Polymarket position
+  if (size > MAX_REASONABLE_SIZE) {
+    log.error(`recordTrade REJECTED: size=${size} exceeds MAX_REASONABLE_SIZE=${MAX_REASONABLE_SIZE} — likely malformed CLOB response`);
     return;
   }
   if (actualCost != null && (!Number.isFinite(actualCost) || actualCost <= 0)) {
