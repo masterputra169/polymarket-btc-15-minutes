@@ -150,6 +150,19 @@ function PositionPanel({ data, sendBotCommand }) {
   const bankroll = data?.bankroll;
   const cutLoss = data?.cutLoss ?? null;
   const recentJournal = data?.recentJournal ?? [];
+  const marketUp = data?.marketUp;
+  const marketDown = data?.marketDown;
+
+  // Real-time unrealized P&L for bot position
+  const rtCurrentPrice = botPosition?.side === 'UP' ? marketUp
+    : botPosition?.side === 'DOWN' ? marketDown
+    : null;
+  const rtPnl = (rtCurrentPrice != null && botPosition?.cost > 0 && botPosition?.size > 0)
+    ? rtCurrentPrice * botPosition.size - botPosition.cost
+    : null;
+  const rtPnlPct = (rtPnl != null && botPosition?.cost > 0)
+    ? (rtPnl / botPosition.cost) * 100
+    : null;
 
   // Auto-updating "Xs ago" timer
   useEffect(() => {
@@ -339,6 +352,41 @@ function PositionPanel({ data, sendBotCommand }) {
               <div style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{timeHeldText ?? '-'}</div>
             </div>
           </div>
+
+          {/* Real-time P&L bar */}
+          {rtPnl != null && (
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              marginTop: 7, padding: '5px 8px', borderRadius: 5,
+              background: rtPnl >= 0 ? 'rgba(0,230,118,0.07)' : 'rgba(255,82,82,0.07)',
+              border: `1px solid ${rtPnl >= 0 ? 'rgba(0,230,118,0.18)' : 'rgba(255,82,82,0.18)'}`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: '0.54rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Unrealized P&L
+                </span>
+                <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                  Mkt: <b style={{ color: 'var(--text-primary)' }}>${fmt(rtCurrentPrice, 3)}</b>
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+                <span style={{
+                  fontSize: '0.85rem', fontWeight: 700,
+                  color: rtPnl >= 0 ? 'var(--green-bright)' : 'var(--red-bright)',
+                }}>
+                  {rtPnl >= 0 ? '+' : ''}{fmtUsd(rtPnl)}
+                </span>
+                <span style={{
+                  fontSize: '0.63rem',
+                  color: rtPnl >= 0 ? 'var(--green-bright)' : 'var(--red-bright)',
+                  opacity: 0.75,
+                }}>
+                  ({rtPnlPct >= 0 ? '+' : ''}{fmt(rtPnlPct, 1)}%)
+                </span>
+              </div>
+            </div>
+          )}
+
           <CutLossBar cutLoss={cutLoss} />
           {botPosition.marketSlug && (
             <div style={{
@@ -503,6 +551,13 @@ function PositionPanel({ data, sendBotCommand }) {
 export default memo(PositionPanel, (prev, next) => {
   const pp = prev.data?.positions;
   const np = next.data?.positions;
+  // When bot has an open position, always re-render on market price change (live P&L)
+  const hasBotPos = np?.botPosition != null;
+  const priceChanged = hasBotPos && (
+    prev.data?.marketUp !== next.data?.marketUp ||
+    prev.data?.marketDown !== next.data?.marketDown
+  );
+  if (priceChanged) return false;
   return (
     pp?.lastUpdate === np?.lastUpdate &&
     pp?.list?.length === np?.list?.length &&

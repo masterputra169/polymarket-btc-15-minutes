@@ -347,6 +347,8 @@ export default function App() {
       bankroll: data.bankroll,
       cutLoss: data.cutLoss ?? null,
       recentJournal: data.recentJournal ?? [],
+      marketUp: data.marketUp,
+      marketDown: data.marketDown,
     };
   }, [
     data?.positions?.lastUpdate,
@@ -360,6 +362,8 @@ export default function App() {
     data?.cutLoss?.active,
     data?.recentJournal?.length,
     data?.recentJournal?.[0]?._ts,
+    data?.marketUp,
+    data?.marketDown,
   ]);
 
   // BetSizingPanel: bet sizing output
