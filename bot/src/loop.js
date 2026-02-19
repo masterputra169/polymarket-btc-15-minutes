@@ -1297,7 +1297,7 @@ export async function pollOnce() {
       feedbackStats, detailedFeedback,
 
       // Trade journal
-      recentJournal: getRecentJournal(10),
+      recentJournal: getRecentJournal(5),
 
       // Volume features
       volumeRecent, volumeAvg,

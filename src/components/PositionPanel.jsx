@@ -53,132 +53,16 @@ function CutLossBar({ cutLoss }) {
   );
 }
 
-// Short outcome label mapping
-const OUTCOME_LABEL = {
-  WIN: 'WIN', LOSS: 'LOSS', DRY_RUN: 'DRY',
-  CUT_LOSS: 'CL', TAKE_PROFIT: 'TP',
-  EMERGENCY_CUT: 'EM', SMART_SELL_FIRST: 'SS',
-  UNWIND: 'UNW', REJECTED: 'REJ',
-};
-
-function JournalEntry({ j }) {
-  const { entry, analysis } = j;
-  if (!entry || !analysis) return null;
-
-  const isWin = analysis.outcome === 'WIN' || analysis.outcome === 'TAKE_PROFIT';
-  const isNeutral = analysis.outcome === 'DRY_RUN' || analysis.outcome === 'UNWIND' || analysis.outcome === 'REJECTED';
-  const outcomeColor = isWin ? 'var(--green-bright)' : isNeutral ? 'var(--text-dim)' : 'var(--red-bright)';
-  const outcomeBg = isWin ? 'rgba(0,230,118,0.10)' : isNeutral ? 'rgba(255,255,255,0.05)' : 'rgba(255,82,82,0.10)';
-  const outcomeBorder = isWin ? 'rgba(0,230,118,0.25)' : isNeutral ? 'rgba(255,255,255,0.12)' : 'rgba(255,82,82,0.25)';
-
-  const pnl = analysis.pnl ?? 0;
-  const pnlColor = pnl > 0 ? 'var(--green-bright)' : pnl < 0 ? 'var(--red-bright)' : 'var(--text-dim)';
-  const pnlPct = entry.cost > 0 ? (pnl / entry.cost * 100) : null;
-
-  // Hold duration
-  const holdSec = analysis.holdDurationSec;
-  const holdText = holdSec != null
-    ? holdSec < 60 ? `${holdSec}s`
-    : holdSec < 3600 ? `${Math.floor(holdSec / 60)}m${holdSec % 60 > 0 ? ` ${holdSec % 60}s` : ''}`
-    : `${Math.floor(holdSec / 3600)}h ${Math.floor((holdSec % 3600) / 60)}m`
-    : null;
-
-  // Time ago (computed fresh on each render — PositionPanel's agoText interval ensures ~1s refresh)
-  const secsAgo = j._ts ? Math.round((Date.now() - j._ts) / 1000) : null;
-  const agoLabel = secsAgo != null
-    ? secsAgo < 60 ? `${secsAgo}s ago`
-    : secsAgo < 3600 ? `${Math.floor(secsAgo / 60)}m ago`
-    : secsAgo < 86400 ? `${Math.floor(secsAgo / 3600)}h ago`
-    : `${Math.floor(secsAgo / 86400)}d ago`
-    : '';
-
-  // Context notes (right side row 2)
-  const notes = [];
-  if (analysis.mlWasRight === false) notes.push('ML✗');
-  if (analysis.ruleWasRight === false) notes.push('Rule✗');
-  if (analysis.regimeChanged) notes.push(`${analysis.entryRegime?.[0]?.toUpperCase() ?? '?'}→${analysis.exitRegime?.[0]?.toUpperCase() ?? '?'}`);
-  if (analysis.outcome === 'CUT_LOSS' && analysis.cutLossSaved > 0) notes.push(`saved $${analysis.cutLossSaved.toFixed(2)}`);
-
-  const outcomeLabel = OUTCOME_LABEL[analysis.outcome] ?? analysis.outcome;
-
-  return (
-    <div style={{ padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      {/* Row 1: outcome | direction | BTC price  ←→  P&L | time */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-          <span style={{
-            fontSize: '0.5rem', fontWeight: 800, padding: '1px 5px', borderRadius: 3, flexShrink: 0,
-            background: outcomeBg, color: outcomeColor, border: `1px solid ${outcomeBorder}`,
-            letterSpacing: '0.04em',
-          }}>
-            {outcomeLabel}
-          </span>
-          <span style={{
-            fontSize: '0.7rem', fontWeight: 700, flexShrink: 0,
-            color: entry.side === 'UP' ? 'var(--green-bright)' : 'var(--red-bright)',
-          }}>
-            {entry.side === 'UP' ? '↑' : '↓'} {entry.side}
-          </span>
-          {entry.btcPrice != null && (
-            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', flexShrink: 0 }}>
-              ${entry.btcPrice.toFixed(0)}
-            </span>
-          )}
-          {entry.tokenPrice != null && (
-            <span style={{ fontSize: '0.56rem', color: 'var(--text-dim)', flexShrink: 0 }}>
-              @{fmt(entry.tokenPrice, 2)}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, flexShrink: 0 }}>
-          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: pnlColor }}>
-            {pnl >= 0 ? '+' : ''}{fmtUsd(pnl)}
-          </span>
-          {pnlPct != null && (
-            <span style={{ fontSize: '0.54rem', color: pnlColor, opacity: 0.75 }}>
-              ({pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
-            </span>
-          )}
-          {agoLabel && (
-            <span style={{ fontSize: '0.52rem', color: 'var(--text-dim)' }}>{agoLabel}</span>
-          )}
-        </div>
-      </div>
-      {/* Row 2: hold time | BTC move  ←→  edge/ML/notes */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, fontSize: '0.53rem', color: 'var(--text-dim)' }}>
-        <span style={{ display: 'flex', gap: 6 }}>
-          {holdText && <span>⏱ {holdText}</span>}
-          {analysis.btcMovePct != null && (
-            <span style={{ color: analysis.btcMovePct >= 0 ? 'rgba(0,230,118,0.7)' : 'rgba(255,82,82,0.7)' }}>
-              BTC {analysis.btcMovePct >= 0 ? '+' : ''}{analysis.btcMovePct.toFixed(2)}%
-            </span>
-          )}
-          {entry.regime && <span style={{ opacity: 0.7 }}>{entry.regime}</span>}
-        </span>
-        <span style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
-          {entry.bestEdge != null && <span>E:{(entry.bestEdge * 100).toFixed(0)}%</span>}
-          {entry.mlConfidence != null && <span>ML:{(entry.mlConfidence * 100).toFixed(0)}%</span>}
-          {notes.length > 0 && (
-            <span style={{ color: '#ffab40' }}>{notes.join(' · ')}</span>
-          )}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 function PositionPanel({ data, sendBotCommand }) {
   const [selling, setSelling] = useState(null);
   const [sellError, setSellError] = useState(null);
   const [agoText, setAgoText] = useState('');
-  const [showJournal, setShowJournal] = useState(true);
 
   const positions = data?.positions?.list ?? [];
   const lastUpdate = data?.positions?.lastUpdate;
   const botPosition = data?.positions?.botPosition ?? null;
   const bankroll = data?.bankroll;
   const cutLoss = data?.cutLoss ?? null;
-  const recentJournal = data?.recentJournal ?? [];
   const marketUp = data?.marketUp;
   const marketDown = data?.marketDown;
 
@@ -556,52 +440,6 @@ function PositionPanel({ data, sendBotCommand }) {
         </>
       )}
 
-      {/* Recent Trades Journal */}
-      {recentJournal.length > 0 && (() => {
-        const displayed = recentJournal.slice(0, 3);
-        const wins = recentJournal.filter(j => j.analysis?.outcome === 'WIN' || j.analysis?.outcome === 'TAKE_PROFIT').length;
-        const settled = recentJournal.filter(j => j.analysis?.outcome && j.analysis?.outcome !== 'DRY_RUN' && j.analysis?.outcome !== 'UNWIND' && j.analysis?.outcome !== 'REJECTED').length;
-        const totalPnl = recentJournal.reduce((s, j) => s + (j.analysis?.pnl ?? 0), 0);
-        const wrPct = settled > 0 ? Math.round(wins / settled * 100) : null;
-        return (
-          <div style={{ marginTop: 8, borderTop: '1px solid var(--border-dim)', paddingTop: 6 }}>
-            <div
-              onClick={() => setShowJournal(v => !v)}
-              style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                cursor: 'pointer', marginBottom: 5, userSelect: 'none',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                  Recent Trades
-                </span>
-                <span style={{ fontSize: '0.56rem', color: 'var(--text-dim)', background: 'var(--bg-elevated)', padding: '1px 5px', borderRadius: 3 }}>
-                  {recentJournal.length}
-                </span>
-                {wrPct != null && (
-                  <span style={{
-                    fontSize: '0.56rem', fontWeight: 700, padding: '1px 6px', borderRadius: 3,
-                    color: wrPct >= 60 ? 'var(--green-bright)' : wrPct >= 50 ? '#ffab40' : 'var(--red-bright)',
-                    background: wrPct >= 60 ? 'rgba(0,230,118,0.10)' : wrPct >= 50 ? 'rgba(255,171,64,0.10)' : 'rgba(255,82,82,0.10)',
-                  }}>
-                    {wins}W/{settled - wins}L {wrPct}%
-                  </span>
-                )}
-                {totalPnl !== 0 && (
-                  <span style={{ fontSize: '0.56rem', fontWeight: 600, color: totalPnl >= 0 ? 'var(--green-bright)' : 'var(--red-bright)' }}>
-                    {totalPnl >= 0 ? '+' : ''}{fmtUsd(totalPnl)}
-                  </span>
-                )}
-              </div>
-              <span style={{ fontSize: '0.5rem', color: 'var(--text-dim)' }}>{showJournal ? '\u25BC' : '\u25B6'}</span>
-            </div>
-            {showJournal && displayed.map((j, i) => (
-              <JournalEntry key={j._ts || i} j={j} />
-            ))}
-          </div>
-        );
-      })()}
     </div>
   );
 }
@@ -626,8 +464,6 @@ export default memo(PositionPanel, (prev, next) => {
     prev.data?.bankroll === next.data?.bankroll &&
     prev.data?.cutLoss?.dropPct === next.data?.cutLoss?.dropPct &&
     prev.data?.cutLoss?.attempts === next.data?.cutLoss?.attempts &&
-    prev.data?.cutLoss?.active === next.data?.cutLoss?.active &&
-    prev.data?.recentJournal?.length === next.data?.recentJournal?.length &&
-    prev.data?.recentJournal?.[0]?._ts === next.data?.recentJournal?.[0]?._ts
+    prev.data?.cutLoss?.active === next.data?.cutLoss?.active
   );
 });
