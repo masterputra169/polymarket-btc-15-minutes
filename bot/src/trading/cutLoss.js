@@ -117,7 +117,14 @@ export function evaluateCutLoss({
 
   // ── Gate 5: Min hold time met? ──
   const holdSec = (now - position.enteredAt) / 1000;
-  if (holdSec < cfg.minHoldSec) return no(`hold_${Math.round(holdSec)}s/${cfg.minHoldSec}s`);
+  // v8: If token is in a steep crash (slope strongly negative) + big drop, reduce hold to 45s.
+  // This protects against immediate post-entry crashes where waiting would lose more capital.
+  const slope = getTokenPriceSlope();
+  const isSteeplyFalling = slope !== null && slope < -0.10; // dropping > 10 cents in last 36s
+  const earlyDropPct = currentTokenPrice != null && position.price > 0
+    ? ((position.price - currentTokenPrice) / position.price) * 100 : 0;
+  const minHoldRequired = (isSteeplyFalling && earlyDropPct >= 8) ? Math.min(45, cfg.minHoldSec) : cfg.minHoldSec;
+  if (holdSec < minHoldRequired) return no(`hold_${Math.round(holdSec)}s/${minHoldRequired}s`);
 
   // ── Gate 6: Not too close to settlement? ──
   if (timeLeftMin != null && timeLeftMin < 0.5) return no('near_settlement');
@@ -149,8 +156,10 @@ export function evaluateCutLoss({
   const isCrash = dropPct >= crashDrop && (!hasPtb || btcDistPct >= crashDist || !btcFavorable);
 
   // ── Gate 6c: LATE FORCE-CUT fast-track ──
-  const LATE_FORCE_CUT_MIN = 2.0;
-  const LATE_FORCE_CUT_DROP = 15;
+  // v8: 2.0→3.0 min — wider window so more time is classified as "late phase"
+  // v8: 15→10% — trigger at smaller drop when close to expiry (time has value)
+  const LATE_FORCE_CUT_MIN = 3.0;
+  const LATE_FORCE_CUT_DROP = 10;
   const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Gate 6d: TIME-BASED PERSISTENT LOSS fast-track (Fix D) ──

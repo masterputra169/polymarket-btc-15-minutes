@@ -79,25 +79,26 @@ const BOT_CONFIG = {
   winRateWarnThreshold: envNum(process.env.WIN_RATE_WARN, 0.40, 0.10, 0.90),
   winRatePauseThreshold: envNum(process.env.WIN_RATE_PAUSE, 0.30, 0.10, 0.90),
 
-  // Cut-loss (stop-loss) — v6 Pure EV
-  // Data: 71 trades, settlement WR 71.1%, cut-loss destroyed $28.77 edge.
-  // v6: Only cut when model ITSELF agrees position is EV-negative.
+  // Cut-loss (stop-loss) — v8 STRICT mode
+  // v8 philosophy: Protect capital aggressively. Cut early, cut fast.
+  // Evidence: 71.1% settlement WR suggests holding wins more often,
+  // but strict cut-loss limits catastrophic drawdowns and frees capital for better trades.
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),        // v7: 120→180s (3min — give more time for recovery before evaluating)
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 90, 0, 600),         // v8: 180→90s — allow cutting after 1.5 min (not 3 min)
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
-    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
+    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 2000, 500, 120000),    // v8: 5000→2000ms — retry sell faster
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 15, 1, 90), // v7: 10→15% (raised — only consider cutting when loss is more significant)
-    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20),
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 10, 1, 90), // v8: 15→10% — trigger at 10% loss (more sensitive)
+    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 1, 1, 20), // v8: 2→1 — cut immediately on first confirmed signal
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
-    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 30, 10, 90),
-    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
-    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.90, 0.50, 1.50),        // v7: 1.00→0.90 — require model 10% below market before cutting (lower = harder to trigger)
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.55, 0.40, 0.90), // v6: Cut when ML flips sides with this confidence
-    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 25, 5, 90),   // v7: 20→25% — raise threshold for time-based forced cut
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 7, 1, 30), // v7: 5→7min — wait longer before time-based forced cut
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 20, 10, 90),      // v8: 30→20% — crash fast-track at 20% drop
+    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.15, 0.01, 5.0), // v8: 0.20→0.15 — more sensitive to BTC distance
+    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 1.00, 0.50, 1.50),        // v8: 0.90→1.00 — cut when model prob ≤ market price (not 10% below)
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.50, 0.40, 0.90), // v8: 0.55→0.50 — cut on less confident ML flip
+    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 15, 5, 90),   // v8: 25→15% — time-based cut at 15% persistent loss
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 4, 1, 30), // v8: 7→4min — cut after 4min of persistent loss
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
