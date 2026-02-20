@@ -561,45 +561,69 @@ async function redeemCycle() {
     return;
   }
 
-  log.info(`Found ${redeemable.length} redeemable position(s)`);
-
   const proxyAddr = process.env.POLYMARKET_PROXY_ADDRESS;
   const holder = proxyAddr || getWalletAddress();
+
+  // ── Batch balance check (all in parallel) ──
+  log.info(`Found ${redeemable.length} redeemable position(s) — checking on-chain balances in parallel...`);
+
+  const balanceResults = await Promise.allSettled(
+    redeemable.map(pos =>
+      hasRedeemableBalance(pos.conditionId, holder)
+        .then(has => ({ pos, has }))
+    )
+  );
+
+  // Split: positions with balance (redeem) vs zero-balance (already done)
+  const toRedeem = [];
+  for (const r of balanceResults) {
+    if (r.status === 'fulfilled') {
+      if (r.value.has) {
+        toRedeem.push(r.value.pos);
+      } else {
+        log.debug(`No on-chain balance for ${r.value.pos.conditionId.slice(0, 16)}... — already redeemed`);
+        redeemedSet.add(r.value.pos.conditionId);
+      }
+    } else {
+      log.debug(`Balance check failed: ${r.reason?.message ?? r.reason}`);
+    }
+  }
+
+  if (toRedeem.length === 0) {
+    log.info('All positions already redeemed (zero on-chain balance)');
+    saveRedeemedSet();
+    return;
+  }
+
+  // ── Sequential tx submission (nonce safety — same wallet) ──
+  log.info(`Submitting ${toRedeem.length} redemption tx(s)...`);
 
   let redeemed = 0;
   let failed = 0;
 
-  for (const pos of redeemable) {
+  for (let i = 0; i < toRedeem.length; i++) {
+    const pos = toRedeem[i];
     const short = pos.conditionId.slice(0, 16);
-
-    // Check on-chain balance before attempting redemption
-    const hasBal = await hasRedeemableBalance(pos.conditionId, holder);
-    if (!hasBal) {
-      log.debug(`No token balance for ${short}... — already redeemed or zero`);
-      redeemedSet.add(pos.conditionId);
-      continue;
-    }
+    const tag = `[${i + 1}/${toRedeem.length}]`;
 
     try {
-      log.info(`Redeeming ${short}... | winner=${pos.winner} | ${pos.question.slice(0, 60)}`);
+      log.info(`${tag} Redeeming ${short}... | winner=${pos.winner} | ${pos.question.slice(0, 60)}`);
       const txHash = await redeemPosition(pos.conditionId);
-      log.info(`Redeemed conditionId=${short}... | tx=${txHash}`);
+      log.info(`${tag} Redeemed ${short}... | tx=${txHash}`);
       redeemedSet.add(pos.conditionId);
       redeemed++;
     } catch (err) {
-      log.warn(`Redeem failed for ${short}...: ${err.message}`);
+      log.warn(`${tag} Redeem failed for ${short}...: ${err.message}`);
       failed++;
     }
 
-    // Sleep 3s between positions to avoid rate limits
-    if (redeemable.indexOf(pos) < redeemable.length - 1) {
-      await sleep(3000);
-    }
+    // 1.5s between txs: enough for nonce increment, avoids RPC throttle
+    if (i < toRedeem.length - 1) await sleep(1500);
   }
 
   saveRedeemedSet();
 
-  log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed, ${redeemable.length - redeemed - failed} skipped`);
+  log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed out of ${toRedeem.length} positions`);
   } finally { redeemCycleRunning = false; }
 }
 
