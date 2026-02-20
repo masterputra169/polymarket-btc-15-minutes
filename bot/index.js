@@ -9,7 +9,11 @@
  * Entry point: polyfills → init services → start WS streams → start poll loop → handle shutdown.
  */
 
-import 'dotenv/config';
+import { config as dotenvConfig } from 'dotenv';
+import { dirname as _dotenvDirname, resolve as _dotenvResolve } from 'path';
+import { fileURLToPath as _dotenvFtu } from 'url';
+// Load .env from bot/ directory regardless of process.cwd() (PM2 sets cwd to frontend/)
+dotenvConfig({ path: _dotenvResolve(_dotenvDirname(_dotenvFtu(import.meta.url)), '.env') });
 
 // ── Node.js polyfills for browser APIs used by shared modules ──
 if (typeof globalThis.localStorage === 'undefined') {
