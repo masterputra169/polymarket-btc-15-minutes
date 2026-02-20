@@ -316,6 +316,14 @@ export async function executeDirectionalTrade({
 
   // Reserve bankroll — FINTECH: round to cents to prevent float drift in available bankroll
   const orderCost = Math.round(shares * betMarketPrice * 100) / 100;
+
+  // Polymarket minimum order size: $1.00 USDC (makerAmount). Reject below this to avoid HTTP 400.
+  const POLYMARKET_MIN_ORDER_USD = 1.00;
+  if (orderCost < POLYMARKET_MIN_ORDER_USD) {
+    log.info(`Trade skipped: orderCost $${orderCost.toFixed(2)} < $${POLYMARKET_MIN_ORDER_USD} Polymarket minimum`);
+    return false;
+  }
+
   deps.setPendingCost(orderCost);
 
   // Build entry snapshot data (shared by DRY_RUN + live paths)

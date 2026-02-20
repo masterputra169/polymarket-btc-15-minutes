@@ -101,7 +101,7 @@ const BOT_CONFIG = {
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
-  maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.00, 0.50, 100),
+  maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.00, 1.00, 100),
 
   // Take-profit (early exit when up but signal weakening)
   takeProfit: {
