@@ -131,7 +131,6 @@ import {
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
-import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -447,7 +446,7 @@ export async function pollOnce() {
           makeSettlementActions(),
         );
       }
-      resetCutLossState(); resetTakeProfitState();
+      resetCutLossState();
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
       entryRegime = null;
@@ -588,7 +587,7 @@ export async function pollOnce() {
       }
 
       resetMarketCache();
-      resetCutLossState(); resetTakeProfitState();
+      resetCutLossState();
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -615,7 +614,7 @@ export async function pollOnce() {
         },
         makeSettlementActions(),
       );
-      resetCutLossState(); resetTakeProfitState();
+      resetCutLossState();
     }
 
     if (!poly?.ok) {
@@ -758,85 +757,8 @@ export async function pollOnce() {
               settleTradeEarlyExit(emRecovery);
               writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: emRecovery - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
-              resetCutLossState(); resetTakeProfitState();
+              resetCutLossState();
               notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
-            }
-          } finally { releaseSellLock(); }
-        }
-      }
-    }
-
-    // ── 6a. Take-profit check (skip ARB — guaranteed profit, let settle) ──
-    let takeProfitTriggered = false;
-    const tpPos = getCurrentPosition();
-    if (tpPos && !tpPos.settled && tpPos.side !== 'ARB') {
-      const tpTokenPrice = tpPos.side === 'UP' ? marketUp : marketDown;
-      const tpTokenBook = tpPos.side === 'UP' ? orderbookUp : orderbookDown;
-
-      const tpResult = evaluateTakeProfit({
-        position: tpPos, currentTokenPrice: tpTokenPrice,
-        orderbook: tpTokenBook, timeLeftMin,
-        modelProbability: tpPos.side === 'UP' ? ensembleUp : ensembleDown,
-        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
-        mlSide: mlResult.available ? mlResult.mlSide : null,
-        regime: regimeInfo?.regime ?? 'moderate',
-        entryRegime,
-        btcDelta1m: delta1m,
-      });
-
-      if (pollCounter % 5 === 0 && tpResult.reason !== 'disabled' && tpResult.reason !== 'no_position' && tpResult.reason !== 'arb_position') {
-        const tpGain = tpPos.price > 0 && tpTokenPrice != null
-          ? (((tpTokenPrice - tpPos.price) / tpPos.price) * 100).toFixed(1) : '?';
-        log.debug(`TakeProfit: ${tpResult.reason} | ${tpPos.side} gain=${tpGain}%`);
-      }
-
-      if (tpResult.shouldTakeProfit) {
-        if (!acquireSellLock('take_profit')) {
-          log.info('Take-profit skipped — sell already in progress');
-        } else {
-          try {
-            takeProfitTriggered = true;
-            const sellSize = tpPos.size;
-            log.info(
-              `TAKE-PROFIT: ${tpPos.side} gain ${tpResult.gainPct.toFixed(1)}% | ` +
-              `sell ${sellSize} shares @$${tpResult.sellPrice.toFixed(3)} | ` +
-              `recover $${tpResult.recoveryAmount.toFixed(2)} of $${tpPos.cost.toFixed(2)} | ` +
-              `${tpResult.weakeners.join(', ')}`
-            );
-            const exitData = {
-              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
-              marketUp, marketDown, tokenPrice: tpTokenPrice,
-              regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
-              entryRegime,
-              rsiNow, vwapDist, timeLeftMin,
-              takeProfitGainPct: tpResult.gainPct,
-              weakeners: tpResult.weakeners,
-            };
-
-            if (BOT_CONFIG.dryRun) {
-              const recovery = tpResult.sellPrice * sellSize;
-              const tpPnl = recovery - tpPos.cost;
-              settleTradeEarlyExit(recovery);
-              invalidateSync();
-              clearEntrySnapshot();
-              writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: recovery } });
-              resetCutLossState(); resetTakeProfitState();
-              notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
-            } else {
-              try {
-                const sellResult = await closePosition(tpPos.tokenId, sellSize, tpResult.sellPrice);
-                const actualRecovery = parseClobAmount(sellResult?.takingAmount, tpResult.sellPrice * sellSize);
-                const tpPnl = actualRecovery - tpPos.cost;
-                settleTradeEarlyExit(actualRecovery);
-                invalidateSync();
-                clearEntrySnapshot();
-                writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...exitData, takeProfitRecovered: actualRecovery } });
-                resetCutLossState(); resetTakeProfitState();
-                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
-              } catch (err) {
-                log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
-                takeProfitTriggered = false;
-              }
             }
           } finally { releaseSellLock(); }
         }
@@ -850,7 +772,7 @@ export async function pollOnce() {
     let smartSellTriggered = false;
     const sfPos = getCurrentPosition();
     // Bug 1 fix: require fillConfirmed — don't try to sell tokens not yet confirmed on-chain
-    if (sfPos && !sfPos.settled && sfPos.fillConfirmed && sfPos.side !== 'ARB' && !takeProfitTriggered) {
+    if (sfPos && !sfPos.settled && sfPos.fillConfirmed && sfPos.side !== 'ARB') {
       const sfFlowAgrees = smartFlowSignal.agreesWithSide?.(sfPos.side) ?? true;
       const sfTokenPrice = sfPos.side === 'UP' ? marketUp : marketDown;
       const sfTokenBook = sfPos.side === 'UP' ? orderbookUp : orderbookDown;
@@ -902,7 +824,7 @@ export async function pollOnce() {
               invalidateSync();
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
-              resetCutLossState(); resetTakeProfitState();
+              resetCutLossState();
               if (sfPnl < 0) recordLoss();
               notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
             } else {
@@ -914,7 +836,7 @@ export async function pollOnce() {
                 invalidateSync();
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
-                resetCutLossState(); resetTakeProfitState();
+                resetCutLossState();
                 if (sfPnl < 0) recordLoss();
                 notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
               } catch (err) {
@@ -943,7 +865,7 @@ export async function pollOnce() {
 
     // ── 6c. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
     const pos = getCurrentPosition();
-    if (pos && !pos.settled && pos.side !== 'ARB' && !takeProfitTriggered && !smartSellTriggered) {
+    if (pos && !pos.settled && pos.side !== 'ARB' && !smartSellTriggered) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
@@ -1009,7 +931,7 @@ export async function pollOnce() {
               invalidateSync();
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
-              resetCutLossState(); resetTakeProfitState();
+              resetCutLossState();
               if (cutPnl < 0) {
                 recordLoss();
                 tiltMarketsLeft = TILT_MARKETS + 1;
@@ -1026,7 +948,7 @@ export async function pollOnce() {
                 invalidateSync();
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
-                resetCutLossState(); resetTakeProfitState();
+                resetCutLossState();
                 if (cutPnl < 0) {
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;

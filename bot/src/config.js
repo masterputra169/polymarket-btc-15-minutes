@@ -103,13 +103,13 @@ const BOT_CONFIG = {
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
   maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.00, 1.00, 100),
 
-  // Take-profit (early exit when up but signal weakening)
+  // Take-profit — DISABLED (conviction play: hold to settlement)
   takeProfit: {
-    enabled: process.env.TAKE_PROFIT_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.TAKE_PROFIT_MIN_HOLD_SEC, 60, 0, 600),
-    minGainPct: envNum(process.env.TAKE_PROFIT_MIN_GAIN_PCT, 20, 5, 90),       // token must be up 20%+
-    minProbDrop: envNum(process.env.TAKE_PROFIT_MIN_PROB_DROP, 0.60, 0.40, 0.70), // M1: 0.55→0.60 — tighter threshold reduces false take-profit triggers
-    minTimeLeftMin: envNum(process.env.TAKE_PROFIT_MIN_TIME_LEFT_MIN, 1.0, 0.5, 5.0), // don't sell if <1min (let settlement handle)
+    enabled: false,
+    minHoldSec: 60,
+    minGainPct: 20,
+    minProbDrop: 0.60,
+    minTimeLeftMin: 1.0,
   },
 };
 
