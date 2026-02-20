@@ -46,7 +46,7 @@ export const TRADE_FILTERS = {
   MAX_TRADES_PER_MARKET: 1,     // lowered from 2 — multi-leg entries have 46% WR vs 60% single-leg
   MIN_ENTRY_PRICE: 0.55,        // skip entries below 55c — data shows cheap-side entries lose consistently
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
-  MAX_EDGE: 0.15,               // lowered from 0.20 — edge 15-20% has poor WR, model diverges too much
+  MAX_EDGE: 0.25,               // raised 0.15→0.25 — data shows 15-25% edge has 100% settled WR; >25% cut rate spikes
 };
 
 export const CONFIG = {
