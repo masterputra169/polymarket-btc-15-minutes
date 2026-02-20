@@ -209,8 +209,25 @@ async function main() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
+// ── Global crash guards ──
+// These catch errors that escape all try/catch blocks and would otherwise
+// kill the process silently. Log the full stack trace before exiting so
+// post-mortem debugging is possible.
+process.on('uncaughtException', (err) => {
+  // Use console.error as fallback — logger itself might be broken
+  const msg = `UNCAUGHT EXCEPTION — bot will restart: ${err.stack || err.message}`;
+  try { log.error(msg); } catch (_) { console.error(msg); }
+  process.exit(1); // Exit so process manager (pm2 / systemd) can restart
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  const msg = `UNHANDLED REJECTION at ${promise}: ${reason?.stack || reason}`;
+  try { log.error(msg); } catch (_) { console.error(msg); }
+  process.exit(1); // Exit so process manager can restart
+});
+
 main().catch(err => {
-  log.error(`Fatal: ${err.message}`);
+  log.error(`Fatal startup error: ${err.stack || err.message}`);
   console.error(err);
   process.exit(1);
 });

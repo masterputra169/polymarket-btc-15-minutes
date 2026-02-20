@@ -1056,55 +1056,65 @@ export async function pollOnce() {
     // 10a. Arbitrage execution (priority over directional)
     if (!signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
-      await executeArbitrage({
-        arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
-        orderbookUp, orderbookDown,
-        dryRun: BOT_CONFIG.dryRun,
-      }, {
-        getAvailableBankroll, setPendingCost, placeBuyOrder,
-        recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
-        captureEntrySnapshot,
-        setEntryRegime: (r) => { entryRegime = r; },
-      });
+      // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
+      try {
+        await executeArbitrage({
+          arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
+          orderbookUp, orderbookDown,
+          dryRun: BOT_CONFIG.dryRun,
+        }, {
+          getAvailableBankroll, setPendingCost, placeBuyOrder,
+          recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
+          captureEntrySnapshot,
+          setEntryRegime: (r) => { entryRegime = r; },
+        });
+      } catch (arbErr) {
+        log.error(`executeArbitrage failed (bot kept alive): ${arbErr.stack || arbErr.message}`);
+      }
     }
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
     else if (!signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
-      await executeDirectionalTrade({
-        rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
-        ensembleUp, timeAware, mlResult, mlAgreesWithRules,
-        regimeInfo, poly, marketSlug, currentConditionId, priceToBeat,
-        lastPrice, timeLeftMin, dryRun: BOT_CONFIG.dryRun,
-        signalConfirmCount: getConfirmCount(), recentFlipCount,
-        tiltMarketsLeft, tiltMlConfMin: TILT_ML_CONF_MIN,
-        rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
-        bb, atr, stochRsi, emaCross, volDelta,
-        consec, delta1m, delta3m, orderbookSignal, orderbookUp,
-        marketUp, marketDown, obFlow,
-        smartFlowSignal,
-      }, {
-        updateConfirmation,
-        isSignalStable,
-        getInstabilityReasons,
-        applyTradeFilters,
-        checkFlowAlignment,
-        validatePrice,
-        validateTrade,
-        getBankroll,
-        getAvailableBankroll,
-        getConsecutiveLosses,
-        hasOpenPosition,
-        setPendingCost,
-        placeBuyOrder,
-        recordTrade,
-        trackOrderPlacement,
-        recordTradeForMarket,
-        captureEntrySnapshot,
-        recordPrediction,
-        setEntryRegime: (r) => { entryRegime = r; },
-        notifyTrade: notifyTradeFn,
-      });
+      // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
+      try {
+        await executeDirectionalTrade({
+          rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
+          ensembleUp, timeAware, mlResult, mlAgreesWithRules,
+          regimeInfo, poly, marketSlug, currentConditionId, priceToBeat,
+          lastPrice, timeLeftMin, dryRun: BOT_CONFIG.dryRun,
+          signalConfirmCount: getConfirmCount(), recentFlipCount,
+          tiltMarketsLeft, tiltMlConfMin: TILT_ML_CONF_MIN,
+          rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
+          bb, atr, stochRsi, emaCross, volDelta,
+          consec, delta1m, delta3m, orderbookSignal, orderbookUp,
+          marketUp, marketDown, obFlow,
+          smartFlowSignal,
+        }, {
+          updateConfirmation,
+          isSignalStable,
+          getInstabilityReasons,
+          applyTradeFilters,
+          checkFlowAlignment,
+          validatePrice,
+          validateTrade,
+          getBankroll,
+          getAvailableBankroll,
+          getConsecutiveLosses,
+          hasOpenPosition,
+          setPendingCost,
+          placeBuyOrder,
+          recordTrade,
+          trackOrderPlacement,
+          recordTradeForMarket,
+          captureEntrySnapshot,
+          recordPrediction,
+          setEntryRegime: (r) => { entryRegime = r; },
+          notifyTrade: notifyTradeFn,
+        });
+      } catch (tradeErr) {
+        log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);
+      }
     }
 
     // Reset confirmation when signal drops to WAIT

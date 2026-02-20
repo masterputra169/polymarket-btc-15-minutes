@@ -195,11 +195,14 @@ export async function cancelAllOrders() {
 }
 
 /**
- * Get all open orders.
+ * Get all open orders. 10s timeout prevents poll stall on slow CLOB.
  */
 export async function getOpenOrders() {
   if (!client) throw new Error('CLOB client not initialized');
-  const result = await client.getOpenOrders();
+  const result = await Promise.race([
+    client.getOpenOrders(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('getOpenOrders timeout (10s)')), 10_000)),
+  ]);
   // CLOB client may return { error: "..." } instead of array
   if (result && !Array.isArray(result)) {
     if (result.error) throw new Error(`getOpenOrders: ${result.error}`);
@@ -258,7 +261,10 @@ export async function getUsdcBalance() {
   }
 
   try {
-    const result = await client.getBalanceAllowance({ asset_type: 'COLLATERAL' });
+    const result = await Promise.race([
+      client.getBalanceAllowance({ asset_type: 'COLLATERAL' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('getUsdcBalance timeout (8s)')), 8_000)),
+    ]);
     if (result && result.balance != null) {
       // USDC.e has 6 decimals — API returns raw microUSDC string
       const rawBalance = parseFloat(result.balance);
