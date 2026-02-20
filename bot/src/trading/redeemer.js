@@ -30,16 +30,12 @@ const DATA_API = 'https://data-api.polymarket.com';
 const PARENT_COLLECTION_ID = '0x' + '0'.repeat(64);
 const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
 
-// Multiple free Polygon RPC endpoints — round-robin to avoid single-endpoint rate limits.
-// polygon-rpc.com removed (401 Unauthorized, API key disabled).
-const RPC_ENDPOINTS = [
-  'https://polygon-bor-rpc.publicnode.com',
-  'https://rpc.ankr.com/polygon',
-  'https://polygon.meowrpc.com',
-  'https://polygon-mainnet.public.blastapi.io',
-  'https://1rpc.io/matic',
-  'https://polygon.drpc.org',
-];
+// Custom Chainstack RPC (WSS + HTTP on same endpoint)
+const CHAINSTACK_WSS = 'wss://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
+const CHAINSTACK_HTTP = CHAINSTACK_WSS.replace(/^wss:\/\//, 'https://');
+
+// Single authoritative endpoint — no round-robin needed with dedicated node
+const RPC_ENDPOINTS = [CHAINSTACK_HTTP];
 let rpcIndex = 0;
 
 // Minimal ABIs (ethers v6 human-readable)
@@ -123,19 +119,20 @@ function initProvider() {
   const pk = process.env.POLYMARKET_PRIVATE_KEY;
   if (!pk) throw new Error('POLYMARKET_PRIVATE_KEY not set');
 
-  provider = new ethers.JsonRpcProvider(RPC_ENDPOINTS[0], POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
+  // Use HTTP for the persistent provider (simpler lifecycle than WebSocketProvider)
+  provider = new ethers.JsonRpcProvider(CHAINSTACK_HTTP, POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
   signer = new ethers.Wallet(pk, provider);
-  log.info(`Redeemer wallet: ${signer.address} (${RPC_ENDPOINTS.length} RPC endpoints)`);
+  log.info(`Redeemer wallet: ${signer.address} (Chainstack dedicated node)`);
 }
 
 /**
- * Create a short-lived provider+signer with staticNetwork (no background probes)
- * and batching disabled (some free RPCs reject batched requests).
+ * Create a short-lived signer using Chainstack HTTP endpoint.
+ * HTTP is used for tx submission (simpler lifecycle than WS provider).
  */
-function makeSigner(url) {
-  const p = new ethers.JsonRpcProvider(url, POLYGON_NETWORK, {
+function makeSigner(_url) {
+  const p = new ethers.JsonRpcProvider(CHAINSTACK_HTTP, POLYGON_NETWORK, {
     staticNetwork: true,
-    batchMaxCount: 1,  // disable batching — avoids "Batch size too large" from free RPCs
+    batchMaxCount: 1,
   });
   return new ethers.Wallet(process.env.POLYMARKET_PRIVATE_KEY, p);
 }
