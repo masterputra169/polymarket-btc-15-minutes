@@ -11,6 +11,7 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
+import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('Journal');
 
@@ -19,6 +20,96 @@ let entrySnapshot = null;
 
 // Cache of recent journal entries (avoids re-reading file on every broadcast)
 let recentCache = null;
+
+// ── Daily trade counter (resets at midnight ET) ──
+let _dailyDate = null;   // 'YYYY-MM-DD' of current tracking day (ET)
+let _dailyCount = 0;     // trades today
+let _dailyWins = 0;
+let _dailyPnl = 0;
+let _dailySummaryTimer = null;
+
+const MAX_MARKETS_PER_DAY = 96; // 24h × 4 markets/hour (15-min markets)
+
+/** Get today's date string in ET timezone (UTC-5, approximate). */
+function getTodayET() {
+  return new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** Reset daily counters for a new trading day. */
+function resetDailyCounters() {
+  _dailyDate = getTodayET();
+  _dailyCount = 0;
+  _dailyWins = 0;
+  _dailyPnl = 0;
+}
+
+/** Increment daily counters after a real trade settles. */
+function incrementDailyCounters(outcome, pnl) {
+  const today = getTodayET();
+  if (_dailyDate !== today) resetDailyCounters();
+  _dailyCount++;
+  if (outcome === 'WIN' || outcome === 'TAKE_PROFIT') _dailyWins++;
+  _dailyPnl += pnl ?? 0;
+}
+
+/** Send the daily trade summary to Telegram (called at midnight ET). */
+export async function sendDailySummary() {
+  const date = _dailyDate ?? getTodayET();
+  const count = _dailyCount;
+  const wins = _dailyWins;
+  const losses = count - wins;
+  const pnl = _dailyPnl;
+  const wrPct = count > 0 ? Math.round(wins / count * 100) : 0;
+  const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+
+  const lines = [
+    `📊 <b>Daily Trade Summary</b> — ${date}`,
+    ``,
+    `📈 Trades: <b>${count}/${MAX_MARKETS_PER_DAY}</b> markets`,
+    `✅ Wins: ${wins}   ❌ Losses: ${losses}   WR: ${wrPct}%`,
+    `💰 P&amp;L Today: <b>${pnlStr}</b>`,
+  ];
+
+  await notify('info', lines.join('\n'), { key: `daily_summary:${date}` });
+  log.info(`Daily summary sent: ${count}/${MAX_MARKETS_PER_DAY} trades, WR=${wrPct}%, P&L=${pnlStr}`);
+
+  // Reset for the new day
+  resetDailyCounters();
+}
+
+/**
+ * Schedule daily summary to fire at midnight ET every day.
+ * Called once from index.js on startup.
+ */
+export function scheduleDailySummary() {
+  function msUntilMidnightET() {
+    const now = Date.now();
+    // Midnight ET = next 05:00 UTC (UTC-5, approximate, ignoring DST)
+    const nowUTC = new Date(now);
+    const nextMidnightET = new Date(nowUTC);
+    nextMidnightET.setUTCHours(5, 0, 0, 0);
+    if (nextMidnightET.getTime() <= now) {
+      nextMidnightET.setUTCDate(nextMidnightET.getUTCDate() + 1);
+    }
+    return nextMidnightET.getTime() - now;
+  }
+
+  function scheduleNext() {
+    const ms = msUntilMidnightET();
+    log.info(`Daily summary scheduled in ${Math.round(ms / 60000)}min`);
+    _dailySummaryTimer = setTimeout(async () => {
+      await sendDailySummary();
+      scheduleNext(); // re-schedule for next midnight
+    }, ms);
+  }
+
+  scheduleNext();
+}
+
+/** Stop daily summary scheduler (called on shutdown). */
+export function stopDailySummary() {
+  if (_dailySummaryTimer) { clearTimeout(_dailySummaryTimer); _dailySummaryTimer = null; }
+}
 
 /**
  * Capture a full snapshot at trade entry. Stored in-memory until settlement.
@@ -33,11 +124,18 @@ export function captureEntrySnapshot(data) {
 
 /**
  * Write a complete journal entry (entry + exit + analysis) to JSONL file.
- * Called at settlement time with the outcome and exit data.
+ * Skipped in DRY_RUN mode. Sends Telegram alert for every real trade.
  */
 export function writeJournalEntry({ outcome, pnl, exitData }) {
   if (!entrySnapshot) {
     log.debug('No entry snapshot — skipping journal write');
+    return;
+  }
+
+  // DRY_RUN: skip file write and Telegram — no real trade happened
+  if (BOT_CONFIG.dryRun) {
+    log.debug(`DRY RUN — journal skipped (${outcome})`);
+    entrySnapshot = null;
     return;
   }
 
@@ -72,8 +170,64 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
   recentCache.unshift(record);
   if (recentCache.length > 20) recentCache.length = 20;
 
+  // Update daily counters
+  incrementDailyCounters(outcome, pnl ?? 0);
+
+  // ── Telegram trade alert ──
+  _sendTradeAlert(record).catch(() => {});
+
   // Clear entry snapshot after writing
   entrySnapshot = null;
+}
+
+/** Build and send a Telegram alert for a completed trade. */
+async function _sendTradeAlert(record) {
+  const { entry, analysis } = record;
+  const outcome = analysis.outcome ?? 'UNKNOWN';
+  const pnl = analysis.pnl ?? 0;
+  const side = entry?.side ?? '?';
+  const btcEntry = entry?.btcPrice;
+  const tokenEntry = entry?.tokenPrice;
+  const edge = entry?.bestEdge;
+  const mlConf = entry?.mlConfidence;
+  const holdSec = analysis?.holdDurationSec;
+
+  // Outcome emoji
+  const isWin = outcome === 'WIN' || outcome === 'TAKE_PROFIT';
+  const isNeutral = outcome === 'DRY_RUN' || outcome === 'UNWIND' || outcome === 'REJECTED';
+  const emoji = isWin ? '✅' : isNeutral ? '➖' : '❌';
+
+  const outcomeLabel = {
+    WIN: 'WIN', LOSS: 'LOSS', TAKE_PROFIT: 'TAKE PROFIT',
+    CUT_LOSS: 'CUT LOSS', EMERGENCY_CUT: 'EMERGENCY CUT',
+    SMART_SELL_FIRST: 'SMART SELL', UNWIND: 'UNWIND', REJECTED: 'REJECTED',
+  }[outcome] ?? outcome;
+
+  const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
+  const holdText = holdSec != null
+    ? holdSec < 60 ? `${holdSec}s`
+    : `${Math.floor(holdSec / 60)}m ${holdSec % 60}s`
+    : '-';
+
+  // Daily progress
+  const today = getTodayET();
+  if (_dailyDate !== today) resetDailyCounters();
+  const todayStr = `${_dailyCount}/${MAX_MARKETS_PER_DAY}`;
+
+  const lines = [
+    `${emoji} <b>${outcomeLabel}</b> | ${side === 'UP' ? '↑ UP' : '↓ DOWN'}`,
+    ``,
+    `💰 P&amp;L: <b>${pnlStr}</b>`,
+    btcEntry != null ? `₿ BTC Entry: $${btcEntry.toFixed(0)}` : null,
+    tokenEntry != null ? `🎯 Token: @${tokenEntry.toFixed(3)}c` : null,
+    `⏱ Hold: ${holdText}`,
+    edge != null ? `📐 Edge: ${(edge * 100).toFixed(1)}%` : null,
+    mlConf != null ? `🤖 ML: ${(mlConf * 100).toFixed(0)}%` : null,
+    ``,
+    `📊 Today: <b>${todayStr}</b> trades`,
+  ].filter(Boolean);
+
+  await notify('info', lines.join('\n'), { key: `trade:journal:${record._ts}` });
 }
 
 /**

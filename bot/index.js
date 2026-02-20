@@ -45,6 +45,7 @@ import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, 
 import { startReconciler, stopReconciler } from './src/trading/journalReconciler.js';
 import { startRedeemer, stopRedeemer } from './src/trading/redeemer.js';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.js';
+import { scheduleDailySummary, stopDailySummary } from './src/trading/tradeJournal.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -99,6 +100,9 @@ async function main() {
   // 4b. Start performance monitor (read-only — safe in both live + dry-run)
   // Must come AFTER loadState() so getStats() reads initialized bankroll/trades
   startMonitor();
+
+  // 4c. Schedule daily trade summary (Telegram alert at midnight ET)
+  scheduleDailySummary();
 
   // 5. Start WebSocket streams (real-time data)
   log.info('Connecting WebSocket streams...');
@@ -155,12 +159,13 @@ async function main() {
     disconnectPolyLiveWs();
     disconnectChainlinkWss();
 
-    // Stop status server + position polling + reconciler + redeemer + monitor
+    // Stop status server + position polling + reconciler + redeemer + monitor + daily summary
     stopStatusServer();
     stopPositionPolling();
     stopReconciler();
     stopRedeemer();
     stopMonitor();
+    stopDailySummary();
 
     // Cancel open orders (live mode only)
     if (!BOT_CONFIG.dryRun) {
