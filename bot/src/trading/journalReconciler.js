@@ -13,6 +13,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { getTradeHistory, isClientReady } from './clobClient.js';
+import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('Reconciler');
 
@@ -304,11 +305,25 @@ async function reconcile() {
         // Was unresolved, now resolved — mark for replacement
         updatedEntries.push(entry);
         log.info(`Updated unresolved → resolved: ${conditionId.slice(0, 16)}... outcome=${entry.outcome} pnl=${entry.netPnl}`);
+        // RC4 Fix: kirim Telegram — ini adalah kasus desync utama (trade ada di Polymarket tapi bot tidak kirim notif)
+        if (entry.netPnl !== null) {
+          const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
+          const emoji = entry.netPnl >= 0 ? '✅' : '❌';
+          const discMsg = entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10
+            ? `\n⚠️ Selisih P&amp;L: local=$${entry.localPnl?.toFixed(2) ?? '?'} vs verified=${pnlStr} (diff=$${entry.discrepancy.toFixed(2)})`
+            : '';
+          notify('info', `${emoji} <b>Reconciled (delayed)</b>: ${entry.outcome ?? '?'} | P&amp;L: <b>${pnlStr}</b>\n📊 ${entry.marketSlug?.slice(-30) ?? conditionId.slice(0, 16)}${discMsg}\n<i>Notif ini terlambat karena bot restart atau oracle delay</i>`, { key: `reconcile:${conditionId}` }).catch(() => {});
+        }
       } else {
         // New entry — append
         const dir = dirname(BOT_CONFIG.verifiedJournalFile);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         appendFileSync(BOT_CONFIG.verifiedJournalFile, JSON.stringify(entry) + '\n');
+        // RC4 Fix: kirim Telegram hanya jika ada discrepancy signifikan (bukan notif rutin untuk semua trades)
+        if (entry.resolved && entry.localMatch && entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10) {
+          const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
+          notify('warn', `⚠️ <b>P&amp;L Discrepancy</b>!\nLocal: $${entry.localPnl?.toFixed(2) ?? '?'} vs Verified: ${pnlStr}\nSelisih: $${entry.discrepancy.toFixed(2)} | ${entry.marketSlug?.slice(-30) ?? ''}`, { key: `discrepancy:${conditionId}` }).catch(() => {});
+        }
       }
 
       totalPnl += entry.netPnl ?? 0;

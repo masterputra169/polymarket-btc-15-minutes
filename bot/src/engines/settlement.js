@@ -10,6 +10,7 @@
 
 import { createLogger } from '../logger.js';
 import { CONFIG } from '../config.js';
+import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('Settlement');
 
@@ -24,13 +25,15 @@ const log = createLogger('Settlement');
  * @returns {Promise<{ won: boolean, outcome: string|null, source: string }>}
  */
 export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
-  // Oracle with 2 retries + exponential backoff
+  // RC2 Fix: 5 retries (was 2) — Polymarket oracle can take 2-3 min to officially close
+  // Delays: 2s, 4s, 6s, 8s, 10s = up to 30s total wait before price_fallback
   if (conditionId) {
-    const MAX_RETRIES = 2;
+    const MAX_RETRIES = 5;
+    const RETRY_DELAYS_MS = [2000, 4000, 6000, 8000, 10000];
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
         if (res.ok) {
           const market = await res.json();
           if (market.closed) {
@@ -42,10 +45,11 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
               return { won, outcome, source: 'oracle' };
             }
           }
-          // H6: Market not closed yet — retry after delay (oracle may need time to settle)
+          // Market not closed yet — retry after delay
           if (attempt < MAX_RETRIES) {
-            log.debug(`Oracle: market not closed yet (attempt ${attempt + 1}/${MAX_RETRIES + 1}) — retrying after ${(attempt + 1)}s`);
-            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            const delayMs = RETRY_DELAYS_MS[attempt] ?? 10000;
+            log.debug(`Oracle: market not closed yet (attempt ${attempt + 1}/${MAX_RETRIES + 1}) — retrying after ${delayMs / 1000}s`);
+            await new Promise(r => setTimeout(r, delayMs));
             continue;
           }
           break; // All retries exhausted, market still not closed
@@ -53,7 +57,8 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
       } catch (err) {
         log.debug(`Oracle fetch attempt ${attempt + 1}/${MAX_RETRIES + 1} failed: ${err.message}`);
         if (attempt < MAX_RETRIES) {
-          await new Promise(r => setTimeout(r, 1000 * (attempt + 1))); // 1s, 2s backoff
+          const delayMs = RETRY_DELAYS_MS[attempt] ?? 10000;
+          await new Promise(r => setTimeout(r, delayMs));
         }
       }
     }
@@ -88,9 +93,10 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
 
   if (source === 'price_fallback' && ptbValue != null && btcPrice != null) {
     const pctFromPtb = Math.abs(btcPrice - ptbValue) / ptbValue;
-    if (pctFromPtb < 0.001) {
-      log.warn(`Settlement UNCERTAIN: BTC $${btcPrice.toFixed(2)} within 0.1% of PTB $${ptbValue.toFixed(2)} (${priceSource})`);
-    }
+    // RC2 Fix: always warn on price_fallback — Telegram + log
+    const closeness = pctFromPtb < 0.001 ? ' ⚠️ SANGAT DEKAT PTB!' : '';
+    log.warn(`Settlement price_fallback: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${(pctFromPtb * 100).toFixed(3)}% gap)${closeness}`);
+    notify('warn', `⚠️ Settlement <b>price_fallback</b> (oracle gagal setelah 5 retries)!\nHasil berdasarkan harga BTC saat ini vs PTB — mungkin berbeda dengan Polymarket resmi.\nSisi: ${pos.side} | BTC: $${btcPrice.toFixed(0)} | PTB: $${ptbValue.toFixed(0)}${closeness}\n<i>Cek Polymarket untuk verifikasi!</i>`, { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(() => {});
   }
 
   // FINTECH: Round P&L to cents. Subtract 2% Polymarket fee on profit (matches positionTracker math).

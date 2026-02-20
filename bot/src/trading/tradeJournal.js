@@ -7,7 +7,7 @@
  * Output: bot/data/trade_journal.jsonl (append-only, one JSON object per line)
  */
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
+import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -112,13 +112,41 @@ export function stopDailySummary() {
 }
 
 /**
- * Capture a full snapshot at trade entry. Stored in-memory until settlement.
+ * RC1 Fix: Load entry snapshot from disk if it exists (survives bot restarts).
+ * Called at startup (index.js) and lazily from writeJournalEntry.
+ */
+export function loadEntrySnapshotFromDisk() {
+  try {
+    if (!BOT_CONFIG.entrySnapshotFile || !existsSync(BOT_CONFIG.entrySnapshotFile)) return false;
+    const raw = readFileSync(BOT_CONFIG.entrySnapshotFile, 'utf-8');
+    const snap = JSON.parse(raw);
+    if (snap && snap.side && snap.marketSlug) {
+      entrySnapshot = snap;
+      log.info(`[RC1] Entry snapshot restored from disk: ${snap.side} on ${snap.marketSlug} (entered ${new Date(snap.enteredAt).toISOString()})`);
+      return true;
+    }
+  } catch (err) {
+    log.debug(`[RC1] No entry snapshot to restore: ${err.message}`);
+  }
+  return false;
+}
+
+/**
+ * Capture a full snapshot at trade entry. Stored in-memory AND on disk until settlement.
  */
 export function captureEntrySnapshot(data) {
   entrySnapshot = {
     ...data,
     enteredAt: Date.now(),
   };
+  // RC1 Fix: persist to disk — survives bot restarts
+  try {
+    const dir = dirname(BOT_CONFIG.entrySnapshotFile);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(BOT_CONFIG.entrySnapshotFile, JSON.stringify(entrySnapshot));
+  } catch (err) {
+    log.warn(`[RC1] Failed to persist entry snapshot: ${err.message}`);
+  }
   log.debug(`Entry snapshot captured: ${data.side} @ BTC $${data.btcPrice?.toFixed(0)}`);
 }
 
@@ -127,6 +155,10 @@ export function captureEntrySnapshot(data) {
  * Skipped in DRY_RUN mode. Sends Telegram alert for every real trade.
  */
 export function writeJournalEntry({ outcome, pnl, exitData }) {
+  // RC1 Fix: if in-memory snapshot was lost (bot restart), try loading from disk
+  if (!entrySnapshot) {
+    loadEntrySnapshotFromDisk();
+  }
   if (!entrySnapshot) {
     log.debug('No entry snapshot — skipping journal write');
     return;
@@ -235,6 +267,14 @@ async function _sendTradeAlert(record) {
  */
 export function clearEntrySnapshot() {
   entrySnapshot = null;
+  // RC1 Fix: delete disk file too
+  try {
+    if (BOT_CONFIG.entrySnapshotFile && existsSync(BOT_CONFIG.entrySnapshotFile)) {
+      unlinkSync(BOT_CONFIG.entrySnapshotFile);
+    }
+  } catch (err) {
+    log.debug(`[RC1] Entry snapshot file cleanup failed: ${err.message}`);
+  }
 }
 
 /**

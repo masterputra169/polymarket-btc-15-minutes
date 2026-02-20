@@ -99,7 +99,7 @@ import {
 } from './trading/fillTracker.js';
 
 // Trading
-import { placeBuyOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory } from './trading/clobClient.js';
+import { placeBuyOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
@@ -1111,6 +1111,8 @@ export async function pollOnce() {
           recordPrediction,
           setEntryRegime: (r) => { entryRegime = r; },
           notifyTrade: notifyTradeFn,
+          // RC3 Fix: ERC-1155 approval immediately after BUY fill
+          updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
         });
       } catch (tradeErr) {
         log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);

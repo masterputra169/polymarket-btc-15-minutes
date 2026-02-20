@@ -48,6 +48,8 @@ const BOT_CONFIG = {
   feedbackFile: resolve(__dirname, '..', 'data', 'feedback.json'),
   stateFile: resolve(__dirname, '..', 'data', 'state.json'),
   signalPerfFile: resolve(__dirname, '..', 'data', 'signal_perf.json'),
+  // RC1 Fix: entry snapshot persisted to disk so bot restart doesn't lose it
+  entrySnapshotFile: resolve(__dirname, '..', 'data', 'entry_snapshot.json'),
 
   // ML model paths (read from frontend public/)
   modelPath: resolve(__dirname, '..', '..', 'public', 'ml', 'xgboost_model.json'),

@@ -49,7 +49,7 @@ import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, 
 import { startReconciler, stopReconciler } from './src/trading/journalReconciler.js';
 import { startRedeemer, stopRedeemer } from './src/trading/redeemer.js';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.js';
-import { scheduleDailySummary, stopDailySummary } from './src/trading/tradeJournal.js';
+import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } from './src/trading/tradeJournal.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -97,6 +97,9 @@ async function main() {
 
   // 4. Load position state
   loadState();
+
+  // RC1 Fix: restore entry snapshot from disk (survives restarts)
+  loadEntrySnapshotFromDisk();
 
   const stats = getStats();
   log.info(`Position state: bankroll=$${stats.bankroll.toFixed(2)}, trades=${stats.totalTrades}, W/L=${stats.wins}/${stats.losses}`);

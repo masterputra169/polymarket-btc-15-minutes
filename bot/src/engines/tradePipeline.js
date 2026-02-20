@@ -421,6 +421,11 @@ export async function executeDirectionalTrade({
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     deps.recordTradeForMarket(marketSlug);
     deps.captureEntrySnapshot(entryData);
+    // RC3 Fix: ensure ERC-1155 setApprovalForAll is set for this token immediately after BUY
+    // Prevents "not enough balance/allowance" errors on subsequent SELL (cut-loss) orders
+    if (deps.updateConditionalApproval) {
+      deps.updateConditionalApproval(tokenId).catch(err => log.debug(`Conditional approval (post-buy): ${err.message}`));
+    }
     // Record prediction for accuracy tracking
     try {
       deps.recordPrediction({
