@@ -35,7 +35,7 @@ export const EXECUTION = {
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.60,       // raised from 0.55 — ML 55-60% is borderline, accuracy jumps above 60%
+  MIN_ML_CONFIDENCE: 0.58,       // 0.60→0.58 — model avg conf 58%, gate 0.60 blocked 74% of trades
   MARKET_5050_RANGE: [0.47, 0.53], // widened — 47-53c is genuinely uncertain/random-walk territory
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
