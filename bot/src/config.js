@@ -33,7 +33,7 @@ const BOT_CONFIG = {
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
-  maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 50, 5, 80),
+  maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 35, 5, 80),  // Audit fix: 50→35% — 50% allows catastrophic loss before halt
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // External notifications (optional — no-ops if not set)
@@ -101,7 +101,7 @@ const BOT_CONFIG = {
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
-  maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.00, 1.00, 100),
+  maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.50, 1.00, 100),  // Audit fix: 2.00→2.50 — allow Kelly asymmetry for high-conf signals
 
   // Take-profit — DISABLED (conviction play: hold to settlement)
   takeProfit: {

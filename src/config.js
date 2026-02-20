@@ -9,7 +9,7 @@ export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStal
 export const BET_SIZING = {
   KELLY_FRACTION: 0.15,
   MAX_BET_PCT: 0.05,
-  MIN_BET_PCT: 0.003,
+  MIN_BET_PCT: 0.01,             // Audit fix: 0.003→0.01 — reflects real $1 Polymarket minimum (at $100 bankroll = 1%)
   MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
   BANKROLL_STORAGE_KEY: 'btc15m_bankroll',
