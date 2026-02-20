@@ -111,9 +111,11 @@ export function applyTradeFilters({
   }
 
   // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)
+  // Bypass when ML is very high confidence (>=80%) — model already prices in PTB proximity
   if (TRADE_FILTERS.MIN_BTC_DIST_PCT && btcPrice != null && priceToBeat != null && priceToBeat > 0) {
     const btcDistPct = Math.abs(btcPrice - priceToBeat) / priceToBeat * 100;
-    if (btcDistPct < TRADE_FILTERS.MIN_BTC_DIST_PCT) {
+    const mlBypass = mlConfidence != null && mlConfidence >= 0.80;
+    if (!mlBypass && btcDistPct < TRADE_FILTERS.MIN_BTC_DIST_PCT) {
       reasons.push(`BTC too close to PTB: ${btcDistPct.toFixed(3)}% < ${TRADE_FILTERS.MIN_BTC_DIST_PCT}% (coin flip)`);
     }
   }
