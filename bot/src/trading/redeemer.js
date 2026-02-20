@@ -219,7 +219,8 @@ async function checkMaticBalance() {
 /**
  * Fetch positions from Polymarket Data API for the holder address,
  * then check CLOB /markets/{conditionId} for closed + winner status.
- * Returns array of { conditionId, tokenId, size, side, winner }.
+ * Falls back to Gamma API if CLOB check is inconclusive.
+ * Returns array of { conditionId, winner, question }.
  */
 async function findRedeemablePositions() {
   const proxyAddr = process.env.POLYMARKET_PROXY_ADDRESS;
@@ -229,14 +230,25 @@ async function findRedeemablePositions() {
     return [];
   }
 
-  // Fetch positions from Data API
+  // Fetch positions from Data API (handles both array and wrapped object responses)
   let positions;
   try {
     const url = `${DATA_API}/positions?user=${holder}`;
+    log.info(`Fetching positions from Data API: ${url}`);
     const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const raw = await res.json();
-    positions = Array.isArray(raw) ? raw : [];
+    // Handle both `[...]` and `{data: [...]}` response formats
+    if (Array.isArray(raw)) {
+      positions = raw;
+    } else if (Array.isArray(raw?.data)) {
+      positions = raw.data;
+    } else if (Array.isArray(raw?.results)) {
+      positions = raw.results;
+    } else {
+      positions = [];
+    }
+    log.info(`Data API returned ${positions.length} position(s) for ${holder.slice(0, 10)}...`);
   } catch (err) {
     log.warn(`Failed to fetch positions: ${err.message}`);
     return [];
@@ -246,17 +258,20 @@ async function findRedeemablePositions() {
   const candidates = positions
     .map(p => ({
       conditionId: p.conditionId ?? p.condition_id ?? '',
-      tokenId: p.tokenId ?? p.token_id ?? '',
+      tokenId: p.tokenId ?? p.token_id ?? p.asset_id ?? '',
       size: Number(p.size) || 0,
       side: p.outcome ?? p.side ?? '',
     }))
     .filter(p => p.size > 0 && p.conditionId && !redeemedSet.has(p.conditionId));
 
-  if (candidates.length === 0) return [];
+  if (candidates.length === 0) {
+    log.info('No unredeemed positions found');
+    return [];
+  }
 
   log.info(`Checking ${candidates.length} position(s) for resolution...`);
 
-  // Check each candidate against CLOB API for closed + winner
+  // Check each candidate against CLOB API for closed + winner, with Gamma API fallback
   const redeemable = [];
   // Deduplicate by conditionId (may have multiple tokenIds per condition)
   const seen = new Set();
@@ -265,26 +280,65 @@ async function findRedeemablePositions() {
     if (seen.has(pos.conditionId)) continue;
     seen.add(pos.conditionId);
 
+    const short = pos.conditionId.slice(0, 16);
+    let resolved = false;
+
+    // ── Try CLOB API first ──
     try {
       const url = `${CONFIG.clobBaseUrl}/markets/${pos.conditionId}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
-      if (!res.ok) continue;
-
-      const market = await res.json();
-      if (!market || market.closed !== true) continue;
-
-      // Find winner token
-      const tokens = Array.isArray(market.tokens) ? market.tokens : [];
-      const winnerToken = tokens.find(t => t.winner === true);
-      if (!winnerToken) continue; // Not yet resolved or no winner
-
-      redeemable.push({
-        conditionId: pos.conditionId,
-        winner: winnerToken.outcome,
-        question: market.question ?? '',
-      });
+      if (res.ok) {
+        const market = await res.json();
+        // Handle boolean or string "true"
+        const closed = market?.closed === true || market?.closed === 'true' || market?.closed === 1;
+        if (!closed) {
+          log.debug(`${short}... not closed yet (CLOB: closed=${market?.closed})`);
+        } else {
+          const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+          // Handle boolean or string "true" for winner field
+          const winnerToken = tokens.find(t => t.winner === true || t.winner === 'true' || t.winner === 1);
+          if (winnerToken) {
+            log.info(`${short}... resolved via CLOB — winner: ${winnerToken.outcome}`);
+            redeemable.push({ conditionId: pos.conditionId, winner: winnerToken.outcome, question: market.question ?? '' });
+            resolved = true;
+          } else {
+            log.debug(`${short}... closed but no winner token found yet (CLOB)`);
+          }
+        }
+      } else {
+        log.debug(`CLOB check failed for ${short}...: HTTP ${res.status}`);
+      }
     } catch (err) {
-      log.debug(`Redeemable check skipped for position: ${err.message}`);
+      log.debug(`CLOB check error for ${short}...: ${err.message}`);
+    }
+
+    if (resolved) continue;
+
+    // ── Fallback: Gamma API ──
+    try {
+      const gammaUrl = `${CONFIG.gammaBaseUrl}/markets?conditionId=${pos.conditionId}`;
+      const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(8_000) });
+      if (gammaRes.ok) {
+        const gammaData = await gammaRes.json();
+        const gammaMarkets = Array.isArray(gammaData) ? gammaData : gammaData?.markets ?? [];
+        const gm = gammaMarkets[0];
+        if (gm) {
+          const isResolved = gm.resolved === true || gm.resolved === 'true' || gm.resolved === 1;
+          if (!isResolved) {
+            log.debug(`${short}... not resolved yet (Gamma)`);
+            continue;
+          }
+          const winnerOutcome = gm.resolvedOutcome ?? gm.winner_outcome ?? gm.winnerOutcome ?? '';
+          if (!winnerOutcome) {
+            log.debug(`${short}... resolved but no winner outcome (Gamma)`);
+            continue;
+          }
+          log.info(`${short}... resolved via Gamma — winner: ${winnerOutcome}`);
+          redeemable.push({ conditionId: pos.conditionId, winner: winnerOutcome, question: gm.question ?? gm.title ?? '' });
+        }
+      }
+    } catch (err) {
+      log.debug(`Gamma fallback error for ${short}...: ${err.message}`);
     }
   }
 
