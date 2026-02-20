@@ -738,7 +738,8 @@ export function getDrawdownPct() {
   // making the circuit breaker trigger prematurely during normal operation.
   const openCost = (state.currentPosition && !state.currentPosition.settled)
     ? (state.currentPosition.cost ?? 0) : 0;
-  const portfolioValue = state.bankroll + openCost;
+  // Audit fix H2: Include pendingCost so circuit breaker accounts for reserved capital
+  const portfolioValue = state.bankroll + openCost + state.pendingCost;
   return roundPct(((state.peakBankroll - portfolioValue) / state.peakBankroll) * 100);
 }
 

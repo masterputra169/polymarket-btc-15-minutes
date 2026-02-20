@@ -31,7 +31,7 @@ function mlMultiplier(ml, side) {
   if (!ml || ml.status !== 'ready' || ml.confidence == null) {
     return { multiplier: 1.0, label: 'N/A' };
   }
-  const hiConf = ml.confidence >= 0.55;  // v3: aligned with new MIN_ML_CONFIDENCE 0.55
+  const hiConf = ml.confidence >= 0.58;  // Audit fix H3: 0.55→0.58 — sync with MIN_ML_CONFIDENCE in config
   const agrees = ml.side === side;
   if (hiConf && agrees) return { multiplier: 1.15, label: 'Hi-Conf \u2713' };
   if (hiConf && !agrees) return { multiplier: 0.70, label: 'Hi-Conf \u2717' };
@@ -186,10 +186,13 @@ export function computeBetSizing({
   let autoCorr = { multiplier: 1.0, label: 'N/A' };
   const streak = feedbackStats?.streak;
   if (streak && streak.count >= 3) {
-    // Check if recent streak is same side as current trade
-    // (side-agnostic: any 3+ streak signals correlated market regime)
-    if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr` }; }
-    else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr` }; }
+    // Audit fix M3: Only apply autocorr penalty for LOSS streaks.
+    // Win streaks mean model is performing well — no penalty needed.
+    // Loss streaks signal correlated market regime that model is consistently wrong on.
+    if (streak.type === 'loss') {
+      if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr` }; }
+      else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr` }; }
+    }
   }
 
   // ── Smart money flow multiplier ──
@@ -200,7 +203,7 @@ export function computeBetSizing({
     const agrees = smartFlowSignal.agreesWithSide?.(side) ?? true;
     const str = smartFlowSignal.strength ?? 0;
     if (agrees && str > 0.3) {
-      smartFlowAdj = { multiplier: 1.10 + str * 0.10, label: `Flow✓ ${smartFlowSignal.direction}` };
+      smartFlowAdj = { multiplier: Math.min(1.25, 1.10 + str * 0.10), label: `Flow✓ ${smartFlowSignal.direction}` }; // Audit fix H1: cap at 1.25
     } else if (!agrees && str > 0.3) {
       smartFlowAdj = { multiplier: 0.70, label: `Flow✗ ${smartFlowSignal.direction}` };
     }

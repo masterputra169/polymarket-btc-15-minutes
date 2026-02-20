@@ -60,7 +60,7 @@ export async function executeArbitrage({
   arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
   orderbookUp, orderbookDown, dryRun,
 }, deps) {
-  const arbBudget = deps.getAvailableBankroll() * 0.10; // 10% of available bankroll
+  const arbBudget = deps.getAvailableBankroll() * 0.05; // Audit fix C1: 10→5% — arb is 2 legs, 5% total = Kelly max per trade
 
   // Cap arb size to available orderbook liquidity at the target price.
   // Without this, we'd try to fill more shares than what's available at the ask,
