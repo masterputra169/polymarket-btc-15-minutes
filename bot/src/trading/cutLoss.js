@@ -156,10 +156,10 @@ export function evaluateCutLoss({
   const isCrash = dropPct >= crashDrop && (!hasPtb || btcDistPct >= crashDist || !btcFavorable);
 
   // ── Gate 6c: LATE FORCE-CUT fast-track ──
-  // v8: 2.0→3.0 min — wider window so more time is classified as "late phase"
-  // v8: 15→10% — trigger at smaller drop when close to expiry (time has value)
-  const LATE_FORCE_CUT_MIN = 3.0;
-  const LATE_FORCE_CUT_DROP = 10;
+  // v9 conviction play: only cut when very close to expiry AND very large drop.
+  // Loosened from (3.0min + 10%) → (2.0min + 25%) — don't panic-cut near settlement.
+  const LATE_FORCE_CUT_MIN = 2.0;
+  const LATE_FORCE_CUT_DROP = 25;
   const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Gate 6d: TIME-BASED PERSISTENT LOSS fast-track (Fix D) ──

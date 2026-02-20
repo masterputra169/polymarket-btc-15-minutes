@@ -79,26 +79,29 @@ const BOT_CONFIG = {
   winRateWarnThreshold: envNum(process.env.WIN_RATE_WARN, 0.40, 0.10, 0.90),
   winRatePauseThreshold: envNum(process.env.WIN_RATE_PAUSE, 0.30, 0.10, 0.90),
 
-  // Cut-loss (stop-loss) — v8 STRICT mode
-  // v8 philosophy: Protect capital aggressively. Cut early, cut fast.
-  // Evidence: 71.1% settlement WR suggests holding wins more often,
-  // but strict cut-loss limits catastrophic drawdowns and frees capital for better trades.
+  // Cut-loss — v9 Conviction Play
+  // Philosophy: Hold to settlement UNLESS ML clearly signals trend reversal (>=80% confidence).
+  // Evidence: Settlement WR 71.1% — holding wins most of the time.
+  //           Aggressive cut-loss has historically destroyed $28.77 of edge.
+  // PRIMARY trigger: ML flips to opposite side with confidence >= 80%.
+  // EV-negative gate near-disabled — model uncertainty alone does NOT cut a conviction position.
+  // All fast-tracks loosened — only actual crashes (45%+ drop) or extreme time-based (40%+ for 12min).
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 90, 0, 600),         // v8: 180→90s — allow cutting after 1.5 min (not 3 min)
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),        // hold at least 3min before even evaluating
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
-    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 2000, 500, 120000),    // v8: 5000→2000ms — retry sell faster
+    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 10, 1, 90), // v8: 15→10% — trigger at 10% loss (more sensitive)
-    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 1, 1, 20), // v8: 2→1 — cut immediately on first confirmed signal
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 20, 1, 90), // need 20%+ real loss before even considering cut
+    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20), // 2 consecutive confirmations required
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
-    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 20, 10, 90),      // v8: 30→20% — crash fast-track at 20% drop
-    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.15, 0.01, 5.0), // v8: 0.20→0.15 — more sensitive to BTC distance
-    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 1.00, 0.50, 1.50),        // v8: 0.90→1.00 — cut when model prob ≤ market price (not 10% below)
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.50, 0.40, 0.90), // v8: 0.55→0.50 — cut on less confident ML flip
-    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 15, 5, 90),   // v8: 25→15% — time-based cut at 15% persistent loss
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 4, 1, 30), // v8: 7→4min — cut after 4min of persistent loss
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 45, 10, 90),      // v9: only actual crashes (45%+ drop) trigger fast-track
+    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
+    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.20, 0.05, 1.50),        // v9: near-disabled — model needs <10% prob on 50c token to flag EV-negative
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.80, 0.40, 0.99), // v9: PRIMARY signal — ML must be >=80% confident of reversal
+    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 40, 5, 90),   // v9: near-disabled time-based cut (40%+ required)
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 12, 1, 30), // v9: 12min — very long wait before time-based forced cut
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
