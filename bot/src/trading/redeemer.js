@@ -230,25 +230,47 @@ async function findRedeemablePositions() {
     return [];
   }
 
-  // Fetch positions from Data API (handles both array and wrapped object responses)
-  let positions;
+  // Fetch ALL positions from Data API with pagination (handles large portfolios)
+  let positions = [];
   try {
-    const url = `${DATA_API}/positions?user=${holder}`;
-    log.info(`Fetching positions from Data API: ${url}`);
-    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const raw = await res.json();
-    // Handle both `[...]` and `{data: [...]}` response formats
-    if (Array.isArray(raw)) {
-      positions = raw;
-    } else if (Array.isArray(raw?.data)) {
-      positions = raw.data;
-    } else if (Array.isArray(raw?.results)) {
-      positions = raw.results;
-    } else {
-      positions = [];
+    const PAGE_SIZE = 100;
+    let offset = 0;
+    let page = 0;
+    const MAX_PAGES = 20; // safety cap: up to 2000 positions
+
+    while (page < MAX_PAGES) {
+      const url = `${DATA_API}/positions?user=${holder}&limit=${PAGE_SIZE}&offset=${offset}`;
+      if (page === 0) log.info(`Fetching all positions from Data API (paginated, ${PAGE_SIZE}/page)...`);
+
+      const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const raw = await res.json();
+
+      // Handle both `[...]` and `{data: [...]}` response formats
+      let page_items;
+      if (Array.isArray(raw)) {
+        page_items = raw;
+      } else if (Array.isArray(raw?.data)) {
+        page_items = raw.data;
+      } else if (Array.isArray(raw?.results)) {
+        page_items = raw.results;
+      } else {
+        page_items = [];
+      }
+
+      positions.push(...page_items);
+
+      // Stop if this page is less than PAGE_SIZE (last page)
+      if (page_items.length < PAGE_SIZE) break;
+
+      offset += PAGE_SIZE;
+      page++;
+
+      // Small delay between pages to avoid rate limiting
+      if (page < MAX_PAGES) await sleep(300);
     }
-    log.info(`Data API returned ${positions.length} position(s) for ${holder.slice(0, 10)}...`);
+
+    log.info(`Data API: fetched ${positions.length} total position(s) for ${holder.slice(0, 10)}... (${page + 1} page(s))`);
   } catch (err) {
     log.warn(`Failed to fetch positions: ${err.message}`);
     return [];
