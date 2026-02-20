@@ -31,11 +31,14 @@ const PARENT_COLLECTION_ID = '0x' + '0'.repeat(64);
 const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
 
 // Multiple free Polygon RPC endpoints — round-robin to avoid single-endpoint rate limits.
-// publicnode first (most reliable for tx submission), llamarpc + polygon-rpc as fallbacks.
+// polygon-rpc.com removed (401 Unauthorized, API key disabled).
 const RPC_ENDPOINTS = [
   'https://polygon-bor-rpc.publicnode.com',
-  'https://polygon.llamarpc.com',
-  'https://polygon-rpc.com',
+  'https://rpc.ankr.com/polygon',
+  'https://polygon.meowrpc.com',
+  'https://polygon-mainnet.public.blastapi.io',
+  'https://1rpc.io/matic',
+  'https://polygon.drpc.org',
 ];
 let rpcIndex = 0;
 
