@@ -101,7 +101,7 @@ const BOT_CONFIG = {
     crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 42, 10, 90),      // v11: 35→42% — only true crashes
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
     evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.15, 0.05, 1.50),        // v11: 0.50→0.15 — near-disabled EV check
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.80, 0.40, 0.99), // v11: 0.75→0.80 — only very strong reversal
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // ML must flip to opposite side with >=75% confidence
     persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 42, 5, 90),   // v11: 35→42% — truly dead position
     persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 15, 1, 30), // v11: 12→15min — wait even longer
   },
