@@ -108,10 +108,18 @@ function PositionPanel({ data, sendBotCommand }) {
     setSellError(null);
     setSelling(pos.tokenId);
     try {
+      // Use the most up-to-date price available:
+      // 1. pos.currentPrice if it's valid and looks like a CURRENT price (not entry price)
+      //    — for API positions, currentPrice comes from Polymarket Data API (real-time)
+      // 2. pos.currentPrice fallback (may be entry price for new bot positions)
+      // 3. 0.01 as absolute minimum (FOK sell fills at best available bid — price improvement)
+      const sellPrice = (pos.currentPrice != null && Number.isFinite(pos.currentPrice) && pos.currentPrice > 0)
+        ? pos.currentPrice
+        : 0.01;
       const result = await sendBotCommand('sellPosition', {
         tokenId: pos.tokenId,
         size: pos.size,
-        price: pos.currentPrice,
+        price: sellPrice,
       });
       if (result && !result.ok) {
         setSellError(result.error || 'Sell failed');
@@ -223,11 +231,17 @@ function PositionPanel({ data, sendBotCommand }) {
               {/* Sell button for bot position */}
               {botPosition.tokenId && botPosition.fillConfirmed && (
                 <button
-                  onClick={() => handleSell({
-                    tokenId: botPosition.tokenId,
-                    size: botPosition.size,
-                    currentPrice: botPosition.price,
-                  })}
+                  onClick={() => {
+                    // Use current market price from API positions if available,
+                    // otherwise fall back to entry price (handleSell will use 0.01 as min).
+                    const apiPos = positions.find(p => p.tokenId === botPosition.tokenId);
+                    const currentPrice = (apiPos?.currentPrice > 0) ? apiPos.currentPrice : botPosition.price;
+                    handleSell({
+                      tokenId: botPosition.tokenId,
+                      size: botPosition.size,
+                      currentPrice,
+                    });
+                  }}
                   disabled={!!selling}
                   style={{
                     background: 'rgba(255,82,82,0.15)',

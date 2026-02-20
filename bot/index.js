@@ -33,7 +33,7 @@ import { loadMLModelFromDisk } from './src/adapters/mlLoader.js';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.js';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.js';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
-import { initClobClient, cancelAllOrders, getUsdcBalance } from './src/trading/clobClient.js';
+import { initClobClient, cancelAllOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
@@ -96,6 +96,18 @@ async function main() {
 
   const stats = getStats();
   log.info(`Position state: bankroll=$${stats.bankroll.toFixed(2)}, trades=${stats.totalTrades}, W/L=${stats.wins}/${stats.losses}`);
+
+  // 4a. If there's an existing open position, pre-approve its conditional token.
+  // This ensures ERC1155 setApprovalForAll is set so cut-loss sells don't fail.
+  if (!BOT_CONFIG.dryRun) {
+    const openPos = getCurrentPosition();
+    if (openPos && !openPos.settled && openPos.tokenId) {
+      log.info(`Open position found at startup — ensuring conditional token approval for ${openPos.tokenId.slice(0, 12)}...`);
+      updateConditionalApproval(openPos.tokenId).catch(err =>
+        log.warn(`Startup conditional approval skipped: ${err.message}`)
+      );
+    }
+  }
 
   // 4b. Start performance monitor (read-only — safe in both live + dry-run)
   // Must come AFTER loadState() so getStats() reads initialized bankroll/trades

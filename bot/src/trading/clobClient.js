@@ -121,6 +121,19 @@ export async function initClobClient() {
     log.info('CLOB client initialized with derived API credentials');
   }
 
+  // Ensure USDC allowance is set (gasless via Polymarket relay).
+  // This also triggers ERC1155 setApprovalForAll on the proxy if not already set.
+  // Non-fatal: log warning and continue if it fails.
+  try {
+    await Promise.race([
+      client.updateBalanceAllowance({ asset_type: 'COLLATERAL' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('startup collateral approval timeout')), 10_000)),
+    ]);
+    log.info('USDC collateral allowance confirmed/updated at startup');
+  } catch (err) {
+    log.warn(`Startup collateral approval skipped (non-fatal): ${err.message}`);
+  }
+
   return client;
 }
 
@@ -284,12 +297,14 @@ export function isClientReady() {
 }
 
 /**
- * Fetch actual conditional token (ERC1155) balance from CLOB API.
+ * Fetch actual conditional token (ERC1155) balance AND allowance from CLOB API.
  * More reliable than Polygon RPC (same API, no regional blocks).
- * Returns balance in decimal (e.g. 2.06), or null on error.
+ * Returns { balance, allowance } in decimal, or null on error.
+ * - balance=0 → phantom position (no tokens received)
+ * - allowance=0 → ERC1155 not approved for exchange (setApprovalForAll missing)
  *
  * @param {string} tokenId - Outcome token ID
- * @returns {Promise<number|null>}
+ * @returns {Promise<{balance: number, allowance: number}|null>}
  */
 export async function getConditionalTokenBalance(tokenId) {
   if (!client) return null;
@@ -299,13 +314,57 @@ export async function getConditionalTokenBalance(tokenId) {
       new Promise((_, reject) => setTimeout(() => reject(new Error('conditional balance timeout')), 5000)),
     ]);
     if (result?.balance != null) {
-      const raw = parseFloat(result.balance);
-      if (Number.isFinite(raw) && raw >= 0) return raw / 1e6;
+      const rawBal = parseFloat(result.balance);
+      const rawAll = parseFloat(result.allowance ?? '0');
+      if (Number.isFinite(rawBal) && rawBal >= 0) {
+        return {
+          balance: rawBal / 1e6,
+          allowance: Number.isFinite(rawAll) ? rawAll : 0,
+        };
+      }
     }
   } catch (err) {
     log.debug(`Conditional token balance check failed: ${err.message}`);
   }
   return null;
+}
+
+/**
+ * Trigger CLOB API to set/update USDC (collateral) allowance.
+ * Called at startup to ensure USDC is approved for trading.
+ * Uses Polymarket's gasless approval relay — no ETH needed.
+ */
+export async function updateCollateralApproval() {
+  if (!client) return;
+  try {
+    await Promise.race([
+      client.updateBalanceAllowance({ asset_type: 'COLLATERAL' }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('collateral approval timeout')), 10_000)),
+    ]);
+    log.info('Collateral (USDC) allowance updated successfully');
+  } catch (err) {
+    log.warn(`Collateral allowance update failed (non-fatal): ${err.message}`);
+  }
+}
+
+/**
+ * Trigger CLOB API to set/update conditional token (ERC1155) approval.
+ * Called when sell fails due to missing setApprovalForAll.
+ * Uses Polymarket's gasless approval relay — no ETH needed.
+ *
+ * @param {string} tokenId - Outcome token ID
+ */
+export async function updateConditionalApproval(tokenId) {
+  if (!client) return;
+  try {
+    await Promise.race([
+      client.updateBalanceAllowance({ asset_type: 'CONDITIONAL', token_id: tokenId }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('conditional approval timeout')), 10_000)),
+    ]);
+    log.info(`Conditional token (ERC1155) approval updated for ${tokenId.slice(0, 12)}...`);
+  } catch (err) {
+    log.warn(`Conditional approval update failed (non-fatal): ${err.message}`);
+  }
 }
 
 /**

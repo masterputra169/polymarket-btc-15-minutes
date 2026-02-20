@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { createLogger } from '../logger.js';
 import { BOT_CONFIG } from '../config.js';
-import { placeSellOrder, getWalletAddress, getConditionalTokenBalance } from './clobClient.js';
+import { placeSellOrder, getWalletAddress, getConditionalTokenBalance, updateConditionalApproval } from './clobClient.js';
 
 const log = createLogger('Positions');
 
@@ -95,25 +95,54 @@ export async function closePosition(tokenId, size, price) {
 
     log.warn(`SELL balance mismatch for ${tokenId.slice(0, 12)}... recorded=${size} — checking actual balance`);
 
-    // ── Step 1: CLOB API balance check (primary — most reliable, no RPC blocks) ──
-    const clobBalance = await getConditionalTokenBalance(tokenId);
-    if (clobBalance !== null) {
+    // ── Step 1: CLOB API balance + allowance check (primary — most reliable, no RPC blocks) ──
+    const clobInfo = await getConditionalTokenBalance(tokenId);
+    if (clobInfo !== null) {
+      const { balance: clobBalance, allowance: clobAllowance } = clobInfo;
+
       if (clobBalance <= 0) {
         // Confirmed phantom: no tokens in wallet — position was never really filled or already redeemed
         log.error(`SELL ABORTED — CLOB shows 0 tokens for ${tokenId.slice(0, 12)}... (recorded size=${size}). Phantom position or already settled.`);
         throw new Error('no_tokens_on_chain');
       }
+
+      // Check ERC1155 allowance: 0 = exchange not approved to transfer tokens
+      // Fix: trigger Polymarket's gasless approval relay, then retry sell.
+      if (clobAllowance === 0) {
+        log.warn(`SELL: ERC1155 approval missing for ${tokenId.slice(0, 12)}... — triggering gasless approval via CLOB API`);
+        await updateConditionalApproval(tokenId);
+        // Wait for approval to propagate on-chain (Polygon ~2s block time)
+        await new Promise(r => setTimeout(r, 4000));
+        log.info(`Retrying sell after approval update (balance=${clobBalance.toFixed(6)}, size=${size})`);
+        const sellSize = clobBalance < size
+          ? Math.floor(clobBalance * 1e6) / 1e6
+          : size;
+        return await placeSellOrder({ tokenId, price, size: sellSize });
+      }
+
       if (clobBalance < size) {
         const correctedSize = Math.floor(clobBalance * 1e6) / 1e6;
         log.warn(`CLOB balance ${clobBalance.toFixed(6)} < recorded ${size} — retrying sell with ${correctedSize}`);
         return await placeSellOrder({ tokenId, price, size: correctedSize });
       }
-      // Balance sufficient but order still rejected → ERC1155 approval missing
-      log.error(
-        `SELL FAILED — CLOB balance (${clobBalance.toFixed(6)}) >= size (${size}) but order rejected. ` +
-        `Possible missing CTF token approval. Re-run account setup or approve via Polymarket UI.`
+
+      // Balance + allowance both sufficient, but order still rejected.
+      // Try one more time after re-triggering approval (may fix stale approval state).
+      log.warn(
+        `SELL FAILED — CLOB balance (${clobBalance.toFixed(6)}) >= size (${size}) and allowance=${clobAllowance}. ` +
+        `Re-triggering approval and retrying once...`
       );
-      throw err;
+      await updateConditionalApproval(tokenId);
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        return await placeSellOrder({ tokenId, price, size });
+      } catch (retryErr) {
+        log.error(
+          `SELL FAILED after approval retry — balance OK, allowance OK, order still rejected. ` +
+          `Possible missing CTF ERC1155 approval on proxy. Re-approve via Polymarket UI. Error: ${retryErr.message}`
+        );
+        throw retryErr;
+      }
     }
 
     // ── Step 2: Fallback — Polygon RPC on-chain balance ──
@@ -126,23 +155,41 @@ export async function closePosition(tokenId, size, price) {
       if (onChainBalance < size) {
         const correctedSize = Math.floor(onChainBalance * 1e6) / 1e6;
         log.warn(`On-chain balance ${onChainBalance.toFixed(6)} < recorded ${size} — retrying with ${correctedSize}`);
+        // Also try approval in case that's the issue
+        await updateConditionalApproval(tokenId);
+        await new Promise(r => setTimeout(r, 2000));
         return await placeSellOrder({ tokenId, price, size: correctedSize });
       }
-      log.error(
-        `SELL FAILED — on-chain balance (${onChainBalance.toFixed(6)}) appears sufficient. ` +
-        `Possible missing CTF ERC1155 approval. Re-run account setup or approve via Polymarket UI.`
-      );
-      throw err;
+      // Balance sufficient — try approval fix
+      log.warn(`On-chain balance ${onChainBalance.toFixed(6)} >= ${size} but rejected — trying approval fix`);
+      await updateConditionalApproval(tokenId);
+      await new Promise(r => setTimeout(r, 4000));
+      try {
+        return await placeSellOrder({ tokenId, price, size });
+      } catch (retryErr) {
+        log.error(
+          `SELL FAILED — on-chain balance OK but order rejected after approval fix. ` +
+          `Re-approve via Polymarket UI. Error: ${retryErr.message}`
+        );
+        throw retryErr;
+      }
     }
 
-    // ── Step 3: Both APIs unavailable — safe-size fallback ──
-    // Subtract 1 microshare + round to CLOB 3-decimal precision.
-    // Covers small rounding differences between recorded size and on-chain fill.
-    // NOTE: Only valid when balance truly exists — if phantom, this will also fail.
+    // ── Step 3: Both APIs unavailable — try approval fix + safe-size fallback ──
+    // First try approval in case that's the issue
+    log.warn(`Balance APIs unavailable — trying approval fix before safe-size fallback`);
+    await updateConditionalApproval(tokenId);
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      return await placeSellOrder({ tokenId, price, size });
+    } catch (_approvalRetryErr) {
+      // Approval didn't help — try safe-size (covers tiny rounding mismatches)
+    }
+
     const microSize = Math.round(size * 1e6);
     const safeSize  = Math.floor((microSize - 1) / 1000) * 1000 / 1e6;
     if (safeSize > 0 && safeSize < size) {
-      log.warn(`Balance APIs unavailable — retrying with safe size ${safeSize} (was ${size}, -1 microshare)`);
+      log.warn(`Retrying with safe size ${safeSize} (was ${size}, -1 microshare)`);
       return await placeSellOrder({ tokenId, price, size: safeSize });
     }
 
