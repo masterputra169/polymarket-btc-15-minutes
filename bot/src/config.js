@@ -79,29 +79,31 @@ const BOT_CONFIG = {
   winRateWarnThreshold: envNum(process.env.WIN_RATE_WARN, 0.40, 0.10, 0.90),
   winRatePauseThreshold: envNum(process.env.WIN_RATE_PAUSE, 0.30, 0.10, 0.90),
 
-  // Cut-loss — v10 Balanced Conviction Play
-  // Philosophy: Hold to settlement UNLESS model clearly signals losing position.
-  // Evidence: Settlement WR 71.1% — holding wins most of the time.
-  //           Aggressive cut-loss historically destroyed $28.77 of edge.
-  // PRIMARY trigger: ML flips to opposite side with >=75% confidence.
-  // SECONDARY trigger: EV-negative at 50% buffer (model below 50% of token price).
-  // Fast-tracks: real crash (35%+) or very persistent loss (35%+ for 12min).
+  // Cut-loss — v11 Last Resort Only
+  // Philosophy: HOLD conviction positions. Cut ONLY when situation is clearly unrecoverable.
+  // Evidence: Settlement WR 71.1% — holding wins 71% of time. Cut-loss destroyed $28.77 edge.
+  // Triggers (only when truly "penting"):
+  //   1. ML reverses with >=80% confidence + drop >=25% (strong signal + confirmed loss)
+  //   2. EV near-disabled: model needs <7.5% prob on 50c token (essentially never fires)
+  //   3. True crash: >=42% token drop with BTC confirming
+  //   4. Extreme persistent: >=42% drop for 15+ minutes (position clearly dead)
+  //   5. Late rescue: <1.5min left + >=30% drop (handled in cutLoss.js)
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),        // hold at least 3min before evaluating
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 240, 0, 600),        // v11: 180→240s (4min) before evaluating
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 20, 1, 90), // 20%+ real loss before considering cut
-    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20), // 2 consecutive confirmations required
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 25, 1, 90), // v11: 20→25% — need significant confirmed loss
+    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 3, 1, 20), // v11: 2→3 polls to confirm (not a fluke)
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
-    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 35, 10, 90),      // v10: 45→35% — meaningful safety net without over-cutting
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 42, 10, 90),      // v11: 35→42% — only true crashes
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
-    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.50, 0.05, 1.50),        // v10: 0.20→0.50 — cut when model below 50% of token price (clear EV-negative)
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // v10: 0.80→0.75 — slightly more reachable while still high-confidence
-    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 35, 5, 90),   // v10: 40→35% — persistent 35%+ loss is genuinely stuck
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 12, 1, 30), // keep 12min — conviction play, wait long
+    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.15, 0.05, 1.50),        // v11: 0.50→0.15 — near-disabled EV check
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.80, 0.40, 0.99), // v11: 0.75→0.80 — only very strong reversal
+    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 42, 5, 90),   // v11: 35→42% — truly dead position
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 15, 1, 30), // v11: 12→15min — wait even longer
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
