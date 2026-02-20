@@ -284,6 +284,31 @@ export function isClientReady() {
 }
 
 /**
+ * Fetch actual conditional token (ERC1155) balance from CLOB API.
+ * More reliable than Polygon RPC (same API, no regional blocks).
+ * Returns balance in decimal (e.g. 2.06), or null on error.
+ *
+ * @param {string} tokenId - Outcome token ID
+ * @returns {Promise<number|null>}
+ */
+export async function getConditionalTokenBalance(tokenId) {
+  if (!client) return null;
+  try {
+    const result = await Promise.race([
+      client.getBalanceAllowance({ asset_type: 'CONDITIONAL', token_id: tokenId }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('conditional balance timeout')), 5000)),
+    ]);
+    if (result?.balance != null) {
+      const raw = parseFloat(result.balance);
+      if (Number.isFinite(raw) && raw >= 0) return raw / 1e6;
+    }
+  } catch (err) {
+    log.debug(`Conditional token balance check failed: ${err.message}`);
+  }
+  return null;
+}
+
+/**
  * Fetch trade history from the CLOB API.
  * Returns real on-chain fill data for the authenticated wallet.
  *

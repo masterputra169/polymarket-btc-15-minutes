@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { createLogger } from '../logger.js';
 import { BOT_CONFIG } from '../config.js';
-import { placeSellOrder, getWalletAddress } from './clobClient.js';
+import { placeSellOrder, getWalletAddress, getConditionalTokenBalance } from './clobClient.js';
 
 const log = createLogger('Positions');
 
@@ -91,46 +91,61 @@ export async function closePosition(tokenId, size, price) {
   try {
     return await placeSellOrder({ tokenId, price, size });
   } catch (err) {
-    if (err.message.includes('not enough balance')) {
-      // ── Retry path A: Query actual on-chain balance ──
-      // CLOB library internally rounds sell size to 3 decimal places (1000 microshares),
-      // so recorded size (e.g. 2.030302) may differ from what's actually on-chain (2.030000).
-      const actualBalance = await queryOnChainTokenBalance(tokenId);
-      if (actualBalance != null && actualBalance > 0) {
-        if (actualBalance < size) {
-          // Floor to 6 decimal precision (CTF token precision)
-          const correctedSize = Math.floor(actualBalance * 1e6) / 1e6;
-          log.warn(`Balance mismatch: recorded ${size}, on-chain ${actualBalance.toFixed(6)} — retrying sell with ${correctedSize}`);
-          return await placeSellOrder({ tokenId, price, size: correctedSize });
-        }
-        // Balance looks sufficient but error still occurred — likely missing ERC1155 approval
-        log.error(
-          `SELL FAILED — on-chain balance (${actualBalance.toFixed(6)}) appears sufficient. ` +
-          `Possible missing CTF token approval (ERC1155 setApprovalForAll) for the exchange contract. ` +
-          `Re-run account setup or approve via Polymarket UI.`
-        );
-      } else {
-        // ── Retry path B: Polygon RPC unavailable (user's region may block it) ──
-        //
-        // Two sub-cases handled:
-        // B1: Non-round size (e.g., 2.030302) — CLOB library truncates to 3 decimals (→ 2.030)
-        // B2: Round size (e.g., 2.1) — CLOB sends exact 2100000 microshares, but CTF contract
-        //     may have stored fill as 2099999 microshares (integer rounding in exchange).
-        //     Solution: subtract 1 microshare (0.000001) as safety margin, then round to CLOB precision.
-        //
-        // In both cases: loss is at most 1000 microshares = 0.001 shares ≈ negligible.
-        const microSize = Math.round(size * 1e6);           // float → integer microshares (no drift)
-        const safeMs   = microSize - 1;                     // subtract 1 microshare as safety margin
-        const safeSize = Math.floor(safeMs / 1000) * 1000 / 1e6;  // round down to CLOB 3-decimal precision
-        if (safeSize > 0 && safeSize < size) {
-          log.warn(
-            `On-chain balance query failed (RPC unavailable?) — retrying sell with safe size ` +
-            `${safeSize} (was ${size}, -1 microshare + CLOB rounding)`
-          );
-          return await placeSellOrder({ tokenId, price, size: safeSize });
-        }
+    if (!err.message.includes('not enough balance')) throw err;
+
+    log.warn(`SELL balance mismatch for ${tokenId.slice(0, 12)}... recorded=${size} — checking actual balance`);
+
+    // ── Step 1: CLOB API balance check (primary — most reliable, no RPC blocks) ──
+    const clobBalance = await getConditionalTokenBalance(tokenId);
+    if (clobBalance !== null) {
+      if (clobBalance <= 0) {
+        // Confirmed phantom: no tokens in wallet — position was never really filled or already redeemed
+        log.error(`SELL ABORTED — CLOB shows 0 tokens for ${tokenId.slice(0, 12)}... (recorded size=${size}). Phantom position or already settled.`);
+        throw new Error('no_tokens_on_chain');
       }
+      if (clobBalance < size) {
+        const correctedSize = Math.floor(clobBalance * 1e6) / 1e6;
+        log.warn(`CLOB balance ${clobBalance.toFixed(6)} < recorded ${size} — retrying sell with ${correctedSize}`);
+        return await placeSellOrder({ tokenId, price, size: correctedSize });
+      }
+      // Balance sufficient but order still rejected → ERC1155 approval missing
+      log.error(
+        `SELL FAILED — CLOB balance (${clobBalance.toFixed(6)}) >= size (${size}) but order rejected. ` +
+        `Possible missing CTF token approval. Re-run account setup or approve via Polymarket UI.`
+      );
+      throw err;
     }
+
+    // ── Step 2: Fallback — Polygon RPC on-chain balance ──
+    const onChainBalance = await queryOnChainTokenBalance(tokenId);
+    if (onChainBalance !== null) {
+      if (onChainBalance <= 0) {
+        log.error(`SELL ABORTED — on-chain balance = 0 for ${tokenId.slice(0, 12)}... Phantom position.`);
+        throw new Error('no_tokens_on_chain');
+      }
+      if (onChainBalance < size) {
+        const correctedSize = Math.floor(onChainBalance * 1e6) / 1e6;
+        log.warn(`On-chain balance ${onChainBalance.toFixed(6)} < recorded ${size} — retrying with ${correctedSize}`);
+        return await placeSellOrder({ tokenId, price, size: correctedSize });
+      }
+      log.error(
+        `SELL FAILED — on-chain balance (${onChainBalance.toFixed(6)}) appears sufficient. ` +
+        `Possible missing CTF ERC1155 approval. Re-run account setup or approve via Polymarket UI.`
+      );
+      throw err;
+    }
+
+    // ── Step 3: Both APIs unavailable — safe-size fallback ──
+    // Subtract 1 microshare + round to CLOB 3-decimal precision.
+    // Covers small rounding differences between recorded size and on-chain fill.
+    // NOTE: Only valid when balance truly exists — if phantom, this will also fail.
+    const microSize = Math.round(size * 1e6);
+    const safeSize  = Math.floor((microSize - 1) / 1000) * 1000 / 1e6;
+    if (safeSize > 0 && safeSize < size) {
+      log.warn(`Balance APIs unavailable — retrying with safe size ${safeSize} (was ${size}, -1 microshare)`);
+      return await placeSellOrder({ tokenId, price, size: safeSize });
+    }
+
     throw err;
   }
 }

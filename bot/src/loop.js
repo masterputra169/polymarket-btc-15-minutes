@@ -956,8 +956,22 @@ export async function pollOnce() {
                   notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
                 }
               } catch (err) {
-                log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
-                resetCutConfirm();
+                if (err.message === 'no_tokens_on_chain') {
+                  // Phantom position: tokens never received or already redeemed on-chain.
+                  // Unwind state to prevent infinite cut-loss retry loops.
+                  log.error(`CUT-LOSS: Phantom position — no tokens found on-chain. Unwinding position state (loss=$${pos.cost.toFixed(2)})`);
+                  settleTradeEarlyExit(0); // 0 recovery
+                  invalidateSync();
+                  clearEntrySnapshot();
+                  writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: -pos.cost, exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
+                  resetCutLossState();
+                  recordLoss();
+                  tiltMarketsLeft = TILT_MARKETS + 1;
+                  notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}`);
+                } else {
+                  log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
+                  resetCutConfirm();
+                }
               }
             }
           } finally { releaseSellLock(); }
