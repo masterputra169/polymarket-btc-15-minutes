@@ -79,29 +79,29 @@ const BOT_CONFIG = {
   winRateWarnThreshold: envNum(process.env.WIN_RATE_WARN, 0.40, 0.10, 0.90),
   winRatePauseThreshold: envNum(process.env.WIN_RATE_PAUSE, 0.30, 0.10, 0.90),
 
-  // Cut-loss — v9 Conviction Play
-  // Philosophy: Hold to settlement UNLESS ML clearly signals trend reversal (>=80% confidence).
+  // Cut-loss — v10 Balanced Conviction Play
+  // Philosophy: Hold to settlement UNLESS model clearly signals losing position.
   // Evidence: Settlement WR 71.1% — holding wins most of the time.
-  //           Aggressive cut-loss has historically destroyed $28.77 of edge.
-  // PRIMARY trigger: ML flips to opposite side with confidence >= 80%.
-  // EV-negative gate near-disabled — model uncertainty alone does NOT cut a conviction position.
-  // All fast-tracks loosened — only actual crashes (45%+ drop) or extreme time-based (40%+ for 12min).
+  //           Aggressive cut-loss historically destroyed $28.77 of edge.
+  // PRIMARY trigger: ML flips to opposite side with >=75% confidence.
+  // SECONDARY trigger: EV-negative at 50% buffer (model below 50% of token price).
+  // Fast-tracks: real crash (35%+) or very persistent loss (35%+ for 12min).
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),        // hold at least 3min before even evaluating
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 180, 0, 600),        // hold at least 3min before evaluating
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 20, 1, 90), // need 20%+ real loss before even considering cut
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 20, 1, 90), // 20%+ real loss before considering cut
     consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 2, 1, 20), // 2 consecutive confirmations required
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
-    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 45, 10, 90),      // v9: only actual crashes (45%+ drop) trigger fast-track
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 35, 10, 90),      // v10: 45→35% — meaningful safety net without over-cutting
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
-    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.20, 0.05, 1.50),        // v9: near-disabled — model needs <10% prob on 50c token to flag EV-negative
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.80, 0.40, 0.99), // v9: PRIMARY signal — ML must be >=80% confident of reversal
-    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 40, 5, 90),   // v9: near-disabled time-based cut (40%+ required)
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 12, 1, 30), // v9: 12min — very long wait before time-based forced cut
+    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.50, 0.05, 1.50),        // v10: 0.20→0.50 — cut when model below 50% of token price (clear EV-negative)
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // v10: 0.80→0.75 — slightly more reachable while still high-confidence
+    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 35, 5, 90),   // v10: 40→35% — persistent 35%+ loss is genuinely stuck
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 12, 1, 30), // keep 12min — conviction play, wait long
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
