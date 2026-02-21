@@ -414,6 +414,17 @@ function _applyGate(apiResponse, betSide, source) {
   if (dumbContrarian)               contextParts.push('dumbContra');
   const contextStr = contextParts.length ? ` [${contextParts.join(' ')}]` : '';
 
+  const reason = boost
+    ? `Smart money agrees ${ourDir} (${(consensusStrength * 100).toFixed(0)}%)${contextStr}`
+    : `No block${contextStr}`;
+
+  // Log every result so backend logs show MetEngine was consulted (neutral = pass through)
+  if (boost) {
+    log.info(`[MetEngine] BOOST ${ourDir} (${(consensusStrength * 100).toFixed(0)}%)${contextStr}`);
+  } else {
+    log.info(`[MetEngine] OK (neutral)${contextStr}`);
+  }
+
   return {
     blocked: false,
     boost,
@@ -423,9 +434,7 @@ function _applyGate(apiResponse, betSide, source) {
     smartVsPriceAligned,
     contrarian,
     source,
-    reason: boost
-      ? `Smart money agrees ${ourDir} (${(consensusStrength * 100).toFixed(0)}%)${contextStr}`
-      : `No block${contextStr}`,
+    reason,
   };
 }
 

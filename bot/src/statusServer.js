@@ -8,6 +8,7 @@ import { createLogger } from './logger.js';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.js';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.js';
 import { resetCutLossState } from './trading/cutLoss.js';
+import { resetTakeProfitState } from './trading/takeProfit.js';
 import { recordLoss } from './safety/tradeFilters.js';
 import { forceUsdcSync } from './engines/usdcSync.js';
 
@@ -179,6 +180,7 @@ export function startStatusServer() {
                     writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
                     clearEntrySnapshot();
                     resetCutLossState();
+                    resetTakeProfitState();
                     if (_resetEntryRegime) _resetEntryRegime(); // Prevent stale regime leaking into next trade's cut-loss
                     if (cutPnl < 0) recordLoss();
                   }
@@ -207,6 +209,7 @@ export function startStatusServer() {
             writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { source: 'forceSettle' } });
             clearEntrySnapshot();
             resetCutLossState();
+            resetTakeProfitState();
             if (_resetEntryRegime) _resetEntryRegime();
             setLastSettled(pos.marketSlug, Date.now());
             releaseSellLock();
@@ -219,6 +222,7 @@ export function startStatusServer() {
             writeJournalEntry({ outcome: won ? 'WIN' : 'LOSS', pnl, exitData: { source: 'forceSettle' } });
             clearEntrySnapshot();
             resetCutLossState();
+            resetTakeProfitState();
             if (_resetEntryRegime) _resetEntryRegime();
             if (!won) recordLoss();
             setLastSettled(pos.marketSlug, Date.now());

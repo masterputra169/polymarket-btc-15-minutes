@@ -69,6 +69,12 @@ let sellLockTs = 0;
 let sellLockSource = '';  // Tracks which caller holds the lock (for dedup logging)
 const SELL_LOCK_TIMEOUT_MS = 90_000; // C6: 60s→90s — prevents double-sell when CLOB is slow
 
+// H1 FIX: If unwindPosition() is called while sell lock is held, defer and retry after release.
+let pendingUnwind = false;
+
+// Fix M: Last known token price for mark-to-market drawdown (updated each poll, not persisted).
+let lastKnownTokenPrice = null;
+
 // ── Audit log (append-only with rotation) ──
 const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
 const AUDIT_MAX_BACKUPS = 3;
@@ -380,6 +386,7 @@ export function settleTrade(won) {
 
   state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
+  lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
   saveState();
   return true;
 }
@@ -473,6 +480,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
 
   state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
+  lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
   saveState();
   return true;
 }
@@ -651,9 +659,10 @@ export function unwindPosition() {
   }
 
   // H1 FIX: Check sell lock — if settlement/cut-loss/take-profit is running,
-  // they may modify bankroll concurrently. Defer unwind.
+  // they may modify bankroll concurrently. Defer unwind and retry after lock releases.
   if (sellingInProgress && (Date.now() - sellLockTs) < SELL_LOCK_TIMEOUT_MS) {
-    log.warn(`Unwind deferred — sell in progress (held by '${sellLockSource}')`);
+    log.warn(`Unwind deferred — sell in progress (held by '${sellLockSource}') — will retry after lock releases`);
+    pendingUnwind = true;
     return;
   }
 
@@ -686,6 +695,7 @@ export function unwindPosition() {
   );
 
   state.currentPosition = null;
+  lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
   saveState();
 }
 
@@ -728,18 +738,38 @@ export function getBankroll() {
 }
 
 /**
+ * Fix M: Update last known token price for mark-to-market drawdown.
+ * Called each poll by loop.js when the position's token price is available.
+ * Resets to null when position closes (prevents stale price leaking into next trade).
+ */
+export function updatePositionMarketPrice(price) {
+  if (Number.isFinite(price) && price > 0) {
+    lastKnownTokenPrice = price;
+  }
+}
+
+/**
  * Get current drawdown from peak bankroll as a percentage.
- * Example: peak $100, current $75 → drawdown 25%.
+ * Fix M: Uses mark-to-market (current token price × size) for open position,
+ * not entry cost. This reflects actual unrealized P&L instead of just reserved capital.
+ * Falls back to entry cost if token price not yet known (first poll after startup).
+ * Example: peak $100, current $75 with open pos at MtM $10 → drawdown = (100-(75+10))/100 = 15%.
  */
 export function getDrawdownPct() {
   if (state.peakBankroll <= 0) return 0;
-  // Audit fix H: Include open position cost in portfolio value.
-  // Without this, placing a $5 trade on a $100 bankroll immediately shows 5% drawdown,
-  // making the circuit breaker trigger prematurely during normal operation.
-  const openCost = (state.currentPosition && !state.currentPosition.settled)
-    ? (state.currentPosition.cost ?? 0) : 0;
-  // Audit fix H2: Include pendingCost so circuit breaker accounts for reserved capital
-  const portfolioValue = state.bankroll + openCost + state.pendingCost;
+  let openValue = 0;
+  if (state.currentPosition && !state.currentPosition.settled) {
+    const pos = state.currentPosition;
+    // Fix M: mark-to-market using last known token price (updated each poll).
+    // Falls back to entry cost when price not yet available (e.g. first poll after startup).
+    if (lastKnownTokenPrice != null && Number.isFinite(lastKnownTokenPrice) && pos.size > 0) {
+      openValue = lastKnownTokenPrice * pos.size;
+    } else {
+      openValue = pos.cost ?? 0;
+    }
+  }
+  // Include pendingCost so circuit breaker accounts for reserved capital (Audit fix H2)
+  const portfolioValue = state.bankroll + openValue + state.pendingCost;
   return roundPct(((state.peakBankroll - portfolioValue) / state.peakBankroll) * 100);
 }
 
@@ -821,6 +851,13 @@ export function releaseSellLock() {
   sellingInProgress = false;
   sellLockTs = 0;
   sellLockSource = '';
+  // H1 FIX: Execute deferred unwind if requested while lock was held.
+  // unwindPosition() is safe to call here — lock is now released.
+  if (pendingUnwind) {
+    pendingUnwind = false;
+    log.info('Executing deferred unwind (sell lock released)');
+    unwindPosition();
+  }
 }
 
 export function isSelling() {

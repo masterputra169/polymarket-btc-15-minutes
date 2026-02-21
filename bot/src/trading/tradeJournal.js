@@ -12,6 +12,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { notify } from '../monitoring/notifier.js';
+import { getBankroll } from './positionTracker.js';
 
 const log = createLogger('Journal');
 
@@ -223,6 +224,7 @@ async function _sendTradeAlert(record) {
   const edge = entry?.bestEdge;
   const mlConf = entry?.mlConfidence;
   const holdSec = analysis?.holdDurationSec;
+  const meBoost = entry?.meBoost === true;
 
   // Outcome emoji
   const isWin = outcome === 'WIN' || outcome === 'TAKE_PROFIT';
@@ -241,15 +243,23 @@ async function _sendTradeAlert(record) {
     : `${Math.floor(holdSec / 60)}m ${holdSec % 60}s`
     : '-';
 
+  // Current bankroll after settlement
+  let bankrollStr = null;
+  try {
+    const br = getBankroll();
+    if (br != null && br > 0) bankrollStr = `$${br.toFixed(2)}`;
+  } catch (_) { /* non-critical */ }
+
   // Daily progress
   const today = getTodayET();
   if (_dailyDate !== today) resetDailyCounters();
   const todayStr = `${_dailyCount}/${MAX_MARKETS_PER_DAY}`;
 
   const lines = [
-    `${emoji} <b>${outcomeLabel}</b> | ${side === 'UP' ? '↑ UP' : '↓ DOWN'}`,
+    `${emoji} <b>${outcomeLabel}</b> | ${side === 'UP' ? '↑ UP' : '↓ DOWN'}${meBoost ? ' 🧠 ME↑' : ''}`,
     ``,
     `💰 P&amp;L: <b>${pnlStr}</b>`,
+    bankrollStr != null ? `🏦 Bankroll: <b>${bankrollStr}</b>` : null,
     btcEntry != null ? `₿ BTC Entry: $${btcEntry.toFixed(0)}` : null,
     tokenEntry != null ? `🎯 Token: @${tokenEntry.toFixed(3)}c` : null,
     `⏱ Hold: ${holdText}`,

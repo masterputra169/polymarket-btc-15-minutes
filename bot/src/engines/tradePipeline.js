@@ -11,6 +11,7 @@ import { createLogger } from '../logger.js';
 import { getSessionName } from '../../../src/utils.js';
 import { EXECUTION } from '../../../src/config.js';
 import { BOT_CONFIG } from '../config.js';
+import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('TradePipeline');
 
@@ -290,6 +291,7 @@ export async function executeDirectionalTrade({
       const meResult = await deps.querySmartMoney(currentConditionId, betSide);
       if (meResult.blocked) {
         log.info(`[MetEngine] Gate blocked: ${meResult.reason}`);
+        notify('warn', `🧠 MetEngine BLOCKED ${betSide}: ${meResult.reason}`, { key: `me:block:${currentConditionId}` }).catch(() => {});
         return false;
       }
       if (meResult.boost) {
@@ -387,6 +389,7 @@ export async function executeDirectionalTrade({
     smartFlowDirection: smartFlowSignal?.direction ?? null,
     smartFlowStrength: smartFlowSignal?.strength ?? null,
     smartFlowWindow: smartFlowSignal?.window ?? null,
+    meBoost: meBoostActive,
   };
 
   if (dryRun) {

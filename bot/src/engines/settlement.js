@@ -25,15 +25,15 @@ const log = createLogger('Settlement');
  * @returns {Promise<{ won: boolean, outcome: string|null, source: string }>}
  */
 export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbValue) {
-  // RC2 Fix: 5 retries (was 2) — Polymarket oracle can take 2-3 min to officially close
-  // Delays: 2s, 4s, 6s, 8s, 10s = up to 30s total wait before price_fallback
+  // Fix: 7 retries, ~135s total — Polymarket BTC 15m oracle typically closes 1-3 min after expiry.
+  // Delays: 5, 10, 15, 20, 25, 30, 30 = 135s before falling back to Gamma API / price_fallback.
   if (conditionId) {
-    const MAX_RETRIES = 5;
-    const RETRY_DELAYS_MS = [2000, 4000, 6000, 8000, 10000];
+    const MAX_RETRIES = 7;
+    const RETRY_DELAYS_MS = [5000, 10000, 15000, 20000, 25000, 30000, 30000];
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       try {
         const url = `${CONFIG.clobBaseUrl}/markets/${conditionId}`;
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        const res = await fetch(url, { signal: AbortSignal.timeout(6000) });
         if (res.ok) {
           const market = await res.json();
           if (market.closed) {
@@ -42,12 +42,13 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
             if (winner) {
               const outcome = winner.outcome.toUpperCase();
               const won = pos.side === outcome;
+              log.info(`Oracle (CLOB): ${outcome} — ${won ? 'WIN' : 'LOSS'} (attempt ${attempt + 1})`);
               return { won, outcome, source: 'oracle' };
             }
           }
           // Market not closed yet — retry after delay
           if (attempt < MAX_RETRIES) {
-            const delayMs = RETRY_DELAYS_MS[attempt] ?? 10000;
+            const delayMs = RETRY_DELAYS_MS[attempt] ?? 30000;
             log.debug(`Oracle: market not closed yet (attempt ${attempt + 1}/${MAX_RETRIES + 1}) — retrying after ${delayMs / 1000}s`);
             await new Promise(r => setTimeout(r, delayMs));
             continue;
@@ -57,21 +58,72 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
       } catch (err) {
         log.debug(`Oracle fetch attempt ${attempt + 1}/${MAX_RETRIES + 1} failed: ${err.message}`);
         if (attempt < MAX_RETRIES) {
-          const delayMs = RETRY_DELAYS_MS[attempt] ?? 10000;
+          const delayMs = RETRY_DELAYS_MS[attempt] ?? 30000;
           await new Promise(r => setTimeout(r, delayMs));
         }
       }
     }
-    log.warn('Oracle: market not closed or no winner after retries — falling back to BTC price comparison');
+    log.warn('Oracle (CLOB): market not closed after 135s — trying Gamma API oracle');
+
+    // ── Gamma API as secondary oracle ──
+    // Gamma API often has market resolution data even when CLOB is lagging.
+    // Query by conditionId → check closed + outcomePrices (1.00 = winner, 0.00 = loser).
+    if (pos.marketSlug) {
+      try {
+        const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(pos.marketSlug)}`;
+        const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(8000) });
+        if (gammaRes.ok) {
+          const gammaData = await gammaRes.json();
+          const gm = Array.isArray(gammaData) ? gammaData[0] : gammaData;
+
+          if (gm?.closed === true) {
+            // Try tokens array first (same format as CLOB)
+            const tokens = Array.isArray(gm.tokens) ? gm.tokens : [];
+            const winner = tokens.find(t => t.winner === true);
+            if (winner) {
+              const outcome = winner.outcome.toUpperCase();
+              const won = pos.side === outcome;
+              log.info(`Oracle (Gamma tokens): ${outcome} — ${won ? 'WIN' : 'LOSS'}`);
+              return { won, outcome, source: 'gamma_oracle' };
+            }
+
+            // Try outcomePrices: ["1", "0"] or ["0", "1"] — winner has price ~1.00
+            const rawOutcomes = gm.outcomes;
+            const rawPrices = gm.outcomePrices;
+            const outcomes = Array.isArray(rawOutcomes) ? rawOutcomes
+              : (typeof rawOutcomes === 'string' ? (() => { try { return JSON.parse(rawOutcomes); } catch { return []; } })() : []);
+            const prices = Array.isArray(rawPrices) ? rawPrices
+              : (typeof rawPrices === 'string' ? (() => { try { return JSON.parse(rawPrices); } catch { return []; } })() : []);
+
+            for (let i = 0; i < outcomes.length; i++) {
+              if (parseFloat(prices[i]) > 0.99) {
+                const outcome = String(outcomes[i]).toUpperCase();
+                const won = pos.side === outcome;
+                log.info(`Oracle (Gamma outcomePrices): ${outcome} — ${won ? 'WIN' : 'LOSS'}`);
+                return { won, outcome, source: 'gamma_oracle' };
+              }
+            }
+
+            log.warn('Gamma API: market closed but no winner found in tokens/outcomePrices');
+          } else {
+            log.debug(`Gamma API: market not closed yet (closed=${gm?.closed})`);
+          }
+        }
+      } catch (err) {
+        log.debug(`Gamma API oracle failed: ${err.message}`);
+      }
+    }
+
+    log.warn('Oracle (CLOB + Gamma): both exhausted — falling back to BTC price comparison');
   }
 
-  // 2. Fallback: BTC price comparison (legacy behavior)
+  // 3. Fallback: BTC price comparison (legacy behavior)
   if (fallbackBtcPrice != null && ptbValue != null) {
     const outcome = fallbackBtcPrice >= ptbValue ? 'UP' : 'DOWN';
     return { won: pos.side === outcome, outcome, source: 'price_fallback' };
   }
 
-  // 3. Last resort: unknown — settle as loss
+  // 4. Last resort: unknown — settle as loss
   return { won: false, outcome: null, source: 'unknown' };
 }
 
@@ -93,10 +145,22 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
 
   if (source === 'price_fallback' && ptbValue != null && btcPrice != null) {
     const pctFromPtb = Math.abs(btcPrice - ptbValue) / ptbValue;
-    // RC2 Fix: always warn on price_fallback — Telegram + log
-    const closeness = pctFromPtb < 0.001 ? ' ⚠️ SANGAT DEKAT PTB!' : '';
-    log.warn(`Settlement price_fallback: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${(pctFromPtb * 100).toFixed(3)}% gap)${closeness}`);
-    notify('warn', `⚠️ Settlement <b>price_fallback</b> (oracle gagal setelah 5 retries)!\nHasil berdasarkan harga BTC saat ini vs PTB — mungkin berbeda dengan Polymarket resmi.\nSisi: ${pos.side} | BTC: $${btcPrice.toFixed(0)} | PTB: $${ptbValue.toFixed(0)}${closeness}\n<i>Cek Polymarket untuk verifikasi!</i>`, { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(() => {});
+    const gapPct = (pctFromPtb * 100).toFixed(3);
+    // Risk label based on gap from PTB (closer = less reliable)
+    const riskLabel = pctFromPtb < 0.001 ? '🔴 SANGAT BERISIKO (gap <0.1%)' :
+                      pctFromPtb < 0.005 ? '🟠 Berisiko (gap <0.5%)' :
+                      pctFromPtb < 0.01  ? '🟡 Hati-hati (gap <1%)' : '🟢 Gap cukup aman';
+    log.warn(`Settlement price_fallback: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${gapPct}% gap) | ${riskLabel}`);
+    notify('warn', [
+      `⚠️ Settlement <b>price_fallback</b>`,
+      `Oracle CLOB + Gamma gagal setelah ~2 menit`,
+      ``,
+      `Sisi: <b>${pos.side}</b> | Hasil: <b>${won ? 'WIN' : 'LOSS'}</b>`,
+      `₿ BTC: $${btcPrice.toFixed(0)} vs PTB: $${ptbValue.toFixed(0)}`,
+      `Gap: ${gapPct}% | ${riskLabel}`,
+      ``,
+      `<i>journalReconciler akan verifikasi ulang dalam ~30 menit</i>`,
+    ].join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(() => {});
   }
 
   // FINTECH: Round P&L to cents. Subtract 2% Polymarket fee on profit (matches positionTracker math).

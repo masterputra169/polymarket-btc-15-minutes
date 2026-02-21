@@ -1,5 +1,5 @@
 /**
- * Cut-loss (stop-loss) evaluator — v6 Pure EV Cut-Loss.
+ * Cut-loss (stop-loss) evaluator — v12 Data-Driven Threshold + Recovery Gate.
  *
  * v6 rewrite: Data-driven simplification based on 71 real trades analysis.
  *
@@ -18,19 +18,20 @@
  *   2.  Has open, fill-confirmed position (not ARB)
  *   3.  Max attempts not exceeded
  *   4.  Cooldown elapsed since last failed sell
- *   5.  Min hold time met (120s)
+ *   5.  Min hold time met (240s)
  *   6.  Not too close to settlement (< 30s)
  *
  * FAST TRACKS (skip to confirmation):
  *   6b. CRASH: drop >= crashDropPct AND BTC distance >= crashBtcDistPct
- *   6c. LATE FORCE-CUT: <2min left + drop >= 15%
+ *   6c. LATE FORCE-CUT: <2min left + drop >= 30%
  *
  * CUT DECISION (must pass ONE of):
  *   7a. EV-NEGATIVE: modelProb < tokenPrice × evBuffer (model agrees with market)
  *   7b. ML FLIPPED: ML now predicts opposite side with confidence >= mlFlipConf
  *
  * MINIMUM DAMAGE:
- *   8.  Token drop >= minTokenDropPct (confirmed real loss, not noise)
+ *   8.  Token drop >= minTokenDropPct (v12: 35% — data shows 25-35% zone is 83% FP)
+ *   8b. Recovery gate: if token is rising >5¢/36s, hold (may self-correct)
  *
  * HARD EXECUTION GATES:
  *   9.  Token price above minimum
@@ -218,6 +219,17 @@ export function evaluateCutLoss({
     // ── Gate 8: Minimum damage threshold ──
     if (dropPct < cfg.minTokenDropPct) {
       return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
+    }
+
+    // ── Gate 8b: Recovery zone — token actively recovering, hold and wait ──
+    // Data (34 verified cut-loss markets): 11/34 FP (33%) were positions in recovery.
+    // If token slope is significantly positive over last 36s (+5¢), the position may
+    // self-correct before settlement — don't panic cut during a bounce.
+    // Does NOT apply to crash/late-force/time-based fast-tracks (handled above).
+    const RECOVERY_SLOPE_THRESHOLD = 0.05; // +5 cents in 36s = meaningful recovery
+    if (slope !== null && slope > RECOVERY_SLOPE_THRESHOLD) {
+      consecutiveCutPolls = 0; // reset confirmation — re-evaluate next poll
+      return no(`recovering(slope=+${slope.toFixed(3)})`);
     }
   }
 

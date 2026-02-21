@@ -326,12 +326,12 @@ export async function pollOnce() {
             writeJournalEntry({ outcome: 'REJECTED', pnl: 0, exitData: { reason: 'FOK rejection — no matching trade in history' } });
             clearEntrySnapshot();
           }
-          notify('warning', `FOK order rejected — position unwound | Bankroll: $${getBankroll().toFixed(2)}`);
+          notify('warn', `FOK order rejected — position unwound | Bankroll: $${getBankroll().toFixed(2)}`);
         } else if (fillResult.uncertain) {
           // Sell order couldn't be verified — release sell lock so cut-loss can retry
           log.warn(`UNCERTAIN FILL: sell order ${fillResult.orderId} unverified after ${(fillResult.timeToFill / 1000).toFixed(1)}s — releasing sell lock for retry`);
           releaseSellLock();
-          notify('warning', `Uncertain sell fill: ${fillResult.orderId} — cut-loss can retry`);
+          notify('warn', `Uncertain sell fill: ${fillResult.orderId} — cut-loss can retry`);
         } else if (fillResult.filled) {
           confirmFill();
           log.info(`Fill ${fillResult.verified ? 'verified' : 'assumed'} (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
