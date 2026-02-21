@@ -148,7 +148,8 @@ export function loadState() {
           ? (state.currentPosition.cost ?? 0) : 0;
         state.startOfDayBankroll = roundMoney(state.bankroll + openCost);
         state.dayStartMs = now;
-        state.consecutiveLosses = 0;
+        // H4 FIX: Do NOT reset consecutiveLosses on midnight — circuit breaker must persist
+        // across days. Resetting at midnight allowed bypassing the 5-consecutive-loss halt.
         log.info(`New trading day (UTC) — daily stats reset (baseline $${state.startOfDayBankroll.toFixed(2)}${openCost > 0 ? `, incl $${openCost.toFixed(2)} open` : ''})`);
       }
 
@@ -344,13 +345,12 @@ export function settleTrade(won) {
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTrade')) return false;
 
-  // C1 FIX: Atomic settlement — update bankroll AND mark settled together, then single save.
-  // Previously: settled=true saved first, bankroll updated second → crash between = lost payout.
-  // Now: both modified in memory first, single saveState() persists both atomically.
+  // C2 FIX: Update ALL financial state in memory BEFORE first saveState().
+  // Counters (wins/losses/consecutiveLosses) must be saved atomically with bankroll + settled.
+  // If bot crashes after save, the reloaded state will have correct counters — no drift.
   state.bankroll = roundMoney(state.bankroll + payout);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
-  saveState();
 
   if (won) {
     state.wins++;
@@ -364,6 +364,8 @@ export function settleTrade(won) {
     state.consecutiveLosses++;
     state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
+
+  saveState(); // Atomic: bankroll + settled + all counters saved together
 
   const pnl = roundMoney(payout - pos.cost);
 
@@ -428,15 +430,14 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTradeEarlyExit')) return false;
 
-  // C2 FIX: Atomic settlement — update bankroll AND mark settled together, single save.
   state.bankroll = roundMoney(state.bankroll + recovered);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
-  saveState();
 
   const pnl = roundMoney(recovered - pos.cost);
   const isWin = pnl >= 0;
 
+  // C2 FIX: Update counters BEFORE saveState so all financial state is saved atomically.
   // Cut-loss is typically a loss, but if recovered >= cost, count as win
   if (isWin) {
     state.wins++;
@@ -446,6 +447,8 @@ export function settleTradeEarlyExit(recoveredUsdc) {
     state.consecutiveLosses++;
     state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
+
+  saveState(); // Atomic: bankroll + settled + all counters saved together
 
   state.cutLossCount = (state.cutLossCount || 0) + 1; // L4: pre-computed counter
 
@@ -897,6 +900,8 @@ export function _resetForTest(overrides = {}) {
     lastSettledTs: overrides.lastSettledTs ?? 0,
     lastSettlementMs: overrides.lastSettlementMs ?? 0,
     cutLossCount: overrides.cutLossCount ?? 0,
+    marketTradeCounts: overrides.marketTradeCounts ?? {},   // H8 FIX: was missing, caused test isolation failures
+    lastLossTimestamp: overrides.lastLossTimestamp ?? 0,    // H8 FIX: was missing, loss cooldown leaked between tests
   };
   sellingInProgress = false;
   sellLockSource = '';

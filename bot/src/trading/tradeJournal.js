@@ -31,9 +31,12 @@ let _dailySummaryTimer = null;
 
 const MAX_MARKETS_PER_DAY = 96; // 24h × 4 markets/hour (15-min markets)
 
-/** Get today's date string in ET timezone (UTC-5, approximate). */
+/** Get today's date string in ET timezone (America/New_York, DST-aware). */
 function getTodayET() {
-  return new Date(Date.now() - 5 * 3600_000).toISOString().slice(0, 10);
+  // H6 FIX: Use Intl API for proper DST handling (EDT=UTC-4, EST=UTC-5).
+  // Previously used hardcoded -5h offset which was wrong during EDT (April-November).
+  // en-CA locale formats as YYYY-MM-DD which matches our logging format.
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
 /** Reset daily counters for a new trading day. */

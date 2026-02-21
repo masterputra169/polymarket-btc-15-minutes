@@ -88,7 +88,8 @@ export async function checkPendingFill() {
       getOpenOrders(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('getOpenOrders timeout')), 5000))
     ]);
-    const openIds = new Set(openOrders.map(o => o.id));
+    // H3 FIX: Handle all Polymarket order ID field names (API returns o.id OR o.orderID OR o.order_id)
+    const openIds = new Set(openOrders.map(o => o.id ?? o.orderID ?? o.order_id));
 
     for (const [orderId, pending] of pendingOrders) {
       const elapsed = Date.now() - pending.placedAt;

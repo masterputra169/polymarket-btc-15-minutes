@@ -557,10 +557,14 @@ export async function pollOnce() {
       fetchBalance: getUsdcBalance, getBankroll, getCurrentPosition, getPendingCost,
     });
 
-    // ── 3c. Auto force-sync every 10 min (bypasses all guards — position open, cooldown, etc.) ──
-    // Ensures bankroll stays 100% in sync with on-chain USDC even across long sessions.
+    // ── 3c. Auto force-sync every 10 min (bypasses cooldown, but guards open positions) ──
+    // C1 FIX: Skip auto force-sync when a position is open to prevent overwriting bankroll
+    // mid-trade. forceUsdcSync() calls setBankroll(onChain) without checking if a trade just
+    // deducted from bankroll — this can restore the pre-trade amount and inflate the bankroll.
     const AUTO_FORCE_SYNC_INTERVAL_MS = 10 * 60_000;
-    if (isClientReady() && now - lastAutoForceSyncMs >= AUTO_FORCE_SYNC_INTERVAL_MS) {
+    const _autoSyncPos = getCurrentPosition();
+    const _autoSyncHasPos = _autoSyncPos != null && !_autoSyncPos.settled;
+    if (isClientReady() && !_autoSyncHasPos && now - lastAutoForceSyncMs >= AUTO_FORCE_SYNC_INTERVAL_MS) {
       lastAutoForceSyncMs = now;
       forceUsdcSync(getUsdcBalance, getBankroll, setBankroll)
         .then(r => {
@@ -810,10 +814,9 @@ export async function pollOnce() {
             const sfRawPrice = sfBestBid ?? sfTokenPrice;
             if (!sfRawPrice || !Number.isFinite(sfRawPrice)) {
               log.info('Smart sell-first skipped — no valid token price available');
-              smartSellTriggered = false;
-              // Note: don't return here — fall through to finally { releaseSellLock() }
-              throw new Error('no_valid_price');
-            }
+              // H1 FIX: Do NOT throw here — throwing aborts the entire poll (steps 7-13 skipped,
+              // no broadcast). Use early return via else-block; finally still releases sell lock.
+            } else {
             smartSellTriggered = true;
             // Bug 3 fix: apply 1% slippage (same as take-profit) to improve FOK fill rate
             const sfSellPrice = Math.max(0.01, Math.round(sfRawPrice * 0.99 * 1000) / 1000);
@@ -859,6 +862,7 @@ export async function pollOnce() {
                 smartSellTriggered = false;
               }
             }
+            } // close else { smartSellTriggered = true; ... } (H1 FIX)
           } finally { releaseSellLock(); }
         }
       }
@@ -1145,6 +1149,10 @@ export async function pollOnce() {
           dryRun: BOT_CONFIG.dryRun,
         }, {
           getAvailableBankroll, setPendingCost, placeBuyOrder,
+          // M11 FIX: Pass placeSellOrder so one-legged ARB can unwind leg 1.
+          // Without this, deps.placeSellOrder?.() always returns undefined and
+          // unwindSucceeded stays false → one-legged ARB silently falls back to directional.
+          placeSellOrder: ({ tokenId, price, size }) => closePosition(tokenId, size, price),
           recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
           captureEntrySnapshot,
           setEntryRegime: (r) => { entryRegime = r; },

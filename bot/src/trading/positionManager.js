@@ -60,7 +60,14 @@ async function queryOnChainTokenBalance(tokenId) {
 
     // ERC1155 balanceOf(address, uint256)
     const addr = '000000000000000000000000' + proxyAddress.slice(2).toLowerCase();
-    const id = BigInt(tokenId).toString(16).padStart(64, '0');
+    // C6 FIX: Validate tokenId before BigInt conversion — invalid values throw synchronous error
+    // which propagates out of try/catch in some JS engines. Catch explicitly.
+    let bigId;
+    try { bigId = BigInt(tokenId); } catch {
+      log.warn(`On-chain balance query skipped: invalid tokenId format (${String(tokenId).slice(0, 20)})`);
+      return null;
+    }
+    const id = bigId.toString(16).padStart(64, '0');
     const data = '0x00fdd58e' + addr + id;
 
     const res = await fetch(POLYGON_RPC, {

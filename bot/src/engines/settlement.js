@@ -194,8 +194,17 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
  * Settle an ARB position (guaranteed win).
  */
 function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
-  const arbPnl = Math.round((pos.size - pos.cost) * 100) / 100; // FINTECH: round to cents
-  log.info(`ARB position settled (${context}) — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)}`);
+  // H5 FIX: Apply 2% Polymarket fee on ARB profit (matches settleRegularPosition logic).
+  // Worst-case: winning token profit = pos.size - minLegCost (cheaper leg wins → larger fee).
+  // Without this, journal shows pre-fee P&L but bankroll gets post-fee credit — inconsistent.
+  const POLY_FEE_RATE = 0.02;
+  const minLegCost = (pos.arbUpCost != null && pos.arbDownCost != null)
+    ? Math.min(pos.arbUpCost, pos.arbDownCost)
+    : pos.cost; // fallback if individual leg costs not tracked (older positions)
+  const grossProfit = Math.max(0, pos.size - minLegCost);
+  const fee = Math.round(grossProfit * POLY_FEE_RATE * 100) / 100;
+  const arbPnl = Math.round((pos.size - pos.cost - fee) * 100) / 100; // FINTECH: net of fee
+  log.info(`ARB position settled (${context}) — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)} (fee $${fee.toFixed(2)})`);
   actions.settleTrade(true);
   actions.invalidateUsdcSync();
   actions.clearEntrySnapshot();
