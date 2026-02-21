@@ -286,6 +286,8 @@ export async function executeDirectionalTrade({
   const ME_MIN_PROB = 0.65;
   const ME_BOOST_MULTIPLIER = 1.10; // +10% bet when smart money agrees
   let meBoostActive = false;
+  let meConsensusStrength = 0;
+  let meInsiderScore = 0;
   if (deps.querySmartMoney && betEnsembleProb >= ME_MIN_PROB) {
     try {
       const meResult = await deps.querySmartMoney(currentConditionId, betSide);
@@ -297,6 +299,8 @@ export async function executeDirectionalTrade({
       if (meResult.boost) {
         log.info(`[MetEngine] Insider boost: ${meResult.reason}`);
         meBoostActive = true;
+        meConsensusStrength = meResult.consensusStrength ?? 0;
+        meInsiderScore = meResult.insiderScore ?? 0;
       }
     } catch (_e) { /* never propagate — MetEngine errors must not kill the trade loop */ }
   }
@@ -473,9 +477,27 @@ export async function executeDirectionalTrade({
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {
       const cost = actualCost ?? (actualPrice * actualSize);
-      deps.notifyTrade(
-        `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}`
-      );
+      if (meBoostActive) {
+        // Rich MetEngine aligned notification
+        const sideArrow = betSide === 'UP' ? '↑' : '↓';
+        const timeText = timeLeftMin != null
+          ? timeLeftMin < 1 ? `${Math.round(timeLeftMin * 60)}s` : `${timeLeftMin.toFixed(1)}m`
+          : '-';
+        const mlStr = mlResult.available ? `${(mlResult.mlConfidence * 100).toFixed(0)}%` : 'off';
+        notify('info', [
+          `🧠 MetEngine + Bot ALIGNED!`,
+          `${sideArrow} ${betSide} | $${cost.toFixed(2)} (smart money boost +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`,
+          ``,
+          `Smart: ${betSide} ${(meConsensusStrength * 100).toFixed(0)}%${meInsiderScore > 0 ? ` | topInsider=${meInsiderScore}` : ''}`,
+          `₿ BTC: $${lastPrice != null ? lastPrice.toFixed(0) : '?'} | Token: ${actualPrice.toFixed(3)}c`,
+          `📐 Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | 🤖 ML: ${mlStr}`,
+          `⏱ Market ends in ${timeText}`,
+        ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(() => {});
+      } else {
+        deps.notifyTrade(
+          `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}`
+        );
+      }
     }
     return true;
   } catch (err) {
