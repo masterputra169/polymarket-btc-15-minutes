@@ -178,6 +178,29 @@ export function applyTradeFilters({
     reasons.push(`Blackout hour: ${etHour}:00 ET (historically unprofitable)`);
   }
 
+  // 11. Trending regime protection — data (10 trades): 10% WR, -$0.79 avg P&L
+  // Three gates that ALL must pass when regime = 'trending':
+  //   a) Require MID/LATE phase only — EARLY entries (>10m) had 7/9 losses
+  //   b) Token price ≥ 0.60 — losses avg 0.509 (market says 50/50, not trending)
+  //   c) ML confidence ≥ 0.65 — losses avg ML 53.82% (ML unsure = trust trend less)
+  if (regime === 'trending') {
+    // Gate a: Block EARLY phase — losses entered avg 11.87 min left, win at 4.47 min
+    const TRENDING_MAX_TIME_LEFT = 10; // min — require MID or LATE phase
+    if (Number.isFinite(timeLeftMin) && timeLeftMin > TRENDING_MAX_TIME_LEFT) {
+      reasons.push(`Trending+EARLY blocked: ${timeLeftMin.toFixed(1)}m left > ${TRENDING_MAX_TIME_LEFT}m (data: 7/9 EARLY losses)`);
+    }
+    // Gate b: Token price consensus — trending losses avg 0.509 (market disagrees)
+    const TRENDING_MIN_TOKEN = 0.60;
+    if (marketPrice != null && marketPrice < TRENDING_MIN_TOKEN) {
+      reasons.push(`Trending+low price blocked: ${(marketPrice * 100).toFixed(0)}c < ${TRENDING_MIN_TOKEN * 100}c (market says 50/50, not trending)`);
+    }
+    // Gate c: ML must be confident in Trending — losses avg ML conf 53.82%
+    const TRENDING_MIN_ML = 0.65;
+    if (mlAvailable && mlConfidence != null && mlConfidence < TRENDING_MIN_ML) {
+      reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${TRENDING_MIN_ML * 100}% (ML unsure in trending = high loss rate)`);
+    }
+  }
+
   // Session quality score (used as multiplier downstream, not a hard filter)
   const sessionQuality = SESSION_QUALITY[session] ?? 0.85;
 
