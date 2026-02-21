@@ -75,6 +75,15 @@ function BotPanel({ connected, data }) {
     ? ml.confidence >= 0.40 ? 'HI' : ml.confidence >= 0.20 ? 'MED' : 'LO'
     : '-';
 
+  // MetEngine smart money state
+  const me = data.metEngine;
+  const meLast   = me?.last;
+  const meEnabled  = me?.enabled === true;
+  const meIsBlock  = meLast?.blocked === true;
+  const meIsBoost  = meLast?.boost === true;
+  const meAgeSec   = meLast?.ts ? Math.round((Date.now() - meLast.ts) / 1000) : null;
+  const meStale    = meAgeSec != null && meAgeSec > 120;
+
   const winRate = stats?.totalTrades > 0 && stats?.winRate != null
     ? `${(stats.winRate * 100).toFixed(0)}%`
     : '-';
@@ -253,6 +262,46 @@ function BotPanel({ connected, data }) {
               {indicators?.vwapDist != null ? `${indicators.vwapDist > 0 ? '+' : ''}${fmt(indicators.vwapDist)}%` : '-'}
             </span>
           </div>
+
+          {/* MetEngine smart money status */}
+          {meEnabled && (
+            <>
+              <div style={{ borderTop: '1px solid var(--border-dim)', margin: '5px 0 4px' }} />
+              <div className="data-row">
+                <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Smart$</span>
+                <span className="data-row__value" style={{
+                  color: !me.configured ? 'var(--text-dim)'
+                    : meIsBlock ? 'var(--red-bright)'
+                    : meIsBoost ? 'var(--green-bright)'
+                    : meLast    ? 'var(--text-muted)'
+                    : 'var(--text-dim)',
+                  fontWeight: meIsBlock || meIsBoost ? 700 : 400,
+                  opacity: meStale ? 0.55 : 1,
+                }}>
+                  {!me.configured ? 'no key'
+                    : meIsBlock ? `\u2297 ${meLast.direction ?? ''}`.trim()
+                    : meIsBoost ? `\u2191 ${meLast.direction ?? ''}`.trim()
+                    : meLast    ? `\u2013 ${meLast.direction ?? ''}`.trim()
+                    : '\u2013'}
+                  {meLast?.consensusStrength > 0 && ` ${(meLast.consensusStrength * 100).toFixed(0)}%`}
+                </span>
+              </div>
+              {meLast?.insiderScore > 0 && (
+                <div className="data-row">
+                  <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Insider</span>
+                  <span className="data-row__value" style={{
+                    color: meLast.insiderScore >= 90 ? 'var(--green-bright)'
+                      : meLast.insiderScore >= 70 ? '#ffc107'
+                      : 'var(--text-muted)',
+                    fontWeight: meLast.insiderScore >= 70 ? 600 : 400,
+                  }}>
+                    {meLast.insiderScore}
+                    {meStale && <span style={{ fontSize: '0.75em', marginLeft: 4, opacity: 0.6 }}>{meAgeSec}s</span>}
+                  </span>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Column 3: Position */}
