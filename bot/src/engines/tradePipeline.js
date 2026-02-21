@@ -277,13 +277,14 @@ export async function executeDirectionalTrade({
     return false;
   }
 
-  // ── MetEngine smart money gate (Feature 1: consensus + Feature 2: insider) ──
-  // Pre-filter: only query if signal is high-confidence (prob >= 0.75).
-  // Rationale: low-confidence trades rarely have smart money data anyway (15m market
-  // windows are short), and the $0.05/request cost is best spent on high-conviction
-  // signals where smart money opposition matters most.
-  // Async, cached 90s — never blocks trade on error (returns neutral on timeout/fail).
-  const ME_MIN_PROB = 0.75;
+  // ── MetEngine smart money gate (F1: consensus, F2: insider, F3: conviction wallet) ──
+  // Pre-filter: query when prob >= 0.65 (lowered from 0.75 — catches more signals while
+  // still avoiding marginal noise). Cached 90s so cost stays ~$0.50-1.00/day.
+  // BOOST → +10% bet size (smart money confirms our direction → Kelly says size up).
+  // BLOCK → return false immediately (smart money strongly opposes our signal).
+  const ME_MIN_PROB = 0.65;
+  const ME_BOOST_MULTIPLIER = 1.10; // +10% bet when smart money agrees
+  let meBoostActive = false;
   if (deps.querySmartMoney && betEnsembleProb >= ME_MIN_PROB) {
     try {
       const meResult = await deps.querySmartMoney(currentConditionId, betSide);
@@ -293,6 +294,7 @@ export async function executeDirectionalTrade({
       }
       if (meResult.boost) {
         log.info(`[MetEngine] Insider boost: ${meResult.reason}`);
+        meBoostActive = true;
       }
     } catch (_e) { /* never propagate — MetEngine errors must not kill the trade loop */ }
   }
@@ -312,6 +314,16 @@ export async function executeDirectionalTrade({
 
   // Hard dollar cap from BOT_CONFIG (data shows ~$1.30 avg is most consistent)
   let effectiveBetAmount = betSizing.betAmount;
+
+  // MetEngine BOOST: +10% bet when smart money confirms our direction.
+  // Kelly Criterion rationale: when an independent high-quality signal agrees,
+  // the edge is higher → optimal Kelly fraction increases proportionally.
+  if (meBoostActive) {
+    const boosted = Math.round(effectiveBetAmount * ME_BOOST_MULTIPLIER * 100) / 100;
+    log.info(`[MetEngine] Bet boosted: $${effectiveBetAmount.toFixed(2)} → $${boosted.toFixed(2)} (smart money +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`);
+    effectiveBetAmount = boosted;
+  }
+
   if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {
     log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${BOT_CONFIG.maxBetAmountUsd.toFixed(2)} (maxBetAmountUsd)`);
     effectiveBetAmount = BOT_CONFIG.maxBetAmountUsd;
