@@ -185,11 +185,8 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
   });
   if (!won) actions.recordLoss();
   if (outcome) actions.settlePrediction(pos.marketSlug, outcome);
-  if (actions.notifyTrade) {
-    actions.notifyTrade(
-      `${won ? '✅ WIN' : '❌ LOSS'}: ${pos.side} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} | $${actions.getBankroll().toFixed(2)}`
-    );
-  }
+  // Note: Telegram notification handled by tradeJournal._sendTradeAlert (called inside writeJournalEntry above).
+  // Removed duplicate notifyTrade here — journal sends richer format with bankroll + MetEngine info.
   return { won, pnl, outcome, source };
 }
 
@@ -206,9 +203,7 @@ function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
     outcome: 'WIN', pnl: arbPnl,
     exitData: { btcPrice, priceToBeat: ptbValue },
   });
-  if (actions.notifyTrade) {
-    actions.notifyTrade(`✅ ARB WIN | P&L: +$${arbPnl.toFixed(2)} | $${actions.getBankroll().toFixed(2)}`);
-  }
+  // Note: Telegram notification handled by tradeJournal._sendTradeAlert (called inside writeJournalEntry above).
   return { won: true, pnl: arbPnl, outcome: 'ARB_WIN', source: 'arb' };
 }
 
