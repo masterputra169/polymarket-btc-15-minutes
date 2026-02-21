@@ -277,6 +277,26 @@ export async function executeDirectionalTrade({
     return false;
   }
 
+  // ── MetEngine smart money gate (Feature 1: consensus + Feature 2: insider) ──
+  // Pre-filter: only query if signal is high-confidence (prob >= 0.75).
+  // Rationale: low-confidence trades rarely have smart money data anyway (15m market
+  // windows are short), and the $0.05/request cost is best spent on high-conviction
+  // signals where smart money opposition matters most.
+  // Async, cached 90s — never blocks trade on error (returns neutral on timeout/fail).
+  const ME_MIN_PROB = 0.75;
+  if (deps.querySmartMoney && betEnsembleProb >= ME_MIN_PROB) {
+    try {
+      const meResult = await deps.querySmartMoney(currentConditionId, betSide);
+      if (meResult.blocked) {
+        log.info(`[MetEngine] Gate blocked: ${meResult.reason}`);
+        return false;
+      }
+      if (meResult.boost) {
+        log.info(`[MetEngine] Insider boost: ${meResult.reason}`);
+      }
+    } catch (_e) { /* never propagate — MetEngine errors must not kill the trade loop */ }
+  }
+
   const priceCheck = deps.validatePrice(betMarketPrice);
   const tradeCheck = deps.validateTrade({
     rec, betSizing, timeLeftMin,

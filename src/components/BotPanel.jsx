@@ -374,6 +374,37 @@ function BotPanel({ connected, data }) {
             {data.signalStability.stable && ' \u2713'}
           </span>
         )}
+        {/* MetEngine smart money gate status */}
+        {data.metEngine?.enabled && (() => {
+          const me = data.metEngine;
+          const last = me.last;
+          const isBlocked = last?.blocked === true;
+          const isBoost   = last?.boost === true;
+          const ageSec    = last?.ts ? Math.round((Date.now() - last.ts) / 1000) : null;
+          const stale     = ageSec != null && ageSec > 120; // >2min stale
+          const color     = !me.configured ? 'var(--text-dim)'
+            : isBlocked ? 'var(--red-bright)'
+            : isBoost   ? 'var(--green-bright)'
+            : last      ? 'var(--text-muted)'
+            : 'var(--text-dim)';
+          const borderColor = isBlocked ? 'rgba(255,82,82,0.25)'
+            : isBoost   ? 'rgba(0,230,118,0.25)'
+            : undefined;
+          const icon = !me.configured ? '?' : isBlocked ? '\u2297' : isBoost ? '\u2191' : '\u2013';
+          return (
+            <span className="status-pill" style={{
+              padding: '2px 8px', fontSize: '0.62rem',
+              color, fontWeight: isBlocked || isBoost ? 700 : 400,
+              borderColor, opacity: stale ? 0.6 : 1,
+            }} title={last?.reason ?? (me.configured ? 'MetEngine — no data yet' : 'MetEngine — key not set')}>
+              ME:{icon}
+              {last?.direction && ` ${last.direction}`}
+              {last?.consensusStrength > 0 && ` ${(last.consensusStrength * 100).toFixed(0)}%`}
+              {last?.insiderScore > 0 && ` ins:${last.insiderScore}`}
+              {ageSec != null && stale && ` ${ageSec}s`}
+            </span>
+          );
+        })()}
         <span className="status-pill" style={{ padding: '2px 8px', fontSize: '0.62rem', marginLeft: 'auto' }}>
           {data.sources?.binanceWs ? 'BinWS' : 'BinREST'}+{data.sources?.clobWs ? 'ClobWS' : 'ClobREST'}
         </span>

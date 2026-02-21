@@ -96,14 +96,14 @@ const BOT_CONFIG = {
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 25, 1, 90), // v11: 20→25% — need significant confirmed loss
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 35, 1, 90), // v12: 25→35% — data: 25-35% zone has 83% FP rate, cost -$12.18
     consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 3, 1, 20), // v11: 2→3 polls to confirm (not a fluke)
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
     crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 42, 10, 90),      // v11: 35→42% — only true crashes
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
     evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.15, 0.05, 1.50),        // v11: 0.50→0.15 — near-disabled EV check
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // ML must flip to opposite side with >=75% confidence
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.65, 0.40, 0.99), // ML must flip to opposite side with >=65% confidence
     persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 42, 5, 90),   // v11: 35→42% — truly dead position
     persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 15, 1, 30), // v11: 12→15min — wait even longer
   },
@@ -118,6 +118,25 @@ const BOT_CONFIG = {
     minGainPct: 20,
     minProbDrop: 0.60,
     minTimeLeftMin: 1.0,
+  },
+
+  // MetEngine smart money API (x402, Solana USDC payments)
+  // F1: consensus ≥ blockConsensusStrength against us → BLOCK
+  // F2: top insider score ≥ boostInsiderScore on opp side → BLOCK
+  // F3: consensus ≥ convictionBlockStrength AND conviction wallet (score≥convictionScoreMin, USDC≥convictionMinUSDC, non-hedger) → BLOCK
+  // F1b: consensus ≥ 85% of F1 threshold AND dumb money contrarian → BLOCK
+  // Cost: ~$0.01–0.05/request, cached 90s per market → ~$0.50–1.00/day
+  metEngine: {
+    enabled: process.env.METENGINE_ENABLED === 'true',
+    baseUrl: process.env.METENGINE_BASE_URL || 'https://agent.metengine.xyz',
+    solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
+    cacheTtlMs: 90_000,       // 90s per conditionId — don't re-query mid-market
+    timeoutMs: 5_000,         // 5s timeout — don't hold up trade loop
+    blockConsensusStrength:  parseFloat(process.env.METENGINE_BLOCK_STRENGTH        || '0.65'), // F1: strong consensus block
+    boostInsiderScore:       parseFloat(process.env.METENGINE_BOOST_SCORE           || '75'),   // F2: insider score threshold
+    convictionBlockStrength: parseFloat(process.env.METENGINE_CONVICTION_STRENGTH   || '0.60'), // F3: medium consensus gate
+    convictionScoreMin:      parseFloat(process.env.METENGINE_CONVICTION_SCORE      || '90'),   // F3: min wallet score
+    convictionMinUSDC:       parseFloat(process.env.METENGINE_CONVICTION_USDC       || '50'),   // F3: min USDC invested
   },
 };
 

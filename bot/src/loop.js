@@ -128,9 +128,11 @@ import {
   setMarketTradeCounts,
   getLastLossTimestamp,
   setLastLossTimestamp,
+  updatePositionMarketPrice,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
+import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
@@ -152,6 +154,9 @@ import { checkFlowAlignment, resetFlow } from './engines/orderbookFlow.js';
 
 // Smart money flow tracking (time-windowed CLOB flow analysis)
 import { updateSmartFlow, getSmartFlowSignal, getEntryTimingScore, resetSmartFlow } from './engines/smartMoneyTracker.js';
+
+// MetEngine smart money API gates (F1: consensus, F2: insider score, F3: conviction wallet)
+import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats } from './engines/metEngineClient.js';
 
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
@@ -240,10 +245,14 @@ let startupOrdersReconciled = false;
 let startupTradeCountsLoaded = false;
 let lastAutoForceSyncMs = 0; // Auto force-sync every 40 min
 
+// ── MetEngine init (runs once at module load) ──
+initMetEngine(BOT_CONFIG.metEngine);
+
 function resetMarketCache() {
   resetCaches();
   resetSignalState();
   resetMarketUpHistory();
+  clearMetEngineCache(); // Clear smart money cache on market switch
   currentMarketEndMs = null;
   currentConditionId = null;
   priceToBeat = { slug: null, value: null, updatedAt: 0 };
@@ -447,6 +456,7 @@ export async function pollOnce() {
         );
       }
       resetCutLossState();
+      resetTakeProfitState();
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
       entryRegime = null;
@@ -588,6 +598,7 @@ export async function pollOnce() {
 
       resetMarketCache();
       resetCutLossState();
+      resetTakeProfitState();
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -615,6 +626,7 @@ export async function pollOnce() {
         makeSettlementActions(),
       );
       resetCutLossState();
+      resetTakeProfitState();
     }
 
     if (!poly?.ok) {
@@ -758,6 +770,7 @@ export async function pollOnce() {
               writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: emRecovery - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
               resetCutLossState();
+              resetTakeProfitState();
               notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
             }
           } finally { releaseSellLock(); }
@@ -825,6 +838,7 @@ export async function pollOnce() {
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
               resetCutLossState();
+              resetTakeProfitState();
               if (sfPnl < 0) recordLoss();
               notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
             } else {
@@ -837,6 +851,7 @@ export async function pollOnce() {
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
                 resetCutLossState();
+                resetTakeProfitState();
                 if (sfPnl < 0) recordLoss();
                 notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
               } catch (err) {
@@ -867,6 +882,7 @@ export async function pollOnce() {
     const pos = getCurrentPosition();
     if (pos && !pos.settled && pos.side !== 'ARB' && !smartSellTriggered) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
+      updatePositionMarketPrice(tokenPrice); // Fix M: keep mark-to-market drawdown current
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
       const cutResult = evaluateCutLoss({
@@ -932,6 +948,7 @@ export async function pollOnce() {
               clearEntrySnapshot();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
               resetCutLossState();
+              resetTakeProfitState();
               if (cutPnl < 0) {
                 recordLoss();
                 tiltMarketsLeft = TILT_MARKETS + 1;
@@ -949,6 +966,7 @@ export async function pollOnce() {
                 clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
                 resetCutLossState();
+                resetTakeProfitState();
                 if (cutPnl < 0) {
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
@@ -965,6 +983,7 @@ export async function pollOnce() {
                   clearEntrySnapshot();
                   writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: -pos.cost, exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
                   resetCutLossState();
+                  resetTakeProfitState();
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
                   notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}`);
@@ -972,6 +991,68 @@ export async function pollOnce() {
                   log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
                   resetCutConfirm();
                 }
+              }
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
+    // ── 6d. Take-profit check (C5 fix: uses same sell lock as cut-loss/dashboard) ──
+    // evaluateTakeProfit() returns no('disabled') immediately when takeProfit.enabled=false.
+    // Wired here so if ever enabled, race safety is already guaranteed via acquireSellLock.
+    const tpPos = getCurrentPosition();
+    if (tpPos && !tpPos.settled && tpPos.side !== 'ARB' && !smartSellTriggered) {
+      const tpTokenPrice = tpPos.side === 'UP' ? marketUp : marketDown;
+      const tpTokenBook = tpPos.side === 'UP' ? orderbookUp : orderbookDown;
+      const tpResult = evaluateTakeProfit({
+        position: tpPos, currentTokenPrice: tpTokenPrice,
+        orderbook: tpTokenBook, timeLeftMin,
+        modelProbability: tpPos.side === 'UP' ? ensembleUp : ensembleDown,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
+        regime: regimeInfo?.regime ?? 'moderate',
+        entryRegime,
+        btcDelta1m: delta1m,
+      });
+
+      if (tpResult.shouldTakeProfit) {
+        if (!acquireSellLock('take_profit')) {
+          log.info('Take-profit skipped — sell already in progress');
+        } else {
+          try {
+            const tpSellSize = tpPos.size;
+            log.info(
+              `TAKE-PROFIT: ${tpPos.side} gain ${tpResult.gainPct.toFixed(1)}% | ` +
+              `sell ${tpSellSize} shares @$${tpResult.sellPrice.toFixed(3)} | ` +
+              `recover $${tpResult.recoveryAmount.toFixed(2)} | ${tpResult.reason}`
+            );
+            const tpExitData = { gainPct: tpResult.gainPct, weakeners: tpResult.weakeners, timeLeftMin };
+
+            if (BOT_CONFIG.dryRun) {
+              const tpPnl = tpResult.recoveryAmount - tpPos.cost;
+              settleTradeEarlyExit(tpResult.recoveryAmount);
+              invalidateSync();
+              clearEntrySnapshot();
+              writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: tpExitData });
+              resetCutLossState();
+              resetTakeProfitState();
+              notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+            } else {
+              try {
+                const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
+                const tpActualRecovery = parseClobAmount(tpSellResult?.takingAmount, tpResult.sellPrice * tpSellSize);
+                const tpPnl = tpActualRecovery - tpPos.cost;
+                settleTradeEarlyExit(tpActualRecovery);
+                invalidateSync();
+                clearEntrySnapshot();
+                writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...tpExitData, recovered: tpActualRecovery } });
+                resetCutLossState();
+                resetTakeProfitState();
+                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+              } catch (err) {
+                log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
+                resetTakeProfitState();
               }
             }
           } finally { releaseSellLock(); }
@@ -1113,6 +1194,8 @@ export async function pollOnce() {
           notifyTrade: notifyTradeFn,
           // RC3 Fix: ERC-1155 approval immediately after BUY fill
           updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
+          // MetEngine smart money gate (Feature 1+2) — null if disabled
+          querySmartMoney: BOT_CONFIG.metEngine?.enabled ? querySmartMoney : null,
         });
       } catch (tradeErr) {
         log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);
@@ -1296,6 +1379,9 @@ export async function pollOnce() {
         fetchedAt: usdcBalData.fetchedAt,
         drift: Math.abs(getBankroll() - usdcBalData.balance),
       } : null,
+
+      // MetEngine smart money gate status (for BotPanel display)
+      metEngine: getMetEngineStats(),
     });
 
     // Periodic save
