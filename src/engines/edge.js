@@ -9,13 +9,21 @@ import { ML_CONFIDENCE } from '../config.js';
  * 3. Reduced regime/session penalties to prevent stacking to impossible levels
  * 4. Reduced UP side bias (+2% → +1%) to collect more UP trade data
  *
- * PHASE TABLE v3:
+ * v4 changes (Pendekatan B — price-scaled edge requirement):
+ * 5. Added price-scaled extra edge: +0.70% per 1% above price floor 0.60.
+ *    Data: entries at 0.65-0.70 have 46% WR (break-even = 65%) → net losing.
+ *    Entries at 0.70-0.75 have 93% WR (above 70% break-even) → profitable.
+ *    Fix: price 0.65→+3.5% extra | price 0.68→+5.6% extra | price 0.70→+7% extra.
+ *    High-confidence 0.70+ entries still pass (model 85%+ agrees with strong market signal).
+ *    Low-quality 0.65-0.70 entries now blocked unless model is 80%+ confident.
+ *
+ * PHASE TABLE v5 (frequency fix: lowered to match Polymarket's efficient pricing):
  * | Phase     | Time Left | Min Edge | Min Prob | Min Agreement | MultiTF Req |
  * |-----------|-----------|----------|----------|---------------|-------------|
- * | EARLY     | > 10 min  | 6%       | 58%      | 2             | preferred   |
- * | MID       | 5-10 min  | 8%       | 56%      | 2             | preferred   |
- * | LATE      | 2-5 min   | 10%      | 55%      | 2             | no          |
- * | VERY_LATE | < 2 min   | 12%      | 54%      | 2             | no          |
+ * | EARLY     | > 10 min  | 6%       | 60%      | 3             | preferred   |
+ * | MID       | 5-10 min  | 7%       | 58%      | 3             | preferred   |
+ * | LATE      | 2-5 min   | 5%       | 57%      | 2             | no          |
+ * | VERY_LATE | < 2 min   | 7%       | 56%      | 2             | no          |
  */
 
 /**
@@ -228,27 +236,27 @@ export function decide({
 
   if (remainingMinutes > 10) {
     phase = 'EARLY';
-    minEdge = cal?.EARLY?.minEdge ?? 0.08;
+    minEdge = cal?.EARLY?.minEdge ?? 0.06;
     minProb = cal?.EARLY?.minProb ?? 0.60;
     minAgreement = 3;
     preferMultiTf = true;
   } else if (remainingMinutes > 5) {
     phase = 'MID';
-    minEdge = cal?.MID?.minEdge ?? 0.10;
+    minEdge = cal?.MID?.minEdge ?? 0.07;
     minProb = cal?.MID?.minProb ?? 0.58;
     minAgreement = 3;
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
-    minEdge = cal?.LATE?.minEdge ?? 0.12;
+    minEdge = cal?.LATE?.minEdge ?? 0.05;    // v5: 0.12→0.05 — Polymarket is efficient, LATE edge natural range 3-8%; 12% blocked ALL high-prob entries
     minProb = cal?.LATE?.minProb ?? 0.57;
-    minAgreement = 3;
+    minAgreement = 2;                         // v5: 3→2 — late phase signals converge, fewer families strongly agree
     preferMultiTf = false;
   } else {
     phase = 'VERY_LATE';
-    minEdge = cal?.VERY_LATE?.minEdge ?? 0.15;
+    minEdge = cal?.VERY_LATE?.minEdge ?? 0.07;  // v5: 0.15→0.07 — was impossible to meet at premium token prices
     minProb = cal?.VERY_LATE?.minProb ?? 0.56;
-    minAgreement = 3;
+    minAgreement = 2;                            // v5: 3→2 — same rationale as LATE
     preferMultiTf = false;
   }
 
@@ -258,16 +266,20 @@ export function decide({
   const baseMinProb = minProb;
 
   if (regimeInfo && regimeInfo.regime) {
-    const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.85);
+    // M1: Cap at 0.95 — ATR-confirmed regime with 99% confidence shouldn't be limited to 85%.
+    // TODO: backtest whether uncapped (1.0) improves PnL vs current 0.95 cap.
+    const scale = Math.min(regimeInfo.confidence ?? 0.5, 0.95);
     switch (regimeInfo.regime) {
       case 'trending':
         // v3: Direction-aware — old code tightened ALL trending (33% WR was from counter-trend entries).
         // Aligned signals in trends are strong; counter-trend is what loses.
-        // Check if best model side aligns with trend direction.
+        // M6: Use best EDGE side (not model side) for regime direction check.
+        // Model side = higher probability, but edge side = higher (prob - price).
+        // Edge side accounts for market pricing, avoiding false alignment when market already agrees.
         {
           const trendDir = regimeInfo.direction; // 'UP' or 'DOWN'
-          const bestModelSide = modelUp >= modelDown ? 'UP' : 'DOWN';
-          if (trendDir && bestModelSide === trendDir) {
+          const bestEdgeSide = (edgeUp ?? -Infinity) >= (edgeDown ?? -Infinity) ? 'UP' : 'DOWN';
+          if (trendDir && bestEdgeSide === trendDir) {
             // Aligned with trend: RELAX thresholds (clear signal)
             minEdge = Math.max(minEdge - 0.01 * scale, 0.04);
             minProb = Math.max(minProb - 0.01 * scale, 0.52);
@@ -308,16 +320,31 @@ export function decide({
 
   // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= HIGH),
   // the model's 75%+ accuracy justifies relaxing thresholds by 2%
+  // v5: Floor lowered 0.04→0.02 — edge is already net of spread+fees; 2% floor = genuine edge.
+  // v6: Tiered by ML confidence level:
+  //   conf ≥ 0.90: relax 3%, floor 1.5% (extremely high trust — 74%+ accuracy)
+  //   conf ≥ 0.75: relax 2%, floor 2.0% (very high trust)
+  //   conf ≥ HIGH(0.58): relax 2%, floor 3.0% (moderate trust)
+  // v6: Agreement reduction — ML as independent "family" (74%+ accuracy at high conf).
+  //   When ML ≥ 80% and agrees with rules, minAgreement -= 1 (min 1).
+  //   Fixes: P:93% E:5.9% ML:98% → WAIT because agreement < 2 (structural deadlock).
   const mlIsHighConf = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
   if (mlIsHighConf && mlAgreesWithRules) {
-    minEdge = Math.max(minEdge - 0.02, 0.04);
+    const mlRelax = mlConfidence >= 0.90 ? 0.03 : 0.02;
+    const mlFloor = mlConfidence >= 0.90 ? 0.015 : mlConfidence >= 0.75 ? 0.02 : 0.03;
+    minEdge = Math.max(minEdge - mlRelax, mlFloor);
     minProb = Math.max(minProb - 0.02, 0.52);
+    // ML counts as one independent agreement family — reduce required indicator agreement
+    if (mlConfidence >= 0.80) {
+      minAgreement = Math.max(minAgreement - 1, 1);
+    }
   }
 
   // ═══ Smart money flow adjustment ═══
   // Early flow (82.8% accuracy): relax thresholds when flow agrees with best model side.
   // Late flow (56.3%): tighten — flow is noise, reduce reliance on it.
-  if (smartFlowSignal && smartFlowSignal.confidence > 0.3) {
+  // M2: Smart flow confidence gate raised 0.30→0.50 — 30% confidence signals are noise
+  if (smartFlowSignal && smartFlowSignal.confidence > 0.50) {
     const bestModelSide = modelUp >= modelDown ? 'UP' : 'DOWN';
     const flowAgrees = smartFlowSignal.direction === bestModelSide;
     const flowStrength = smartFlowSignal.strength ?? 0;
@@ -333,30 +360,56 @@ export function decide({
     }
   }
 
-  // ═══ Side bias v3 (reduced: UP +1%, DOWN -0.5%) ═══
-  // v2 had UP +2% which blocked almost all UP trades → no new data to recalibrate.
-  // Reduced to collect more UP data while still giving DOWN slight advantage.
-  let upMinEdge = Math.min(minEdge + 0.01, 0.25);   // UP: +1% harder (was +2%)
-  let upMinProb = Math.min(minProb + 0.01, 0.70);
-  let downMinEdge = Math.max(minEdge - 0.005, 0.04); // DOWN: -0.5% easier (was -1%)
-  let downMinProb = Math.max(minProb - 0.005, 0.52);
+  // ═══ Quant fix H4: Side bias REMOVED ═══
+  // Previous: UP +1% harder, DOWN -0.5% easier (for data collection purposes).
+  // Removed: no empirical evidence showing one side is systematically harder to predict.
+  // Bias was hurting UP entries without improving WR — use symmetric thresholds.
+  let upMinEdge = minEdge;
+  let upMinProb = minProb;
+  let downMinEdge = minEdge;
+  let downMinProb = minProb;
 
-  // ═══ Cap combined regime+session+side-bias penalty ═══
-  // Prevent stacking (e.g. choppy +3% + off-hours +3% + UP bias +2% = +8%) from
-  // making entry impossible. Cap AFTER side bias so the final thresholds are bounded.
-  const MAX_COMBINED_PENALTY = 0.04;  // v3: reduced from 5% to prevent impossible thresholds
+  // ═══ Cap combined regime+session penalty ═══
+  // Prevent stacking (e.g. choppy +2% + off-hours +2% = +4%) from making entry impossible.
+  // M4: 4% cap is empirically chosen to allow ~1 trade/hour in worst conditions (choppy+off-hours).
+  // TODO: validate via backtest that 4% doesn't leave money on the table in moderate conditions.
+  const MAX_COMBINED_PENALTY = 0.04;  // max 4% above base threshold
   upMinEdge = Math.min(upMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
   upMinProb = Math.min(upMinProb, baseMinProb + MAX_COMBINED_PENALTY);
   downMinEdge = Math.min(downMinEdge, baseMinEdge + MAX_COMBINED_PENALTY);
   downMinProb = Math.min(downMinProb, baseMinProb + MAX_COMBINED_PENALTY);
+
+  // ═══ Pendekatan B: Price-scaled edge requirement ═══
+  // Data: entries at 0.65-0.70 → 46% WR (break-even 65%) = zona rugi.
+  // Entries at 0.70-0.75 → 93% WR = profitable karena model conviction tinggi.
+  // v5: ML confidence gate — skip penalty when ML conf >= 0.65 (high-conviction entries
+  // at premium prices are profitable; the 46% WR was from LOW-conviction expensive entries).
+  // v5: PRICE_SCALE 0.70→0.35, PRICE_FLOOR 0.60→0.65 — old values created structural deadlock:
+  //   at 0.71c token: +7.7% extra → minEdge 18%+ but natural edge only 3-5% → IMPOSSIBLE.
+  {
+    const PRICE_FLOOR = 0.65;
+    const PRICE_SCALE = 0.35;
+    const mlConfBypass = mlConfidence !== null && mlConfidence >= 0.65;
+    if (!mlConfBypass) {
+      const impliedUp   = edgeUp   != null ? Math.max(0, modelUp   - edgeUp)   : null;
+      const impliedDown = edgeDown != null ? Math.max(0, modelDown - edgeDown) : null;
+      if (impliedUp   != null && impliedUp   > PRICE_FLOOR) {
+        upMinEdge   = Math.min(upMinEdge   + (impliedUp   - PRICE_FLOOR) * PRICE_SCALE, 0.30);
+      }
+      if (impliedDown != null && impliedDown > PRICE_FLOOR) {
+        downMinEdge = Math.min(downMinEdge + (impliedDown - PRICE_FLOOR) * PRICE_SCALE, 0.30);
+      }
+    }
+  }
 
   // Count agreements if breakdown available (default 0 = conservative, not 99)
   const upAgreement = breakdown ? countAgreement(breakdown, 'UP') : 0;
   const downAgreement = breakdown ? countAgreement(breakdown, 'DOWN') : 0;
 
   // Check UP side (stricter thresholds)
-  // MultiTF waiver: minAgreement+1 indicators can waive multiTF requirement
-  const multiTfWaiver = minAgreement + 1;
+  // M5: MultiTF waiver: EARLY needs minAgreement+2 (strong conviction to skip 5m confirm),
+  // other phases: minAgreement+1 (less time = less confirmation needed)
+  const multiTfWaiver = phase === 'EARLY' ? minAgreement + 2 : minAgreement + 1;
 
   const upEdgePass = edgeUp !== null && edgeUp >= upMinEdge;
   const upProbPass = modelUp >= upMinProb;

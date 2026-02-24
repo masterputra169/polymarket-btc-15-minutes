@@ -11,7 +11,7 @@ import { placeSellOrder, getWalletAddress, getConditionalTokenBalance, updateCon
 
 const log = createLogger('Positions');
 
-const CACHE_TTL_MS = 15_000; // Cache positions for 15s
+const CACHE_TTL_MS = 5_000; // H6: Reduced 15s→5s — less stale data for closing decisions
 const DATA_API = 'https://data-api.polymarket.com';
 
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';

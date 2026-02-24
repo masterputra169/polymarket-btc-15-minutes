@@ -76,21 +76,34 @@ export function applyTradeFilters({
   }
 
   // 2b. Extreme contrarian filter — reject entries where market price is very low/high
-  // Buying at <25c or >75c means the market strongly disagrees with the model.
+  // Buying at <15c or >85c means the market strongly disagrees with the model.
   // The model needs to be MUCH more accurate than the market to profit on these.
+  // ML bypass: ≥85% confidence = high-conviction signal, allow extreme-price entries.
+  // At 92c UP with ML 100%: EV = 0.96×$0.08 - 0.04×$0.92 = +$0.04/dollar (positive).
   const priceRange = TRADE_FILTERS.MARKET_PRICE_RANGE;
   if (priceRange && marketPrice != null && (marketPrice < priceRange[0] || marketPrice > priceRange[1])) {
-    reasons.push(`Extreme price ${(marketPrice * 100).toFixed(0)}c outside ${(priceRange[0]*100).toFixed(0)}-${(priceRange[1]*100).toFixed(0)}c range`);
+    const mlBypass = mlConfidence != null && mlConfidence >= 0.85;
+    if (!mlBypass) {
+      reasons.push(`Extreme price ${(marketPrice * 100).toFixed(0)}c outside ${(priceRange[0]*100).toFixed(0)}-${(priceRange[1]*100).toFixed(0)}c range`);
+    }
   }
 
   // 2c. Entry price floor — data shows entries below 55c are consistently unprofitable
+  // H1: Allow low-price entries when edge >= 8% (strong model conviction overrides price filter)
   if (TRADE_FILTERS.MIN_ENTRY_PRICE && marketPrice != null && marketPrice < TRADE_FILTERS.MIN_ENTRY_PRICE) {
-    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(TRADE_FILTERS.MIN_ENTRY_PRICE * 100).toFixed(0)}c floor`);
+    const edgeBypass = bestEdge != null && bestEdge >= 0.08;
+    if (!edgeBypass) {
+      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(TRADE_FILTERS.MIN_ENTRY_PRICE * 100).toFixed(0)}c floor`);
+    }
   }
 
   // 2d. Entry price ceiling — data shows entries above 72c have 40% WR (expensive + low upside)
+  // H2: Allow expensive entries when ML confidence >= 75% (strong ML conviction overrides price filter)
   if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
-    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling`);
+    const mlBypass = mlConfidence != null && mlConfidence >= 0.75;
+    if (!mlBypass) {
+      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling`);
+    }
   }
 
   // 3. Low volatility
@@ -111,12 +124,18 @@ export function applyTradeFilters({
   }
 
   // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)
-  // Bypass when ML is very high confidence (>=80%) — model already prices in PTB proximity
+  // Audit v2 H5: Time-adaptive — EARLY phase (>10min) uses 0.02% (more time for BTC to move),
+  // LATE phase uses full 0.04%. Bypass when ML is very high confidence (>=80%).
   if (TRADE_FILTERS.MIN_BTC_DIST_PCT && btcPrice != null && priceToBeat != null && priceToBeat > 0) {
     const btcDistPct = Math.abs(btcPrice - priceToBeat) / priceToBeat * 100;
     const mlBypass = mlConfidence != null && mlConfidence >= 0.80;
-    if (!mlBypass && btcDistPct < TRADE_FILTERS.MIN_BTC_DIST_PCT) {
-      reasons.push(`BTC too close to PTB: ${btcDistPct.toFixed(3)}% < ${TRADE_FILTERS.MIN_BTC_DIST_PCT}% (coin flip)`);
+    const timeAdaptedDist = (timeLeftMin != null && timeLeftMin > 10)
+      ? TRADE_FILTERS.MIN_BTC_DIST_PCT * 0.5   // EARLY: halve threshold
+      : (timeLeftMin != null && timeLeftMin > 5)
+        ? TRADE_FILTERS.MIN_BTC_DIST_PCT * 0.75 // MID: 75% threshold
+        : TRADE_FILTERS.MIN_BTC_DIST_PCT;        // LATE/VERY_LATE: full threshold
+    if (!mlBypass && btcDistPct < timeAdaptedDist) {
+      reasons.push(`BTC too close to PTB: ${btcDistPct.toFixed(3)}% < ${timeAdaptedDist.toFixed(3)}% (coin flip)`);
     }
   }
 
@@ -129,10 +148,16 @@ export function applyTradeFilters({
     }
   }
 
-  // 6. Max trades per market
+  // 6. Max trades per market + re-entry edge gate (Audit v2 C1)
+  // First entry: normal edge threshold. Re-entry: requires REENTRY_MIN_EDGE (12%) to avoid revenge trading.
   const marketCount = tradesThisMarket[marketSlug] ?? 0;
   if (marketCount >= TRADE_FILTERS.MAX_TRADES_PER_MARKET) {
     reasons.push(`Max ${TRADE_FILTERS.MAX_TRADES_PER_MARKET} trade(s) per market reached`);
+  } else if (marketCount >= 1 && bestEdge != null) {
+    const reentryMinEdge = TRADE_FILTERS.REENTRY_MIN_EDGE ?? 0.12;
+    if (bestEdge < reentryMinEdge) {
+      reasons.push(`Re-entry blocked: edge ${(bestEdge * 100).toFixed(1)}% < ${(reentryMinEdge * 100).toFixed(0)}% (anti-revenge gate)`);
+    }
   }
 
   // 7. Weekend low-liquidity filter (Saturday/Sunday UTC)
@@ -159,10 +184,8 @@ export function applyTradeFilters({
   }
 
   // 9. Counter-trend momentum guard — don't fight strong BTC moves.
-  // If BTC moved >$50 in 1 minute AGAINST our signal direction, wait for momentum to settle.
-  // The ML model has delta1m as a feature but hard-gating extreme counter-moves prevents
-  // chasing into fast reversals where the model's ensemble hasn't caught up yet.
-  const COUNTER_TREND_THRESHOLD = 50; // $50/min
+  // Audit v2 H1: 0.10%→0.20% — old threshold ($63 at $63k) blocked valid entries; BTC 1min vol ≈ 0.05-0.15%
+  const COUNTER_TREND_THRESHOLD = btcPrice != null && Number.isFinite(btcPrice) ? btcPrice * 0.002 : 100;
   if (delta1m != null && signalSide != null) {
     if (signalSide === 'UP' && delta1m < -COUNTER_TREND_THRESHOLD) {
       reasons.push(`Counter-trend: BTC dropped $${Math.abs(delta1m).toFixed(0)} in 1m vs UP signal`);

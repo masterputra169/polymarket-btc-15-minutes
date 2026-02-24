@@ -367,14 +367,14 @@ function _applyGate(apiResponse, betSide, source) {
     // Build set of wallet IDs on OUR side so we can identify hedgers
     const ourWalletIds = new Set(
       (ourSideData?.top_wallets ?? [])
-        .map(w => w.wallet_address ?? w.address ?? w.id ?? '')
+        .map(w => w.wallet_address ?? w.wallet ?? w.address ?? w.id ?? '')
         .filter(Boolean)
     );
 
     // Find best (highest score) conviction wallet on opposite side that is NOT hedging
     const convWallet = oppSideData.top_wallets
       .filter(w => {
-        const wId   = w.wallet_address ?? w.address ?? w.id ?? '';
+        const wId   = w.wallet_address ?? w.wallet ?? w.address ?? w.id ?? '';
         const score = parseFloat(w.score ?? 0) || 0;
         // usdc_invested: amount they put into this specific market outcome
         const usdc  = parseFloat(w.usdc_invested ?? w.capital ?? w.size ?? w.total_usdc ?? 0) || 0;
@@ -383,7 +383,7 @@ function _applyGate(apiResponse, betSide, source) {
       .sort((a, b) => (parseFloat(b.score ?? 0) || 0) - (parseFloat(a.score ?? 0) || 0))[0] ?? null;
 
     if (convWallet) {
-      const wId    = (convWallet.wallet_address ?? convWallet.address ?? convWallet.id ?? '').slice(0, 10);
+      const wId    = (convWallet.wallet_address ?? convWallet.wallet ?? convWallet.address ?? convWallet.id ?? '').slice(0, 10);
       const wScore = parseFloat(convWallet.score ?? 0) || 0;
       const wUsdc  = parseFloat(convWallet.usdc_invested ?? convWallet.capital ?? convWallet.size ?? convWallet.total_usdc ?? 0) || 0;
       const msg    = `Conviction ${wId}… score=${wScore} $${wUsdc.toFixed(0)} on ${oppDir} (${(consensusStrength * 100).toFixed(0)}% consensus) vs our ${betSide}`;

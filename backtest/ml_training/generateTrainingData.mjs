@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * ═══ Generate Training Data for XGBoost (54 Features) ═══
+ * ═══ Generate Training Data for XGBoost (59 Features) ═══
  *
  * Fetches historical Binance BTCUSDT klines and computes the same
- * 54 base features used in live prediction (Mlpredictor.js).
- * (44 original + 5 simulated Polymarket + 3 lag features + 2 funding rate)
+ * 59 base features used in live prediction (Mlpredictor.js).
+ * (44 original + 5 simulated Polymarket + 3 lag features + 2 funding rate + 5 smart money)
  *
- * Output: training_data.csv with 54 feature columns + label column
+ * Output: training_data.csv with 59 feature columns + label column
  *
  * Usage:
  *   node generateTrainingData.mjs [--days 30] [--interval 1m] [--output training_data.csv]
+ *     [--smart-money-lookup ./smart_money_lookup.json]
  *
  * Requirements:
  *   - Node.js 18+
@@ -27,6 +28,7 @@ const PREDICTION_WINDOW = 15; // minutes ahead for label
 const LIMIT_PER_REQUEST = 1000;
 const MIN_MOVE_PCT = ARGS['min-move'] != null ? parseFloat(ARGS['min-move']) : 0.0008; // 0.08% min move — filters noise while keeping ~55k samples
 const POLYMARKET_LOOKUP_PATH = ARGS['polymarket-lookup'] || './polymarket_lookup.json';
+const SMART_MONEY_LOOKUP_PATH = ARGS['smart-money-lookup'] || './smart_money_lookup.json';
 
 // Proxy support for regions where Binance is blocked (e.g., Indonesia)
 // Usage: --proxy http://localhost:3001  (your local proxy)
@@ -77,6 +79,9 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 // ═══ Polymarket lookup (real data when available) ═══
 let polyLookup = null; // { "slug_ts": { label, spread, liquidity, volume, prices: [[secs,price],...] } }
 
+// ═══ Smart money lookup (per-market minute-bucket flow data) ═══
+let smartMoneyLookup = null; // { "slug_ts": { b: [15 floats], t: [15 floats] } }
+
 function loadPolymarketLookup(path) {
   try {
     if (!fs.existsSync(path)) {
@@ -93,6 +98,22 @@ function loadPolymarketLookup(path) {
   }
 }
 
+
+function loadSmartMoneyLookup(path) {
+  try {
+    if (!fs.existsSync(path)) {
+      console.log(`⚠️  Smart money lookup not found at ${path} — smart money features will be null`);
+      return null;
+    }
+    const raw = JSON.parse(fs.readFileSync(path, 'utf-8'));
+    const count = Object.keys(raw).length;
+    console.log(`✅ Smart money lookup loaded: ${count.toLocaleString()} markets from ${path}`);
+    return raw;
+  } catch (err) {
+    console.log(`⚠️  Failed to load smart money lookup: ${err.message} — features will be null`);
+    return null;
+  }
+}
 
 /**
  * Linear interpolation of UP token price at a given seconds-into-market.
@@ -969,9 +990,9 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   // ═══ StochRSI ═══
   const stoch = computeStochRSI(closes, 14, 14, 3, 3);
 
-  // ═══ BUILD 54-FEATURE VECTOR (exact same order as Mlpredictor.js) ═══
-  // 49 original base + 3 lag features + 2 funding rate
-  const features = new Array(54);
+  // ═══ BUILD 59-FEATURE VECTOR (exact same order as Mlpredictor.js) ═══
+  // 49 original base + 3 lag features + 2 funding rate + 5 smart money
+  const features = new Array(59);
 
   // Numerical (16)
   features[0]  = ptbDistPct;
@@ -1137,6 +1158,67 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   const rate8h = fr8hAgo?.rate ?? 0;
   features[53] = Math.max(-1, Math.min(1, (frRate - rate8h) * 1000)); // funding_rate_change
 
+  // ═══ Smart money features (5) — [54-58] ═══
+  // Point-in-time safe: only use minutes 0..M-1 (no lookahead)
+  const smData = smartMoneyLookup?.[String(slugTs)] ?? null;
+  const minuteIdx = polyMarket ? Math.min(Math.floor((candleTimeSec - slugTs) / 60), 14) : null;
+
+  if (smData && minuteIdx != null && minuteIdx >= 0) {
+    const b = smData.b; // bullish volume per minute [15 floats]
+    const t = smData.t; // total volume per minute [15 floats]
+
+    // Cumulative sums up to current minute (exclusive — no lookahead)
+    let cumBull = 0, cumTotal = 0;
+    for (let m = 0; m < minuteIdx; m++) {
+      cumBull += b[m];
+      cumTotal += t[m];
+    }
+
+    // [54] sm_bull_ratio: cumulative bullish ratio so far
+    features[54] = cumTotal > 0 ? cumBull / cumTotal : 0.5;
+
+    // [55] sm_flow_intensity: total smart money volume so far (log-normalized)
+    features[55] = cumTotal > 0 ? Math.min(Math.log1p(cumTotal) / 15, 1) : 0;
+
+    // [56] sm_early_signal: bull ratio in first 5 minutes only
+    let earlyBull = 0, earlyTotal = 0;
+    const earlyEnd = Math.min(minuteIdx, 5);
+    for (let m = 0; m < earlyEnd; m++) {
+      earlyBull += b[m];
+      earlyTotal += t[m];
+    }
+    features[56] = earlyTotal > 0 ? earlyBull / earlyTotal : 0.5;
+
+    // [57] sm_flow_accel: recent 3-min flow vs earlier flow (acceleration)
+    if (minuteIdx >= 4) {
+      let recentBull = 0, recentTotal = 0;
+      for (let m = Math.max(0, minuteIdx - 3); m < minuteIdx; m++) {
+        recentBull += b[m];
+        recentTotal += t[m];
+      }
+      let olderBull = 0, olderTotal = 0;
+      for (let m = 0; m < Math.max(0, minuteIdx - 3); m++) {
+        olderBull += b[m];
+        olderTotal += t[m];
+      }
+      const recentRatio = recentTotal > 0 ? recentBull / recentTotal : 0.5;
+      const olderRatio = olderTotal > 0 ? olderBull / olderTotal : 0.5;
+      features[57] = Math.max(-1, Math.min(1, recentRatio - olderRatio));
+    } else {
+      features[57] = 0;
+    }
+
+    // [58] sm_activity: any smart money activity in this market
+    features[58] = cumTotal > 0 ? 1 : 0;
+  } else {
+    // No smart money data — neutral defaults
+    features[54] = 0.5; // sm_bull_ratio
+    features[55] = 0;   // sm_flow_intensity
+    features[56] = 0.5; // sm_early_signal
+    features[57] = 0;   // sm_flow_accel
+    features[58] = 0;   // sm_activity
+  }
+
   return { features, label, slugTs: polyMarket ? slugTs : null };
 }
 
@@ -1160,11 +1242,12 @@ const FEATURE_NAMES = [
   'spread_pct', 'crowd_model_divergence',
   'momentum_5candle_slope', 'volatility_change_ratio', 'price_consistency',
   'funding_rate_norm', 'funding_rate_change',
+  'sm_bull_ratio', 'sm_flow_intensity', 'sm_early_signal', 'sm_flow_accel', 'sm_activity',
 ];
 
 // ═══ MAIN ═══
 async function main() {
-  console.log(`\n=== Training Data Generator v12 (54 features + real Polymarket) ===`);
+  console.log(`\n=== Training Data Generator v13 (59 features + real Polymarket + smart money) ===`);
   console.log(`Days: ${DAYS} | Window: ${PREDICTION_WINDOW}min | Min-move: ${(MIN_MOVE_PCT*100).toFixed(3)}% | Output: ${OUTPUT_FILE}`);
   if (PROXY_URL) {
     console.log(`API: ${PROXY_URL} (proxy mode)`);
@@ -1176,6 +1259,9 @@ async function main() {
 
   // Load Polymarket lookup (real data for labels, features 44-48, minutesLeft)
   polyLookup = loadPolymarketLookup(POLYMARKET_LOOKUP_PATH);
+
+  // Load smart money lookup (real data for features 54-58)
+  smartMoneyLookup = loadSmartMoneyLookup(SMART_MONEY_LOOKUP_PATH);
 
   // Seed PRNG for reproducible minutesLeft values (used as fallback)
   seedRng(42);
@@ -1211,6 +1297,10 @@ async function main() {
   const simCount = rows.length - realCount;
   console.log(`   Real Polymarket labels: ${realCount} (${(realCount/rows.length*100).toFixed(1)}%)`);
   console.log(`   Simulated labels: ${simCount} (${(simCount/rows.length*100).toFixed(1)}%)`);
+
+  // Smart money feature stats
+  const smActiveCount = rows.filter(r => r.features[58] === 1).length;
+  console.log(`   Smart money active: ${smActiveCount} (${(smActiveCount/rows.length*100).toFixed(1)}%)`);
 
   // Write CSV (slug_timestamp metadata column added after features, before label)
   const header = FEATURE_NAMES.join(',') + ',slug_timestamp,label';

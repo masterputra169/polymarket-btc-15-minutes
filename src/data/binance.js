@@ -17,7 +17,11 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
   const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
   if (!res.ok) throw new Error(`Binance klines HTTP ${res.status}`);
   const raw = await res.json();
+  const now = Date.now();
 
+  // Fix P3: Exclude the current incomplete (forming) candle.
+  // Binance always returns the live candle as the last element with closeTime in the future.
+  // Including it in indicator calculations is look-ahead bias — close price is not final.
   return raw.map((k) => ({
     openTime: k[0],
     open: parseFloat(k[1]),
@@ -26,8 +30,8 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
     close: parseFloat(k[4]),
     volume: parseFloat(k[5]),
     closeTime: k[6],
-    takerBuyVolume: parseFloat(k[9]), 
-  }));
+    takerBuyVolume: parseFloat(k[9]),
+  })).filter((k) => k.closeTime < now);
 }
 
 /**

@@ -43,6 +43,8 @@ parser.add_argument('--data-dir', default='./polymarket_btc15m_data',
                     help='Directory containing Polymarket CSV files')
 parser.add_argument('--output', default='./polymarket_lookup.json',
                     help='Output JSON lookup file')
+parser.add_argument('--merge', default=None,
+                    help='Path to existing lookup JSON to merge (keeps entries not in dataset)')
 args = parser.parse_args()
 
 MASTER_CSV = os.path.join(args.data_dir, '02_btc15m_ml_ready.csv')
@@ -141,9 +143,27 @@ for entry in lookup.values():
 print(f"   {markets_with_prices:,}/{len(lookup):,} markets have price history")
 
 # ============================================================
-# Step 3: Write JSON lookup
+# Step 3: Merge with existing lookup (if --merge provided)
 # ============================================================
-print("[3/3] Writing JSON lookup...")
+if args.merge and os.path.isfile(args.merge):
+    print(f"[3/4] Merging with existing lookup: {args.merge}")
+    with open(args.merge, 'r') as f:
+        existing = json.load(f)
+    # Add entries from existing that are NOT in the new dataset
+    merged_count = 0
+    for key, val in existing.items():
+        if key not in lookup:
+            lookup[key] = val
+            merged_count += 1
+    print(f"   Merged {merged_count:,} entries from existing lookup (not in dataset)")
+    print(f"   Total after merge: {len(lookup):,}")
+else:
+    print("[3/4] No merge file — using dataset only")
+
+# ============================================================
+# Step 4: Write JSON lookup
+# ============================================================
+print("[4/4] Writing JSON lookup...")
 
 with open(args.output, 'w') as f:
     json.dump(lookup, f, separators=(',', ':'))

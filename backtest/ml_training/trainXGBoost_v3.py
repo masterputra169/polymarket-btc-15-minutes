@@ -53,6 +53,9 @@ parser.add_argument('--recency-halflife', type=int, default=90,
                     help='Half-life in days for recency weighting (default: 90)')
 parser.add_argument('--regime-split', action='store_true',
                     help='Train separate models per regime (trending/moderate/choppy)')
+parser.add_argument('--session-weight', action='store_true',
+                    help='Apply session-based sample weighting: US/Overlap +50%/+30%, Asia -20%. '
+                         'Improves model accuracy during US trading hours without changing feature vector.')
 parser.add_argument('--holdout-frac', type=float, default=0.125,
                     help='Reserve final N%% of train data as holdout (not seen by Optuna/CV). '
                          'Default 0.125 = 12.5%% holdout (audit fix C3). Set to 0 to disable.')
@@ -85,6 +88,7 @@ print(f"""
   Zero-feat: {', '.join(zero_feature_names) if zero_feature_names else 'none'}
   Exclude:   {len(exclude_feature_names)} features {'(' + ', '.join(exclude_feature_names[:5]) + ('...' if len(exclude_feature_names) > 5 else '') + ')' if exclude_feature_names else 'none'}
   Recency:   {'Yes (half-life=' + str(args.recency_halflife) + 'd)' if args.recency else 'No'}
+  Sess-wt:   {'Yes (US x1.5, Overlap x1.3, Asia x0.8)' if args.session_weight else 'No'}
 ==================================================
 """)
 
@@ -271,6 +275,41 @@ if args.recency:
     w_train = recency_weight.astype(np.float32)
     print(f"   Recency weighting: half-life={args.recency_halflife}d")
     print(f"     Oldest sample weight: {w_train[0]:.3f} | Newest: {w_train[-1]:.3f} | Mean: {w_train.mean():.3f}")
+
+if args.session_weight:
+    # v10: Session-based sample weighting — boost underrepresented US/Overlap patterns.
+    # US and EU/US Overlap sessions have lower ML confidence in production because the
+    # model sees fewer high-quality examples from these volatile hours. Up-weighting
+    # forces the model to learn US-specific patterns from existing session features
+    # (session_us, session_overlap, hour_sin/cos at indices 22, 23, 42, 43 in X_orig).
+    # No new features needed — works with existing 74-feature vector.
+    if w_train is None:
+        w_train = np.ones(len(X_train), dtype=np.float32)
+    # Feature indices from fi lookup (X_orig columns = same indices in X since engineered appended)
+    sess_us_idx  = fi.get('session_us')       # index 22
+    sess_ov_idx  = fi.get('session_overlap')  # index 23
+    sess_asia_idx = fi.get('session_asia')    # index 20
+    n_us = n_ov = n_asia = 0
+    if sess_us_idx is not None:
+        us_mask = X_train[:, sess_us_idx] > 0.5
+        w_train[us_mask] *= 1.5
+        n_us = int(us_mask.sum())
+    if sess_ov_idx is not None:
+        ov_mask = X_train[:, sess_ov_idx] > 0.5
+        w_train[ov_mask] *= 1.3
+        n_ov = int(ov_mask.sum())
+    if sess_asia_idx is not None:
+        asia_mask = X_train[:, sess_asia_idx] > 0.5
+        w_train[asia_mask] *= 0.8
+        n_asia = int(asia_mask.sum())
+    # Normalize so mean weight stays ~1.0 (preserves effective sample count)
+    w_mean = w_train.mean()
+    w_train = w_train / w_mean
+    print(f"   Session weighting applied:")
+    print(f"     US ×1.5       : {n_us:,} samples")
+    print(f"     Overlap ×1.3  : {n_ov:,} samples")
+    print(f"     Asia ×0.8     : {n_asia:,} samples")
+    print(f"     Normalized (mean={w_mean:.3f} -> 1.000)")
 
 for rn, rc in regime_counts.items():
     pct = rc / len(X) * 100
@@ -1073,6 +1112,7 @@ print(f"""
   Zero-feat:    {', '.join(zero_feature_names) if zero_feature_names else 'none'}
   Pre-excluded: {len(exclude_feature_names)} features
   Recency:      {'half-life=' + str(args.recency_halflife) + 'd' if args.recency else 'off'}
+  Sess-weight:  {'US x1.5, Overlap x1.3, Asia x0.8' if args.session_weight else 'off'}
   Method:       {'Optuna' if USE_OPTUNA else 'Grid search'}
   CV folds:     {N_CV_FOLDS}
 ==================================================

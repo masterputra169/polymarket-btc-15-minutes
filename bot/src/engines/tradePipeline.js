@@ -12,6 +12,7 @@ import { getSessionName } from '../../../src/utils.js';
 import { EXECUTION } from '../../../src/config.js';
 import { BOT_CONFIG } from '../config.js';
 import { notify } from '../monitoring/notifier.js';
+import { SIGNAL_CONFIRM_POLLS } from './signalStability.js';
 
 const log = createLogger('TradePipeline');
 
@@ -23,8 +24,10 @@ const log = createLogger('TradePipeline');
  * Polymarket prices: [0.01, 0.99], precision 0.001.
  */
 function fokBuyPrice(targetPrice, spread) {
-  const fixedSlippage = EXECUTION.FOK_SLIPPAGE ?? 0.01;
-  const pctSlippage = targetPrice * 0.02; // 2% of target price
+  // Audit v2 M2: Reduced slippage 2%→1% — systematic overpayment ≈ 0.5-1% per trade.
+  // 1% still provides 6-7 ticks tolerance on a $0.65 token.
+  const fixedSlippage = Math.max(0.005, targetPrice * 0.005);
+  const pctSlippage = targetPrice * 0.01; // 1% of target price (was 2%)
   const spreadSlippage = (spread != null && Number.isFinite(spread)) ? spread * 0.5 : 0;
   const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
@@ -134,6 +137,12 @@ export async function executeArbitrage({
           conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
         });
         deps.recordTradeForMarket(marketSlug);
+        deps.recordTradeTimestamp?.(); // H7: hourly trade frequency tracking
+        // RC3 Fix (ARB): ERC-1155 approval for both token sides after ARB BUY
+        if (deps.updateConditionalApproval) {
+          deps.updateConditionalApproval(poly.tokens.upTokenId).catch(e => log.debug(`ARB UP approval: ${e.message}`));
+          deps.updateConditionalApproval(poly.tokens.downTokenId).catch(e => log.debug(`ARB DOWN approval: ${e.message}`));
+        }
       } catch (recErr) {
         log.error(`Arb recording failed (trades placed but not tracked): ${recErr.message}`);
       }
@@ -188,6 +197,10 @@ export async function executeArbitrage({
           confidence: 'ARB_ONE_LEG', phase: rec?.phase, reason: 'arb_leg2_failed_unwind_failed',
           timeLeftMin: null, session: getSessionName(),
         });
+        // RC3 Fix (ARB one-leg): ERC-1155 approval for fallback directional position
+        if (deps.updateConditionalApproval) {
+          deps.updateConditionalApproval(poly.tokens.upTokenId).catch(e => log.debug(`ARB one-leg approval: ${e.message}`));
+        }
         log.warn('One-legged arb: unwind failed — recorded as directional UP position');
       }
     }
@@ -222,10 +235,24 @@ export async function executeDirectionalTrade({
   smartFlowSignal,
 }, deps) {
   // ── Signal Confirmation Gate ──
+  // Audit v2 H3: Edge-adaptive confirmation. High edge (≥15%) or high ML (≥80%) → fast entry.
+  // In a 15-min market, 3-poll wait (9s) can miss 2-5% price movement.
+  const mlConf = mlResult.available ? mlResult.mlConfidence : null;
+  const highEdge = edge.bestEdge != null && edge.bestEdge >= 0.15;
+  const requiredPolls = (mlConf != null && mlConf >= 0.80) ? 1
+    : highEdge ? Math.max(1, SIGNAL_CONFIRM_POLLS - 1)
+    : SIGNAL_CONFIRM_POLLS;
+  if (requiredPolls < SIGNAL_CONFIRM_POLLS) {
+    const fastReason = (mlConf != null && mlConf >= 0.80)
+      ? `ML conf ${(mlConf * 100).toFixed(0)}% ≥ 80%`
+      : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
+    log.info(`Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`);
+  }
+
   deps.updateConfirmation(rec.side);
 
-  if (!deps.isSignalStable()) {
-    const reasons = deps.getInstabilityReasons();
+  if (!deps.isSignalStable(requiredPolls)) {
+    const reasons = deps.getInstabilityReasons(requiredPolls);
     log.info(`Signal unstable, holding: ${reasons.join(' | ')}`);
     return false;
   }
@@ -330,6 +357,17 @@ export async function executeDirectionalTrade({
     effectiveBetAmount = boosted;
   }
 
+  // Audit v2 C3: Confidence-tiered Kelly cap — replaces flat 3% cap that made sizing irrelevant.
+  // LOW=2%, MEDIUM=3%, HIGH=4%, VERY_HIGH=5% of bankroll.
+  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.05, HIGH: 0.04, MEDIUM: 0.03, LOW: 0.02 };
+  const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
+  const currentBankroll = deps.getBankroll();
+  const kellyMaxBet = currentBankroll * kellyCapPct;
+  if (effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
+    log.info(`Kelly cap: $${effectiveBetAmount.toFixed(2)} → $${kellyMaxBet.toFixed(2)} (${(kellyCapPct * 100).toFixed(0)}% of $${currentBankroll.toFixed(0)}, conf=${rec.confidence})`);
+    effectiveBetAmount = kellyMaxBet;
+  }
+
   if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {
     log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${BOT_CONFIG.maxBetAmountUsd.toFixed(2)} (maxBetAmountUsd)`);
     effectiveBetAmount = BOT_CONFIG.maxBetAmountUsd;
@@ -416,8 +454,9 @@ export async function executeDirectionalTrade({
       });
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {
+      const marketUrl = `https://polymarket.com/event/${marketSlug}`;
       deps.notifyTrade(
-        `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares} shares ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}`
+        `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares} shares ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}\n<a href="${marketUrl}">View Market</a>`
       );
     }
     return true;
@@ -432,13 +471,13 @@ export async function executeDirectionalTrade({
     });
     const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;
 
-    // C3 FIX: Parse fill data with strict validation. If CLOB returns no fill data,
-    // use theoretical values but log a warning (FOK should either fill fully or reject).
+    // C5 FIX: Parse fill data with strict validation. If CLOB returns no fill data,
+    // mark fill as unconfirmed so fill tracker will verify via getOpenOrders/trade history.
     const fillCost = parseClobAmount(orderResult?.makingAmount, null);
     const fillShares = parseClobAmount(orderResult?.takingAmount, null);
     const hasFillData = (fillCost != null && fillCost > 0) || (fillShares != null && fillShares > 0);
     if (!hasFillData) {
-      log.warn(`Order ${orderId ?? 'unknown'}: no fill data in CLOB response — using theoretical values (cost=$${(shares * betMarketPrice).toFixed(2)}, shares=${shares})`);
+      log.warn(`Order ${orderId ?? 'unknown'}: no fill data in CLOB response — position will remain unconfirmed until fill tracker verifies (cost=$${(shares * betMarketPrice).toFixed(2)}, shares=${shares})`);
     }
     const actualSize = (fillShares != null && fillShares > 0) ? fillShares : shares;
     const actualPrice = (fillCost != null && fillCost > 0 && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
@@ -459,6 +498,7 @@ export async function executeDirectionalTrade({
     });
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     deps.recordTradeForMarket(marketSlug);
+    deps.recordTradeTimestamp?.(); // H7: hourly trade frequency tracking
     deps.captureEntrySnapshot(entryData);
     // RC3 Fix: ensure ERC-1155 setApprovalForAll is set for this token immediately after BUY
     // Prevents "not enough balance/allowance" errors on subsequent SELL (cut-loss) orders
@@ -484,6 +524,7 @@ export async function executeDirectionalTrade({
           ? timeLeftMin < 1 ? `${Math.round(timeLeftMin * 60)}s` : `${timeLeftMin.toFixed(1)}m`
           : '-';
         const mlStr = mlResult.available ? `${(mlResult.mlConfidence * 100).toFixed(0)}%` : 'off';
+        const marketUrl = `https://polymarket.com/event/${marketSlug}`;
         notify('info', [
           `🧠 MetEngine + Bot ALIGNED!`,
           `${sideArrow} ${betSide} | $${cost.toFixed(2)} (smart money boost +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`,
@@ -492,10 +533,12 @@ export async function executeDirectionalTrade({
           `₿ BTC: $${lastPrice != null ? lastPrice.toFixed(0) : '?'} | Token: ${actualPrice.toFixed(3)}c`,
           `📐 Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | 🤖 ML: ${mlStr}`,
           `⏱ Market ends in ${timeText}`,
+          `<a href="${marketUrl}">View Market</a>`,
         ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(() => {});
       } else {
+        const marketUrl = `https://polymarket.com/event/${marketSlug}`;
         deps.notifyTrade(
-          `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}`
+          `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}\n<a href="${marketUrl}">View Market</a>`
         );
       }
     }

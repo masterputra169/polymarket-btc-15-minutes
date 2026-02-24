@@ -1,4 +1,4 @@
-export const ML_CONFIDENCE = { HIGH: 0.60, MEDIUM: 0.20 };  // v4: HIGH raised back to 0.60 aligned with MIN_ML_CONFIDENCE
+export const ML_CONFIDENCE = { HIGH: 0.58, MEDIUM: 0.20 };  // H3: aligned with MIN_ML_CONFIDENCE=0.58 — edge boost kicks in at same level as filter gate
 
 export const WS_DEFAULTS = { throttleMs: 500, reconnectMaxMs: 10_000, heartbeatCheckMs: 10_000 };
 export const WS_BINANCE = { heartbeatDeadMs: 20_000, heartbeatCheckMs: 5_000 };
@@ -9,7 +9,7 @@ export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStal
 export const BET_SIZING = {
   KELLY_FRACTION: 0.15,
   MAX_BET_PCT: 0.05,
-  MIN_BET_PCT: 0.01,             // Audit fix: 0.003→0.01 — reflects real $1 Polymarket minimum (at $100 bankroll = 1%)
+  MIN_BET_PCT: 0.025,            // Quant fix M1: 0.01→0.025 — at $45 bankroll 1%=$0.45 < Polymarket $1 min; 2.5%=$1.13 safely above
   MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
   BANKROLL_STORAGE_KEY: 'btc15m_bankroll',
@@ -42,11 +42,13 @@ export const TRADE_FILTERS = {
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
   MAX_TIME_LEFT_MIN: 14.5,      // relaxed from 14.0 — open 30s earlier for early signals
   MIN_BTC_DIST_PCT: 0.04,       // raised 0.015→0.04 — at $90k BTC, 0.015% = $13 from PTB = near coin-flip
-  LOSS_COOLDOWN_MS: 60_000,     // restored to 60s — 30s too short, allows immediate reentry into next market
-  MAX_TRADES_PER_MARKET: 1,     // lowered from 2 — multi-leg entries have 46% WR vs 60% single-leg
-  MIN_ENTRY_PRICE: 0.55,        // skip entries below 55c — data shows cheap-side entries lose consistently
+  LOSS_COOLDOWN_MS: 60_000,     // Audit v2 M3: 120s→60s — 120s spans market boundaries in 15-min markets, causing missed entries
+  MAX_TRADES_PER_MARKET: 2,     // Audit v2 C1: 3→2 — data shows multi-leg WR 46%; allow 1 re-entry only with conditional gate in tradeFilters
+  REENTRY_MIN_EDGE: 0.12,       // Audit v2 C1: re-entry requires ≥12% edge (higher bar than first entry)
+  MIN_ENTRY_PRICE: 0.58,        // user override to 58c (has edge ≥ 8% bypass for lower prices)
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
-  MAX_EDGE: 0.18,               // 0.25→0.18 — balance between 15-20% sweet spot and allowing high-edge high-conf entries
+  MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
+  BLACKOUT_HOURS_ET: [16, 17, 18, 19, 20, 21, 22, 23], // journal data: 16-20h ET = 31.6% WR (-$7.41), 20-24h = 41.7% WR (-$0.61)
 };
 
 export const CONFIG = {

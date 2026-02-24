@@ -56,7 +56,7 @@ export function computeSignals({
   klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
   clobConnected, clobStale, getClobUpPrice, getClobDownPrice, getClobOrderbook,
   feedbackStats, timeLeftMin, candleWindowMinutes,
-  getMLPrediction, fundingRate,
+  getMLPrediction, fundingRate, smartFlowSignal,
 }) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
@@ -92,18 +92,20 @@ export function computeSignals({
   const orderbookSignal = analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketDown });
 
   // ── Arbitrage detection (BEFORE directional logic) ──
-  // Audit fix H: Only detect arb when using live CLOB WebSocket prices.
-  // REST fallback mid-prices systematically understate ask prices,
-  // creating phantom arb from the mid-to-ask gap (MIN_NET_PROFIT is only 0.5 cents).
-  const arb = useClobWs
-    ? detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDown })
-    : { found: false, reason: 'clob_stale' };
+  // H11: Allow REST-based arbs but with higher min profit (1% vs 0.5%) to compensate for stale mid-prices.
+  // REST mid-prices systematically understate ask prices, so require larger margin of safety.
+  let arb = detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDown });
+  if (!useClobWs && arb.found && arb.netProfit < 0.01) {
+    arb = { ...arb, found: false, reason: 'rest_min_profit_insufficient' };
+  }
 
   // ── Orderbook flow tracking ──
   recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookDown);
   const obFlow = getOrderbookFlow();
 
   // ── Market price momentum (ring buffer) ──
+  // M18: Ring buffer uses fixed candle count (12 polls), not time-based.
+  // At 3s polls = 36s window; at 5s polls = 60s window. Consider timestamped entries for consistency.
   let marketPriceMomentum = 0;
   if (marketUp != null) {
     marketUpHistory.buf[marketUpHistory.idx] = marketUp;
@@ -117,6 +119,9 @@ export function computeSignals({
   }
 
   // ── Score direction (merge trained + live signal modifiers) ──
+  // M19: Trained × live multiplication may double-correct if both respond to same signal.
+  // E.g. if RSI accuracy drops, trained mod → 0.8 AND live mod → 0.8, net = 0.64 (over-dampened).
+  // Current approach is acceptable with the [0.3, 3.0] clamp but consider averaging instead.
   const liveModifiers = getSignalModifiers();
   const trainedMods = getTrainedSignalModifiers();
   let mergedModifiers;
@@ -151,6 +156,21 @@ export function computeSignals({
     orderbookUp, orderbookDown,
   });
 
+  // ── Smart money features (from MetEngine → ML feature vector) ──
+  const sf = smartFlowSignal ?? {};
+  const sfHasData = sf.sampleCount >= 3 && sf.direction !== 'NEUTRAL' && sf.direction !== 'INSUFFICIENT';
+  const smBullRatio = sfHasData
+    ? (sf.direction === 'UP' ? 0.5 + sf.strength * 0.5 : 0.5 - sf.strength * 0.5)
+    : 0.5;
+  const smFlowIntensity = sfHasData ? Math.min(sf.confidence, 1) : 0;
+  const smEarlySignal = sfHasData && sf.earlyFlow !== 0
+    ? (sf.earlyFlow > 0 ? 0.5 + Math.min(Math.abs(sf.earlyFlow), 0.5) : 0.5 - Math.min(Math.abs(sf.earlyFlow), 0.5))
+    : 0.5;
+  const smFlowAccel = sfHasData
+    ? Math.max(-1, Math.min(1, (sf.lateFlow || sf.midFlow || 0) - (sf.earlyFlow || 0)))
+    : 0;
+  const smActivity = sfHasData ? 1 : 0;
+
   // ── ML prediction ──
   const session = getSessionName();
   const mlResult = getMLPrediction({
@@ -178,6 +198,7 @@ export function computeSignals({
     orderbookImbalance: orderbookSignal?.imbalance ?? null,
     spreadPct: orderbookUp?.spread ?? null,
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
+    smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
   }, timeAware.adjustedUp);
 
   // ── Ensemble edge (spread-aware) ──

@@ -10,7 +10,7 @@ import { FI } from './featureMap.js';
 export const featureBuf = new Float64Array(MAX_FEATURES);
 
 /**
- * Compute 25 engineered features in-place in featureBuf[54..78].
+ * Compute 25 engineered features in-place in featureBuf[59..83].
  */
 export function computeEngineeredFeaturesInPlace() {
   const sign = (v) => v > 0 ? 1 : v < 0 ? -1 : 0;
@@ -36,28 +36,28 @@ export function computeEngineeredFeaturesInPlace() {
   const regMR     = featureBuf[FI.regime_mean_reverting];
 
   const clip = 0.003;
-  featureBuf[54] = Math.max(-clip, Math.min(clip, delta1m));
-  featureBuf[55] = delta1m - (delta3m / 3);
-  featureBuf[56] = rsi * regTrend;
-  featureBuf[57] = rsi * regConf;
-  featureBuf[58] = rsi * regMR;
-  featureBuf[59] = delta1m * multiTf;
-  featureBuf[60] = bbPctB * bbSqueeze;
-  featureBuf[61] = volBuy * sign(delta1m);
-  featureBuf[62] = vwapDist * sign(vwapSlope);
-  featureBuf[63] = sign(delta3m) * (-rsiSlope);
-  featureBuf[64] = (rsi + stochK + bbPctB) / 3;
-  featureBuf[65] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
+  featureBuf[59] = Math.max(-clip, Math.min(clip, delta1m));
+  featureBuf[60] = delta1m - (delta3m / 3);
+  featureBuf[61] = rsi * regTrend;
+  featureBuf[62] = rsi * regConf;
+  featureBuf[63] = rsi * regMR;
+  featureBuf[64] = delta1m * multiTf;
+  featureBuf[65] = bbPctB * bbSqueeze;
+  featureBuf[66] = volBuy * sign(delta1m);
+  featureBuf[67] = vwapDist * sign(vwapSlope);
+  featureBuf[68] = sign(delta3m) * (-rsiSlope);
+  featureBuf[69] = (rsi + stochK + bbPctB) / 3;
+  featureBuf[70] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
 
   const atrSafe = Math.max(atrPct, 0.01);
-  featureBuf[66] = delta1m / atrSafe;
-  featureBuf[67] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
-  featureBuf[68] = delta1m * volRatio;
-  featureBuf[69] = sign(macdLine) * rsiSlope;
-  featureBuf[70] = regTrend * multiTf * sign(delta1m);
-  featureBuf[71] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
-  featureBuf[72] = volBuy * sign(delta1m) * volRatio;
-  featureBuf[73] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
+  featureBuf[71] = delta1m / atrSafe;
+  featureBuf[72] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
+  featureBuf[73] = delta1m * volRatio;
+  featureBuf[74] = sign(macdLine) * rsiSlope;
+  featureBuf[75] = regTrend * multiTf * sign(delta1m);
+  featureBuf[76] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
+  featureBuf[77] = volBuy * sign(delta1m) * volRatio;
+  featureBuf[78] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
 
   // L6: Removed `deltaDir !== 0` guard — training computes sign comparisons naturally
   // (e.g. sign(0) == sign(0) → True in numpy), so browser must match.
@@ -71,18 +71,18 @@ export function computeEngineeredFeaturesInPlace() {
     ((rsi > 0.5 ? 1 : 0) === (deltaDir > 0 ? 1 : 0) ? 1 : 0) +
     (multiTf > 0.5 ? 1 : 0)
   );
-  featureBuf[74] = agreeCount / 5;
-  featureBuf[75] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
+  featureBuf[79] = agreeCount / 5;
+  featureBuf[80] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
 
   const mktMomentum = featureBuf[FI.market_price_momentum];
-  featureBuf[76] = sign(mktMomentum) * sign(delta1m);
+  featureBuf[81] = sign(mktMomentum) * sign(delta1m);
 
   const crowdDiv = featureBuf[FI.crowd_model_divergence];
   const ruleConf = featureBuf[FI.rule_confidence];
-  featureBuf[77] = crowdDiv * ruleConf;
+  featureBuf[82] = crowdDiv * ruleConf;
 
   const obImbalance = featureBuf[FI.orderbook_imbalance];
-  featureBuf[78] = obImbalance * volBuy;
+  featureBuf[83] = obImbalance * volBuy;
 }
 
 /**
@@ -103,8 +103,8 @@ export function getDataQualityScore() {
 }
 
 /**
- * Extract 54 base features into featureBuf (in-place, zero alloc).
- * If model is v2+, also computes 25 engineered features [54-78].
+ * Extract 59 base features into featureBuf (in-place, zero alloc).
+ * If model is v2+, also computes 25 engineered features [59-83].
  *
  * H5 FIX: Tracks data freshness — counts how many features used fallback defaults.
  * Call getDataQualityScore() after this to retrieve the result.
@@ -122,6 +122,7 @@ export function extractLiveFeaturesInPlace({
   marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
   momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   fundingRate,
+  smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
 }) {
   // H5: Track fallback usage — each key indicator group that falls back increments this.
   // We track the 18 "primary data" features (not session/regime one-hots or time/clock).
@@ -253,11 +254,18 @@ export function extractLiveFeaturesInPlace({
   featureBuf[52] = Math.max(-1, Math.min(1, fr / 0.1));  // funding_rate_norm
   featureBuf[53] = 0; // funding_rate_change (no historical comparison live)
 
+  // [54-58] Smart money features (from MetEngine or defaults)
+  featureBuf[54] = smBullRatio ?? 0.5;       // sm_bull_ratio
+  featureBuf[55] = smFlowIntensity ?? 0;     // sm_flow_intensity
+  featureBuf[56] = smEarlySignal ?? 0.5;     // sm_early_signal
+  featureBuf[57] = smFlowAccel ?? 0;         // sm_flow_accel
+  featureBuf[58] = smActivity ?? 0;          // sm_activity
+
   if (S.modelVersion >= 2) {
     computeEngineeredFeaturesInPlace();
   } else {
     // Zero out engineered feature slots to prevent stale data from a previous call
-    featureBuf.fill(0, 54, 79);
+    featureBuf.fill(0, 59, 84);
   }
 
   // H5: Compute and store data quality score

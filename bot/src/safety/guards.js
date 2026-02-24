@@ -14,6 +14,10 @@ const log = createLogger('Safety');
 /** M2: Epsilon for float comparison — prevents boundary edge cases */
 const EPSILON = 1e-9;
 
+// H7: Hourly trade frequency limiter — prevents death by a thousand cuts
+const MAX_TRADES_PER_HOUR = 10;
+const tradeTimestamps = []; // ring buffer of recent trade timestamps
+
 /**
  * Circuit breaker — should the bot halt trading?
  * @returns {{ halt: boolean, reason: string }}
@@ -61,9 +65,10 @@ export function shouldEmergencyCut({ dailyPnLPct, drawdownPct }) {
   if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(drawdownPct)) {
     return { shouldCut: false, reason: '' };
   }
-  // Trigger emergency cut at 90% of circuit breaker thresholds (give margin to actually execute)
-  const dailyThreshold = BOT_CONFIG.maxDailyLossPct * 0.90;
-  const drawdownThreshold = BOT_CONFIG.maxDrawdownPct * 0.90;
+  // Audit v2 M4: 90%→75% — old 90% left only $0.67 gap from circuit breaker (one trade).
+  // 75% gives ~4% buffer ($1.69 at $45 bankroll) — enough time to actually execute the cut.
+  const dailyThreshold = BOT_CONFIG.maxDailyLossPct * 0.75;
+  const drawdownThreshold = BOT_CONFIG.maxDrawdownPct * 0.75;
 
   if (dailyPnLPct <= -(dailyThreshold - EPSILON)) {
     const reason = `Emergency: daily loss ${dailyPnLPct.toFixed(1)}% approaching circuit breaker (${BOT_CONFIG.maxDailyLossPct}%)`;
@@ -114,7 +119,25 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, available
     return { valid: false, reason: `Bet $${betAmount.toFixed(2)} exceeds available bankroll $${effectiveBankroll.toFixed(2)}` };
   }
 
+  // H7: Hourly trade frequency limit — prevents rapid-fire losses
+  const oneHourAgo = Date.now() - 3600_000;
+  const recentTrades = tradeTimestamps.filter(ts => ts > oneHourAgo);
+  if (recentTrades.length >= MAX_TRADES_PER_HOUR) {
+    return { valid: false, reason: `Trade frequency limit: ${recentTrades.length}/${MAX_TRADES_PER_HOUR} trades in last hour` };
+  }
+
   return { valid: true, reason: 'OK' };
+}
+
+/**
+ * H7: Record a trade timestamp for frequency tracking.
+ */
+export function recordTradeTimestamp() {
+  tradeTimestamps.push(Date.now());
+  // Keep only last hour + small buffer
+  while (tradeTimestamps.length > MAX_TRADES_PER_HOUR + 5) {
+    tradeTimestamps.shift();
+  }
 }
 
 /**
@@ -125,8 +148,9 @@ export function validatePrice(price) {
   if (price === null || price === undefined || !Number.isFinite(price)) {
     return { valid: false, reason: 'No market price available' };
   }
-  if (price < 0.02 || price > 0.98) {
-    return { valid: false, reason: `Price ${price.toFixed(3)} outside safe range (0.02-0.98)` };
+  // H5: Tightened from 0.02-0.98 — blocks toxic 2-5c entries and 95-98c leveraged bets
+  if (price < 0.05 || price > 0.95) {
+    return { valid: false, reason: `Price ${price.toFixed(3)} outside safe range (0.05-0.95)` };
   }
   return { valid: true, reason: 'OK' };
 }

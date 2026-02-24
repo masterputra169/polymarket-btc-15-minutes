@@ -23,6 +23,8 @@ export const FI = {
   spread_pct: 47, crowd_model_divergence: 48,
   momentum_5candle_slope: 49, volatility_change_ratio: 50, price_consistency: 51,
   funding_rate_norm: 52, funding_rate_change: 53,
+  sm_bull_ratio: 54, sm_flow_intensity: 55, sm_early_signal: 56,
+  sm_flow_accel: 57, sm_activity: 58,
 };
 
 export function resolveFeatureIdx(splitName) {

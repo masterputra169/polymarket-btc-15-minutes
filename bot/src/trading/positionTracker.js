@@ -67,13 +67,15 @@ let state = {
 let sellingInProgress = false;
 let sellLockTs = 0;
 let sellLockSource = '';  // Tracks which caller holds the lock (for dedup logging)
-const SELL_LOCK_TIMEOUT_MS = 90_000; // C6: 60s→90s — prevents double-sell when CLOB is slow
+const SELL_LOCK_TIMEOUT_MS = 45_000; // M20: 90s→45s — 90s excessive, CLOB responds within 30s; long lock blocks cut-loss/take-profit
 
 // H1 FIX: If unwindPosition() is called while sell lock is held, defer and retry after release.
 let pendingUnwind = false;
 
 // Fix M: Last known token price for mark-to-market drawdown (updated each poll, not persisted).
+// H9: Added timestamp to detect stale MtM — skip if >10s old (prevents stale price in drawdown calc).
 let lastKnownTokenPrice = null;
+let lastKnownTokenPriceTs = 0;
 
 // ── Audit log (append-only with rotation) ──
 const AUDIT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
@@ -389,6 +391,7 @@ export function settleTrade(won) {
   state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
   lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
+  lastKnownTokenPriceTs = 0;  // H9: reset timestamp
   saveState();
   return true;
 }
@@ -484,6 +487,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   state.lastSettlementMs = Date.now(); // H3/M4: Track for USDC sync cooldown (persisted)
   state.currentPosition = null;
   lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
+  lastKnownTokenPriceTs = 0;  // H9: reset timestamp
   saveState();
   return true;
 }
@@ -699,6 +703,7 @@ export function unwindPosition() {
 
   state.currentPosition = null;
   lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
+  lastKnownTokenPriceTs = 0;  // H9: reset timestamp
   saveState();
 }
 
@@ -748,6 +753,7 @@ export function getBankroll() {
 export function updatePositionMarketPrice(price) {
   if (Number.isFinite(price) && price > 0) {
     lastKnownTokenPrice = price;
+    lastKnownTokenPriceTs = Date.now(); // H9: track freshness
   }
 }
 
@@ -764,8 +770,9 @@ export function getDrawdownPct() {
   if (state.currentPosition && !state.currentPosition.settled) {
     const pos = state.currentPosition;
     // Fix M: mark-to-market using last known token price (updated each poll).
-    // Falls back to entry cost when price not yet available (e.g. first poll after startup).
-    if (lastKnownTokenPrice != null && Number.isFinite(lastKnownTokenPrice) && pos.size > 0) {
+    // H9: Skip MtM if price is >10s stale — fall back to entry cost to avoid stale drawdown calc.
+    const mtmFresh = lastKnownTokenPriceTs > 0 && (Date.now() - lastKnownTokenPriceTs) < 10_000;
+    if (mtmFresh && lastKnownTokenPrice != null && Number.isFinite(lastKnownTokenPrice) && pos.size > 0) {
       openValue = lastKnownTokenPrice * pos.size;
     } else {
       openValue = pos.cost ?? 0;
@@ -793,6 +800,33 @@ export function getDailyPnLPct() {
 
 export function getConsecutiveLosses() {
   return state.consecutiveLosses;
+}
+
+/** Audit v2 H4: Reset consecutive losses after inactivity period.
+ *  H6: Also reset peakBankroll to current bankroll (fresh start after long break). */
+export function resetConsecutiveLosses() {
+  if (state.consecutiveLosses > 0) {
+    auditLog({ type: 'CONSEC_LOSS_RESET', was: state.consecutiveLosses, peakReset: state.peakBankroll !== state.bankroll, reason: 'inactivity_4hr' });
+    state.consecutiveLosses = 0;
+    state.peakBankroll = state.bankroll; // H6: fresh start for drawdown calc
+    saveState();
+  }
+}
+
+/**
+ * Adjust bankroll by a delta amount based on reconciler discrepancy.
+ * Called by journalReconciler when verified P&L differs from local P&L.
+ * Does NOT touch wins/losses/consecutiveLosses — those are event-driven.
+ */
+export function adjustBankrollForReconciliation({ delta, reason, slug }) {
+  if (!Number.isFinite(delta) || delta === 0) return;
+  if (!assertBankrollOk('reconcileAdjust')) return;
+  const prev = state.bankroll;
+  state.bankroll = roundMoney(state.bankroll + delta);
+  if (state.bankroll > state.peakBankroll) state.peakBankroll = state.bankroll;
+  auditLog({ type: 'RECONCILE_ADJUST', prev, next: state.bankroll, delta, reason, slug });
+  log.info(`Bankroll adjusted by reconciler: $${prev.toFixed(2)} → $${state.bankroll.toFixed(2)} (${delta >= 0 ? '+' : ''}$${delta.toFixed(2)}) | ${reason}`);
+  saveState();
 }
 
 export function setBankroll(value) {

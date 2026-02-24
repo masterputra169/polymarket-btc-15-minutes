@@ -37,7 +37,7 @@ import { loadMLModelFromDisk } from './src/adapters/mlLoader.js';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.js';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.js';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
-import { initClobClient, cancelAllOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.js';
+import { initClobClient, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
@@ -76,6 +76,23 @@ async function main() {
       log.error('Cannot trade without CLOB client. Exiting.');
       process.exit(1);
     }
+
+    // 1a. Cancel orphan orders from previous session BEFORE first poll.
+    // Stale orders may execute during the ~700ms startup window, causing
+    // phantom positions (tokens received but no position state tracked).
+    try {
+      const openOrders = await getOpenOrders();
+      if (openOrders.length > 0) {
+        log.warn(`Startup cleanup: ${openOrders.length} orphan order(s) found — cancelling`);
+        await cancelAllOrders();
+        log.info('Startup cleanup: orphan orders cancelled');
+      } else {
+        log.info('Startup cleanup: no orphan orders');
+      }
+    } catch (err) {
+      log.warn(`Startup cleanup failed (non-fatal): ${err.message}`);
+    }
+
     // Start verified journal reconciler (on-chain trade history)
     startReconciler();
 
@@ -158,7 +175,7 @@ async function main() {
   log.info('-'.repeat(60));
 
   // Small delay for WS to connect before first poll
-  await new Promise(r => setTimeout(r, 1500));
+  await new Promise(r => setTimeout(r, 500));
 
   await pollOnce();
   const intervalId = setInterval(pollOnce, POLL_MS);

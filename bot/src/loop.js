@@ -99,7 +99,7 @@ import {
 } from './trading/fillTracker.js';
 
 // Trading
-import { placeBuyOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval } from './trading/clobClient.js';
+import { placeBuyOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
@@ -128,15 +128,17 @@ import {
   setMarketTradeCounts,
   getLastLossTimestamp,
   setLastLossTimestamp,
+  resetConsecutiveLosses,
   updatePositionMarketPrice,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
 import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
-import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
+import { onCutLoss as recoveryOnCutLoss, tick as recoveryTick, reset as resetRecovery, getRecoveryStatus, isRecoveryActive } from './trading/recoveryBuy.js';
+import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
-import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice } from './safety/guards.js';
+import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp } from './safety/guards.js';
 import {
   applyTradeFilters,
   recordLoss,
@@ -201,9 +203,21 @@ import {
   handleExpiry,
   handleSwitch,
   handleStalePosition,
+  getLastSettlementSource,
+  clearLastSettlementSource,
 } from './engines/settlement.js';
+import { reconcileNow } from './trading/journalReconciler.js';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.js';
 import { executeArbitrage, executeDirectionalTrade } from './engines/tradePipeline.js';
+import {
+  checkPreMarketEntry,
+  getPreMarketSizing,
+  onPreMarketEntry,
+  checkPreMarketTP,
+  clearPreMarketEntry,
+  isPreMarketPosition,
+  getPreMarketStatus,
+} from './engines/preMarketLong.js';
 
 const log = createLogger('Loop');
 
@@ -226,7 +240,11 @@ let priceToBeat = { slug: null, value: null, updatedAt: 0 };
 
 // ── Market transition grace period ──
 let marketTransitionMs = 0;
-const MARKET_TRANSITION_GRACE_MS = 5_000;
+const MARKET_TRANSITION_GRACE_MS = 5_000; // M15: 2s→5s — WS reconnection measured at 3-4s; 2s grace caused stale data trades
+
+// ── Settlement pending flag — prevents new trade entry while oracle waits in background ──
+let settlementPending = false;
+let settlementAbort = null; // AbortController: aborts oracle retries when market switches → instant price_fallback
 
 // ── Tilt protection (post-cut-loss cooldown) ──
 let tiltMarketsLeft = 0;
@@ -265,7 +283,7 @@ function makeSettlementActions() {
     settleTrade,
     unwindPosition,
     invalidateUsdcSync: invalidateSync,
-    clearEntrySnapshot,
+    clearEntrySnapshot: () => { clearEntrySnapshot(); clearPreMarketEntry(); },
     writeJournalEntry,
     recordLoss,
     settlePrediction,
@@ -300,6 +318,17 @@ export async function pollOnce() {
 
   try {
     // ── 1. Circuit Breaker ──
+    // Audit v2 H4: Reset consecutiveLosses after 4hr inactivity — stale streak from different
+    // regime is not informative. lastLossTimestamp tracks when the streak started.
+    {
+      const lastLoss = getLastLossTimestamp();
+      const INACTIVITY_RESET_MS = 4 * 60 * 60 * 1000; // 4 hours
+      if (lastLoss > 0 && getConsecutiveLosses() > 0 && (Date.now() - lastLoss) > INACTIVITY_RESET_MS) {
+        log.info(`Audit v2 H4: Resetting consecutiveLosses (${getConsecutiveLosses()}) after ${((Date.now() - lastLoss) / 3600_000).toFixed(1)}hr inactivity`);
+        resetConsecutiveLosses();
+        setLastLossTimestamp(0);
+      }
+    }
     const haltCheck = shouldHalt({
       dailyPnLPct: getDailyPnLPct(),
       bankroll: getBankroll(),
@@ -362,14 +391,17 @@ export async function pollOnce() {
           log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
-          if (drift > 5 && !hasPos) {
-            log.warn(`Startup USDC auto-sync: drift $${drift.toFixed(2)} > $5 (no position) — syncing`);
+          // M17: Use 5% relative threshold instead of fixed $5 — $5 doesn't scale with bankroll
+          const driftPct = localBankroll > 0 ? (drift / localBankroll) * 100 : 0;
+          const driftSignificant = driftPct > 5;
+          if (driftSignificant && !hasPos) {
+            log.warn(`Startup USDC auto-sync: drift $${drift.toFixed(2)} (${driftPct.toFixed(1)}%) > 5% (no position) — syncing`);
             queueSync(onChain);
-          } else if (drift > 5 && hasPos) {
-            log.error(`Startup USDC DRIFT: $${drift.toFixed(2)} with open position — manual intervention may be needed`);
-            notify('warn', `Startup USDC drift: $${drift.toFixed(2)} (local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)}) with open position`);
-          } else if (drift > 1) {
-            log.warn(`Startup USDC drift: $${drift.toFixed(2)} (minor, will sync on next idle cycle)`);
+          } else if (driftSignificant && hasPos) {
+            log.error(`Startup USDC DRIFT: $${drift.toFixed(2)} (${driftPct.toFixed(1)}%) with open position — manual intervention may be needed`);
+            notify('warn', `Startup USDC drift: $${drift.toFixed(2)} (${driftPct.toFixed(1)}%) (local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)}) with open position`);
+          } else if (driftPct > 1) {
+            log.warn(`Startup USDC drift: $${drift.toFixed(2)} (${driftPct.toFixed(1)}%, minor, will sync on next idle cycle)`);
           }
         }
       } catch (err) {
@@ -444,8 +476,13 @@ export async function pollOnce() {
     if (marketExpired) {
       log.info('Market expired! Forcing fresh discovery...');
       const pos = getCurrentPosition();
-      if (pos && pos.marketSlug === currentMarketSlug) {
-        await handleExpiry(
+      if (pos && pos.marketSlug === currentMarketSlug && !settlementPending) {
+        // Non-blocking: oracle can take up to 83s — don't freeze the poll loop.
+        // settlementPending blocks new trade entry until oracle resolves.
+        // AbortController: market switch aborts oracle retries → instant price_fallback.
+        settlementPending = true;
+        settlementAbort = new AbortController();
+        handleExpiry(
           { pos, currentMarketSlug, currentConditionId, priceToBeat, now },
           {
             getLastSettled, setLastSettled,
@@ -453,10 +490,19 @@ export async function pollOnce() {
             getBinancePrice,
           },
           makeSettlementActions(),
-        );
+          { signal: settlementAbort.signal },
+        ).finally(() => {
+          settlementPending = false; settlementAbort = null;
+          // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
+          if (getLastSettlementSource() === 'price_fallback') {
+            clearLastSettlementSource();
+            setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (expiry): ${e.message}`)), 60_000);
+          }
+        });
       }
       resetCutLossState();
       resetTakeProfitState();
+      resetRecovery(); // Cancel any pending recovery on market expiry
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
       entryRegime = null;
@@ -476,6 +522,7 @@ export async function pollOnce() {
     // Audit fix H: Validate Binance WS price is fresh (< 5s old).
     // During WS outage (up to 20s before heartbeat fires), stale price could cause
     // bad trade decisions. BTC can move $50-200 in 20s during volatile markets.
+    // M16: Matches WS_BINANCE.heartbeatCheckMs (5s) — both use 5s as staleness boundary.
     const BINANCE_STALE_MS = 5_000;
     const wsPrice = getBinancePrice();
     const wsFresh = wsPrice && isBinanceConnected() && (Date.now() - getBinanceLastMsgTime() < BINANCE_STALE_MS);
@@ -587,9 +634,19 @@ export async function pollOnce() {
       log.info(`Market switched: "${oldSlug}" -> "${marketSlug}"`);
       marketTransitionMs = now;
 
+      // Abort any pending settlement (e.g. handleExpiry oracle retries) → instant price_fallback.
+      // Without this, oracle retries block trading for up to 83s on the new market.
+      if (settlementPending && settlementAbort) {
+        log.info('Aborting pending settlement — market switched, forcing price_fallback');
+        settlementAbort.abort();
+      }
+
       const pos = getCurrentPosition();
-      if (pos) {
-        await handleSwitch(
+      if (pos && !settlementPending) {
+        // Non-blocking: settlement runs in background while loop continues on new market.
+        settlementPending = true;
+        settlementAbort = new AbortController();
+        handleSwitch(
           { pos, oldSlug, currentConditionId, priceToBeat, now },
           {
             getLastSettled, setLastSettled,
@@ -597,12 +654,21 @@ export async function pollOnce() {
             getBinancePrice,
           },
           makeSettlementActions(),
-        );
+          { signal: settlementAbort.signal },
+        ).finally(() => {
+          settlementPending = false; settlementAbort = null;
+          // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
+          if (getLastSettlementSource() === 'price_fallback') {
+            clearLastSettlementSource();
+            setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (switch): ${e.message}`)), 60_000);
+          }
+        });
       }
 
       resetMarketCache();
       resetCutLossState();
       resetTakeProfitState();
+      resetRecovery(); // Cancel any pending recovery on market switch
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -619,8 +685,11 @@ export async function pollOnce() {
 
     // ── 4b. Stale position recovery (bot restart with position from past market) ──
     const stalePos = getCurrentPosition();
-    if (stalePos && !stalePos.settled && currentMarketSlug && stalePos.marketSlug !== currentMarketSlug) {
-      await handleStalePosition(
+    if (stalePos && !stalePos.settled && currentMarketSlug && stalePos.marketSlug !== currentMarketSlug && !settlementPending) {
+      // Non-blocking: stale position recovery runs in background.
+      settlementPending = true;
+      settlementAbort = new AbortController();
+      handleStalePosition(
         { pos: stalePos, currentMarketSlug, now },
         {
           getLastSettled,
@@ -628,9 +697,14 @@ export async function pollOnce() {
           getBinancePrice,
         },
         makeSettlementActions(),
-      );
-      resetCutLossState();
-      resetTakeProfitState();
+        { signal: settlementAbort.signal },
+      ).finally(() => {
+        settlementPending = false;
+        settlementAbort = null;
+        resetCutLossState();
+        resetTakeProfitState();
+        resetRecovery(); // Cancel any pending recovery on stale position recovery
+      });
     }
 
     if (!poly?.ok) {
@@ -666,6 +740,9 @@ export async function pollOnce() {
     const clobLastUpdate = getClobLastUpdate();
     const clobStale = clobLastUpdate ? (now - clobLastUpdate > 15_000) : true;
 
+    // Get smart flow signal from PREVIOUS poll cycle (point-in-time correct for ML features)
+    const smartFlowSignalForML = getSmartFlowSignal();
+
     const sig = computeSignals({
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
       clobConnected: isClobConnected(), clobStale,
@@ -673,6 +750,7 @@ export async function pollOnce() {
       feedbackStats, timeLeftMin,
       candleWindowMinutes: CONFIG.candleWindowMinutes,
       getMLPrediction, fundingRate,
+      smartFlowSignal: smartFlowSignalForML,
     });
 
     // Update priceToBeat from signal computation
@@ -775,7 +853,8 @@ export async function pollOnce() {
               clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
-              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+              resetRecovery(); // Emergency cut cancels any pending recovery
+              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${emergencyPos.marketSlug}">View Market</a>`);
             }
           } finally { releaseSellLock(); }
         }
@@ -783,13 +862,14 @@ export async function pollOnce() {
     }
 
     // ── 6b. Smart money sell-first check ──
-    // If holding a position AND strong early smart flow disagrees with our side,
-    // trigger early exit before waiting for full cut-loss conditions.
-    // This catches positions where smart money is flowing against us in the first 5 minutes.
+    // DISABLED by default — data 2026-02-24: -$2.68 loss from 3 trades.
+    // Smart flow accuracy only 56% in late window. Settlement WR 71.1% beats early sell at loss.
+    // Enable with SMART_SELL_FIRST_ENABLED=true in .env if flow model improves.
     let smartSellTriggered = false;
     const sfPos = getCurrentPosition();
+    const smartSellFirstEnabled = process.env.SMART_SELL_FIRST_ENABLED === 'true';
     // Bug 1 fix: require fillConfirmed — don't try to sell tokens not yet confirmed on-chain
-    if (sfPos && !sfPos.settled && sfPos.fillConfirmed && sfPos.side !== 'ARB') {
+    if (smartSellFirstEnabled && sfPos && !sfPos.settled && sfPos.fillConfirmed && sfPos.side !== 'ARB') {
       const sfFlowAgrees = smartFlowSignal.agreesWithSide?.(sfPos.side) ?? true;
       const sfTokenPrice = sfPos.side === 'UP' ? marketUp : marketDown;
       const sfTokenBook = sfPos.side === 'UP' ? orderbookUp : orderbookDown;
@@ -842,8 +922,9 @@ export async function pollOnce() {
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
               resetCutLossState();
               resetTakeProfitState();
+              resetRecovery(); // Smart sell cancels any pending recovery
               if (sfPnl < 0) recordLoss();
-              notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
+              notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
             } else {
               try {
                 const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
@@ -855,8 +936,9 @@ export async function pollOnce() {
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
                 resetCutLossState();
                 resetTakeProfitState();
+                resetRecovery(); // Smart sell cancels any pending recovery
                 if (sfPnl < 0) recordLoss();
-                notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}`);
+                notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
               } catch (err) {
                 log.warn(`Smart sell-first FAILED: ${err.stack || err.message}`);
                 smartSellTriggered = false;
@@ -868,16 +950,39 @@ export async function pollOnce() {
       }
     }
 
-    // ── Fix C: Auto-confirm fill if position held >= 90s without CLOB verification ──
+    // ── Fix C1: Auto-confirm fill if position held >= 90s — now with on-chain verification ──
     // Covers: fill tracker timeout, bot restart with unconfirmed position, CLOB API errors.
-    // 90s < minHoldSec (120s) so cut-loss can evaluate immediately after auto-confirmation.
+    // 90s < minHoldSec (240s) so cut-loss can evaluate immediately after auto-confirmation.
+    // C1 FIX: Verify tokens exist on-chain before confirming — prevents phantom positions.
     {
       const autoPos = getCurrentPosition();
       if (autoPos && !autoPos.settled && !autoPos.fillConfirmed && autoPos.side !== 'ARB') {
         const holdSec = (Date.now() - (autoPos.enteredAt ?? 0)) / 1000;
         if (holdSec >= 90) {
-          log.warn(`Auto-confirm fill: ${autoPos.side} held ${holdSec.toFixed(0)}s without CLOB verification — assuming filled (fill tracker may have missed)`);
-          confirmFill();
+          let onChainVerified = false;
+          if (isClientReady() && autoPos.tokenId) {
+            try {
+              const balInfo = await getConditionalTokenBalance(autoPos.tokenId);
+              if (balInfo && balInfo.balance > 0) {
+                onChainVerified = true;
+                log.info(`Auto-confirm: on-chain balance verified (${balInfo.balance.toFixed(4)} tokens)`);
+              } else {
+                log.warn(`Auto-confirm BLOCKED: no tokens on-chain for ${autoPos.tokenId.slice(0, 12)}... — phantom position, unwinding`);
+                unwindPosition();
+                writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { reason: 'auto_confirm_no_tokens' } });
+                clearEntrySnapshot();
+              }
+            } catch (err) {
+              onChainVerified = true; // Balance check failed — confirm conservatively
+              log.warn(`Auto-confirm: on-chain check failed (${err.message}) — confirming conservatively`);
+            }
+          } else {
+            onChainVerified = true; // Client not ready — confirm conservatively
+          }
+          if (onChainVerified) {
+            log.warn(`Auto-confirm fill: ${autoPos.side} held ${holdSec.toFixed(0)}s without CLOB verification — confirmed${isClientReady() ? ' (on-chain verified)' : ' (conservative)'}`);
+            confirmFill();
+          }
         }
       }
     }
@@ -953,11 +1058,13 @@ export async function pollOnce() {
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
               resetCutLossState();
               resetTakeProfitState();
+              // Trigger recovery buy sampling (captures side/token before pos is cleared)
+              recoveryOnCutLoss({ side: pos.side, tokenId: pos.tokenId, conditionId: pos.conditionId, marketSlug: pos.marketSlug });
               if (cutPnl < 0) {
                 recordLoss();
                 tiltMarketsLeft = TILT_MARKETS + 1;
                 log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
-                notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+                notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
               }
             } else {
               recordSellAttempt();
@@ -971,11 +1078,13 @@ export async function pollOnce() {
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
                 resetCutLossState();
                 resetTakeProfitState();
+                // Trigger recovery buy sampling (captures side/token before pos is cleared)
+                recoveryOnCutLoss({ side: pos.side, tokenId: pos.tokenId, conditionId: pos.conditionId, marketSlug: pos.marketSlug });
                 if (cutPnl < 0) {
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
                   log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
-                  notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+                  notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
                 }
               } catch (err) {
                 if (err.message === 'no_tokens_on_chain') {
@@ -990,7 +1099,7 @@ export async function pollOnce() {
                   resetTakeProfitState();
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
-                  notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}`);
+                  notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
                 } else {
                   log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
                   resetCutConfirm();
@@ -1009,6 +1118,12 @@ export async function pollOnce() {
     if (tpPos && !tpPos.settled && tpPos.side !== 'ARB' && !smartSellTriggered) {
       const tpTokenPrice = tpPos.side === 'UP' ? marketUp : marketDown;
       const tpTokenBook = tpPos.side === 'UP' ? orderbookUp : orderbookDown;
+      // v2: Pass entry snapshot data for entry-relative comparison
+      const tpSnap = getEntrySnapshot();
+      const tpEntryProb = tpSnap
+        ? (tpPos.side === 'UP' ? tpSnap.ensembleUp : (1 - (tpSnap.ensembleUp ?? 0.5)))
+        : null;
+      const tpBestEdge = tpPos.side === 'UP' ? (edge.edgeUp ?? null) : (edge.edgeDown ?? null);
       const tpResult = evaluateTakeProfit({
         position: tpPos, currentTokenPrice: tpTokenPrice,
         orderbook: tpTokenBook, timeLeftMin,
@@ -1018,6 +1133,8 @@ export async function pollOnce() {
         regime: regimeInfo?.regime ?? 'moderate',
         entryRegime,
         btcDelta1m: delta1m,
+        entryEnsembleProb: tpEntryProb,
+        bestEdge: tpBestEdge,
       });
 
       if (tpResult.shouldTakeProfit) {
@@ -1041,7 +1158,8 @@ export async function pollOnce() {
               writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: tpExitData });
               resetCutLossState();
               resetTakeProfitState();
-              notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+              resetRecovery(); // Take-profit cancels any pending recovery
+              notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
             } else {
               try {
                 const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
@@ -1053,7 +1171,8 @@ export async function pollOnce() {
                 writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...tpExitData, recovered: tpActualRecovery } });
                 resetCutLossState();
                 resetTakeProfitState();
-                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}`);
+                resetRecovery(); // Take-profit cancels any pending recovery
+                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
               } catch (err) {
                 log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
                 resetTakeProfitState();
@@ -1061,6 +1180,119 @@ export async function pollOnce() {
             }
           } finally { releaseSellLock(); }
         }
+      }
+    }
+
+    // ── 6d2. Pre-market LONG take-profit (50% target — sell early if reached) ──
+    const pmPos = getCurrentPosition();
+    if (pmPos && !pmPos.settled && pmPos.side === 'UP' && isPreMarketPosition(marketSlug)) {
+      const pmTokenPrice = marketUp;
+      const pmTP = checkPreMarketTP(pmTokenPrice, marketSlug, BOT_CONFIG.preMarketLong);
+      if (pmTP.shouldTP) {
+        if (!acquireSellLock('premarket_tp')) {
+          log.info('Pre-market TP skipped — sell already in progress');
+        } else {
+          try {
+            const pmSellSize = pmPos.size;
+            const pmSellPrice = Math.max(0.01, Math.round((pmTokenPrice - 0.01) * 1000) / 1000); // 1c below mid for FOK fill
+            log.info(
+              `PRE-MARKET TP: ${pmPos.side} +${pmTP.gainPct.toFixed(1)}% | ` +
+              `sell ${pmSellSize} shares @$${pmSellPrice.toFixed(3)} | target was $${pmTP.targetPrice.toFixed(3)}`
+            );
+            if (BOT_CONFIG.dryRun) {
+              const pmRecovery = pmSellPrice * pmSellSize;
+              const pmPnl = pmRecovery - pmPos.cost;
+              settleTradeEarlyExit(pmRecovery);
+              invalidateSync();
+              clearEntrySnapshot();
+              clearPreMarketEntry();
+              writeJournalEntry({ outcome: 'PREMARKET_TP', pnl: pmPnl, exitData: { gainPct: pmTP.gainPct, strategy: 'premarket_long' } });
+              resetCutLossState();
+              resetTakeProfitState();
+              notify('info', `PRE-MARKET TP (dry): UP +${pmTP.gainPct.toFixed(1)}% | P&L $${pmPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+            } else {
+              try {
+                const pmSellResult = await closePosition(pmPos.tokenId, pmSellSize, pmSellPrice);
+                const pmActualRecovery = parseClobAmount(pmSellResult?.takingAmount, pmSellPrice * pmSellSize);
+                const pmPnl = pmActualRecovery - pmPos.cost;
+                settleTradeEarlyExit(pmActualRecovery);
+                invalidateSync();
+                clearEntrySnapshot();
+                clearPreMarketEntry();
+                writeJournalEntry({ outcome: 'PREMARKET_TP', pnl: pmPnl, exitData: { gainPct: pmTP.gainPct, recovered: pmActualRecovery, strategy: 'premarket_long' } });
+                resetCutLossState();
+                resetTakeProfitState();
+                notify('info', `PRE-MARKET TP: UP +${pmTP.gainPct.toFixed(1)}% | P&L $${pmPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              } catch (err) {
+                log.warn(`Pre-market TP sell FAILED: ${err.stack || err.message}`);
+              }
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
+    // ── 6e. Recovery buy tick (after cut-loss, re-enter if signal stabilizes) ──
+    if (isRecoveryActive()) {
+      const recoveryPos = getCurrentPosition();
+      const haltCheck2 = shouldHalt({
+        dailyPnLPct: getDailyPnLPct(),
+        bankroll: getBankroll(),
+        consecutiveLosses: getConsecutiveLosses(),
+        drawdownPct: getDrawdownPct(),
+      });
+      const recoveryResult = recoveryTick({
+        tokenPrice: isRecoveryActive() ? (getRecoveryStatus().side === 'UP' ? marketUp : marketDown) : null,
+        timeLeftMin,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
+        ensembleProb: isRecoveryActive()
+          ? (getRecoveryStatus().side === 'UP' ? ensembleUp : ensembleDown) : null,
+        hasPosition: recoveryPos != null && !recoveryPos.settled,
+        isHalted: haltCheck2.halt,
+        bankroll: getAvailableBankroll(),
+        marketSlug,
+      });
+
+      if (recoveryResult.shouldBuy && !settlementPending) {
+        const rcvSide = recoveryResult.side;
+        const rcvTokenId = recoveryResult.tokenId;
+        const rcvPrice = rcvSide === 'UP' ? marketUp : marketDown;
+        // Recovery sizing: maxRecoveryPct of normal bet, capped by maxBetAmountUsd
+        const rcvBankroll = getAvailableBankroll();
+        const rcvMaxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;
+        const rcvBet = Math.min(rcvBankroll * (recoveryResult.sizePct ?? 0.50), rcvMaxBet);
+        const rcvSize = rcvPrice > 0 ? Math.floor(rcvBet / rcvPrice) : 0;
+
+        if (rcvSize >= 1 && rcvPrice > 0 && rcvPrice < 0.99) {
+          log.info(`RECOVERY BUY: ${rcvSide} ${rcvSize} shares @ $${rcvPrice.toFixed(3)} ($${(rcvSize * rcvPrice).toFixed(2)})`);
+          try {
+            if (BOT_CONFIG.dryRun) {
+              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug });
+              confirmFill();
+              captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
+              entryRegime = regimeInfo?.regime ?? null;
+              notify('info', `RECOVERY BUY (dry): ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+            } else {
+              const rcvResult = await placeBuyOrder({ tokenId: rcvTokenId, price: rcvPrice, size: rcvSize });
+              const rcvOrderId = rcvResult?.orderId ?? null;
+              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: rcvOrderId });
+              trackOrderPlacement(rcvOrderId);
+              captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
+              entryRegime = regimeInfo?.regime ?? null;
+              if (!BOT_CONFIG.dryRun && rcvTokenId) {
+                updateConditionalApproval(rcvTokenId).catch(e => log.warn(`Recovery approval skip: ${e.message}`));
+              }
+              notify('info', `RECOVERY BUY: ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+            }
+          } catch (err) {
+            log.warn(`Recovery buy FAILED: ${err.stack || err.message}`);
+          }
+        } else {
+          log.info(`Recovery buy skipped: size=${rcvSize} price=${rcvPrice?.toFixed(3)} — insufficient`);
+        }
+      } else if (pollCounter % 10 === 0 && isRecoveryActive()) {
+        log.debug(`Recovery: ${recoveryResult.reason}`);
       }
     }
 
@@ -1114,6 +1346,11 @@ export async function pollOnce() {
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
 
     // ── 10. Trade execution ──
+    // H8: settlementPending only blocks trade entry (steps 10a/10b), not signal computation or broadcast.
+    // Previously returned early here, which skipped status log + dashboard broadcast for up to 83s.
+    if (settlementPending) {
+      log.debug('Settlement in progress — skipping trade entry this poll (signal/broadcast still active)');
+    }
     const alreadyHasPosition = hasOpenPosition(marketSlug);
     const hasPending = hasPendingOrder();
 
@@ -1138,8 +1375,80 @@ export async function pollOnce() {
       log.debug(`Trade entry blocked: timeLeftMin=${timeLeftMin ?? 'null'} < ${MIN_TIME_LEFT_FOR_ENTRY}min — too close to expiry`);
     }
 
+    // ── 10pre. Pre-market LONG strategy (priority over normal signals) ──
+    // Bypasses ML, edge, signal stability gates — pure time-window momentum play.
+    let preMarketEnteredThisPoll = false;
+    if (BOT_CONFIG.preMarketLong.enabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
+      const pmCheck = checkPreMarketEntry({
+        hasPosition: alreadyHasPosition,
+        bankroll,
+        settlementPending,
+        config: BOT_CONFIG.preMarketLong,
+      });
+
+      if (pmCheck.shouldEnter && poly.tokens?.upTokenId && marketUp > 0.01 && marketUp < 0.99) {
+        const pmSizing = getPreMarketSizing(bankroll, marketUp, BOT_CONFIG.preMarketLong);
+        if (pmSizing.valid) {
+          const pmTokenId = poly.tokens.upTokenId;
+          const pmShares = pmSizing.shares;
+          const pmPrice = marketUp;
+          const pmOrderCost = Math.round(pmShares * pmPrice * 100) / 100;
+
+          // Polymarket minimum order $1.00
+          if (pmOrderCost >= 1.00) {
+            log.info(
+              `PRE-MARKET LONG: BUY UP ${pmShares} shares @ $${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | ` +
+              `Risk: ${(BOT_CONFIG.preMarketLong.riskPct * 100).toFixed(0)}% of $${bankroll.toFixed(2)} | ` +
+              `TP target: +${(BOT_CONFIG.preMarketLong.profitTargetPct * 100).toFixed(0)}% ($${(pmPrice * (1 + BOT_CONFIG.preMarketLong.profitTargetPct)).toFixed(3)})`
+            );
+
+            if (BOT_CONFIG.dryRun) {
+              recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmPrice, size: pmShares, marketSlug });
+              confirmFill();
+              captureEntrySnapshot({ side: 'UP', tokenPrice: pmPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmOrderCost, size: pmShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
+              entryRegime = regimeInfo?.regime ?? null;
+              onPreMarketEntry(pmPrice, marketSlug);
+              preMarketEnteredThisPoll = true;
+              notify('info', `PRE-MARKET LONG (dry): UP ${pmShares}@$${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+            } else {
+              try {
+                setPendingCost(pmOrderCost);
+                const fokPrice = Math.min(Math.round((pmPrice + Math.max(0.005, pmPrice * 0.01)) * 1000) / 1000, 0.99);
+                const pmResult = await placeBuyOrder({ tokenId: pmTokenId, price: fokPrice, size: pmShares });
+                const pmOrderId = pmResult?.orderId ?? null;
+                const pmFillCost = parseClobAmount(pmResult?.makingAmount, null);
+                const pmActualSize = parseClobAmount(pmResult?.takingAmount, null) ?? pmShares;
+                const pmActualPrice = (pmFillCost != null && pmFillCost > 0 && pmActualSize > 0) ? pmFillCost / pmActualSize : pmPrice;
+                const pmActualCost = (pmFillCost != null && pmFillCost > 0) ? pmFillCost : null;
+
+                setPendingCost(0);
+                if (pmOrderId) trackOrderPlacement(pmOrderId, { tokenId: pmTokenId, price: pmActualPrice, size: pmActualSize, side: 'UP', confirmed: !!(pmResult?.makingAmount || pmResult?.takingAmount) });
+                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmActualPrice, size: pmActualSize, marketSlug, orderId: pmOrderId, actualCost: pmActualCost });
+                entryRegime = regimeInfo?.regime ?? null;
+                captureEntrySnapshot({ side: 'UP', tokenPrice: pmActualPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmActualCost ?? pmOrderCost, size: pmActualSize, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
+                onPreMarketEntry(pmActualPrice, marketSlug);
+                preMarketEnteredThisPoll = true;
+                // ERC-1155 approval for subsequent sells
+                updateConditionalApproval(pmTokenId).catch(e => log.debug(`PreMarket approval: ${e.message}`));
+                notify('info', `PRE-MARKET LONG: UP ${pmActualSize}@$${pmActualPrice.toFixed(3)} ($${(pmActualCost ?? pmOrderCost).toFixed(2)}) | TP: $${(pmActualPrice * (1 + BOT_CONFIG.preMarketLong.profitTargetPct)).toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              } catch (err) {
+                setPendingCost(0);
+                log.error(`Pre-market LONG order FAILED: ${err.message}`);
+              }
+            }
+          }
+        }
+      } else if (pmCheck.shouldEnter === false && pollCounter % 200 === 0 && BOT_CONFIG.preMarketLong.enabled) {
+        // Periodic log (every ~200 polls) for pre-market status
+        const pmStatus = getPreMarketStatus(BOT_CONFIG.preMarketLong);
+        if (pmStatus.isWeekday) {
+          log.debug(`PreMarket: ${pmCheck.reason} | ${pmStatus.etTime} | traded=${pmStatus.tradedToday}`);
+        }
+      }
+    }
+
     // 10a. Arbitrage execution (priority over directional)
-    if (!signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!preMarketEnteredThisPoll && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
       try {
@@ -1154,8 +1463,10 @@ export async function pollOnce() {
           // unwindSucceeded stays false → one-legged ARB silently falls back to directional.
           placeSellOrder: ({ tokenId, price, size }) => closePosition(tokenId, size, price),
           recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
-          captureEntrySnapshot,
+          captureEntrySnapshot, recordTradeTimestamp,
           setEntryRegime: (r) => { entryRegime = r; },
+          // RC3 Fix (ARB): ERC-1155 approval after BUY legs for subsequent SELL
+          updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
         });
       } catch (arbErr) {
         log.error(`executeArbitrage failed (bot kept alive): ${arbErr.stack || arbErr.message}`);
@@ -1164,7 +1475,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
+    else if (!preMarketEnteredThisPoll && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         await executeDirectionalTrade({
@@ -1198,6 +1509,7 @@ export async function pollOnce() {
           recordTradeForMarket,
           captureEntrySnapshot,
           recordPrediction,
+          recordTradeTimestamp,
           setEntryRegime: (r) => { entryRegime = r; },
           notifyTrade: notifyTradeFn,
           // RC3 Fix: ERC-1155 approval immediately after BUY fill
@@ -1359,6 +1671,9 @@ export async function pollOnce() {
       volumeRatio: volumeAvg > 0 ? volumeRecent / volumeAvg : 1,
       vwapCrossCount, failedVwapReclaim,
 
+      // Pre-market LONG strategy
+      preMarketLong: BOT_CONFIG.preMarketLong.enabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : { enabled: false },
+
       // Bet sizing
       betSizing,
 
@@ -1390,6 +1705,9 @@ export async function pollOnce() {
 
       // MetEngine smart money gate status (for BotPanel display)
       metEngine: getMetEngineStats(),
+
+      // Recovery buy status
+      recoveryBuy: getRecoveryStatus(),
     });
 
     // Periodic save

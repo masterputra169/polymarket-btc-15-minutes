@@ -127,7 +127,11 @@ export function computeBetSizing({
   }
 
   // ── Kelly Criterion ──
-  const b = (1 / marketPrice) - 1;    // decimal odds payout ratio
+  // Quant fix C2: net payout after Polymarket 2% fee on profit.
+  // Gross b = (1/price - 1). Net b = gross × (1 - 0.02) = gross × 0.98.
+  // Without fee, Kelly slightly oversizes every trade systematically.
+  const grossB = (1 / marketPrice) - 1;
+  const b = grossB * 0.98;             // net decimal odds after 2% fee
   const p = ensembleProb;              // model probability of winning
   const q = 1 - p;
   const rawKelly = (b * p - q) / b;
@@ -172,27 +176,31 @@ export function computeBetSizing({
   const mlAdj = mlMultiplier(ml, side);
 
   // Confidence tier
-  const confMult = CONF_MULT[confidence] ?? 0.55;
+  // Fix P1: When ML confidence ≥ 0.80 and agrees with trade side, bypass confidence
+  // tier penalty — ML at this level already encodes signal quality, double-dampening
+  // causes systematic under-sizing ("death by a thousand cuts").
+  const mlVeryHighConf = ml?.status === 'ready' && ml?.confidence >= 0.80 && ml?.side === side;
+  const confMult = mlVeryHighConf ? 1.0 : (CONF_MULT[confidence] ?? 0.55);
   const confidenceAdj = {
     multiplier: confMult,
-    label: confidence ?? 'MEDIUM',
+    label: mlVeryHighConf ? `${confidence}→ML↑` : (confidence ?? 'MEDIUM'),
   };
 
   // Execution risk
   const executionAdj = executionMultiplier(executionContext);
 
-  // Audit fix H: Autocorrelation penalty — consecutive same-side trades are correlated,
-  // Kelly assumes independence. Reduce sizing when betting same direction repeatedly.
+  // Autocorrelation penalty — consecutive loss streaks signal correlated regime failure.
+  // Quant fix H7: Gate behind accuracy check — don't penalize random variance.
+  // Kelly assumes independence; streak penalty only valid when accuracy is also statistically poor.
+  // With 65% WR, P(5 consecutive losses) = 0.35^5 = 0.52% — can happen by chance alone.
+  // Only apply if recent accuracy < 45% (well below random 50%) confirming systematic failure.
   let autoCorr = { multiplier: 1.0, label: 'N/A' };
   const streak = feedbackStats?.streak;
-  if (streak && streak.count >= 3) {
-    // Audit fix M3: Only apply autocorr penalty for LOSS streaks.
-    // Win streaks mean model is performing well — no penalty needed.
-    // Loss streaks signal correlated market regime that model is consistently wrong on.
-    if (streak.type === 'loss') {
-      if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr` }; }
-      else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr` }; }
-    }
+  // accRaw already declared above (line ~166) — reuse for streak accuracy gate
+  const accPoor = accRaw === null || accRaw < 0.45;  // null = no data → conservative, apply penalty
+  if (streak && streak.count >= 3 && streak.type === 'loss' && accPoor) {
+    if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr (acc=${accRaw != null ? (accRaw*100).toFixed(0)+'%' : 'N/A'})` }; }
+    else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr (acc=${accRaw != null ? (accRaw*100).toFixed(0)+'%' : 'N/A'})` }; }
   }
 
   // ── Smart money flow multiplier ──
@@ -214,26 +222,29 @@ export function computeBetSizing({
   let timingAdj = { multiplier: 1.0, label: 'N/A' };
   if (entryTimingScore) {
     timingAdj = {
-      multiplier: entryTimingScore.score,
+      // Quant fix L3: clamp score to [0.5, 1.5] before use as multiplier — prevents corrupt
+      // upstream value from hitting the [0.15, 3.0] global clamp at max (makes debugging opaque).
+      multiplier: Math.max(0.5, Math.min(1.5, entryTimingScore.score)),
       label: entryTimingScore.label + (entryTimingScore.inSweetSpot ? ' ★' : ''),
     };
   }
 
-  // Apply all multipliers (8 total: regime, accuracy, ML, confidence, execution, autocorrelation, smartFlow, timing)
-  // Multiply all together, clamp once at end — per-step clamping loses information
-  // when intermediate values hit bounds and later multipliers pull back
+  // Audit v2 H2: Group correlated multipliers to prevent double-counting.
+  // Regime+accuracy are correlated (choppy→cold accuracy). ML+confidence are correlated.
+  // Group them and cap each group's combined penalty, then multiply groups together.
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
-  const rawMultiplier = safeMult(regimeAdj.multiplier)
-    * safeMult(accuracyAdj.multiplier)
-    * safeMult(mlAdj.multiplier)
-    * safeMult(confidenceAdj.multiplier)
-    * safeMult(executionAdj.multiplier)
-    * safeMult(autoCorr.multiplier)
-    * safeMult(smartFlowAdj.multiplier)
-    * safeMult(timingAdj.multiplier);
-  // Audit fix M: Cap total multiplier product to [0.30, 3.0] (10x range).
-  // Previously 5 unbounded multipliers could combine to 31x range — too opaque.
-  const clampedMultiplier = Math.max(0.30, Math.min(3.0, rawMultiplier));
+
+  // Group 1: Market quality (regime × accuracy × autocorrelation) — correlated via regime
+  const marketQuality = Math.max(0.40, safeMult(regimeAdj.multiplier) * safeMult(accuracyAdj.multiplier) * safeMult(autoCorr.multiplier));
+  // Group 2: Signal quality (ML × confidence × smartFlow) — correlated via model agreement
+  const signalQuality = Math.max(0.40, safeMult(mlAdj.multiplier) * safeMult(confidenceAdj.multiplier) * safeMult(smartFlowAdj.multiplier));
+  // Group 3: Execution (independent)
+  const execQuality = safeMult(executionAdj.multiplier) * safeMult(timingAdj.multiplier);
+
+  const rawMultiplier = marketQuality * signalQuality * execQuality;
+  // Audit v2 H2: Floor 0.15→0.25 — 0.15 produces near-zero bets that waste fees.
+  // At $45 bankroll × 5% Kelly × 0.15 = $0.34 bet — below Polymarket $1 minimum anyway.
+  const clampedMultiplier = Math.max(0.25, Math.min(3.0, rawMultiplier));
   let adjustedFraction = frac * clampedMultiplier;
   adjustedFraction = Math.min(Math.max(adjustedFraction, 0), MAX_BET_PCT);
 

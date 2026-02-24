@@ -9,9 +9,13 @@
  */
 
 // ── Constants ──
-export const SIGNAL_CONFIRM_POLLS = 3;  // v4: 2→3 polls (3 × 3s = 9s) — reduces false triggers from single-poll anomalies
+// M10: Derive from poll interval instead of hardcoding (assumes 3s poll).
+// At 3s poll: 9s confirmation. At 5s poll: 10s confirmation. Scales correctly.
+import { CONFIG } from '../../../src/config.js';
+const POLL_INTERVAL_S = (CONFIG.pollIntervalMs ?? 3000) / 1000;
+export const SIGNAL_CONFIRM_POLLS = Math.max(2, Math.round(9 / POLL_INTERVAL_S));  // ~9s of confirmation
 const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
-const MAX_FLIPS_TO_ENTER = 4;           // v3: 3→4 — 15-min markets are naturally flippy, 3 was too strict
+const MAX_FLIPS_TO_ENTER = 3;           // v5: 2→3 — with lower edge thresholds, signal oscillates less but still needs some tolerance; 2 was too strict with LATE phase natural flickering
 
 // ── State ──
 let signalConfirmCount = 0;
@@ -69,19 +73,23 @@ export function decayConfirmation() {
 
 /**
  * Check if signal meets stability requirements for entry.
+ * Fix P2: When ML confidence >= 0.80, reduce required polls to 1 — high-confidence
+ * signals don't need multi-poll confirmation, avoiding 10-20s entry lag.
+ * @param {number} [requiredPolls] - Override required polls (default: SIGNAL_CONFIRM_POLLS)
  */
-export function isSignalStable() {
-  return signalConfirmCount >= SIGNAL_CONFIRM_POLLS && signalFlipHistory.length <= MAX_FLIPS_TO_ENTER;
+export function isSignalStable(requiredPolls = SIGNAL_CONFIRM_POLLS) {
+  return signalConfirmCount >= requiredPolls && signalFlipHistory.length <= MAX_FLIPS_TO_ENTER;
 }
 
 /**
  * Get reasons why signal is unstable (for logging when blocked).
+ * @param {number} [requiredPolls] - Override required polls (default: SIGNAL_CONFIRM_POLLS)
  * @returns {string[]}
  */
-export function getInstabilityReasons() {
+export function getInstabilityReasons(requiredPolls = SIGNAL_CONFIRM_POLLS) {
   const reasons = [];
-  if (signalConfirmCount < SIGNAL_CONFIRM_POLLS) {
-    reasons.push(`confirm ${signalConfirmCount}/${SIGNAL_CONFIRM_POLLS}`);
+  if (signalConfirmCount < requiredPolls) {
+    reasons.push(`confirm ${signalConfirmCount}/${requiredPolls}`);
   }
   if (signalFlipHistory.length > MAX_FLIPS_TO_ENTER) {
     reasons.push(`${signalFlipHistory.length} flips in ${FLIP_WINDOW_MS / 1000}s`);
@@ -91,15 +99,16 @@ export function getInstabilityReasons() {
 
 /**
  * Get status object for dashboard broadcast.
+ * @param {number} [requiredPolls] - Override required polls (default: SIGNAL_CONFIRM_POLLS)
  */
-export function getSignalStabilityStatus() {
+export function getSignalStabilityStatus(requiredPolls = SIGNAL_CONFIRM_POLLS) {
   return {
     confirmCount: signalConfirmCount,
-    confirmNeeded: SIGNAL_CONFIRM_POLLS,
+    confirmNeeded: requiredPolls,
     confirmSide: signalConfirmSide,
     recentFlips: signalFlipHistory.length,
     maxFlips: MAX_FLIPS_TO_ENTER,
-    stable: isSignalStable(),
+    stable: isSignalStable(requiredPolls),
   };
 }
 

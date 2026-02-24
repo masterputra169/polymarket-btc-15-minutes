@@ -88,6 +88,17 @@ function BotPanel({ connected, data }) {
     ? `${(stats.winRate * 100).toFixed(0)}%`
     : '-';
 
+  // Portfolio — active bot position real-time value
+  const botPosition = data.positions?.botPosition ?? null;
+  const rtCurrentPrice = botPosition?.side === 'UP' ? data.marketUp
+    : botPosition?.side === 'DOWN' ? data.marketDown : null;
+  const rtPositionValue = (rtCurrentPrice != null && botPosition?.size > 0)
+    ? rtCurrentPrice * botPosition.size : null;
+  const rtPnl = (rtPositionValue != null && botPosition?.cost > 0)
+    ? rtPositionValue - botPosition.cost : null;
+  const portfolioTotal = data.bankroll != null
+    ? data.bankroll + (rtPositionValue ?? botPosition?.cost ?? 0) : null;
+
   // getStats() only tracks consecutiveLosses, not consecutive wins
   const streak = stats?.consecutiveLosses > 0
     ? `L${stats.consecutiveLosses}`
@@ -263,44 +274,42 @@ function BotPanel({ connected, data }) {
             </span>
           </div>
 
-          {/* MetEngine smart money status */}
-          {meEnabled && (
-            <>
-              <div style={{ borderTop: '1px solid var(--border-dim)', margin: '5px 0 4px' }} />
-              <div className="data-row">
-                <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Smart$</span>
-                <span className="data-row__value" style={{
-                  color: !me.configured ? 'var(--text-dim)'
-                    : meIsBlock ? 'var(--red-bright)'
-                    : meIsBoost ? 'var(--green-bright)'
-                    : meLast    ? 'var(--text-muted)'
-                    : 'var(--text-dim)',
-                  fontWeight: meIsBlock || meIsBoost ? 700 : 400,
-                  opacity: meStale ? 0.55 : 1,
-                }}>
-                  {!me.configured ? 'no key'
-                    : meIsBlock ? `\u2297 ${meLast.direction ?? ''}`.trim()
-                    : meIsBoost ? `\u2191 ${meLast.direction ?? ''}`.trim()
-                    : meLast    ? `\u2013 ${meLast.direction ?? ''}`.trim()
-                    : '\u2013'}
-                  {meLast?.consensusStrength > 0 && ` ${(meLast.consensusStrength * 100).toFixed(0)}%`}
-                </span>
-              </div>
-              {meLast?.insiderScore > 0 && (
-                <div className="data-row">
-                  <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Insider</span>
-                  <span className="data-row__value" style={{
-                    color: meLast.insiderScore >= 90 ? 'var(--green-bright)'
-                      : meLast.insiderScore >= 70 ? '#ffc107'
-                      : 'var(--text-muted)',
-                    fontWeight: meLast.insiderScore >= 70 ? 600 : 400,
-                  }}>
-                    {meLast.insiderScore}
-                    {meStale && <span style={{ fontSize: '0.75em', marginLeft: 4, opacity: 0.6 }}>{meAgeSec}s</span>}
-                  </span>
-                </div>
-              )}
-            </>
+          {/* MetEngine smart money status — always visible */}
+          <div style={{ borderTop: '1px solid var(--border-dim)', margin: '5px 0 4px' }} />
+          <div className="data-row">
+            <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Smart$</span>
+            <span className="data-row__value" style={{
+              color: !meEnabled ? 'var(--text-dim)'
+                : !me?.configured ? 'var(--text-dim)'
+                : meIsBlock ? 'var(--red-bright)'
+                : meIsBoost ? 'var(--green-bright)'
+                : meLast    ? 'var(--text-muted)'
+                : 'var(--text-dim)',
+              fontWeight: meIsBlock || meIsBoost ? 700 : 400,
+              opacity: !meEnabled ? 0.45 : meStale ? 0.55 : 1,
+            }}>
+              {!meEnabled ? 'off'
+                : !me?.configured ? 'no key'
+                : meIsBlock ? `\u2297 ${meLast.direction ?? ''}`.trim()
+                : meIsBoost ? `\u2191 ${meLast.direction ?? ''}`.trim()
+                : meLast    ? `\u2013 ${meLast.direction ?? ''}`.trim()
+                : '\u2013'}
+              {meEnabled && meLast?.consensusStrength > 0 && ` ${(meLast.consensusStrength * 100).toFixed(0)}%`}
+            </span>
+          </div>
+          {meEnabled && meLast?.insiderScore > 0 && (
+            <div className="data-row">
+              <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Insider</span>
+              <span className="data-row__value" style={{
+                color: meLast.insiderScore >= 90 ? 'var(--green-bright)'
+                  : meLast.insiderScore >= 70 ? '#ffc107'
+                  : 'var(--text-muted)',
+                fontWeight: meLast.insiderScore >= 70 ? 600 : 400,
+              }}>
+                {meLast.insiderScore}
+                {meStale && <span style={{ fontSize: '0.75em', marginLeft: 4, opacity: 0.6 }}>{meAgeSec}s</span>}
+              </span>
+            </div>
           )}
         </div>
 
@@ -320,12 +329,6 @@ function BotPanel({ connected, data }) {
           }} />
           <div style={colHeaderStyle}>Position</div>
 
-          <div className="data-row">
-            <span className="data-row__label">Bankroll</span>
-            <span className="data-row__value" style={{ fontWeight: 600 }}>
-              {fmtUsd(data.bankroll, 0)}
-            </span>
-          </div>
           {data.usdcBalance && (
             <div className="data-row">
               <span className="data-row__label">On-chain</span>
@@ -367,6 +370,58 @@ function BotPanel({ connected, data }) {
               {streak}
             </span>
           </div>
+
+          {/* Portfolio — always visible */}
+          <div style={{ borderTop: '1px solid var(--border-dim)', margin: '6px 0 5px' }} />
+          <div style={{
+            fontSize: '0.54rem', color: 'var(--text-dim)',
+            textTransform: 'uppercase', letterSpacing: '0.07em',
+            marginBottom: 4,
+          }}>
+            Portfolio
+          </div>
+          {botPosition ? (
+            <>
+              <div className="data-row">
+                <span className="data-row__label">
+                  {botPosition.side === 'UP' ? '↑ UP' : '↓ DOWN'}
+                </span>
+                <span className="data-row__value" style={{
+                  fontWeight: 600,
+                  color: rtPnl != null && rtPnl >= 0 ? 'var(--green-bright)' : rtPnl != null ? 'var(--red-bright)' : 'var(--text-primary)',
+                }}>
+                  {rtPositionValue != null ? fmtUsd(rtPositionValue) : fmtUsd(botPosition.cost)}
+                  {rtPnl != null && (
+                    <span style={{ fontSize: '0.75em', marginLeft: 3, opacity: 0.8 }}>
+                      ({rtPnl >= 0 ? '+' : ''}{fmtUsd(rtPnl)})
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="data-row">
+                <span className="data-row__label">Bankroll</span>
+                <span className="data-row__value" style={{ fontWeight: 600 }}>
+                  {fmtUsd(data.bankroll, 0)}
+                </span>
+              </div>
+              <div className="data-row">
+                <span className="data-row__label">Total</span>
+                <span className="data-row__value" style={{
+                  fontWeight: 700,
+                  color: rtPnl != null && rtPnl >= 0 ? 'var(--green-bright)' : rtPnl != null ? 'var(--red-bright)' : 'var(--text-primary)',
+                }}>
+                  {portfolioTotal != null ? fmtUsd(portfolioTotal) : '-'}
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="data-row">
+              <span className="data-row__label">Bankroll</span>
+              <span className="data-row__value" style={{ fontWeight: 600 }}>
+                {fmtUsd(data.bankroll, 0)}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

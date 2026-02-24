@@ -75,7 +75,9 @@ export function scoreDirection({
     const distance = price - priceToBeat;
     const distPct = distance / priceToBeat;
 
-    // Use session-adaptive thresholds if available, else defaults
+    // M9: Use session-adaptive thresholds if available, else defaults.
+    // Fallback values (0.3%/0.15%/0.05%) are from BTC $90k-level analysis.
+    // If volProfile is missing, these may undercount at very different price levels.
     const thr = volProfile?.ptbThresholds ?? { strong: 0.003, moderate: 0.0015, slight: 0.0005 };
 
     const wStrong = mod('ptbDistance', 5);
@@ -419,14 +421,15 @@ export function scoreDirection({
   // not probability estimation — applying streaks to both is double-counting.
   const fbMultiplierRaw = feedbackStats?.confidenceMultiplier ?? 1.0;
   const fbAccuracy = feedbackStats?.accuracy ?? null;
-  // Strip streak component: compute accuracy-only multiplier directly
+  // M8: Use smooth formula instead of step bins (removes discontinuity at 70%/55%/45%/35%).
+  // Old bins: accuracy 0.699→1.05, accuracy 0.700→1.15 = 10% jump at boundary.
+  // New: linear interpolation from 0.70 (accuracy 0%) to 1.15 (accuracy 70%+), clamped.
   let fbMultiplier;
   if (fbAccuracy == null) fbMultiplier = 1.0;
-  else if (fbAccuracy >= 0.70) fbMultiplier = 1.15;
-  else if (fbAccuracy >= 0.55) fbMultiplier = 1.05;
-  else if (fbAccuracy >= 0.45) fbMultiplier = 1.0;
-  else if (fbAccuracy >= 0.35) fbMultiplier = 0.85;
-  else fbMultiplier = 0.70;
+  else {
+    // Linear scale: 0% accuracy → 0.70, 50% → 1.0 (neutral), 70%+ → 1.15
+    fbMultiplier = 0.70 + (Math.min(fbAccuracy, 0.70) / 0.70) * 0.45;
+  }
   // Clamp same as stats.js
   fbMultiplier = Math.max(0.50, Math.min(1.25, fbMultiplier));
   breakdown.feedback = {
@@ -475,8 +478,11 @@ export function scoreDirection({
  * @param {number} totalWindowMin - total market window (15)
  * @returns {{ adjustedUp: number, adjustedDown: number, timeDecay: number }}
  */
-export function applyTimeAwareness(rawUp, timeLeftMin, totalWindowMin = 15) {
-  const FLOOR = 0.35;  // minimum decay — never fully flatten
+export function applyTimeAwareness(rawUp, timeLeftMin, totalWindowMin = 15, marketPrice = null) {
+  // M7: FLOOR 0.25→0.30 — 0.25 floor blocks profitable VERY_LATE entries when ML confidence is high.
+  // With 0.30: rawUp=0.70 → anchor + 0.20*0.30 = enough signal for high-conf ML to pass.
+  // 0.25 was over-decaying legitimate strong signals in last 2 minutes.
+  const FLOOR = 0.30;
 
   if (!Number.isFinite(timeLeftMin) || !Number.isFinite(totalWindowMin) || totalWindowMin <= 0) {
     return { adjustedUp: rawUp, adjustedDown: 1 - rawUp, timeDecay: 1 };
@@ -486,7 +492,18 @@ export function applyTimeAwareness(rawUp, timeLeftMin, totalWindowMin = 15) {
   const rawDecay = Math.sqrt(ratio);  // sqrt curve — much gentler than linear
   const timeDecay = Math.max(FLOOR, rawDecay);
 
-  const adjustedUp = 0.5 + (rawUp - 0.5) * timeDecay;
+  // Quant fix M7: Converge to market price instead of 0.5 as time → 0.
+  // Efficient market hypothesis: near expiry, market price IS the best probability estimate.
+  // Formula: anchor + (rawUp - anchor) * decay
+  //   → anchor=0.5 (old): decays to 0.5 ignoring current market consensus
+  //   → anchor=marketPrice (new): decays to market's own estimate — avoids "phantom edge"
+  //     when model says 0.70 but market already priced 0.70 (zero edge anyway).
+  // Fallback to 0.5 when market price unknown for backward compatibility.
+  const anchor = (marketPrice != null && Number.isFinite(marketPrice) && marketPrice > 0 && marketPrice < 1)
+    ? marketPrice
+    : 0.5;
+
+  const adjustedUp = anchor + (rawUp - anchor) * timeDecay;
   const adjustedDown = 1 - adjustedUp;
 
   return { adjustedUp, adjustedDown, timeDecay };

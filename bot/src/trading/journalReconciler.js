@@ -13,12 +13,14 @@ import { dirname } from 'path';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { getTradeHistory, isClientReady } from './clobClient.js';
+import { adjustBankrollForReconciliation } from './positionTracker.js';
 import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('Reconciler');
 
 let intervalId = null;
 let lastProcessedTime = 0; // Unix ms — only fetch trades after this
+let lastReconcileMs = 0;   // debounce for reconcileNow()
 
 const MONTHS = {
   January: 0, February: 1, March: 2, April: 3, May: 4, June: 5,
@@ -305,6 +307,10 @@ async function reconcile() {
         // Was unresolved, now resolved — mark for replacement
         updatedEntries.push(entry);
         log.info(`Updated unresolved → resolved: ${conditionId.slice(0, 16)}... outcome=${entry.outcome} pnl=${entry.netPnl}`);
+        // RC5 Fix: auto-correct bankroll when reconciler finds discrepancy
+        if (entry.localMatch && entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10) {
+          adjustBankrollForReconciliation({ delta: entry.discrepancy, reason: `reconciler_delayed_resolution`, slug: entry.marketSlug });
+        }
         // RC4 Fix: kirim Telegram — ini adalah kasus desync utama (trade ada di Polymarket tapi bot tidak kirim notif)
         if (entry.netPnl !== null) {
           const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
@@ -319,8 +325,10 @@ async function reconcile() {
         const dir = dirname(BOT_CONFIG.verifiedJournalFile);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         appendFileSync(BOT_CONFIG.verifiedJournalFile, JSON.stringify(entry) + '\n');
-        // RC4 Fix: kirim Telegram hanya jika ada discrepancy signifikan (bukan notif rutin untuk semua trades)
+        // RC5 Fix: auto-correct bankroll when reconciler finds discrepancy on new entry
         if (entry.resolved && entry.localMatch && entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10) {
+          adjustBankrollForReconciliation({ delta: entry.discrepancy, reason: `reconciler_discrepancy`, slug: entry.marketSlug });
+          // RC4 Fix: kirim Telegram
           const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
           notify('warn', `⚠️ <b>P&amp;L Discrepancy</b>!\nLocal: $${entry.localPnl?.toFixed(2) ?? '?'} vs Verified: ${pnlStr}\nSelisih: $${entry.discrepancy.toFixed(2)} | ${entry.marketSlug?.slice(-30) ?? ''}`, { key: `discrepancy:${conditionId}` }).catch(() => {});
         }
@@ -356,6 +364,7 @@ async function reconcile() {
   }
 
   lastProcessedTime = now;
+  lastReconcileMs = now;
 
   if (marketCount > 0) {
     log.info(
@@ -471,6 +480,16 @@ async function buildVerifiedEntry(conditionId, marketTrades, localTrades) {
     discrepancy,
     _fetchedAt: Date.now(),
   };
+}
+
+/**
+ * Trigger an immediate reconciliation (debounced: skip if last reconcile < 30s ago).
+ * Used after price_fallback settlement to correct bankroll ASAP.
+ */
+export async function reconcileNow() {
+  if (Date.now() - lastReconcileMs < 30_000) return;
+  lastReconcileMs = Date.now();
+  try { await reconcile(); } catch (e) { log.warn(`Manual reconcile failed: ${e.message}`); }
 }
 
 /**

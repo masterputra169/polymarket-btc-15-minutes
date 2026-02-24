@@ -87,15 +87,23 @@ export async function sendDailySummary() {
  */
 export function scheduleDailySummary() {
   function msUntilMidnightET() {
+    // M21: DST-aware midnight calculation using Intl API.
+    // Old: hardcoded UTC-5 (05:00 UTC) — wrong during EDT (April-November, UTC-4 = 04:00 UTC).
+    // New: use Intl.DateTimeFormat to get current ET offset dynamically.
     const now = Date.now();
-    // Midnight ET = next 05:00 UTC (UTC-5, approximate, ignoring DST)
-    const nowUTC = new Date(now);
-    const nextMidnightET = new Date(nowUTC);
-    nextMidnightET.setUTCHours(5, 0, 0, 0);
-    if (nextMidnightET.getTime() <= now) {
-      nextMidnightET.setUTCDate(nextMidnightET.getUTCDate() + 1);
-    }
-    return nextMidnightET.getTime() - now;
+    const etFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+    const parts = etFormatter.formatToParts(new Date(now));
+    const get = (type) => parseInt(parts.find(p => p.type === type).value, 10);
+    const etHour = get('hour') === 24 ? 0 : get('hour');
+    const etMin = get('minute');
+    const etSec = get('second');
+    // Milliseconds until midnight ET = (24h - current ET time) in ms
+    const secUntilMidnight = (24 * 3600) - (etHour * 3600 + etMin * 60 + etSec);
+    return secUntilMidnight * 1000;
   }
 
   function scheduleNext() {
@@ -270,6 +278,7 @@ async function _sendTradeAlert(record) {
     mlConf != null ? `🤖 ML: ${(mlConf * 100).toFixed(0)}%` : null,
     ``,
     `📊 Today: <b>${todayStr}</b> trades`,
+    entry?.marketSlug ? `<a href="https://polymarket.com/event/${entry.marketSlug}">View Market</a>` : null,
   ].filter(Boolean);
 
   await notify('info', lines.join('\n'), { key: `trade:journal:${record._ts}` });
@@ -278,6 +287,14 @@ async function _sendTradeAlert(record) {
 /**
  * Clear entry snapshot without writing (e.g. position unwound, no settlement).
  */
+/**
+ * Get the current entry snapshot (for take-profit entry-relative comparison).
+ * Returns null if no active position.
+ */
+export function getEntrySnapshot() {
+  return entrySnapshot;
+}
+
 export function clearEntrySnapshot() {
   entrySnapshot = null;
   // RC1 Fix: delete disk file too

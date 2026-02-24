@@ -197,13 +197,16 @@ export function getDetailedStats() {
 
 export function computeKellyTune(baseKelly = 0.25) {
   const detailed = getDetailedStats();
-  if (detailed.totalSettled < 30) {
+  // Quant fix M6: lower minimum 30→15 — at 1 trade per 15min market, 30 trades = 7.5hr warmup.
+  // 15 trades = ~3.75hr warmup, still statistically meaningful for initial calibration signal.
+  if (detailed.totalSettled < 15) {
     return { kellyFraction: baseKelly, reason: 'insufficient_data', calibrationRatio: 1.0, sampleCount: detailed.totalSettled };
   }
 
   let weightedPredicted = 0, weightedActual = 0, totalWeight = 0;
   for (const bucket of detailed.calibration) {
-    if (bucket.total < 3 || bucket.actual === null) continue;
+    // Quant fix M6: lower per-bucket minimum 3→2 — small sample but better than skipping
+    if (bucket.total < 2 || bucket.actual === null) continue;
     const w = bucket.total;
     weightedPredicted += bucket.predicted * w;
     weightedActual += bucket.actual * w;

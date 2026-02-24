@@ -320,6 +320,9 @@ export function useMarketData({ clobWs } = {}) {
         spreadPct: wsOrderbook?.up?.spread ?? null,
         momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
         fundingRate,
+        // Smart money features — null (neutral defaults) in browser, MetEngine in bot
+        smBullRatio: null, smFlowIntensity: null, smEarlySignal: null,
+        smFlowAccel: null, smActivity: null,
       }, timeAware.adjustedUp);
 
       // ═══ Step 3: Recompute edge using ML ensemble probability ═══

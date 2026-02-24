@@ -186,13 +186,17 @@ export function evaluateCutLoss({
   if (!isCrash && !isLateForceCut && !isTimeBased) {
 
     // ── Gate 7a: EV-NEGATIVE — model agrees position is losing ──
-    // Binary option math: CUT when modelProb < tokenPrice × evBuffer
-    // This means: even our model (which has 71% WR) says we have less chance
-    // of winning than the current market price implies.
-    const evBuffer = cfg.evBuffer ?? 0.95;
-    // M2: Floor prevents EV check from becoming useless at very low token prices.
-    // Without floor, a $0.05 token has threshold $0.045 — any model prob passes.
-    const evThreshold = Math.max(currentTokenPrice * evBuffer, 0.25);
+    // C2: Uniform 80% threshold with 0.40 floor — cheap tokens no longer cut at 25% (too loose)
+    // M22: Regime-aware EV threshold — relax in trending (model stronger), tighten in choppy (noisy)
+    const evBuffer = cfg.evBuffer ?? 0.80;
+    let evThreshold = Math.max(entryPrice * evBuffer, 0.40);
+    if (regime === 'trending') {
+      // Trending: model probabilities are more reliable, allow wider buffer before cutting
+      evThreshold *= 0.92; // ~8% more lenient → holds profitable trending positions longer
+    } else if (regime === 'choppy') {
+      // Choppy: signals are noisy, cut earlier to avoid prolonged losses
+      evThreshold *= 1.08; // ~8% stricter → faster exit in whipsaw conditions
+    }
     if (modelProbability != null && Number.isFinite(modelProbability)) {
       if (modelProbability < evThreshold) {
         evNegative = true;
@@ -309,7 +313,7 @@ export function evaluateCutLoss({
       btcDistPct,
       btcFavorable,
       modelProbability: modelProbability ?? null,
-      evThreshold: currentTokenPrice * (cfg.evBuffer ?? 0.95),
+      evThreshold: entryPrice * (cfg.evBuffer ?? 0.85),
       evNegative,
       mlFlipped,
       mlSide: mlSide ?? null,
@@ -395,8 +399,8 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     btcFavorable = position.side === 'UP' ? btcPrice >= priceToBeat : btcPrice < priceToBeat;
   }
 
-  const evBuffer = cfg.evBuffer ?? 0.95;
-  const evThreshold = Math.max((currentTokenPrice ?? 0.5) * evBuffer, 0.25); // M2: match evaluator floor
+  const evBuffer = cfg.evBuffer ?? 0.80;
+  const evThreshold = Math.max((position?.price ?? currentTokenPrice ?? 0.5) * evBuffer, 0.40); // C2: uniform 80% with 0.40 floor
   const evNegative = modelProbability != null && modelProbability < evThreshold;
   const mlFlipConf = cfg.mlFlipConfidence ?? 0.55;
   const mlFlipped = mlConfidence != null && mlConfidence >= mlFlipConf && mlSide != null && mlSide !== position.side;
