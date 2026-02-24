@@ -202,7 +202,7 @@ export default function App() {
     data?.regimeInfo?.regime, data?.regimeInfo?.confidence, data?.regimeInfo?.label,
     data?.feedbackStats?.accuracy, data?.feedbackStats?.streak,
     data?.haNarrative, data?.rsiNarrative, data?.macdNarrative, data?.vwapNarrative,
-    data?.timing, data?.consec?.count, data?.consec?.color,
+    data?.timing?.phase, data?.timing?.timeLeftMin, data?.consec?.count, data?.consec?.color,
     data?.ml?.confidence, data?.ml?.side,
   ]);
 
@@ -305,6 +305,7 @@ export default function App() {
     };
   }, [
     data?.edge?.bestEdge, data?.edge?.bestSide, data?.edge?.confidence,
+    data?.edge?.edgeUp, data?.edge?.edgeDown,
     data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
     data?.pLong, data?.pShort, data?.ruleUp,
     data?.marketUp, data?.marketDown, data?.timeLeftMin,
@@ -387,6 +388,8 @@ export default function App() {
       sources: data.sources, arbitrage: data.arbitrage,
       fillTracker: data.fillTracker, signalStability: data.signalStability,
       usdcBalance: data.usdcBalance,
+      metEngine: data.metEngine,
+      positions: data.positions,
     };
   }, [
     data?.ts, data?.pollCounter, data?.paused, data?.dryRun,
@@ -397,6 +400,8 @@ export default function App() {
     data?.regime, data?.ensembleUp, data?.marketUp, data?.marketDown,
     data?.signalStability?.confirmCount, data?.signalStability?.recentFlips,
     data?.arbitrage?.found,
+    data?.metEngine?.last?.ts, data?.metEngine?.enabled,
+    data?.positions?.botPosition?.side, data?.positions?.botPosition?.size,
   ]);
 
   return (

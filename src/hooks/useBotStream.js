@@ -78,6 +78,7 @@ export function useBotStream() {
       };
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return; // H6: stale WS guard
         setConnected(false);
         wsRef.current = null;
         stopStaleCheck();

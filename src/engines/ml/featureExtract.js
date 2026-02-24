@@ -2,17 +2,18 @@
  * Feature extraction and engineered feature computation.
  */
 
-import { MAX_FEATURES } from './state.js';
 import * as S from './state.js';
 import { FI } from './featureMap.js';
 
-// Pre-allocated buffer (ZERO allocation per prediction)
-export const featureBuf = new Float64Array(MAX_FEATURES);
+// Pre-allocated buffer — sized for max model (84 = 59 base + 25 engineered)
+export const featureBuf = new Float64Array(84);
 
 /**
- * Compute 25 engineered features in-place in featureBuf[59..83].
+ * Compute 25 engineered features in-place starting at featureBuf[BASE_FEATURES].
+ * Offset adapts: v9 → starts at [54], v9a+ → starts at [59].
  */
 export function computeEngineeredFeaturesInPlace() {
+  const O = S.BASE_FEATURES; // engineered feature offset
   const sign = (v) => v > 0 ? 1 : v < 0 ? -1 : 0;
 
   const delta1m   = featureBuf[FI.delta_1m_pct];
@@ -36,32 +37,30 @@ export function computeEngineeredFeaturesInPlace() {
   const regMR     = featureBuf[FI.regime_mean_reverting];
 
   const clip = 0.003;
-  featureBuf[59] = Math.max(-clip, Math.min(clip, delta1m));
-  featureBuf[60] = delta1m - (delta3m / 3);
-  featureBuf[61] = rsi * regTrend;
-  featureBuf[62] = rsi * regConf;
-  featureBuf[63] = rsi * regMR;
-  featureBuf[64] = delta1m * multiTf;
-  featureBuf[65] = bbPctB * bbSqueeze;
-  featureBuf[66] = volBuy * sign(delta1m);
-  featureBuf[67] = vwapDist * sign(vwapSlope);
-  featureBuf[68] = sign(delta3m) * (-rsiSlope);
-  featureBuf[69] = (rsi + stochK + bbPctB) / 3;
-  featureBuf[70] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
+  featureBuf[O + 0]  = Math.max(-clip, Math.min(clip, delta1m));
+  featureBuf[O + 1]  = delta1m - (delta3m / 3);
+  featureBuf[O + 2]  = rsi * regTrend;
+  featureBuf[O + 3]  = rsi * regConf;
+  featureBuf[O + 4]  = rsi * regMR;
+  featureBuf[O + 5]  = delta1m * multiTf;
+  featureBuf[O + 6]  = bbPctB * bbSqueeze;
+  featureBuf[O + 7]  = volBuy * sign(delta1m);
+  featureBuf[O + 8]  = vwapDist * sign(vwapSlope);
+  featureBuf[O + 9]  = sign(delta3m) * (-rsiSlope);
+  featureBuf[O + 10] = (rsi + stochK + bbPctB) / 3;
+  featureBuf[O + 11] = (sign(haConsec) === sign(delta1m)) ? 1 : 0;
 
   const atrSafe = Math.max(atrPct, 0.01);
-  featureBuf[71] = delta1m / atrSafe;
-  featureBuf[72] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
-  featureBuf[73] = delta1m * volRatio;
-  featureBuf[74] = sign(macdLine) * rsiSlope;
-  featureBuf[75] = regTrend * multiTf * sign(delta1m);
-  featureBuf[76] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
-  featureBuf[77] = volBuy * sign(delta1m) * volRatio;
-  featureBuf[78] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
+  featureBuf[O + 12] = delta1m / atrSafe;
+  featureBuf[O + 13] = sign(vwapDist) * 0.4 + (bbPctB - 0.5) * 0.3 + (emaCross - 0.5) * 0.3;
+  featureBuf[O + 14] = delta1m * volRatio;
+  featureBuf[O + 15] = sign(macdLine) * rsiSlope;
+  featureBuf[O + 16] = regTrend * multiTf * sign(delta1m);
+  featureBuf[O + 17] = Math.max(rsi - 0.7, 0) + Math.max(0.3 - rsi, 0);
+  featureBuf[O + 18] = volBuy * sign(delta1m) * volRatio;
+  featureBuf[O + 19] = bbSqueeze * Math.abs(stochK - 0.5) * 2;
 
   // L6: Removed `deltaDir !== 0` guard — training computes sign comparisons naturally
-  // (e.g. sign(0) == sign(0) → True in numpy), so browser must match.
-  // When deltaDir == 0, only indicators also at 0 will agree (sign(x) === 0).
   const deltaDir = sign(delta1m);
   const macdHist = featureBuf[FI.macd_hist];
   const agreeCount = (
@@ -71,18 +70,18 @@ export function computeEngineeredFeaturesInPlace() {
     ((rsi > 0.5 ? 1 : 0) === (deltaDir > 0 ? 1 : 0) ? 1 : 0) +
     (multiTf > 0.5 ? 1 : 0)
   );
-  featureBuf[79] = agreeCount / 5;
-  featureBuf[80] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
+  featureBuf[O + 20] = agreeCount / 5;
+  featureBuf[O + 21] = Math.max(stochK - 0.8, 0) * 5 + Math.max(0.2 - stochK, 0) * 5;
 
   const mktMomentum = featureBuf[FI.market_price_momentum];
-  featureBuf[81] = sign(mktMomentum) * sign(delta1m);
+  featureBuf[O + 22] = sign(mktMomentum) * sign(delta1m);
 
   const crowdDiv = featureBuf[FI.crowd_model_divergence];
   const ruleConf = featureBuf[FI.rule_confidence];
-  featureBuf[82] = crowdDiv * ruleConf;
+  featureBuf[O + 23] = crowdDiv * ruleConf;
 
   const obImbalance = featureBuf[FI.orderbook_imbalance];
-  featureBuf[83] = obImbalance * volBuy;
+  featureBuf[O + 24] = obImbalance * volBuy;
 }
 
 /**
@@ -193,7 +192,7 @@ export function extractLiveFeaturesInPlace({
   featureBuf[24] = session === 'Off-hours'      ? 1 : 0;
 
   featureBuf[25] = isGreen                      ? 1 : 0;
-  featureBuf[26] = multiTfAgreement             ? 1 : 0;
+  featureBuf[26] = Number.isFinite(multiTfAgreement) ? multiTfAgreement : (multiTfAgreement ? 1 : 0);
   featureBuf[27] = failedVwapReclaim            ? 1 : 0;
 
   // Bollinger
@@ -254,18 +253,21 @@ export function extractLiveFeaturesInPlace({
   featureBuf[52] = Math.max(-1, Math.min(1, fr / 0.1));  // funding_rate_norm
   featureBuf[53] = 0; // funding_rate_change (no historical comparison live)
 
-  // [54-58] Smart money features (from MetEngine or defaults)
-  featureBuf[54] = smBullRatio ?? 0.5;       // sm_bull_ratio
-  featureBuf[55] = smFlowIntensity ?? 0;     // sm_flow_intensity
-  featureBuf[56] = smEarlySignal ?? 0.5;     // sm_early_signal
-  featureBuf[57] = smFlowAccel ?? 0;         // sm_flow_accel
-  featureBuf[58] = smActivity ?? 0;          // sm_activity
+  // [54-58] Smart money features — only written when model has 59 base features (v9a+)
+  if (S.BASE_FEATURES >= 59) {
+    // H11: Track SM fallbacks in data quality score
+    if (smBullRatio == null && smFlowIntensity == null && smActivity == null) fallbackCount++;
+    featureBuf[54] = smBullRatio ?? 0.5;       // sm_bull_ratio
+    featureBuf[55] = smFlowIntensity ?? 0;     // sm_flow_intensity
+    featureBuf[56] = smEarlySignal ?? 0.5;     // sm_early_signal
+    featureBuf[57] = smFlowAccel ?? 0;         // sm_flow_accel
+    featureBuf[58] = smActivity ?? 0;          // sm_activity
+  }
 
   if (S.modelVersion >= 2) {
-    computeEngineeredFeaturesInPlace();
+    computeEngineeredFeaturesInPlace(); // writes at [BASE_FEATURES..BASE_FEATURES+24]
   } else {
-    // Zero out engineered feature slots to prevent stale data from a previous call
-    featureBuf.fill(0, 59, 84);
+    featureBuf.fill(0, S.BASE_FEATURES, S.MAX_FEATURES);
   }
 
   // H5: Compute and store data quality score

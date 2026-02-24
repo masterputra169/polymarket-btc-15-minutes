@@ -427,8 +427,14 @@ export function scoreDirection({
   let fbMultiplier;
   if (fbAccuracy == null) fbMultiplier = 1.0;
   else {
-    // Linear scale: 0% accuracy → 0.70, 50% → 1.0 (neutral), 70%+ → 1.15
-    fbMultiplier = 0.70 + (Math.min(fbAccuracy, 0.70) / 0.70) * 0.45;
+    // C5 fix: Two-piece linear. Old formula: neutral at 46.7%, not 50%.
+    // New: 0% → 0.70 (harsh penalty), 50% → 1.00 (neutral), 70%+ → 1.15 (boost)
+    const acc = Math.min(fbAccuracy, 0.70);
+    if (acc < 0.50) {
+      fbMultiplier = 0.70 + (acc / 0.50) * 0.30;   // [0.70, 1.00]
+    } else {
+      fbMultiplier = 1.00 + ((acc - 0.50) / 0.20) * 0.15; // [1.00, 1.15]
+    }
   }
   // Clamp same as stats.js
   fbMultiplier = Math.max(0.50, Math.min(1.25, fbMultiplier));

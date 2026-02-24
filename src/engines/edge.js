@@ -93,7 +93,7 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
     bestEdge = edgeDown;
   }
 
-  return { edgeUp, edgeDown, bestSide, bestEdge, spreadPenaltyUp, spreadPenaltyDown };
+  return { edgeUp, edgeDown, bestSide, bestEdge, spreadPenaltyUp, spreadPenaltyDown, effectiveUp, effectiveDown };
 }
 
 /**
@@ -221,6 +221,8 @@ export function decide({
   edgeDown,
   modelUp,
   modelDown,
+  effectiveUp = null,           // raw execution price (bestAsk or mid) — for Pendekatan B
+  effectiveDown = null,
   breakdown = null,
   multiTfConfirmed = false,
   mlConfidence = null,
@@ -391,13 +393,15 @@ export function decide({
     const PRICE_SCALE = 0.35;
     const mlConfBypass = mlConfidence !== null && mlConfidence >= 0.65;
     if (!mlConfBypass) {
-      const impliedUp   = edgeUp   != null ? Math.max(0, modelUp   - edgeUp)   : null;
-      const impliedDown = edgeDown != null ? Math.max(0, modelDown - edgeDown) : null;
-      if (impliedUp   != null && impliedUp   > PRICE_FLOOR) {
-        upMinEdge   = Math.min(upMinEdge   + (impliedUp   - PRICE_FLOOR) * PRICE_SCALE, 0.30);
+      // C4 fix: use raw effective prices directly, not reconstructed from edge
+      // (edge = model - effective - spread - fee, so model - edge = effective + spread + fee, overstating price)
+      const priceUp   = effectiveUp   ?? (edgeUp   != null ? Math.max(0, modelUp   - edgeUp)   : null);
+      const priceDown = effectiveDown ?? (edgeDown != null ? Math.max(0, modelDown - edgeDown) : null);
+      if (priceUp   != null && priceUp   > PRICE_FLOOR) {
+        upMinEdge   = Math.min(upMinEdge   + (priceUp   - PRICE_FLOOR) * PRICE_SCALE, 0.30);
       }
-      if (impliedDown != null && impliedDown > PRICE_FLOOR) {
-        downMinEdge = Math.min(downMinEdge + (impliedDown - PRICE_FLOOR) * PRICE_SCALE, 0.30);
+      if (priceDown != null && priceDown > PRICE_FLOOR) {
+        downMinEdge = Math.min(downMinEdge + (priceDown - PRICE_FLOOR) * PRICE_SCALE, 0.30);
       }
     }
   }

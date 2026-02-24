@@ -181,11 +181,14 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
   const clampedPriceSignal = Math.max(-0.4, Math.min(0.4, priceSignal * 0.8));
   const combinedScore = imbalance * 0.6 + clampedPriceSignal;
 
-  if (combinedScore > 0.15) {
+  // H8: Require minimum imbalance to fire — prevents price alone from exceeding threshold
+  const hasMinImbalance = Math.abs(imbalance) > 0.05;
+
+  if (hasMinImbalance && combinedScore > 0.15) {
     result.signal = 'UP';
     result.weight = combinedScore > 0.3 ? 2 : 1;
     result.detail = `Bullish: imbalance ${(imbalance * 100).toFixed(1)}%, spread ${result.spreadHealth}`;
-  } else if (combinedScore < -0.15) {
+  } else if (hasMinImbalance && combinedScore < -0.15) {
     result.signal = 'DOWN';
     result.weight = combinedScore < -0.3 ? 2 : 1;
     result.detail = `Bearish: imbalance ${(imbalance * 100).toFixed(1)}%, spread ${result.spreadHealth}`;

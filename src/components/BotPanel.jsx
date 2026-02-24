@@ -1,4 +1,5 @@
 import React, { memo } from 'react';
+import { ML_CONFIDENCE } from '../config.js';
 
 /**
  * BotPanel — Full-width dashboard card showing real-time bot status.
@@ -72,7 +73,7 @@ function BotPanel({ connected, data }) {
   const isPaused = data.paused === true;
 
   const mlConfLabel = ml?.confidence != null
-    ? ml.confidence >= 0.40 ? 'HI' : ml.confidence >= 0.20 ? 'MED' : 'LO'
+    ? ml.confidence >= ML_CONFIDENCE.HIGH ? 'HI' : ml.confidence >= ML_CONFIDENCE.MEDIUM ? 'MED' : 'LO'
     : '-';
 
   // MetEngine smart money state

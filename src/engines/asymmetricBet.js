@@ -208,7 +208,9 @@ export function computeBetSizing({
   // When it disagrees, dampen.
   let smartFlowAdj = { multiplier: 1.0, label: 'N/A' };
   if (smartFlowSignal && smartFlowSignal.confidence > 0.2) {
-    const agrees = smartFlowSignal.agreesWithSide?.(side) ?? true;
+    const agrees = typeof smartFlowSignal.agreesWithSide === 'function'
+      ? smartFlowSignal.agreesWithSide(side)
+      : smartFlowSignal.direction === side;
     const str = smartFlowSignal.strength ?? 0;
     if (agrees && str > 0.3) {
       smartFlowAdj = { multiplier: Math.min(1.25, 1.10 + str * 0.10), label: `Flow✓ ${smartFlowSignal.direction}` }; // Audit fix H1: cap at 1.25

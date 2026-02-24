@@ -1,5 +1,48 @@
 import React, { memo } from 'react';
 
+function accBarColor(acc) {
+  if (acc === null) return 'var(--border-dim)';
+  if (acc >= 0.60) return 'var(--green-mid)';
+  if (acc >= 0.50) return 'var(--yellow-mid, #ffc107)';
+  return 'var(--red-mid)';
+}
+
+// H2: Moved outside render body to preserve component identity across renders
+function RollingBar({ label, acc, count }) {
+  const pct = acc !== null ? Math.round(acc * 100) : 0;
+  const show = acc !== null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', width: 52, flexShrink: 0 }}>
+        {label}
+      </span>
+      <div style={{
+        flex: 1, height: 16, background: 'var(--bg-elevated)',
+        borderRadius: 3, overflow: 'hidden', position: 'relative',
+        border: '1px solid var(--border-dim)',
+      }}>
+        {show && (
+          <div style={{
+            position: 'absolute', left: 0, top: 0, bottom: 0,
+            width: `${pct}%`, background: accBarColor(acc),
+            transition: 'width 0.6s ease',
+          }} />
+        )}
+        <span style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '0.62rem', fontWeight: 600, color: '#fff', zIndex: 1,
+        }}>
+          {show ? `${pct}%` : '-'}
+        </span>
+      </div>
+      <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', width: 20, textAlign: 'right' }}>
+        {count ?? ''}
+      </span>
+    </div>
+  );
+}
+
 function AccuracyPanel({ data }) {
   if (!data) return null;
 
@@ -28,48 +71,6 @@ function AccuracyPanel({ data }) {
     if (acc >= 0.60) return 'c-green';
     if (acc >= 0.50) return 'c-yellow';
     return 'c-red';
-  }
-
-  function accBarColor(acc) {
-    if (acc === null) return 'var(--border-dim)';
-    if (acc >= 0.60) return 'var(--green-mid)';
-    if (acc >= 0.50) return 'var(--yellow-mid, #ffc107)';
-    return 'var(--red-mid)';
-  }
-
-  function RollingBar({ label, acc, count }) {
-    const pct = acc !== null ? Math.round(acc * 100) : 0;
-    const show = acc !== null;
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', width: 52, flexShrink: 0 }}>
-          {label}
-        </span>
-        <div style={{
-          flex: 1, height: 16, background: 'var(--bg-elevated)',
-          borderRadius: 3, overflow: 'hidden', position: 'relative',
-          border: '1px solid var(--border-dim)',
-        }}>
-          {show && (
-            <div style={{
-              position: 'absolute', left: 0, top: 0, bottom: 0,
-              width: `${pct}%`, background: accBarColor(acc),
-              transition: 'width 0.6s ease',
-            }} />
-          )}
-          <span style={{
-            position: 'absolute', inset: 0,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '0.62rem', fontWeight: 600, color: '#fff', zIndex: 1,
-          }}>
-            {show ? `${pct}%` : '-'}
-          </span>
-        </div>
-        <span style={{ fontSize: '0.62rem', color: 'var(--text-dim)', width: 20, textAlign: 'right' }}>
-          {count ?? ''}
-        </span>
-      </div>
-    );
   }
 
   const regimeNames = ['trending', 'moderate', 'choppy', 'mean_reverting'];
@@ -259,6 +260,8 @@ export default memo(AccuracyPanel, (prev, next) => {
     adf?.rolling?.last20 === bdf?.rolling?.last20 &&
     adf?.rolling?.last50 === bdf?.rolling?.last50 &&
     adf?.rolling?.last100 === bdf?.rolling?.last100 &&
-    a.signalPerf === b.signalPerf
+    a.signalPerf?.length === b.signalPerf?.length &&
+    a.signalPerf?.[0]?.emaAccuracy === b.signalPerf?.[0]?.emaAccuracy &&
+    a.signalPerf?.[a.signalPerf.length - 1]?.emaAccuracy === b.signalPerf?.[b.signalPerf.length - 1]?.emaAccuracy
   );
 });

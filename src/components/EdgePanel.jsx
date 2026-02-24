@@ -26,7 +26,7 @@ function EdgePanel({ data }) {
   // Gate indicators — thresholds mirror edge.js decide() exactly
   const bestEdge = edge?.bestEdge ?? 0;
   const bestProb = Math.max(pLong ?? 0, pShort ?? 0);
-  const baseEdge = phase === 'EARLY' ? 0.08 : phase === 'MID' ? 0.10 : phase === 'LATE' ? 0.12 : 0.15;
+  const baseEdge = phase === 'EARLY' ? 0.06 : phase === 'MID' ? 0.07 : phase === 'LATE' ? 0.05 : 0.07;
   const baseProb = phase === 'EARLY' ? 0.60 : phase === 'MID' ? 0.58 : phase === 'LATE' ? 0.57 : 0.56;
   let edgePassThreshold = baseEdge;
   let probPassThreshold = baseProb;
@@ -35,13 +35,21 @@ function EdgePanel({ data }) {
   // Regime-adaptive adjustments (same logic as edge.js decide)
   const regime = data.regimeInfo;
   if (regime?.regime) {
-    const scale = Math.min(regime.confidence ?? 0.5, 0.85);
+    const scale = Math.min(regime.confidence ?? 0.5, 0.95);
     if (regime.regime === 'trending') {
+      // Direction-aware: relax when aligned with trend, tighten when counter-trend
+      const trendDir = regime.direction;
+      const bestEdgeSide = (data.edge?.edgeUp ?? -Infinity) >= (data.edge?.edgeDown ?? -Infinity) ? 'UP' : 'DOWN';
+      if (trendDir && bestEdgeSide === trendDir) {
+        edgePassThreshold = Math.max(edgePassThreshold - 0.01 * scale, 0.04);
+        probPassThreshold = Math.max(probPassThreshold - 0.01 * scale, 0.52);
+      } else {
+        edgePassThreshold = Math.min(edgePassThreshold + 0.02 * scale, 0.25);
+        probPassThreshold = Math.min(probPassThreshold + 0.02 * scale, 0.70);
+      }
+    } else if (regime.regime === 'choppy') {
       edgePassThreshold = Math.min(edgePassThreshold + 0.02 * scale, 0.25);
       probPassThreshold = Math.min(probPassThreshold + 0.02 * scale, 0.70);
-    } else if (regime.regime === 'choppy') {
-      edgePassThreshold = Math.min(edgePassThreshold + 0.03 * scale, 0.25);
-      probPassThreshold = Math.min(probPassThreshold + 0.03 * scale, 0.70);
     } else if (regime.regime === 'mean_reverting') {
       edgePassThreshold = Math.min(edgePassThreshold + 0.01 * scale, 0.20);
     }
@@ -50,11 +58,11 @@ function EdgePanel({ data }) {
   // M6: Session-adaptive thresholds (matching edge.js decide)
   const session = getSessionName();
   const SESSION_ADJ = {
-    'Asia': { edgeAdj: +0.02, probAdj: +0.02 },
+    'Asia': { edgeAdj: +0.01, probAdj: +0.01 },
     'US': { edgeAdj: -0.01, probAdj: -0.01 },
     'EU/US Overlap': { edgeAdj: -0.02, probAdj: -0.01 },
     'Europe': { edgeAdj: 0, probAdj: 0 },
-    'Off-hours': { edgeAdj: +0.03, probAdj: +0.02 },
+    'Off-hours': { edgeAdj: +0.02, probAdj: +0.01 },
   };
   const adj = SESSION_ADJ[session];
   if (adj) {
@@ -62,8 +70,8 @@ function EdgePanel({ data }) {
     probPassThreshold = Math.max(Math.min(probPassThreshold + adj.probAdj, 0.70), 0.52);
   }
 
-  // M6: Cap combined regime+session penalty (max +3% above base)
-  const MAX_COMBINED_PENALTY = 0.03;
+  // M6: Cap combined regime+session penalty (max +4% above base)
+  const MAX_COMBINED_PENALTY = 0.04;
   if (edgePassThreshold > baseEdge + MAX_COMBINED_PENALTY) edgePassThreshold = baseEdge + MAX_COMBINED_PENALTY;
   if (probPassThreshold > baseProb + MAX_COMBINED_PENALTY) probPassThreshold = baseProb + MAX_COMBINED_PENALTY;
 

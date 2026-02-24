@@ -12,6 +12,7 @@ import { createLogger } from '../logger.js';
 
 // Import ML internals to populate shared state
 import * as S from '../../../src/engines/ml/state.js';
+import { setBaseFeatureCount } from '../../../src/engines/ml/state.js';
 import { indexTree } from '../../../src/engines/ml/treeEval.js';
 import { loadLgbModelFromData, isLgbReady } from '../../../src/engines/ml/lgbPredictor.js';
 
@@ -43,6 +44,10 @@ export function loadMLModelFromDisk() {
     const version = rawModel.version || 1;
     const numFeatures = rawModel.num_features || S.BASE_FEATURES;
     const threshold = Math.max(rawModel.optimal_threshold || 0.65, 0.60);
+
+    // Determine base feature count: total - 25 engineered
+    const baseCount = numFeatures - S.ENGINEERED_FEATURES;
+    if (baseCount >= 54 && baseCount <= 59) setBaseFeatureCount(baseCount);
 
     S.setState({
       modelVersion: version,

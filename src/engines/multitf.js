@@ -93,7 +93,7 @@ export function computeMultiTfConfirmation({
   // M4: Agreement requires BOTH timeframes to have a directional signal that matches.
   // 5m NEUTRAL (delta5m ~ 0) is NOT confirmation — it means 5m has no opinion.
   const agreement = has5mData && tf1mSignal !== 'NEUTRAL' && tf5mSignal !== 'NEUTRAL' && tf1mSignal === tf5mSignal;
-  const confidence = total > 0 ? Math.max(upVotes, downVotes) / total : 0.5;
+  const confidence = totalVoters > 0 ? Math.max(upVotes, downVotes) / totalVoters : 0.5;
 
   const detail = !has5mData
     ? `1m ${tf1mSignal} (no 5m data)`

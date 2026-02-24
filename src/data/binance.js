@@ -31,7 +31,7 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
     volume: parseFloat(k[5]),
     closeTime: k[6],
     takerBuyVolume: parseFloat(k[9]),
-  })).filter((k) => k.closeTime < now);
+  })).filter((k) => k.closeTime < now && !isNaN(k.close) && !isNaN(k.open));
 }
 
 /**

@@ -235,6 +235,10 @@ export default memo(BetSizingPanel, (prev, next) => {
     a.riskLevel === b.riskLevel &&
     a.bankroll === b.bankroll &&
     a.side === b.side &&
+    a.betAmount === b.betAmount &&
+    a.rawKelly === b.rawKelly &&
+    a.expectedValue === b.expectedValue &&
+    a.adjustedFraction === b.adjustedFraction &&
     a.kellyTune?.kellyFraction === b.kellyTune?.kellyFraction
   );
 });

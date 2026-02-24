@@ -12,7 +12,7 @@
 
 import { ML_CONFIDENCE } from '../config.js';
 import * as S from './ml/state.js';
-import { BASE_FEATURES } from './ml/state.js';
+import { BASE_FEATURES, setBaseFeatureCount } from './ml/state.js';
 import { indexTree, predictXGBoost } from './ml/treeEval.js';
 import { calibrate, calibrateLogit } from './ml/calibration.js';
 import { featureBuf, extractLiveFeaturesInPlace, getDataQualityScore } from './ml/featureExtract.js';
@@ -70,6 +70,10 @@ export async function loadMLModel(
     const version = rawModel.version ?? 1;
     const numFeatures = rawModel.num_features ?? BASE_FEATURES;
     const threshold = Math.max(rawModel.optimal_threshold ?? 0.65, 0.52);
+
+    // Determine base feature count from model: total features minus 25 engineered
+    const baseCount = numFeatures - S.ENGINEERED_FEATURES;
+    if (baseCount >= 54 && baseCount <= 59) setBaseFeatureCount(baseCount);
 
     S.setState({
       modelVersion: version,
