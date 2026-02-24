@@ -49,7 +49,21 @@ export async function notify(level, message, opts) {
 }
 
 /**
+ * Extract inline button from <a href="...">Label</a> tag in text.
+ * Returns { cleanText, inlineKeyboard } — inlineKeyboard is null if no link found.
+ */
+function extractInlineButton(text) {
+  const linkRe = /\n?<a href="([^"]+)">([^<]+)<\/a>/;
+  const match = text.match(linkRe);
+  if (!match) return { cleanText: text, inlineKeyboard: null };
+  const cleanText = text.replace(linkRe, '').trimEnd();
+  const inlineKeyboard = { inline_keyboard: [[{ text: `🔗 ${match[2]}`, url: match[1] }]] };
+  return { cleanText, inlineKeyboard };
+}
+
+/**
  * Send message via Telegram Bot API.
+ * Auto-converts <a href> links to inline keyboard buttons.
  * @returns {boolean} true if sent successfully
  */
 async function sendTelegram(text) {
@@ -58,11 +72,14 @@ async function sendTelegram(text) {
   if (!token || !chatId) return false;
 
   try {
+    const { cleanText, inlineKeyboard } = extractInlineButton(text);
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    const payload = { chat_id: chatId, text: cleanText, parse_mode: 'HTML' };
+    if (inlineKeyboard) payload.reply_markup = inlineKeyboard;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
