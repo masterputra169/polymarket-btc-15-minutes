@@ -69,6 +69,15 @@ export function applyTradeFilters({
     }
   }
 
+  // 1b. ML 75-80% dead zone — data (15 trades): 53.3% WR, -$4.54
+  // This confidence band is unreliable; require strong edge to compensate.
+  // 80%+ ML unaffected (90.9% WR, no extra gate needed).
+  if (mlAvailable && mlConfidence != null && mlConfidence >= 0.75 && mlConfidence < 0.80) {
+    if (bestEdge == null || bestEdge < 0.10) {
+      reasons.push(`ML dead zone: conf ${(mlConfidence * 100).toFixed(0)}% in 75-80% band, edge ${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < 10% required`);
+    }
+  }
+
   // 2. Market near 50/50 (random walk — no edge)
   const [lo, hi] = TRADE_FILTERS.MARKET_5050_RANGE;
   if (marketPrice != null && marketPrice >= lo && marketPrice <= hi) {
@@ -121,6 +130,16 @@ export function applyTradeFilters({
   // 4b. Max time remaining (early bird filter — indicators stale, BTC near PTB)
   if (TRADE_FILTERS.MAX_TIME_LEFT_MIN && Number.isFinite(timeLeftMin) && timeLeftMin > TRADE_FILTERS.MAX_TIME_LEFT_MIN) {
     reasons.push(`Too early: ${timeLeftMin.toFixed(1)}min left > ${TRADE_FILTERS.MAX_TIME_LEFT_MIN}min (wait for price discovery)`);
+  }
+
+  // 4c. LATE/VERY_LATE phase ML gate — data: LATE 50% WR, -$1.63
+  // Late entries need high ML confidence to justify reduced time for resolution.
+  // EARLY/MID unaffected (76%/74% WR, working well).
+  if (Number.isFinite(timeLeftMin) && timeLeftMin < 5) {
+    const LATE_ML_MIN = 0.80;
+    if (mlAvailable && mlConfidence != null && mlConfidence < LATE_ML_MIN) {
+      reasons.push(`LATE phase ML gate: conf ${(mlConfidence * 100).toFixed(0)}% < ${LATE_ML_MIN * 100}% (${timeLeftMin.toFixed(1)}min left)`);
+    }
   }
 
   // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)

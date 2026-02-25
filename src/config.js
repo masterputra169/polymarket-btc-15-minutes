@@ -48,7 +48,7 @@ export const TRADE_FILTERS = {
   MIN_ENTRY_PRICE: 0.58,        // user override to 58c (has edge ≥ 8% bypass for lower prices)
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
   MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
-  BLACKOUT_HOURS_ET: [16, 17, 18, 19, 20, 21, 22, 23], // journal data: 16-20h ET = 31.6% WR (-$7.41), 20-24h = 41.7% WR (-$0.61)
+  BLACKOUT_HOURS_ET: [22, 23, 0, 1, 2, 3, 4, 5, 6, 7], // Asia/overnight hours: 57% WR, -$3.86 (Feb 23-25 data)
 };
 
 export const CONFIG = {

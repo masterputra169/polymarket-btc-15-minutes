@@ -282,9 +282,8 @@ export function decide({
           const trendDir = regimeInfo.direction; // 'UP' or 'DOWN'
           const bestEdgeSide = (edgeUp ?? -Infinity) >= (edgeDown ?? -Infinity) ? 'UP' : 'DOWN';
           if (trendDir && bestEdgeSide === trendDir) {
-            // Aligned with trend: RELAX thresholds (clear signal)
-            minEdge = Math.max(minEdge - 0.01 * scale, 0.04);
-            minProb = Math.max(minProb - 0.01 * scale, 0.52);
+            // Aligned with trend: NO relaxation — data (Feb 23-25): trending 66.7% WR, +$0.03 (breakeven)
+            // Relaxation was counterproductive; keep base thresholds for aligned signals.
           } else {
             // Counter-trend: TIGHTEN (risky against momentum)
             minEdge = Math.min(minEdge + 0.02 * scale, 0.25);
