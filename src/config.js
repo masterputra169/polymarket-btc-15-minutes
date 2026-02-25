@@ -51,6 +51,8 @@ export const TRADE_FILTERS = {
   BLACKOUT_HOURS_ET: [22, 23, 0, 1, 2, 3, 4, 5, 6, 7], // Asia/overnight hours: 57% WR, -$3.86 (Feb 23-25 data)
   MAX_ENTRY_SPREAD_PCT: 8,    // hard reject: spread > 8%
   SPREAD_EDGE_MIN: 8,         // soft: spread > 4% needs edge ≥ 8%
+  VPIN_BLOCK_THRESHOLD: 0.70, // VPIN > 70% + opposing flow = informed trader, block entry
+  SPREAD_WIDEN_RATIO: 2.0,    // spread > 2× baseline = sudden widening, block entry
 };
 
 export const CONFIG = {

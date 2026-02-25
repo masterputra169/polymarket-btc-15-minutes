@@ -306,6 +306,7 @@ export async function executeDirectionalTrade({
     etHour,
     spread: orderbookUp?.spread ?? null,
     mlAccuracy: deps.getMLAccuracy?.() ?? null,
+    buyRatio: volDelta?.buyRatio ?? null,
   });
 
   // Orderbook flow alignment check

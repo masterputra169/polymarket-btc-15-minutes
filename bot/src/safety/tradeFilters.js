@@ -13,6 +13,12 @@
  * 7. Weekend low-liquidity
  * 8. Edge ceiling — hard cap at 20% for all regimes (high edge = 0-14% WR)
  * 9. Counter-trend momentum — don't fight strong BTC moves
+ * 10. Hour-of-day blackout
+ * 11. Trending regime protection
+ * 12. Wide spread gate
+ * 13. ML accuracy degradation
+ * 14. VPIN — informed flow opposing signal
+ * 15. Spread widening — sudden spread increase
  */
 
 import { TRADE_FILTERS } from '../../../src/config.js';
@@ -23,6 +29,27 @@ const log = createLogger('Filter');
 // Module state for cooldown tracking
 let lastLossTimestamp = 0;
 let tradesThisMarket = {};  // { [slug]: count }
+
+// Spread baseline tracker (rolling ring buffer for spread widening detection)
+const SPREAD_BUF_SIZE = 10;
+const spreadBuf = new Float64Array(SPREAD_BUF_SIZE);
+let spreadBufIdx = 0;
+let spreadBufCount = 0;
+
+/** Record a spread observation for baseline computation. */
+export function recordSpread(spread) {
+  if (!Number.isFinite(spread) || spread <= 0) return;
+  spreadBuf[spreadBufIdx] = spread;
+  spreadBufIdx = (spreadBufIdx + 1) % SPREAD_BUF_SIZE;
+  if (spreadBufCount < SPREAD_BUF_SIZE) spreadBufCount++;
+}
+
+function getSpreadBaseline() {
+  if (spreadBufCount < 3) return null; // need ≥3 observations for meaningful baseline
+  let sum = 0;
+  for (let i = 0; i < spreadBufCount; i++) sum += spreadBuf[i];
+  return sum / spreadBufCount;
+}
 
 // Session quality: US session and EU/US overlap are highest quality
 // Off-hours and weekends have lower liquidity → lower reliability
@@ -56,6 +83,7 @@ export function applyTradeFilters({
   etHour,          // current ET hour (0-23) for blackout filter
   spread,          // orderbook spread for bet-side token (decimal, e.g. 0.05 = 5%)
   mlAccuracy,      // ML-specific accuracy from getMLAccuracy() (0-1 or null)
+  buyRatio,        // volume delta buy ratio (0-1, >0.5 = buyers dominating)
 }) {
   const reasons = [];
 
@@ -264,6 +292,37 @@ export function applyTradeFilters({
   // If ML has been wrong > 55% of last 20 predictions, stop trusting it for entry
   if (mlAccuracy != null && mlAccuracy < 0.45) {
     reasons.push(`ML degraded: ${(mlAccuracy*100).toFixed(0)}% acc (last 20) < 45%`);
+  }
+
+  // 14. VPIN — Volume-synchronized Probability of Informed Trading
+  // VPIN = |buyRatio×2 - 1| (0=balanced, 1=fully one-sided).
+  // High VPIN opposing our signal = informed trader pushing against us → block entry.
+  // High VPIN agreeing = confirmation → no block.
+  if (buyRatio != null && Number.isFinite(buyRatio) && signalSide != null) {
+    const vpin = Math.abs(buyRatio * 2 - 1);
+    const vpinThreshold = TRADE_FILTERS.VPIN_BLOCK_THRESHOLD != null
+      ? TRADE_FILTERS.VPIN_BLOCK_THRESHOLD : 0.70;
+    if (vpin >= vpinThreshold) {
+      // Determine if volume flow opposes our signal
+      const flowBullish = buyRatio > 0.5;
+      const signalBullish = signalSide === 'UP';
+      if (flowBullish !== signalBullish) {
+        reasons.push(`VPIN ${(vpin*100).toFixed(0)}% opposing: flow=${flowBullish ? 'BUY' : 'SELL'} vs signal=${signalSide} (informed flow)`);
+      }
+    }
+  }
+
+  // 15. Spread widening detection — sudden spread increase = informed trader arrival
+  // Compare current spread to rolling baseline. If spread > 2× baseline, block.
+  if (spread != null && Number.isFinite(spread)) {
+    const baseline = getSpreadBaseline();
+    const widenRatio = TRADE_FILTERS.SPREAD_WIDEN_RATIO != null
+      ? TRADE_FILTERS.SPREAD_WIDEN_RATIO : 2.0;
+    if (baseline != null && baseline > 0 && spread > baseline * widenRatio) {
+      reasons.push(`Spread widening: ${(spread*100).toFixed(1)}% > ${widenRatio}× baseline ${(baseline*100).toFixed(1)}% (informed flow)`);
+    }
+    // Always record spread for baseline tracking (after check to avoid self-reference)
+    recordSpread(spread);
   }
 
   // Session quality score (used as multiplier downstream, not a hard filter)
