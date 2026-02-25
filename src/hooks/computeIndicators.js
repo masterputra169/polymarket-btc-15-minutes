@@ -14,7 +14,7 @@ import { computeATR } from '../indicators/atr.js';
 import { computeVolumeDelta } from '../indicators/volumedelta.js';
 import { computeEmaCrossover } from '../indicators/emacross.js';
 import { computeStochRsi } from '../indicators/stochrsi.js';
-import { detectRegime } from '../engines/regime.js';
+import { detectRegime, computeAutocorrelation } from '../engines/regime.js';
 import { computeMultiTfConfirmation } from '../engines/multitf.js';
 import { getVolatilityProfile, computeRealizedVol } from '../engines/volatility.js';
 
@@ -95,11 +95,16 @@ export function computeAllIndicators({ candles, klines5m, lastPrice }) {
         closes[cLen - 2] > vwapSeries[vwapSeries.length - 2]
       : false;
 
+  // ACF — v3: price return autocorrelation for regime confirmation
+  const acf = computeAutocorrelation(closes);
+
   // Regime — H4: pass ATR ratio + volume ratio to reduce "moderate" dead zone
+  // v3: pass ACF for momentum/mean-reversion/random-walk confirmation
   const regimeInfo = detectRegime({
     price: lastPrice, vwap: vwapNow, vwapSlope, vwapCrossCount,
     volumeRecent, volumeAvg,
     atrRatio: atr?.atrRatio ?? null,
+    acf,
   });
 
   // Deltas

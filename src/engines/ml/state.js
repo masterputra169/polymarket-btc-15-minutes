@@ -2,10 +2,16 @@
  * Shared mutable module state for ML predictor.
  */
 
-// Feature counts
-export const BASE_FEATURES = 59;
+// Feature counts — adapts to loaded model (v9=54 base, v9a+=59 base)
+export let BASE_FEATURES = 54;
 export const ENGINEERED_FEATURES = 25;
-export const MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 84
+export let MAX_FEATURES = BASE_FEATURES + ENGINEERED_FEATURES; // 79 (v9) or 84 (v9a+)
+
+/** Called by model loader when norm_browser.json reveals actual base feature count. */
+export function setBaseFeatureCount(count) {
+  BASE_FEATURES = count;
+  MAX_FEATURES = count + ENGINEERED_FEATURES;
+}
 
 // Module state
 export let processedTrees = null;

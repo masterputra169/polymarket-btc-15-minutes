@@ -1,9 +1,14 @@
 /**
  * Feature index constants and named-feature resolution.
+ *
+ * Base features [0..53] are shared across all model versions.
+ * SM features [54..58] only exist in v9a+ models (59 base features).
+ * Engineered features start at index BASE_FEATURES (54 for v9, 59 for v9a+).
  */
 
 import * as S from './state.js';
 
+/** Core 54 base features (present in all model versions). */
 export const FI = {
   ptb_dist_pct: 0, rsi_norm: 1, rsi_slope: 2, macd_hist: 3, macd_line: 4,
   vwap_dist: 5, vwap_slope: 6, ha_signed_consec: 7, delta_1m_pct: 8,
@@ -23,8 +28,6 @@ export const FI = {
   spread_pct: 47, crowd_model_divergence: 48,
   momentum_5candle_slope: 49, volatility_change_ratio: 50, price_consistency: 51,
   funding_rate_norm: 52, funding_rate_change: 53,
-  sm_bull_ratio: 54, sm_flow_intensity: 55, sm_early_signal: 56,
-  sm_flow_accel: 57, sm_activity: 58,
 };
 
 export function resolveFeatureIdx(splitName) {
