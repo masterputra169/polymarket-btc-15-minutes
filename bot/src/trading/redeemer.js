@@ -649,6 +649,31 @@ async function redeemCycle() {
   } finally { redeemCycleRunning = false; }
 }
 
+// ── On-demand trigger (called after settlement) ──
+
+let pendingTriggerTimer = null;
+
+/**
+ * Trigger a redemption cycle after a delay.
+ * Called from loop.js after market settlement so tokens are redeemed
+ * as soon as the oracle resolves, instead of waiting for the periodic interval.
+ *
+ * @param {number} [delayMs=45000] — delay to allow oracle propagation (default 45s)
+ */
+export function triggerRedeem(delayMs = 45_000) {
+  if (!signer) return; // redeemer not initialized
+  // Deduplicate: don't stack multiple triggers
+  if (pendingTriggerTimer) {
+    log.debug('Redeem trigger already pending — skipping duplicate');
+    return;
+  }
+  log.info(`Redeem triggered — will run in ${Math.round(delayMs / 1000)}s (post-settlement)`);
+  pendingTriggerTimer = setTimeout(() => {
+    pendingTriggerTimer = null;
+    redeemCycle().catch(err => log.warn(`Post-settlement redeem failed: ${err.message}`));
+  }, delayMs);
+}
+
 // ── Lifecycle ──
 
 export function startRedeemer() {

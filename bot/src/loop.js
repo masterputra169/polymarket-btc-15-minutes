@@ -211,6 +211,7 @@ import {
   clearLastSettlementSource,
 } from './engines/settlement.js';
 import { reconcileNow } from './trading/journalReconciler.js';
+import { triggerRedeem } from './trading/redeemer.js';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.js';
 import { executeArbitrage, executeDirectionalTrade } from './engines/tradePipeline.js';
 import {
@@ -538,6 +539,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
+          triggerRedeem(); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -703,6 +705,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
+          triggerRedeem(); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -748,6 +751,7 @@ export async function pollOnce() {
       ).finally(() => {
         settlementPending = false;
         settlementAbort = null;
+        triggerRedeem(); // Auto-redeem after stale position settlement
         resetCutLossState();
         resetTakeProfitState();
         resetRecovery(); // Cancel any pending recovery on stale position recovery
