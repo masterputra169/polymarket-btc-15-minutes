@@ -1,4 +1,4 @@
-import { ML_CONFIDENCE } from '../config.js';
+import { ML_CONFIDENCE, polyFeeRate } from '../config.js';
 
 /**
  * ═══ Edge & Decision Engine v2 ═══
@@ -60,12 +60,11 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
   const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : DEFAULT_SPREAD_PENALTY);
   const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : DEFAULT_SPREAD_PENALTY);
 
-  // H3: Subtract expected Polymarket 2% redemption fee from edge.
-  // Fee is on profit (1 - price), so expected fee cost = 0.02 * (1 - price).
-  // Without this, edge is overstated and triggers trades that are actually EV-negative after fees.
-  const POLY_FEE_RATE = 0.02;
-  const feeAdjUp = effectiveUp != null && Number.isFinite(effectiveUp) ? POLY_FEE_RATE * (1 - effectiveUp) : 0;
-  const feeAdjDown = effectiveDown != null && Number.isFinite(effectiveDown) ? POLY_FEE_RATE * (1 - effectiveDown) : 0;
+  // H3: Subtract expected Polymarket taker fee from edge.
+  // Fee is on profit (1 - price). Dynamic formula (Feb 2026): feeRate = 0.25 × (p×(1−p))².
+  // At 65c: 1.29% (was flat 2%), at 70c: 1.10%, at 50c: 1.56% (max).
+  const feeAdjUp = effectiveUp != null && Number.isFinite(effectiveUp) ? polyFeeRate(effectiveUp) * (1 - effectiveUp) : 0;
+  const feeAdjDown = effectiveDown != null && Number.isFinite(effectiveDown) ? polyFeeRate(effectiveDown) * (1 - effectiveDown) : 0;
 
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
     ? modelUp - effectiveUp - spreadPenaltyUp - feeAdjUp

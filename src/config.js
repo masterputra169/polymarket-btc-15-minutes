@@ -55,6 +55,20 @@ export const TRADE_FILTERS = {
   SPREAD_WIDEN_RATIO: 2.0,    // spread > 2× baseline = sudden widening, block entry
 };
 
+/**
+ * Polymarket dynamic taker fee rate (Feb 2026 update).
+ * Formula: feeRate = 0.25 × (p × (1−p))²
+ * Max ~1.56% at p=0.50, decreases toward extreme prices.
+ * Old flat 2% was over-conservative at our entry range (58-72c → actual 1.0-1.5%).
+ * @param {number} price - token price (0-1)
+ * @returns {number} fee rate as decimal (0 to ~0.0156)
+ */
+export function polyFeeRate(price) {
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0;
+  const pq = price * (1 - price);
+  return 0.25 * pq * pq;
+}
+
 export const CONFIG = {
   symbol: 'BTCUSDT',
   binanceWsUrl: 'wss://data-stream.binance.vision/ws/btcusdt@trade',

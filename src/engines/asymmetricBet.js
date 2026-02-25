@@ -1,4 +1,4 @@
-import { BET_SIZING, EXECUTION } from '../config.js';
+import { BET_SIZING, EXECUTION, polyFeeRate } from '../config.js';
 import { computeKellyTune } from './feedback/stats.js';
 
 const {
@@ -127,11 +127,12 @@ export function computeBetSizing({
   }
 
   // ── Kelly Criterion ──
-  // Quant fix C2: net payout after Polymarket 2% fee on profit.
-  // Gross b = (1/price - 1). Net b = gross × (1 - 0.02) = gross × 0.98.
-  // Without fee, Kelly slightly oversizes every trade systematically.
+  // Quant fix C2: net payout after Polymarket taker fee on profit.
+  // Gross b = (1/price - 1). Net b = gross × (1 - feeRate).
+  // Dynamic fee (Feb 2026): feeRate = 0.25 × (p×(1−p))². At 65c: 1.29%, at 70c: 1.10%.
   const grossB = (1 / marketPrice) - 1;
-  const b = grossB * 0.98;             // net decimal odds after 2% fee
+  const feeRate = polyFeeRate(marketPrice);
+  const b = grossB * (1 - feeRate);    // net decimal odds after dynamic fee
   const p = ensembleProb;              // model probability of winning
   const q = 1 - p;
   const rawKelly = (b * p - q) / b;
