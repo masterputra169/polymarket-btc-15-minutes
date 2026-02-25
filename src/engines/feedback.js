@@ -6,7 +6,7 @@
  */
 
 export { recordPrediction, settlePrediction, autoSettle, loadHistory, flushHistory, clearAll } from './feedback/store.js';
-export { getAccuracyStats, getDetailedStats } from './feedback/stats.js';
+export { getAccuracyStats, getDetailedStats, getMLAccuracy } from './feedback/stats.js';
 export { purgeStaleMarkets, purgeSlug, purgeOlderThan, onMarketSwitch, getStorageStats } from './feedback/cleanup.js';
 export { getSignalModifiers, getSignalPerfStats, computeOverallCRPS, flushSignalPerf, clearSignalPerf } from './feedback/signalPerf.js';
 

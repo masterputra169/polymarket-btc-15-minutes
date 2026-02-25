@@ -16,6 +16,26 @@ import { SIGNAL_CONFIRM_POLLS } from './signalStability.js';
 
 const log = createLogger('TradePipeline');
 
+// ── Execution quality tracking (rolling slippage) ──
+const SLIPPAGE_BUF_SIZE = 20;
+const slippageBuf = new Float64Array(SLIPPAGE_BUF_SIZE);
+let slippageBufIdx = 0;
+let slippageBufCount = 0;
+
+function recordSlippage(pct) {
+  if (!Number.isFinite(pct)) return;
+  slippageBuf[slippageBufIdx] = pct;
+  slippageBufIdx = (slippageBufIdx + 1) % SLIPPAGE_BUF_SIZE;
+  if (slippageBufCount < SLIPPAGE_BUF_SIZE) slippageBufCount++;
+}
+
+export function getAvgSlippage() {
+  if (slippageBufCount === 0) return null;
+  let sum = 0;
+  for (let i = 0; i < slippageBufCount; i++) sum += slippageBuf[i];
+  return sum / slippageBufCount;
+}
+
 /**
  * Compute FOK buy limit price with adaptive slippage tolerance.
  * Audit fix H: Fixed slippage (1 cent) was 10% at $0.10 but only 1% at $0.90.
@@ -284,6 +304,8 @@ export async function executeDirectionalTrade({
     signalSide: rec.side,
     regime: regimeInfo?.regime ?? 'moderate',
     etHour,
+    spread: orderbookUp?.spread ?? null,
+    mlAccuracy: deps.getMLAccuracy?.() ?? null,
   });
 
   // Orderbook flow alignment check
@@ -441,6 +463,9 @@ export async function executeDirectionalTrade({
     smartFlowStrength: smartFlowSignal?.strength ?? null,
     smartFlowWindow: smartFlowSignal?.window ?? null,
     meBoost: meBoostActive,
+    expectedPrice: betMarketPrice,
+    slippagePct: null,     // populated after fill for live orders
+    avgSlippage: null,     // populated after fill for live orders
   };
 
   if (dryRun) {
@@ -460,6 +485,7 @@ export async function executeDirectionalTrade({
         priceToBeat: priceToBeat.value, marketSlug,
         regime: regimeInfo.regime,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
       });
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {
@@ -492,6 +518,12 @@ export async function executeDirectionalTrade({
     const actualPrice = (fillCost != null && fillCost > 0 && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
     const actualCost = (fillCost != null && fillCost > 0) ? fillCost : null;
 
+    // Execution quality tracking
+    const slippagePct = betMarketPrice > 0
+      ? ((actualPrice - betMarketPrice) / betMarketPrice) * 100
+      : 0;
+    recordSlippage(slippagePct);
+
     deps.setPendingCost(0);
     // H2/H9 FIX: Track order BEFORE recording trade (same pattern as arb fix above)
     // H9 FIX: Use parseClobAmount > 0 for fill confirmation (not just truthy)
@@ -508,6 +540,10 @@ export async function executeDirectionalTrade({
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     deps.recordTradeForMarket(marketSlug);
     deps.recordTradeTimestamp?.(); // H7: hourly trade frequency tracking
+    // Populate execution quality fields before snapshot
+    entryData.actualPrice = actualPrice;
+    entryData.slippagePct = slippagePct;
+    entryData.avgSlippage = getAvgSlippage();
     deps.captureEntrySnapshot(entryData);
     // RC3 Fix: ensure ERC-1155 setApprovalForAll is set for this token immediately after BUY
     // Prevents "not enough balance/allowance" errors on subsequent SELL (cut-loss) orders
@@ -522,6 +558,7 @@ export async function executeDirectionalTrade({
         priceToBeat: priceToBeat.value, marketSlug,
         regime: regimeInfo.regime,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
       });
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {

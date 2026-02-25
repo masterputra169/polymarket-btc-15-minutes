@@ -30,6 +30,7 @@ export {
 export {
   getAccuracyStats,
   getDetailedStats,
+  getMLAccuracy,
 } from '../../../src/engines/feedback/stats.js';
 
 export {

@@ -54,6 +54,8 @@ export function applyTradeFilters({
   signalSide,      // the side we want to enter ('UP'|'DOWN')
   regime,          // market regime ('trending'|'choppy'|'mean_reverting'|'moderate')
   etHour,          // current ET hour (0-23) for blackout filter
+  spread,          // orderbook spread for bet-side token (decimal, e.g. 0.05 = 5%)
+  mlAccuracy,      // ML-specific accuracy from getMLAccuracy() (0-1 or null)
 }) {
   const reasons = [];
 
@@ -241,6 +243,27 @@ export function applyTradeFilters({
     if (mlAvailable && mlConfidence != null && mlConfidence < TRENDING_MIN_ML) {
       reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${TRENDING_MIN_ML * 100}% (ML unsure in trending = high loss rate)`);
     }
+  }
+
+  // 12. Wide spread gate — illiquid market = slippage eats edge
+  if (spread != null && Number.isFinite(spread)) {
+    const maxSpread = TRADE_FILTERS.MAX_ENTRY_SPREAD_PCT != null
+      ? TRADE_FILTERS.MAX_ENTRY_SPREAD_PCT / 100 : 0.08;
+    if (spread > maxSpread) {
+      reasons.push(`Wide spread: ${(spread*100).toFixed(1)}% > ${(maxSpread*100).toFixed(0)}% max`);
+    } else if (spread > 0.04 && bestEdge != null) {
+      const spreadEdgeMin = TRADE_FILTERS.SPREAD_EDGE_MIN != null
+        ? TRADE_FILTERS.SPREAD_EDGE_MIN / 100 : 0.08;
+      if (bestEdge < spreadEdgeMin) {
+        reasons.push(`Spread ${(spread*100).toFixed(1)}% w/ thin edge ${(bestEdge*100).toFixed(1)}% < ${(spreadEdgeMin*100).toFixed(0)}%`);
+      }
+    }
+  }
+
+  // 13. ML accuracy degradation gate
+  // If ML has been wrong > 55% of last 20 predictions, stop trusting it for entry
+  if (mlAccuracy != null && mlAccuracy < 0.45) {
+    reasons.push(`ML degraded: ${(mlAccuracy*100).toFixed(0)}% acc (last 20) < 45%`);
   }
 
   // Session quality score (used as multiplier downstream, not a hard filter)

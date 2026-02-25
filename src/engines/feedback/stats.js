@@ -93,7 +93,22 @@ export function getAccuracyStats(windowSize = 20) {
   if (confidenceMultiplier < 0.50) confidenceMultiplier = 0.50;
   else if (confidenceMultiplier > 1.25) confidenceMultiplier = 1.25;
 
-  const result = { accuracy, total: recentTotal, correct: recentCorrect, confidenceMultiplier, streak, label, _windowSize: windowSize };
+  // Short-term accuracy (last 10) for rapid sizing adaptation
+  let shortTermAccuracy = null;
+  if (settledCount >= 10) {
+    let stSkip = settledCount - 10;
+    let stCorrect = 0, stTotal = 0;
+    for (let i = 0; i < S.cache.length; i++) {
+      const p = S.cache[i];
+      if (!p.settled || p.correct === null) continue;
+      if (stSkip > 0) { stSkip--; continue; }
+      stTotal++;
+      if (p.correct) stCorrect++;
+    }
+    shortTermAccuracy = stTotal > 0 ? stCorrect / stTotal : null;
+  }
+
+  const result = { accuracy, total: recentTotal, correct: recentCorrect, confidenceMultiplier, streak, label, shortTermAccuracy, _windowSize: windowSize };
   S.setStatsCache(result);
   return result;
 }
@@ -193,6 +208,22 @@ export function getDetailedStats() {
       count: streakCount,
     },
   };
+}
+
+export function getMLAccuracy(windowSize = 20) {
+  ensureLoaded();
+  const mlSettled = [];
+  for (let i = 0; i < S.cache.length; i++) {
+    const p = S.cache[i];
+    if (p.settled && p.correct !== null && p.mlSide != null) mlSettled.push(p);
+  }
+  if (mlSettled.length < 5) return null;
+  const window = mlSettled.slice(-Math.min(windowSize, mlSettled.length));
+  let correct = 0;
+  for (const p of window) {
+    if (p.mlSide === p.actualResult) correct++;
+  }
+  return correct / window.length;
 }
 
 export function computeKellyTune(baseKelly = 0.25) {

@@ -172,6 +172,15 @@ export function computeBetSizing({
     accuracyAdj.label += ' (damped)';
   }
 
+  // Short-window rapid adaptation — when last 10 trades diverge badly from normal,
+  // apply additional penalty to reduce sizing faster during cold spells.
+  const shortAcc = feedbackStats?.shortTermAccuracy ?? null;
+  if (shortAcc !== null && accRaw !== null && shortAcc < accRaw - 0.15) {
+    const shortPenalty = Math.max(0.60, shortAcc / (accRaw || 0.5));
+    accuracyAdj.multiplier *= shortPenalty;
+    accuracyAdj.label += ` | ST\u2193${(shortAcc*100).toFixed(0)}%`;
+  }
+
   // ML
   const mlAdj = mlMultiplier(ml, side);
 

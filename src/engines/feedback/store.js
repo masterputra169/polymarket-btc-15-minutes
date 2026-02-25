@@ -6,7 +6,7 @@ import { ensureLoaded, markDirty, MAX_HISTORY, clearPersistTimer } from './state
 import * as S from './state.js';
 import { extractSignalSnapshot, updateSignalPerf } from './signalPerf.js';
 
-export function recordPrediction({ side, modelProb, marketPrice, btcPrice, priceToBeat, marketSlug, regime, mlConfidence, breakdown }) {
+export function recordPrediction({ side, modelProb, marketPrice, btcPrice, priceToBeat, marketSlug, regime, mlConfidence, mlSide, breakdown }) {
   ensureLoaded();
 
   const now = Date.now();
@@ -25,6 +25,7 @@ export function recordPrediction({ side, modelProb, marketPrice, btcPrice, price
     marketSlug,
     regime: regime ?? null,
     mlConfidence: mlConfidence ?? null,
+    mlSide: mlSide ?? null,
     signalSnapshot: extractSignalSnapshot(breakdown),
     settled: false,
     correct: null,

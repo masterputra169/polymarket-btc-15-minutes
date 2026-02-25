@@ -49,6 +49,8 @@ export const TRADE_FILTERS = {
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
   MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
   BLACKOUT_HOURS_ET: [22, 23, 0, 1, 2, 3, 4, 5, 6, 7], // Asia/overnight hours: 57% WR, -$3.86 (Feb 23-25 data)
+  MAX_ENTRY_SPREAD_PCT: 8,    // hard reject: spread > 8%
+  SPREAD_EDGE_MIN: 8,         // soft: spread > 4% needs edge ≥ 8%
 };
 
 export const CONFIG = {
