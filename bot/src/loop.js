@@ -130,6 +130,7 @@ import {
   getLastLossTimestamp,
   setLastLossTimestamp,
   resetConsecutiveLosses,
+  resetDailyBaseline,
   updatePositionMarketPrice,
   getTradeTimestamps,
   setTradeTimestamps,
@@ -262,6 +263,10 @@ export function resetEntryRegime() { entryRegime = null; }
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
+
+// Circuit breaker cooldown tracking
+let cbHaltStartMs = 0;        // when circuit breaker first triggered (0 = not halted)
+let cbLastLogMs = 0;           // throttle halt log spam (log every 5min, not every poll)
 let startupUsdcChecked = false;
 let startupOrdersReconciled = false;
 let startupTradeCountsLoaded = false;
@@ -341,10 +346,45 @@ export async function pollOnce() {
       drawdownPct: getDrawdownPct(),
     });
     if (haltCheck.halt) {
-      log.warn(`HALTED: ${haltCheck.reason}`);
-      notify('critical', `CIRCUIT BREAKER: ${haltCheck.reason} | Bankroll: $${getBankroll().toFixed(2)}`);
-      broadcast({ halted: true, haltReason: haltCheck.reason, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
-      return;
+      const now = Date.now();
+      // Track when halt first started
+      if (cbHaltStartMs === 0) {
+        cbHaltStartMs = now;
+        cbLastLogMs = 0; // force first log immediately
+      }
+
+      const elapsed = now - cbHaltStartMs;
+      const cooldownMs = BOT_CONFIG.circuitBreakerCooldownMs;
+
+      // Auto-recover after cooldown period (0 = disabled, stay halted forever)
+      if (cooldownMs > 0 && elapsed >= cooldownMs) {
+        log.info(`Circuit breaker cooldown expired (${(elapsed / 60_000).toFixed(0)}min) — resetting baseline and resuming`);
+        notify('info', `Circuit breaker cooldown expired — resuming trading | Bankroll: $${getBankroll().toFixed(2)}`);
+        resetDailyBaseline();
+        cbHaltStartMs = 0;
+        cbLastLogMs = 0;
+        // Fall through to continue trading
+      } else {
+        // Still in cooldown — throttle log to every 5 minutes
+        const LOG_THROTTLE_MS = 5 * 60 * 1000;
+        if (now - cbLastLogMs >= LOG_THROTTLE_MS) {
+          const remainMin = Math.ceil((cooldownMs - elapsed) / 60_000);
+          log.warn(`HALTED: ${haltCheck.reason} | Cooldown: ${remainMin}min remaining`);
+          if (cbLastLogMs === 0) {
+            // First time — send notification
+            notify('critical', `CIRCUIT BREAKER: ${haltCheck.reason} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
+          }
+          cbLastLogMs = now;
+        }
+        broadcast({ halted: true, haltReason: haltCheck.reason, cooldownRemainMin: Math.ceil((cooldownMs - elapsed) / 60_000), ts: now, bankroll: getBankroll(), stats: getStats() });
+        return;
+      }
+    } else {
+      // Not halted — reset cooldown tracker
+      if (cbHaltStartMs > 0) {
+        cbHaltStartMs = 0;
+        cbLastLogMs = 0;
+      }
     }
 
     // ── 1b. Check pending order fills (non-blocking) ──

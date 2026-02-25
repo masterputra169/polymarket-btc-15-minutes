@@ -34,6 +34,7 @@ const BOT_CONFIG = {
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
   maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),  // Audit v2 H6: 20→25% — P(4 consec full loss)=3.7% at 56% WR; 20% too tight for normal variance
+  circuitBreakerCooldownMs: envInt(process.env.CB_COOLDOWN_MS, 30 * 60 * 1000, 0, 24 * 60 * 60 * 1000), // Auto-recover after cooldown (default 30min)
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // External notifications (optional — no-ops if not set)
@@ -103,9 +104,12 @@ const BOT_CONFIG = {
     crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 42, 10, 90),      // v11: 35→42% — only true crashes
     crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
     evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.80, 0.05, 1.50),        // C2: 0.85→0.80 with floor 0.40 — uniform 80% threshold across price levels
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.65, 0.40, 0.99), // ML must flip to opposite side with >=65% confidence
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // Fix 5: 0.65→0.75 — with 87.5% settlement WR, ML must be very sure
     persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 42, 5, 90),   // v11: 35→42% — truly dead position
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 15, 1, 30), // v11: 12→15min — wait even longer
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 7, 1, 30), // Fix 4: 15→7min — dynamic capping handles the rest
+    maxLossOfCostPct: envNum(process.env.CUT_LOSS_MAX_LOSS_OF_COST_PCT, 75, 20, 95), // Fix 2: force cut at 75% capital loss
+    trailingStopActivationPct: envNum(process.env.CUT_LOSS_TRAILING_ACTIVATION_PCT, 15, 5, 50), // Fix 6: need 15%+ gain to activate
+    trailingStopDropPct: envNum(process.env.CUT_LOSS_TRAILING_DROP_PCT, 50, 20, 80),            // Fix 6: cut at 50% give-back from peak
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)

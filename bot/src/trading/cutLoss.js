@@ -48,6 +48,7 @@ let sellAttempts = 0;
 let lastSellAttemptMs = 0;
 let consecutiveCutPolls = 0;
 let firstLargeDropMs = 0; // Fix D: timestamp when position first crossed persistentDropPct threshold
+let peakTokenPrice = 0;   // Fix 6: trailing stop — track peak price since entry
 
 // Token price ring buffer (for dashboard trajectory tracking)
 const TOKEN_BUF_SIZE = 12; // 12 polls ≈ 36s at 3s interval
@@ -140,10 +141,16 @@ export function evaluateCutLoss({
   if (entryPrice < 0.01) return no('bad_entry_price'); // M3: min Polymarket token price is $0.01
 
   recordTokenPrice(currentTokenPrice);
+  if (currentTokenPrice > peakTokenPrice) peakTokenPrice = currentTokenPrice;
 
   const dropPct = ((entryPrice - currentTokenPrice) / entryPrice) * 100;
   const hasPtb = btcPrice != null && priceToBeat != null &&
     Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
+
+  // Fix 1: Volatility scaling — high vol widens thresholds (noise), low vol tightens
+  const volScale = (atrRatio != null && Number.isFinite(atrRatio) && atrRatio > 0)
+    ? Math.max(0.7, Math.min(1.5, atrRatio))
+    : 1.0;
 
   let btcDistPct = null;
   let btcFavorable = null;
@@ -154,7 +161,7 @@ export function evaluateCutLoss({
   }
 
   // ── Gate 6b: CRASH fast-track ──
-  const crashDrop = cfg.crashDropPct ?? 30;
+  const crashDrop = (cfg.crashDropPct ?? 30) * volScale;  // Fix 1: vol-scaled
   const crashDist = cfg.crashBtcDistPct ?? 0.20;
   // H10: OR logic — 30%+ token drop is a crash even without BTC data.
   // BTC distance OR BTC unfavorable confirms, but lack of PTB data shouldn't block crash detection.
@@ -171,8 +178,13 @@ export function evaluateCutLoss({
   // If token has been down >= persistentDropPct% continuously for >= persistentDropMinutes,
   // cut without waiting for model agreement (skip gates 7a/7b).
   // Prevents holding a deeply losing position indefinitely while model is slow to flip.
-  const persistentDropPct = cfg.persistentDropPct ?? 20;
+  const persistentDropPct = (cfg.persistentDropPct ?? 20) * volScale;  // Fix 1: vol-scaled
   const persistentDropMs = (cfg.persistentDropMinutes ?? 5) * 60_000;
+  // Fix 4: Cap persistent wait at 50% of remaining time (never wait longer than half the market)
+  const maxPersistentMs = (timeLeftMin != null && Number.isFinite(timeLeftMin))
+    ? Math.max(60_000, timeLeftMin * 60_000 * 0.5)
+    : persistentDropMs;
+  const effectivePersistentMs = Math.min(persistentDropMs, maxPersistentMs);
   if (dropPct >= persistentDropPct) {
     if (firstLargeDropMs === 0) firstLargeDropMs = now;
   } else {
@@ -180,7 +192,22 @@ export function evaluateCutLoss({
   }
   const persistentDropDurationMs = firstLargeDropMs > 0 ? now - firstLargeDropMs : 0;
   // M10: Re-verify dropPct at trigger time — token may have partially recovered since timer started
-  const isTimeBased = firstLargeDropMs > 0 && persistentDropDurationMs >= persistentDropMs && dropPct >= persistentDropPct;
+  const isTimeBased = firstLargeDropMs > 0 && persistentDropDurationMs >= effectivePersistentMs && dropPct >= persistentDropPct;
+
+  // ── Gate 6e: DOLLAR-BASED MAX LOSS fast-track ──
+  // Force cut when position has lost ≥75% of invested capital, regardless of model.
+  const maxLossOfCostPct = cfg.maxLossOfCostPct ?? 75;
+  const currentValue = currentTokenPrice * (position.size ?? 0);
+  const costLossPct = (position.cost > 0) ? ((position.cost - currentValue) / position.cost) * 100 : 0;
+  const isMaxLoss = position.cost > 0 && costLossPct >= maxLossOfCostPct;
+
+  // ── Gate 6f: TRAILING STOP fast-track — protect unrealized gains from complete reversal ──
+  const trailingActivation = cfg.trailingStopActivationPct ?? 15; // need 15%+ gain first
+  const trailingDropPct = cfg.trailingStopDropPct ?? 50;          // cut at 50% give-back
+  const gainFromEntry = entryPrice > 0 ? ((peakTokenPrice - entryPrice) / entryPrice) * 100 : 0;
+  const peakDrawdown = peakTokenPrice > 0 ? ((peakTokenPrice - currentTokenPrice) / peakTokenPrice) * 100 : 0;
+  const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= trailingDropPct
+    && (modelProbability == null || modelProbability < 0.60); // model not strongly supporting
 
   // ── Determine cut reason (skip for fast-tracks) ──
   let cutReason = null;
@@ -197,7 +224,17 @@ export function evaluateCutLoss({
     computedEvThreshold *= 1.08; // ~8% stricter → faster exit in whipsaw conditions
   }
 
-  if (!isCrash && !isLateForceCut && !isTimeBased) {
+  // Fix 3: Time decay — binary options have extreme theta near expiry.
+  // Model must be MORE supportive near expiry to justify holding.
+  let timeDecayScale = 1.0;
+  if (timeLeftMin != null && Number.isFinite(timeLeftMin)) {
+    if (timeLeftMin < 2)       timeDecayScale = 1.15;  // VERY_LATE: 15% stricter
+    else if (timeLeftMin < 5)  timeDecayScale = 1.10;  // LATE: 10% stricter
+    else if (timeLeftMin < 10) timeDecayScale = 1.05;  // MID: 5% stricter
+  }
+  computedEvThreshold *= timeDecayScale;
+
+  if (!isCrash && !isLateForceCut && !isTimeBased && !isMaxLoss && !isTrailingStop) {
 
     // ── Gate 7a: EV-NEGATIVE — model agrees position is losing ──
     // C2: Uniform 80% threshold with 0.40 floor — cheap tokens no longer cut at 25% (too loose)
@@ -225,9 +262,10 @@ export function evaluateCutLoss({
         : 'no_model_data');
     }
 
-    // ── Gate 8: Minimum damage threshold ──
-    if (dropPct < cfg.minTokenDropPct) {
-      return no(`drop_${dropPct.toFixed(1)}%<${cfg.minTokenDropPct}%`);
+    // ── Gate 8: Minimum damage threshold (vol-scaled) ──
+    const scaledMinDrop = cfg.minTokenDropPct * volScale;
+    if (dropPct < scaledMinDrop) {
+      return no(`drop_${dropPct.toFixed(1)}%<${scaledMinDrop.toFixed(1)}%`);
     }
 
     // ── Gate 8b: Recovery zone — token actively recovering, hold and wait ──
@@ -260,10 +298,10 @@ export function evaluateCutLoss({
   }
 
   // ── Gate 11: Consecutive poll confirmation ──
-  const requiredPolls = (isCrash || isLateForceCut || isTimeBased) ? 1 : cfg.consecutivePolls;
+  const requiredPolls = (isCrash || isLateForceCut || isTimeBased || isMaxLoss || isTrailingStop) ? 1 : cfg.consecutivePolls;
   consecutiveCutPolls++;
   if (consecutiveCutPolls < requiredPolls) {
-    const tag = isCrash ? 'crash' : isLateForceCut ? 'late_force' : 'ev';
+    const tag = isCrash ? 'crash' : isLateForceCut ? 'late_force' : isMaxLoss ? 'max_loss' : isTrailingStop ? 'trailing_stop' : 'ev';
     return {
       shouldCut: false,
       reason: `${tag}_confirming_${consecutiveCutPolls}/${requiredPolls}`,
@@ -305,6 +343,8 @@ export function evaluateCutLoss({
 
   const reason = isCrash ? 'CRASH'
     : isLateForceCut ? 'LATE_FORCE_CUT'
+    : isMaxLoss ? `MAX_LOSS(cost_loss=${costLossPct.toFixed(1)}%)`
+    : isTrailingStop ? `TRAILING_STOP(gain=${gainFromEntry.toFixed(1)}%,drawdown=${peakDrawdown.toFixed(1)}%)`
     : isTimeBased ? `TIME_BASED(drop=${dropPct.toFixed(1)}%,${(persistentDropDurationMs / 60_000).toFixed(1)}min)`
     : cutReason ?? 'triggered';
 
@@ -327,10 +367,17 @@ export function evaluateCutLoss({
       regime,
       entryRegime: entryRegime ?? null,
       atrRatio: atrRatio ?? null,
+      volScale,
       tokenSlope: getTokenPriceSlope(),
       isCrash,
       isLateForceCut,
       isTimeBased,
+      isMaxLoss,
+      isTrailingStop,
+      costLossPct: position.cost > 0 ? parseFloat(costLossPct.toFixed(1)) : null,
+      timeDecayScale,
+      gainFromEntry: parseFloat(gainFromEntry.toFixed(1)),
+      peakDrawdown: parseFloat(peakDrawdown.toFixed(1)),
       persistentDropDurationMin: persistentDropDurationMs > 0 ? parseFloat((persistentDropDurationMs / 60_000).toFixed(1)) : null,
       sellAttempt: attempt,
       slippageMode: slippageMultiplier === null ? 'market' : `${slippageMultiplier}x`,
@@ -346,6 +393,7 @@ export function resetCutLossState() {
   lastSellAttemptMs = 0;
   consecutiveCutPolls = 0;
   firstLargeDropMs = 0;
+  peakTokenPrice = 0;
   tokenPriceBuf.fill(0);
   tokenBufIdx = 0;
   tokenBufCount = 0;

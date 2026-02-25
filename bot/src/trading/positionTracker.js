@@ -803,6 +803,28 @@ export function getConsecutiveLosses() {
   return state.consecutiveLosses;
 }
 
+/**
+ * Reset daily baseline after circuit breaker cooldown.
+ * Resets startOfDayBankroll + peakBankroll to current values so the bot can resume.
+ */
+export function resetDailyBaseline() {
+  const prevSoD = state.startOfDayBankroll;
+  const prevPeak = state.peakBankroll;
+  const openCost = (state.currentPosition && !state.currentPosition.settled)
+    ? (state.currentPosition.cost ?? 0) : 0;
+  state.startOfDayBankroll = roundMoney(state.bankroll + openCost);
+  state.dayStartMs = Date.now();
+  state.peakBankroll = Math.max(state.bankroll, state.startOfDayBankroll);
+  state.consecutiveLosses = 0;
+  auditLog({
+    type: 'CB_COOLDOWN_RESET', prevSoD, prevPeak,
+    nextSoD: state.startOfDayBankroll, nextPeak: state.peakBankroll,
+    bankroll: state.bankroll, reason: 'circuit_breaker_cooldown',
+  });
+  log.info(`Circuit breaker cooldown: baseline $${prevSoD.toFixed(2)}→$${state.startOfDayBankroll.toFixed(2)}, peak $${prevPeak.toFixed(2)}→$${state.peakBankroll.toFixed(2)}`);
+  saveState();
+}
+
 /** Audit v2 H4: Reset consecutive losses after inactivity period.
  *  H6: Also reset peakBankroll to current bankroll (fresh start after long break). */
 export function resetConsecutiveLosses() {
