@@ -165,11 +165,17 @@ export function getSmartFlowSignal() {
     return insufficientResult;
   }
 
-  // Weighted composite flow (early flow weighted 3x, late flow 0.3x)
+  // M1 audit fix: Normalize by sample count per window before weighting.
+  // Previously earlyFlow accumulated per-poll — at 50ms vs 700ms poll, magnitude changed ~14x.
+  // Now we compute average flow per sample per window, then weight by accuracy-based weights.
+  const avgEarly = state.earlyCount > 0 ? state.earlyFlow / state.earlyCount : 0;
+  const avgMid = state.midCount > 0 ? state.midFlow / state.midCount : 0;
+  const avgLate = state.lateCount > 0 ? state.lateFlow / state.lateCount : 0;
+
   const weighted =
-    state.earlyFlow * WINDOW_WEIGHTS.EARLY +
-    state.midFlow * WINDOW_WEIGHTS.MID +
-    state.lateFlow * WINDOW_WEIGHTS.LATE;
+    avgEarly * WINDOW_WEIGHTS.EARLY +
+    avgMid * WINDOW_WEIGHTS.MID +
+    avgLate * WINDOW_WEIGHTS.LATE;
 
   const totalWeight =
     (state.earlyCount > 0 ? WINDOW_WEIGHTS.EARLY : 0) +

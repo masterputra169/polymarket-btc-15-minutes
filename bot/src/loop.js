@@ -96,6 +96,7 @@ import {
   hasPendingOrder,
   getFillTrackerStatus,
   registerPendingOrder,
+  clearPendingOrders,
 } from './trading/fillTracker.js';
 
 // Trading
@@ -130,6 +131,8 @@ import {
   setLastLossTimestamp,
   resetConsecutiveLosses,
   updatePositionMarketPrice,
+  getTradeTimestamps,
+  setTradeTimestamps,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
@@ -138,7 +141,7 @@ import { onCutLoss as recoveryOnCutLoss, tick as recoveryTick, reset as resetRec
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
 
 // Safety
-import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp } from './safety/guards.js';
+import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp, exportTradeTimestamps, importTradeTimestamps } from './safety/guards.js';
 import {
   applyTradeFilters,
   recordLoss,
@@ -214,6 +217,7 @@ import {
   getPreMarketSizing,
   onPreMarketEntry,
   checkPreMarketTP,
+  checkPreMarketSL,
   clearPreMarketEntry,
   isPreMarketPosition,
   getPreMarketStatus,
@@ -313,6 +317,7 @@ export async function pollOnce() {
     startupTradeCountsLoaded = true;
     importMarketTradeCounts(getMarketTradeCounts());
     importLastLossTimestamp(getLastLossTimestamp()); // FINTECH: restore cooldown across restart
+    importTradeTimestamps(getTradeTimestamps()); // M2 audit fix: restore hourly trade limit across restart
   }
   const _pollStart = performance.now();
 
@@ -503,6 +508,7 @@ export async function pollOnce() {
       resetCutLossState();
       resetTakeProfitState();
       resetRecovery(); // Cancel any pending recovery on market expiry
+      clearPendingOrders(); // H2 audit fix: stale orders from expired market
       resetMarketTradeCount(currentMarketSlug);
       resetMarketCache();
       entryRegime = null;
@@ -669,6 +675,7 @@ export async function pollOnce() {
       resetCutLossState();
       resetTakeProfitState();
       resetRecovery(); // Cancel any pending recovery on market switch
+      clearPendingOrders(); // H2 audit fix: stale orders from previous market
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -1232,6 +1239,55 @@ export async function pollOnce() {
       }
     }
 
+    // ── 6d3. Pre-market LONG stop-loss (M3 audit fix — 20% bankroll at risk needs a floor) ──
+    const pmSLPos = getCurrentPosition();
+    if (pmSLPos && !pmSLPos.settled && pmSLPos.side === 'UP' && isPreMarketPosition(marketSlug)) {
+      const pmSLPrice = marketUp;
+      const pmSL = checkPreMarketSL(pmSLPrice, marketSlug, BOT_CONFIG.preMarketLong);
+      if (pmSL.shouldCut) {
+        if (!acquireSellLock('premarket_sl')) {
+          log.info('Pre-market SL skipped — sell already in progress');
+        } else {
+          try {
+            const pmSLSellSize = pmSLPos.size;
+            const pmSLSellPrice = Math.max(0.01, Math.round((pmSLPrice - 0.01) * 1000) / 1000);
+            log.info(
+              `PRE-MARKET STOP-LOSS: ${pmSLPos.side} -${pmSL.lossPct.toFixed(1)}% | ` +
+              `sell ${pmSLSellSize} shares @$${pmSLSellPrice.toFixed(3)} | stop was $${pmSL.stopPrice.toFixed(3)}`
+            );
+            if (BOT_CONFIG.dryRun) {
+              const pmSLRecovery = pmSLSellPrice * pmSLSellSize;
+              const pmSLPnl = pmSLRecovery - pmSLPos.cost;
+              settleTradeEarlyExit(pmSLRecovery);
+              invalidateSync();
+              clearEntrySnapshot();
+              clearPreMarketEntry();
+              writeJournalEntry({ outcome: 'PREMARKET_SL', pnl: pmSLPnl, exitData: { lossPct: pmSL.lossPct, strategy: 'premarket_long' } });
+              resetCutLossState();
+              resetTakeProfitState();
+              notify('warn', `PRE-MARKET SL (dry): UP -${pmSL.lossPct.toFixed(1)}% | P&L $${pmSLPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+            } else {
+              try {
+                const pmSLResult = await closePosition(pmSLPos.tokenId, pmSLSellSize, pmSLSellPrice);
+                const pmSLActual = parseClobAmount(pmSLResult?.takingAmount, pmSLSellPrice * pmSLSellSize);
+                const pmSLPnl = pmSLActual - pmSLPos.cost;
+                settleTradeEarlyExit(pmSLActual);
+                invalidateSync();
+                clearEntrySnapshot();
+                clearPreMarketEntry();
+                writeJournalEntry({ outcome: 'PREMARKET_SL', pnl: pmSLPnl, exitData: { lossPct: pmSL.lossPct, recovered: pmSLActual, strategy: 'premarket_long' } });
+                resetCutLossState();
+                resetTakeProfitState();
+                notify('warn', `PRE-MARKET SL: UP -${pmSL.lossPct.toFixed(1)}% | P&L $${pmSLPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              } catch (err) {
+                log.warn(`Pre-market SL sell FAILED: ${err.stack || err.message}`);
+              }
+            }
+          } finally { releaseSellLock(); }
+        }
+      }
+    }
+
     // ── 6e. Recovery buy tick (after cut-loss, re-enter if signal stabilizes) ──
     if (isRecoveryActive()) {
       const recoveryPos = getCurrentPosition();
@@ -1252,6 +1308,7 @@ export async function pollOnce() {
         isHalted: haltCheck2.halt,
         bankroll: getAvailableBankroll(),
         marketSlug,
+        smartFlowSignal: smartFlowSignal ?? null, // C3 audit fix: block recovery against smart money
       });
 
       if (recoveryResult.shouldBuy && !settlementPending) {
@@ -1378,6 +1435,9 @@ export async function pollOnce() {
     // ── 10pre. Pre-market LONG strategy (priority over normal signals) ──
     // Bypasses ML, edge, signal stability gates — pure time-window momentum play.
     let preMarketEnteredThisPoll = false;
+    // Check if we're inside pre-market window and already traded — blocks regular entries after pre-market TP
+    const pmStatus = BOT_CONFIG.preMarketLong.enabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : null;
+    const preMarketWindowActive = pmStatus?.inWindow && pmStatus?.tradedToday;
     if (BOT_CONFIG.preMarketLong.enabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
       const pmCheck = checkPreMarketEntry({
         hasPosition: alreadyHasPosition,
@@ -1448,7 +1508,7 @@ export async function pollOnce() {
     }
 
     // 10a. Arbitrage execution (priority over directional)
-    if (!preMarketEnteredThisPoll && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
       try {
@@ -1463,7 +1523,8 @@ export async function pollOnce() {
           // unwindSucceeded stays false → one-legged ARB silently falls back to directional.
           placeSellOrder: ({ tokenId, price, size }) => closePosition(tokenId, size, price),
           recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
-          captureEntrySnapshot, recordTradeTimestamp,
+          captureEntrySnapshot,
+          recordTradeTimestamp: () => { recordTradeTimestamp(() => setTradeTimestamps(exportTradeTimestamps())); },
           setEntryRegime: (r) => { entryRegime = r; },
           // RC3 Fix (ARB): ERC-1155 approval after BUY legs for subsequent SELL
           updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
@@ -1475,7 +1536,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         await executeDirectionalTrade({
@@ -1509,7 +1570,7 @@ export async function pollOnce() {
           recordTradeForMarket,
           captureEntrySnapshot,
           recordPrediction,
-          recordTradeTimestamp,
+          recordTradeTimestamp: () => { recordTradeTimestamp(() => setTradeTimestamps(exportTradeTimestamps())); },
           setEntryRegime: (r) => { entryRegime = r; },
           notifyTrade: notifyTradeFn,
           // RC3 Fix: ERC-1155 approval immediately after BUY fill

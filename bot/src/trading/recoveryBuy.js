@@ -86,6 +86,7 @@ export function onCutLoss({ side, tokenId, conditionId, marketSlug }) {
 export function tick({
   tokenPrice, timeLeftMin, mlConfidence, mlSide,
   ensembleProb, hasPosition, isHalted, bankroll, marketSlug,
+  smartFlowSignal,
 }) {
   const cfg = BOT_CONFIG.recoveryBuy;
   const no = (reason) => ({ shouldBuy: false, reason });
@@ -164,6 +165,15 @@ export function tick({
     if (baselinePrice != null && tokenPrice < baselinePrice * 0.97) {
       // Still falling — 3%+ below baseline, don't buy into continued decline
       return no(`falling_${(tokenPrice * 100).toFixed(0)}c<baseline_${(baselinePrice * 100).toFixed(0)}c`);
+    }
+
+    // Gate 6b: Smart money flow alignment (C3 audit fix)
+    // Early flow has 82.8% predictive accuracy — don't re-enter against dominant flow
+    if (smartFlowSignal && smartFlowSignal.confidence > 0.5
+        && smartFlowSignal.strength > 0.4
+        && typeof smartFlowSignal.agreesWithSide === 'function'
+        && !smartFlowSignal.agreesWithSide(cutLossSide)) {
+      return no(`smart_flow_opposes_${smartFlowSignal.direction}`);
     }
 
     // Gate 7: ML still agrees

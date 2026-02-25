@@ -131,12 +131,41 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, available
 
 /**
  * H7: Record a trade timestamp for frequency tracking.
+ * @param {function} [persistFn] — optional callback to persist timestamps (called with array)
  */
-export function recordTradeTimestamp() {
+export function recordTradeTimestamp(persistFn) {
   tradeTimestamps.push(Date.now());
   // Keep only last hour + small buffer
   while (tradeTimestamps.length > MAX_TRADES_PER_HOUR + 5) {
     tradeTimestamps.shift();
+  }
+  // M2 audit fix: persist to disk so hourly limit survives restart
+  if (typeof persistFn === 'function') {
+    try { persistFn(exportTradeTimestamps()); } catch (_) { /* non-critical */ }
+  }
+}
+
+/**
+ * M2 audit fix: Export trade timestamps for persistence across restarts.
+ * Only exports timestamps from last hour (stale ones are useless).
+ */
+export function exportTradeTimestamps() {
+  const oneHourAgo = Date.now() - 3600_000;
+  return tradeTimestamps.filter(ts => ts > oneHourAgo);
+}
+
+/**
+ * M2 audit fix: Import persisted trade timestamps on startup.
+ * Filters out stale entries (>1hr old) to prevent phantom limits.
+ */
+export function importTradeTimestamps(timestamps) {
+  if (!Array.isArray(timestamps)) return;
+  const oneHourAgo = Date.now() - 3600_000;
+  const valid = timestamps.filter(ts => typeof ts === 'number' && ts > oneHourAgo);
+  tradeTimestamps.length = 0;
+  tradeTimestamps.push(...valid);
+  if (valid.length > 0) {
+    log.info(`Restored ${valid.length} trade timestamps from persistence (hourly limit: ${MAX_TRADES_PER_HOUR})`);
   }
 }
 

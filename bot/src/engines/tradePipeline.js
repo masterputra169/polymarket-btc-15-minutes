@@ -264,8 +264,8 @@ export async function executeDirectionalTrade({
   }
 
   // ── Smart trade filters ──
-  // Compute ET hour for blackout filter (ET = UTC-5, no DST handling needed for hour-level granularity)
-  const etHour = new Date(Date.now() - 5 * 3600_000).getUTCHours();
+  // Compute ET hour for blackout filter (DST-aware via Intl API)
+  const etHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
 
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
@@ -366,6 +366,15 @@ export async function executeDirectionalTrade({
   if (effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
     log.info(`Kelly cap: $${effectiveBetAmount.toFixed(2)} → $${kellyMaxBet.toFixed(2)} (${(kellyCapPct * 100).toFixed(0)}% of $${currentBankroll.toFixed(0)}, conf=${rec.confidence})`);
     effectiveBetAmount = kellyMaxBet;
+  }
+
+  // C2 Audit fix: Session quality scaling (Kelly adjustment for session reliability).
+  // Low-liquidity sessions (Asia/Off-hours) have wider spreads and less reliable signals.
+  const sessionQuality = filterResult.sessionQuality ?? 1.0;
+  if (sessionQuality < 1.0) {
+    const sqScaled = Math.round(effectiveBetAmount * sessionQuality * 100) / 100;
+    log.info(`Session quality: $${effectiveBetAmount.toFixed(2)} × ${sessionQuality} = $${sqScaled.toFixed(2)} (${getSessionName()})`);
+    effectiveBetAmount = sqScaled;
   }
 
   if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {

@@ -147,6 +147,7 @@ const BOT_CONFIG = {
     windowStartM: envInt(process.env.PREMARKET_LONG_WINDOW_START_M, 0, 0, 59),
     windowEndH: envInt(process.env.PREMARKET_LONG_WINDOW_END_H, 9, 0, 23),           // 09:15 EST
     windowEndM: envInt(process.env.PREMARKET_LONG_WINDOW_END_M, 15, 0, 59),
+    maxLossPct: envNum(process.env.PREMARKET_LONG_MAX_LOSS_PCT, 0.30, 0.05, 0.80),  // M3 audit fix: 30% stop-loss
   },
 
   // MetEngine smart money API (x402, Solana USDC payments)
@@ -161,11 +162,11 @@ const BOT_CONFIG = {
     solanaPrivateKey: process.env.SOLANA_PRIVATE_KEY || '',
     cacheTtlMs: 90_000,       // 90s per conditionId — don't re-query mid-market
     timeoutMs: 5_000,         // 5s timeout — don't hold up trade loop
-    blockConsensusStrength:  parseFloat(process.env.METENGINE_BLOCK_STRENGTH        || '0.65'), // F1: strong consensus block
-    boostInsiderScore:       parseFloat(process.env.METENGINE_BOOST_SCORE           || '75'),   // F2: insider score threshold
-    convictionBlockStrength: parseFloat(process.env.METENGINE_CONVICTION_STRENGTH   || '0.60'), // F3: medium consensus gate
-    convictionScoreMin:      parseFloat(process.env.METENGINE_CONVICTION_SCORE      || '90'),   // F3: min wallet score
-    convictionMinUSDC:       parseFloat(process.env.METENGINE_CONVICTION_USDC       || '50'),   // F3: min USDC invested
+    blockConsensusStrength:  envNum(process.env.METENGINE_BLOCK_STRENGTH,      0.65, 0, 1),      // F1: strong consensus block
+    boostInsiderScore:       envNum(process.env.METENGINE_BOOST_SCORE,        75, 0, 200),      // F2: insider score threshold
+    convictionBlockStrength: envNum(process.env.METENGINE_CONVICTION_STRENGTH, 0.60, 0, 1),     // F3: medium consensus gate
+    convictionScoreMin:      envNum(process.env.METENGINE_CONVICTION_SCORE,   90, 0, 200),      // F3: min wallet score
+    convictionMinUSDC:       envNum(process.env.METENGINE_CONVICTION_USDC,    50, 0, 100000),   // F3: min USDC invested
   },
 };
 

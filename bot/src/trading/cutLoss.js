@@ -118,13 +118,17 @@ export function evaluateCutLoss({
 
   // ── Gate 5: Min hold time met? ──
   const holdSec = (now - position.enteredAt) / 1000;
-  // v8: If token is in a steep crash (slope strongly negative) + big drop, reduce hold to 45s.
-  // This protects against immediate post-entry crashes where waiting would lose more capital.
+  // v8: If token is in a steep crash (slope strongly negative) + severe drop + BTC confirms, reduce hold to 60s.
+  // H1 audit fix: Raised from 8%→15% and 45s→60s. At 50ms poll, 45s is too aggressive — flash crashes bounce.
+  // Also requires BTC unfavorable confirmation to avoid cutting on volatility-only dips.
   const slope = getTokenPriceSlope();
   const isSteeplyFalling = slope !== null && slope < -0.10; // dropping > 10 cents in last 36s
   const earlyDropPct = currentTokenPrice != null && position.price > 0
     ? ((position.price - currentTokenPrice) / position.price) * 100 : 0;
-  const minHoldRequired = (isSteeplyFalling && earlyDropPct >= 8) ? Math.min(45, cfg.minHoldSec) : cfg.minHoldSec;
+  const hasPtbEarly = btcPrice != null && priceToBeat != null &&
+    Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
+  const btcConfirmsEarly = hasPtbEarly && (position.side === 'UP' ? btcPrice < priceToBeat : btcPrice >= priceToBeat);
+  const minHoldRequired = (isSteeplyFalling && earlyDropPct >= 15 && btcConfirmsEarly) ? Math.min(60, cfg.minHoldSec) : cfg.minHoldSec;
   if (holdSec < minHoldRequired) return no(`hold_${Math.round(holdSec)}s/${minHoldRequired}s`);
 
   // ── Gate 6: Not too close to settlement? ──
@@ -183,24 +187,25 @@ export function evaluateCutLoss({
   let evNegative = false;
   let mlFlipped = false;
 
+  // H4 audit fix: Compute evThreshold outside the fast-track block so diagnostics can reuse it.
+  // Previously, diagnostics used a different default (0.85) and missed regime adjustment.
+  const evBuffer = cfg.evBuffer ?? 0.80;
+  let computedEvThreshold = Math.max(entryPrice * evBuffer, 0.40);
+  if (regime === 'trending') {
+    computedEvThreshold *= 0.92; // ~8% more lenient → holds profitable trending positions longer
+  } else if (regime === 'choppy') {
+    computedEvThreshold *= 1.08; // ~8% stricter → faster exit in whipsaw conditions
+  }
+
   if (!isCrash && !isLateForceCut && !isTimeBased) {
 
     // ── Gate 7a: EV-NEGATIVE — model agrees position is losing ──
     // C2: Uniform 80% threshold with 0.40 floor — cheap tokens no longer cut at 25% (too loose)
     // M22: Regime-aware EV threshold — relax in trending (model stronger), tighten in choppy (noisy)
-    const evBuffer = cfg.evBuffer ?? 0.80;
-    let evThreshold = Math.max(entryPrice * evBuffer, 0.40);
-    if (regime === 'trending') {
-      // Trending: model probabilities are more reliable, allow wider buffer before cutting
-      evThreshold *= 0.92; // ~8% more lenient → holds profitable trending positions longer
-    } else if (regime === 'choppy') {
-      // Choppy: signals are noisy, cut earlier to avoid prolonged losses
-      evThreshold *= 1.08; // ~8% stricter → faster exit in whipsaw conditions
-    }
     if (modelProbability != null && Number.isFinite(modelProbability)) {
-      if (modelProbability < evThreshold) {
+      if (modelProbability < computedEvThreshold) {
         evNegative = true;
-        cutReason = `ev_negative(model=${(modelProbability * 100).toFixed(0)}%<market=${(evThreshold * 100).toFixed(0)}%)`;
+        cutReason = `ev_negative(model=${(modelProbability * 100).toFixed(0)}%<market=${(computedEvThreshold * 100).toFixed(0)}%)`;
       }
     }
 
@@ -216,7 +221,7 @@ export function evaluateCutLoss({
     // Must have at least one cut signal
     if (!evNegative && !mlFlipped) {
       return no(modelProbability != null
-        ? `model_holds(prob=${(modelProbability * 100).toFixed(0)}%,threshold=${(currentTokenPrice * (cfg.evBuffer ?? 0.95) * 100).toFixed(0)}%)`
+        ? `model_holds(prob=${(modelProbability * 100).toFixed(0)}%,threshold=${(computedEvThreshold * 100).toFixed(0)}%)`
         : 'no_model_data');
     }
 
@@ -313,7 +318,7 @@ export function evaluateCutLoss({
       btcDistPct,
       btcFavorable,
       modelProbability: modelProbability ?? null,
-      evThreshold: entryPrice * (cfg.evBuffer ?? 0.85),
+      evThreshold: computedEvThreshold,
       evNegative,
       mlFlipped,
       mlSide: mlSide ?? null,
@@ -399,8 +404,11 @@ export function getCutLossStatus(position, currentTokenPrice, v2Context = {}) {
     btcFavorable = position.side === 'UP' ? btcPrice >= priceToBeat : btcPrice < priceToBeat;
   }
 
-  const evBuffer = cfg.evBuffer ?? 0.80;
-  const evThreshold = Math.max((position?.price ?? currentTokenPrice ?? 0.5) * evBuffer, 0.40); // C2: uniform 80% with 0.40 floor
+  const statusEvBuffer = cfg.evBuffer ?? 0.80;
+  let evThreshold = Math.max((position?.price ?? currentTokenPrice ?? 0.5) * statusEvBuffer, 0.40); // C2: uniform 80% with 0.40 floor
+  // H4 audit fix: include regime adjustment in dashboard status (matches evaluateCutLoss)
+  if (regime === 'trending') evThreshold *= 0.92;
+  else if (regime === 'choppy') evThreshold *= 1.08;
   const evNegative = modelProbability != null && modelProbability < evThreshold;
   const mlFlipConf = cfg.mlFlipConfidence ?? 0.55;
   const mlFlipped = mlConfidence != null && mlConfidence >= mlFlipConf && mlSide != null && mlSide !== position.side;

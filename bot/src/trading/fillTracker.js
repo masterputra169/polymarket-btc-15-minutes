@@ -299,6 +299,18 @@ export function hasPendingOrder() {
 }
 
 /**
+ * H2 audit fix: Clear all pending orders on market switch.
+ * Old orders for previous market's tokens should not be tracked against new market.
+ * The 10-minute stale eviction handles this eventually, but stale orders could match wrong trades.
+ */
+export function clearPendingOrders() {
+  if (pendingOrders.size > 0) {
+    log.info(`Clearing ${pendingOrders.size} pending orders (market switch)`);
+    pendingOrders.clear();
+  }
+}
+
+/**
  * Get uncertain fills for manual review.
  * These are sell orders that couldn't be verified within the deadline.
  */

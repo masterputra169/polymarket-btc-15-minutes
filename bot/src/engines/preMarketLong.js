@@ -28,17 +28,21 @@ let entryPrice = null;        // token price at entry (for take-profit calc)
 let entryMarketSlug = null;   // market slug where entry was made
 
 /**
- * Get current ET (Eastern Standard Time = UTC-5) date parts.
- * Note: always uses EST (UTC-5), consistent with bot's existing ET calculations.
+ * Get current Eastern Time (EST/EDT-aware) date parts.
+ * Uses Intl API for reliable DST detection — handles EST (UTC-5) and EDT (UTC-4).
+ * EDT runs Mar 2nd Sunday – Nov 1st Sunday; critical for pre-market window timing.
  */
 function getETNow() {
-  const etMs = Date.now() - 5 * 3600_000;
-  const d = new Date(etMs);
+  const now = new Date();
+  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const etDate = new Date(etStr);
   return {
-    dateStr: d.toISOString().slice(0, 10),
-    hour: d.getUTCHours(),
-    minute: d.getUTCMinutes(),
-    dayOfWeek: d.getUTCDay(), // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
+    dateStr: etDate.getFullYear() + '-' +
+      String(etDate.getMonth() + 1).padStart(2, '0') + '-' +
+      String(etDate.getDate()).padStart(2, '0'),
+    hour: etDate.getHours(),
+    minute: etDate.getMinutes(),
+    dayOfWeek: etDate.getDay(), // 0=Sun, 1=Mon, ..., 5=Fri, 6=Sat
   };
 }
 
@@ -81,7 +85,7 @@ export function checkPreMarketEntry({ hasPosition, bankroll, settlementPending, 
   const windowEnd = config.windowEndH * 60 + config.windowEndM;
 
   if (etMinutes < windowStart || etMinutes >= windowEnd) {
-    return { shouldEnter: false, reason: `outside_window (${et.hour}:${String(et.minute).padStart(2, '0')} EST)` };
+    return { shouldEnter: false, reason: `outside_window (${et.hour}:${String(et.minute).padStart(2, '0')} ET)` };
   }
 
   return { shouldEnter: true, reason: 'pre_market_window' };
@@ -114,7 +118,7 @@ export function onPreMarketEntry(price, marketSlug) {
   lastTradeDateStr = et.dateStr;
   entryPrice = price;
   entryMarketSlug = marketSlug;
-  log.info(`Pre-market LONG entered: $${price.toFixed(3)} | ${marketSlug} | ${et.hour}:${String(et.minute).padStart(2, '0')} EST`);
+  log.info(`Pre-market LONG entered: $${price.toFixed(3)} | ${marketSlug} | ${et.hour}:${String(et.minute).padStart(2, '0')} ET`);
 }
 
 /**
@@ -155,6 +159,42 @@ export function checkPreMarketTP(currentPrice, currentSlug, config) {
 }
 
 /**
+ * M3 audit fix: Check if pre-market position should be stopped out.
+ * 20% bankroll at risk with no stop-loss = full loss on BTC crash.
+ * Cut if token drops below entry × (1 - maxLossPct).
+ *
+ * @param {number} currentPrice - Current UP token price
+ * @param {string} currentSlug - Current market slug
+ * @param {Object} config - preMarketLong config
+ * @returns {{ shouldCut: boolean, stopPrice: number|null, lossPct: number }}
+ */
+export function checkPreMarketSL(currentPrice, currentSlug, config) {
+  if (!config.enabled || entryPrice === null) {
+    return { shouldCut: false, stopPrice: null, lossPct: 0 };
+  }
+  if (currentSlug !== entryMarketSlug) {
+    return { shouldCut: false, stopPrice: null, lossPct: 0 };
+  }
+  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return { shouldCut: false, stopPrice: null, lossPct: 0 };
+  }
+
+  const maxLossPct = config.maxLossPct ?? 0.30; // default 30% max loss on pre-market trade
+  const stopPrice = entryPrice * (1 - maxLossPct);
+  const lossPct = ((entryPrice - currentPrice) / entryPrice) * 100;
+
+  if (currentPrice <= stopPrice) {
+    log.info(
+      `Pre-market STOP-LOSS: $${currentPrice.toFixed(3)} <= stop $${stopPrice.toFixed(3)} ` +
+      `(entry $${entryPrice.toFixed(3)}, -${lossPct.toFixed(1)}%)`
+    );
+    return { shouldCut: true, stopPrice, lossPct };
+  }
+
+  return { shouldCut: false, stopPrice, lossPct };
+}
+
+/**
  * Clear entry state (called on settlement/close/market switch).
  */
 export function clearPreMarketEntry() {
@@ -184,7 +224,7 @@ export function getPreMarketStatus(config) {
     tradedToday,
     entryPrice,
     entryMarketSlug,
-    etTime: `${et.hour}:${String(et.minute).padStart(2, '0')} EST`,
+    etTime: `${et.hour}:${String(et.minute).padStart(2, '0')} ET`,
     isWeekday: et.dayOfWeek >= 1 && et.dayOfWeek <= 5,
     inWindow,
     dayOfWeek: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][et.dayOfWeek],

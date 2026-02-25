@@ -57,6 +57,7 @@ let state = {
   cutLossCount: 0,          // L4: Pre-computed count of CUT_LOSS trades (avoids scanning array)
   marketTradeCounts: {},     // H7: Per-market trade counts (persisted across restarts)
   lastLossTimestamp: 0,      // FINTECH: Persisted loss cooldown timestamp (survives restart)
+  tradeTimestamps: [],       // M2 audit fix: Persisted hourly trade timestamps (survives restart)
 };
 
 // ── Sell guard: prevents dashboard sell, cut-loss, and take-profit from racing ──
@@ -974,4 +975,12 @@ export function getMarketTradeCounts() { return state.marketTradeCounts ?? {}; }
 /** H7: Set persisted market trade counts (from tradeFilters). */
 export function setMarketTradeCounts(counts) {
   state.marketTradeCounts = (counts && typeof counts === 'object') ? counts : {};
+}
+
+/** M2 audit fix: Get persisted trade timestamps for hourly limit. */
+export function getTradeTimestamps() { return Array.isArray(state.tradeTimestamps) ? state.tradeTimestamps : []; }
+
+/** M2 audit fix: Set persisted trade timestamps (from guards). */
+export function setTradeTimestamps(timestamps) {
+  state.tradeTimestamps = Array.isArray(timestamps) ? timestamps : [];
 }
