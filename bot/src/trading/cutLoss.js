@@ -1,5 +1,5 @@
 /**
- * Cut-loss (stop-loss) evaluator — v12 Data-Driven Threshold + Recovery Gate.
+ * Cut-loss (stop-loss) evaluator — v13 Recovery Gate for ALL paths (incl. fast-tracks).
  *
  * v6 rewrite: Data-driven simplification based on 71 real trades analysis.
  *
@@ -29,9 +29,11 @@
  *   7a. EV-NEGATIVE: modelProb < tokenPrice × evBuffer (model agrees with market)
  *   7b. ML FLIPPED: ML now predicts opposite side with confidence >= mlFlipConf
  *
- * MINIMUM DAMAGE:
+ * RECOVERY (applies to ALL paths except CRASH):
+ *   6.5 Recovery gate: if token is rising >5¢/36s, hold (may self-correct)
+ *
+ * MINIMUM DAMAGE (normal path only):
  *   8.  Token drop >= minTokenDropPct (v12: 35% — data shows 25-35% zone is 83% FP)
- *   8b. Recovery gate: if token is rising >5¢/36s, hold (may self-correct)
  *
  * HARD EXECUTION GATES:
  *   9.  Token price above minimum
@@ -209,6 +211,15 @@ export function evaluateCutLoss({
   const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= trailingDropPct
     && (modelProbability == null || modelProbability < 0.60); // model not strongly supporting
 
+  // ── Gate 6.5: Recovery gate (applies to ALL paths including fast-tracks) ──
+  // If token is actively bouncing back, don't cut at the bottom — let it recover.
+  // Only CRASH bypasses this (true crash = no bounce expected).
+  const RECOVERY_SLOPE_THRESHOLD = 0.05; // +5 cents in 36s = meaningful recovery
+  if (!isCrash && slope !== null && slope > RECOVERY_SLOPE_THRESHOLD) {
+    consecutiveCutPolls = 0; // reset confirmation — re-evaluate next poll
+    return no(`recovering(slope=+${slope.toFixed(3)})`);
+  }
+
   // ── Determine cut reason (skip for fast-tracks) ──
   let cutReason = null;
   let evNegative = false;
@@ -268,16 +279,7 @@ export function evaluateCutLoss({
       return no(`drop_${dropPct.toFixed(1)}%<${scaledMinDrop.toFixed(1)}%`);
     }
 
-    // ── Gate 8b: Recovery zone — token actively recovering, hold and wait ──
-    // Data (34 verified cut-loss markets): 11/34 FP (33%) were positions in recovery.
-    // If token slope is significantly positive over last 36s (+5¢), the position may
-    // self-correct before settlement — don't panic cut during a bounce.
-    // Does NOT apply to crash/late-force/time-based fast-tracks (handled above).
-    const RECOVERY_SLOPE_THRESHOLD = 0.05; // +5 cents in 36s = meaningful recovery
-    if (slope !== null && slope > RECOVERY_SLOPE_THRESHOLD) {
-      consecutiveCutPolls = 0; // reset confirmation — re-evaluate next poll
-      return no(`recovering(slope=+${slope.toFixed(3)})`);
-    }
+    // Gate 8b (recovery) now handled above Gate 6.5 for ALL paths including fast-tracks.
   }
 
   // ── Gate 9: Token price above minimum — HARD GATE ──

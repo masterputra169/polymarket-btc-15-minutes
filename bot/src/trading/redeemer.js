@@ -55,6 +55,8 @@ let intervalId = null;
 let provider = null;
 let signer = null;
 let redeemedSet = new Set(); // conditionIds already redeemed
+let pendingQueue = []; // [{ conditionId, addedAt }] — self-tracked positions awaiting redeem
+const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours — expire stale entries
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -367,6 +369,101 @@ async function findRedeemablePositions() {
   return redeemable;
 }
 
+// ── Self-tracked pending redeem queue ──
+
+/**
+ * Add a conditionId to the pending redeem queue.
+ * Called from loop.js when bot settles a position, so redeemer can find it
+ * even if Data API removes the position before we redeem on-chain.
+ */
+export function addPendingRedeem(conditionId) {
+  if (!conditionId || redeemedSet.has(conditionId)) return;
+  if (pendingQueue.some(p => p.conditionId === conditionId)) return; // dedup
+  pendingQueue.push({ conditionId, addedAt: Date.now() });
+  log.info(`Added pending redeem: ${conditionId.slice(0, 16)}...`);
+  savePersistence(); // persist immediately so it survives restart
+}
+
+/**
+ * Check self-tracked pending queue for redeemable positions.
+ * Parallel to findRedeemablePositions() but uses our own queue instead of Data API.
+ */
+async function findSelfTrackedRedeemable() {
+  // Expire old entries
+  const now = Date.now();
+  const before = pendingQueue.length;
+  pendingQueue = pendingQueue.filter(p => now - p.addedAt < PENDING_MAX_AGE_MS);
+  if (pendingQueue.length < before) {
+    log.debug(`Expired ${before - pendingQueue.length} stale pending redeem(s)`);
+  }
+
+  if (pendingQueue.length === 0) return [];
+
+  log.info(`Self-tracked: checking ${pendingQueue.length} pending position(s)...`);
+  const redeemable = [];
+  const stillPending = [];
+
+  for (const entry of pendingQueue) {
+    if (redeemedSet.has(entry.conditionId)) continue; // already handled
+    const short = entry.conditionId.slice(0, 16);
+
+    // ── Try CLOB API for resolution status ──
+    let resolved = false;
+    try {
+      const url = `${CONFIG.clobBaseUrl}/markets/${entry.conditionId}`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+      if (res.ok) {
+        const market = await res.json();
+        const closed = market?.closed === true || market?.closed === 'true' || market?.closed === 1;
+        if (closed) {
+          const tokens = Array.isArray(market.tokens) ? market.tokens : [];
+          const winnerToken = tokens.find(t => t.winner === true || t.winner === 'true' || t.winner === 1);
+          if (winnerToken) {
+            log.info(`Self-tracked ${short}... resolved via CLOB — winner: ${winnerToken.outcome}`);
+            redeemable.push({ conditionId: entry.conditionId, winner: winnerToken.outcome, question: market.question ?? '' });
+            resolved = true;
+          }
+        }
+      }
+    } catch (err) {
+      log.debug(`Self-tracked CLOB check error for ${short}...: ${err.message}`);
+    }
+
+    if (resolved) continue;
+
+    // ── Fallback: Gamma API ──
+    try {
+      const gammaUrl = `${CONFIG.gammaBaseUrl}/markets?conditionId=${entry.conditionId}`;
+      const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(8_000) });
+      if (gammaRes.ok) {
+        const gammaData = await gammaRes.json();
+        const gammaMarkets = Array.isArray(gammaData) ? gammaData : gammaData?.markets ?? [];
+        const gm = gammaMarkets[0];
+        if (gm) {
+          const isResolved = gm.resolved === true || gm.resolved === 'true' || gm.resolved === 1;
+          if (isResolved) {
+            const winnerOutcome = gm.resolvedOutcome ?? gm.winner_outcome ?? gm.winnerOutcome ?? '';
+            if (winnerOutcome) {
+              log.info(`Self-tracked ${short}... resolved via Gamma — winner: ${winnerOutcome}`);
+              redeemable.push({ conditionId: entry.conditionId, winner: winnerOutcome, question: gm.question ?? gm.title ?? '' });
+              resolved = true;
+            }
+          }
+        }
+      }
+    } catch (err) {
+      log.debug(`Self-tracked Gamma fallback error for ${short}...: ${err.message}`);
+    }
+
+    // Keep in queue if not yet resolved
+    if (!resolved) stillPending.push(entry);
+  }
+
+  // Update queue: only keep unresolved entries
+  pendingQueue = stillPending;
+  return redeemable;
+}
+
 // ── On-chain token balance query ──
 
 /**
@@ -525,17 +622,32 @@ function loadRedeemedSet() {
   try {
     const filePath = BOT_CONFIG.redeemedFile;
     if (!existsSync(filePath)) return;
-    const data = JSON.parse(readFileSync(filePath, 'utf-8'));
-    if (Array.isArray(data)) {
-      redeemedSet = new Set(data);
-      log.info(`Loaded ${redeemedSet.size} redeemed conditionId(s) from disk`);
+    const raw = JSON.parse(readFileSync(filePath, 'utf-8'));
+
+    // Backward-compatible: plain array = redeemed-only (old format)
+    if (Array.isArray(raw)) {
+      redeemedSet = new Set(raw);
+      log.info(`Loaded ${redeemedSet.size} redeemed conditionId(s) from disk (legacy format)`);
+      return;
     }
+
+    // New format: { redeemed: [...], pending: [...] }
+    if (Array.isArray(raw?.redeemed)) {
+      redeemedSet = new Set(raw.redeemed);
+    }
+    if (Array.isArray(raw?.pending)) {
+      pendingQueue = raw.pending.filter(p => p.conditionId && typeof p.addedAt === 'number');
+      // Expire stale entries on load
+      const now = Date.now();
+      pendingQueue = pendingQueue.filter(p => now - p.addedAt < PENDING_MAX_AGE_MS);
+    }
+    log.info(`Loaded ${redeemedSet.size} redeemed + ${pendingQueue.length} pending conditionId(s) from disk`);
   } catch (err) {
     log.debug(`No redeemed set to load: ${err.message}`);
   }
 }
 
-function saveRedeemedSet() {
+function savePersistence() {
   try {
     const filePath = BOT_CONFIG.redeemedFile;
     const dir = dirname(filePath);
@@ -546,7 +658,10 @@ function saveRedeemedSet() {
     if (arr.length > 500) {
       redeemedSet = new Set(arr.slice(-500));
     }
-    const data = JSON.stringify([...redeemedSet], null, 2);
+    const data = JSON.stringify({
+      redeemed: [...redeemedSet],
+      pending: pendingQueue,
+    }, null, 2);
     // Atomic write
     const tmpPath = filePath + '.tmp';
     writeFileSync(tmpPath, data);
@@ -557,7 +672,7 @@ function saveRedeemedSet() {
       writeFileSync(filePath, data);
     }
   } catch (err) {
-    log.warn(`Failed to save redeemed set: ${err.message}`);
+    log.warn(`Failed to save persistence: ${err.message}`);
   }
 }
 
@@ -577,9 +692,22 @@ async function redeemCycle() {
     return;
   }
 
-  const redeemable = await findRedeemablePositions();
+  // Existing: find via Data API
+  const dataApiRedeemable = await findRedeemablePositions();
+
+  // NEW: find via self-tracked queue
+  const selfTrackedRedeemable = await findSelfTrackedRedeemable();
+
+  // Merge (deduplicate by conditionId)
+  const seen = new Set(dataApiRedeemable.map(r => r.conditionId));
+  const redeemable = [...dataApiRedeemable];
+  for (const r of selfTrackedRedeemable) {
+    if (!seen.has(r.conditionId)) redeemable.push(r);
+  }
+
   if (redeemable.length === 0) {
     log.info('No redeemable positions found');
+    savePersistence(); // persist pending queue state
     return;
   }
 
@@ -605,6 +733,8 @@ async function redeemCycle() {
       } else {
         log.debug(`No on-chain balance for ${r.value.pos.conditionId.slice(0, 16)}... — already redeemed`);
         redeemedSet.add(r.value.pos.conditionId);
+        // Remove from pending queue (zero balance = already redeemed)
+        pendingQueue = pendingQueue.filter(p => p.conditionId !== r.value.pos.conditionId);
       }
     } else {
       log.debug(`Balance check failed: ${r.reason?.message ?? r.reason}`);
@@ -613,7 +743,7 @@ async function redeemCycle() {
 
   if (toRedeem.length === 0) {
     log.info('All positions already redeemed (zero on-chain balance)');
-    saveRedeemedSet();
+    savePersistence();
     return;
   }
 
@@ -633,6 +763,8 @@ async function redeemCycle() {
       const txHash = await redeemPosition(pos.conditionId);
       log.info(`${tag} Redeemed ${short}... | tx=${txHash}`);
       redeemedSet.add(pos.conditionId);
+      // Remove from pending queue after successful redeem
+      pendingQueue = pendingQueue.filter(p => p.conditionId !== pos.conditionId);
       redeemed++;
     } catch (err) {
       log.warn(`${tag} Redeem failed for ${short}...: ${err.message}`);
@@ -643,7 +775,7 @@ async function redeemCycle() {
     if (i < toRedeem.length - 1) await sleep(1500);
   }
 
-  saveRedeemedSet();
+  savePersistence();
 
   log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed out of ${toRedeem.length} positions`);
   } finally { redeemCycleRunning = false; }
@@ -660,8 +792,9 @@ let pendingTriggerTimer = null;
  *
  * @param {number} [delayMs=45000] — delay to allow oracle propagation (default 45s)
  */
-export function triggerRedeem(delayMs = 45_000) {
+export function triggerRedeem(delayMs = 45_000, conditionId = null) {
   if (!signer) return; // redeemer not initialized
+  if (conditionId) addPendingRedeem(conditionId); // Track immediately
   // Deduplicate: don't stack multiple triggers
   if (pendingTriggerTimer) {
     log.debug('Redeem trigger already pending — skipping duplicate');
