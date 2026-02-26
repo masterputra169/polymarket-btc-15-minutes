@@ -48,7 +48,7 @@ export const TRADE_FILTERS = {
   MIN_ENTRY_PRICE: 0.58,        // user override to 58c (has edge ≥ 8% bypass for lower prices)
   MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
   MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
-  BLACKOUT_HOURS_ET: [3, 7, 8, 10, 18, 19], // data-driven (226 trades): block losing hours only. Opened 0-2,4-6,22-23 (+$35 profit). Blocked 8,10,18,19 (-$10 losses)
+  BLACKOUT_HOURS_ET: [22, 23, 0, 1, 2, 3, 4, 5, 6, 7], // overnight/Asia session: low WR, block 10PM-8AM ET (10:00-20:00 WIB)
   MAX_ENTRY_SPREAD_PCT: 8,    // hard reject: spread > 8%
   SPREAD_EDGE_MIN: 8,         // soft: spread > 4% needs edge ≥ 8%
   VPIN_BLOCK_THRESHOLD: 0.70, // VPIN > 70% + opposing flow = informed trader, block entry

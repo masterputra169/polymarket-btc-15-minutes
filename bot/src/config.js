@@ -146,12 +146,12 @@ const BOT_CONFIG = {
   preMarketLong: {
     enabled: process.env.PREMARKET_LONG_ENABLED === 'true',
     riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.20, 0.05, 0.50),          // 20% of bankroll
-    profitTargetPct: envNum(process.env.PREMARKET_LONG_PROFIT_TARGET_PCT, 0.50, 0.10, 2.00), // 50% take-profit
+    // take-profit removed — full hold to settlement
     windowStartH: envInt(process.env.PREMARKET_LONG_WINDOW_START_H, 9, 0, 23),       // 09:00 EST
     windowStartM: envInt(process.env.PREMARKET_LONG_WINDOW_START_M, 0, 0, 59),
     windowEndH: envInt(process.env.PREMARKET_LONG_WINDOW_END_H, 9, 0, 23),           // 09:15 EST
     windowEndM: envInt(process.env.PREMARKET_LONG_WINDOW_END_M, 15, 0, 59),
-    maxLossPct: envNum(process.env.PREMARKET_LONG_MAX_LOSS_PCT, 0.30, 0.05, 0.80),  // M3 audit fix: 30% stop-loss
+    // stop-loss removed — hold to settlement (settlement WR 87.5%)
   },
 
   // MetEngine smart money API (x402, Solana USDC payments)

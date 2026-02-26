@@ -121,78 +121,7 @@ export function onPreMarketEntry(price, marketSlug) {
   log.info(`Pre-market LONG entered: $${price.toFixed(3)} | ${marketSlug} | ${et.hour}:${String(et.minute).padStart(2, '0')} ET`);
 }
 
-/**
- * Check if pre-market take-profit should trigger.
- * Targets profitTargetPct (default 50%) return on the invested amount.
- *
- * Example: entry $0.55, target = $0.55 × 1.50 = $0.825
- *
- * @param {number} currentPrice - Current UP token price
- * @param {string} currentSlug - Current market slug
- * @param {Object} config - preMarketLong config
- * @returns {{ shouldTP: boolean, targetPrice: number|null, gainPct: number }}
- */
-export function checkPreMarketTP(currentPrice, currentSlug, config) {
-  if (!config.enabled || entryPrice === null) {
-    return { shouldTP: false, targetPrice: null, gainPct: 0 };
-  }
-  // Only applies to the market where we entered
-  if (currentSlug !== entryMarketSlug) {
-    return { shouldTP: false, targetPrice: null, gainPct: 0 };
-  }
-  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-    return { shouldTP: false, targetPrice: null, gainPct: 0 };
-  }
-
-  const targetPrice = entryPrice * (1 + config.profitTargetPct);
-  const gainPct = ((currentPrice - entryPrice) / entryPrice) * 100;
-
-  if (currentPrice >= targetPrice) {
-    log.info(
-      `Pre-market TP HIT: $${currentPrice.toFixed(3)} >= target $${targetPrice.toFixed(3)} ` +
-      `(entry $${entryPrice.toFixed(3)}, +${gainPct.toFixed(1)}%)`
-    );
-    return { shouldTP: true, targetPrice, gainPct };
-  }
-
-  return { shouldTP: false, targetPrice, gainPct };
-}
-
-/**
- * M3 audit fix: Check if pre-market position should be stopped out.
- * 20% bankroll at risk with no stop-loss = full loss on BTC crash.
- * Cut if token drops below entry × (1 - maxLossPct).
- *
- * @param {number} currentPrice - Current UP token price
- * @param {string} currentSlug - Current market slug
- * @param {Object} config - preMarketLong config
- * @returns {{ shouldCut: boolean, stopPrice: number|null, lossPct: number }}
- */
-export function checkPreMarketSL(currentPrice, currentSlug, config) {
-  if (!config.enabled || entryPrice === null) {
-    return { shouldCut: false, stopPrice: null, lossPct: 0 };
-  }
-  if (currentSlug !== entryMarketSlug) {
-    return { shouldCut: false, stopPrice: null, lossPct: 0 };
-  }
-  if (!Number.isFinite(currentPrice) || currentPrice <= 0) {
-    return { shouldCut: false, stopPrice: null, lossPct: 0 };
-  }
-
-  const maxLossPct = config.maxLossPct ?? 0.30; // default 30% max loss on pre-market trade
-  const stopPrice = entryPrice * (1 - maxLossPct);
-  const lossPct = ((entryPrice - currentPrice) / entryPrice) * 100;
-
-  if (currentPrice <= stopPrice) {
-    log.info(
-      `Pre-market STOP-LOSS: $${currentPrice.toFixed(3)} <= stop $${stopPrice.toFixed(3)} ` +
-      `(entry $${entryPrice.toFixed(3)}, -${lossPct.toFixed(1)}%)`
-    );
-    return { shouldCut: true, stopPrice, lossPct };
-  }
-
-  return { shouldCut: false, stopPrice, lossPct };
-}
+// Take-profit & stop-loss REMOVED — full hold to settlement (settlement WR 87.5% beats early exit)
 
 /**
  * Clear entry state (called on settlement/close/market switch).

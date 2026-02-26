@@ -218,8 +218,6 @@ import {
   checkPreMarketEntry,
   getPreMarketSizing,
   onPreMarketEntry,
-  checkPreMarketTP,
-  checkPreMarketSL,
   clearPreMarketEntry,
   isPreMarketPosition,
   getPreMarketStatus,
@@ -1234,103 +1232,7 @@ export async function pollOnce() {
       }
     }
 
-    // ── 6d2. Pre-market LONG take-profit (50% target — sell early if reached) ──
-    const pmPos = getCurrentPosition();
-    if (pmPos && !pmPos.settled && pmPos.side === 'UP' && isPreMarketPosition(marketSlug)) {
-      const pmTokenPrice = marketUp;
-      const pmTP = checkPreMarketTP(pmTokenPrice, marketSlug, BOT_CONFIG.preMarketLong);
-      if (pmTP.shouldTP) {
-        if (!acquireSellLock('premarket_tp')) {
-          log.info('Pre-market TP skipped — sell already in progress');
-        } else {
-          try {
-            const pmSellSize = pmPos.size;
-            const pmSellPrice = Math.max(0.01, Math.round((pmTokenPrice - 0.01) * 1000) / 1000); // 1c below mid for FOK fill
-            log.info(
-              `PRE-MARKET TP: ${pmPos.side} +${pmTP.gainPct.toFixed(1)}% | ` +
-              `sell ${pmSellSize} shares @$${pmSellPrice.toFixed(3)} | target was $${pmTP.targetPrice.toFixed(3)}`
-            );
-            if (BOT_CONFIG.dryRun) {
-              const pmRecovery = pmSellPrice * pmSellSize;
-              const pmPnl = pmRecovery - pmPos.cost;
-              settleTradeEarlyExit(pmRecovery);
-              invalidateSync();
-              clearEntrySnapshot();
-              clearPreMarketEntry();
-              writeJournalEntry({ outcome: 'PREMARKET_TP', pnl: pmPnl, exitData: { gainPct: pmTP.gainPct, strategy: 'premarket_long' } });
-              resetCutLossState();
-              resetTakeProfitState();
-              notify('info', `PRE-MARKET TP (dry): UP +${pmTP.gainPct.toFixed(1)}% | P&L $${pmPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
-            } else {
-              try {
-                const pmSellResult = await closePosition(pmPos.tokenId, pmSellSize, pmSellPrice);
-                const pmActualRecovery = parseClobAmount(pmSellResult?.takingAmount, pmSellPrice * pmSellSize);
-                const pmPnl = pmActualRecovery - pmPos.cost;
-                settleTradeEarlyExit(pmActualRecovery);
-                invalidateSync();
-                clearEntrySnapshot();
-                clearPreMarketEntry();
-                writeJournalEntry({ outcome: 'PREMARKET_TP', pnl: pmPnl, exitData: { gainPct: pmTP.gainPct, recovered: pmActualRecovery, strategy: 'premarket_long' } });
-                resetCutLossState();
-                resetTakeProfitState();
-                notify('info', `PRE-MARKET TP: UP +${pmTP.gainPct.toFixed(1)}% | P&L $${pmPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
-              } catch (err) {
-                log.warn(`Pre-market TP sell FAILED: ${err.stack || err.message}`);
-              }
-            }
-          } finally { releaseSellLock(); }
-        }
-      }
-    }
-
-    // ── 6d3. Pre-market LONG stop-loss (M3 audit fix — 20% bankroll at risk needs a floor) ──
-    const pmSLPos = getCurrentPosition();
-    if (pmSLPos && !pmSLPos.settled && pmSLPos.side === 'UP' && isPreMarketPosition(marketSlug)) {
-      const pmSLPrice = marketUp;
-      const pmSL = checkPreMarketSL(pmSLPrice, marketSlug, BOT_CONFIG.preMarketLong);
-      if (pmSL.shouldCut) {
-        if (!acquireSellLock('premarket_sl')) {
-          log.info('Pre-market SL skipped — sell already in progress');
-        } else {
-          try {
-            const pmSLSellSize = pmSLPos.size;
-            const pmSLSellPrice = Math.max(0.01, Math.round((pmSLPrice - 0.01) * 1000) / 1000);
-            log.info(
-              `PRE-MARKET STOP-LOSS: ${pmSLPos.side} -${pmSL.lossPct.toFixed(1)}% | ` +
-              `sell ${pmSLSellSize} shares @$${pmSLSellPrice.toFixed(3)} | stop was $${pmSL.stopPrice.toFixed(3)}`
-            );
-            if (BOT_CONFIG.dryRun) {
-              const pmSLRecovery = pmSLSellPrice * pmSLSellSize;
-              const pmSLPnl = pmSLRecovery - pmSLPos.cost;
-              settleTradeEarlyExit(pmSLRecovery);
-              invalidateSync();
-              clearEntrySnapshot();
-              clearPreMarketEntry();
-              writeJournalEntry({ outcome: 'PREMARKET_SL', pnl: pmSLPnl, exitData: { lossPct: pmSL.lossPct, strategy: 'premarket_long' } });
-              resetCutLossState();
-              resetTakeProfitState();
-              notify('warn', `PRE-MARKET SL (dry): UP -${pmSL.lossPct.toFixed(1)}% | P&L $${pmSLPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
-            } else {
-              try {
-                const pmSLResult = await closePosition(pmSLPos.tokenId, pmSLSellSize, pmSLSellPrice);
-                const pmSLActual = parseClobAmount(pmSLResult?.takingAmount, pmSLSellPrice * pmSLSellSize);
-                const pmSLPnl = pmSLActual - pmSLPos.cost;
-                settleTradeEarlyExit(pmSLActual);
-                invalidateSync();
-                clearEntrySnapshot();
-                clearPreMarketEntry();
-                writeJournalEntry({ outcome: 'PREMARKET_SL', pnl: pmSLPnl, exitData: { lossPct: pmSL.lossPct, recovered: pmSLActual, strategy: 'premarket_long' } });
-                resetCutLossState();
-                resetTakeProfitState();
-                notify('warn', `PRE-MARKET SL: UP -${pmSL.lossPct.toFixed(1)}% | P&L $${pmSLPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
-              } catch (err) {
-                log.warn(`Pre-market SL sell FAILED: ${err.stack || err.message}`);
-              }
-            }
-          } finally { releaseSellLock(); }
-        }
-      }
-    }
+    // Pre-market TP & SL REMOVED — full hold to settlement (settlement WR 87.5% beats early exit)
 
     // ── 6e. Recovery buy tick (after cut-loss, re-enter if signal stabilizes) ──
     if (isRecoveryActive()) {
@@ -1503,7 +1405,7 @@ export async function pollOnce() {
             log.info(
               `PRE-MARKET LONG: BUY UP ${pmShares} shares @ $${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | ` +
               `Risk: ${(BOT_CONFIG.preMarketLong.riskPct * 100).toFixed(0)}% of $${bankroll.toFixed(2)} | ` +
-              `TP target: +${(BOT_CONFIG.preMarketLong.profitTargetPct * 100).toFixed(0)}% ($${(pmPrice * (1 + BOT_CONFIG.preMarketLong.profitTargetPct)).toFixed(3)})`
+              `Strategy: FULL HOLD to settlement`
             );
 
             if (BOT_CONFIG.dryRun) {
@@ -1534,7 +1436,7 @@ export async function pollOnce() {
                 preMarketEnteredThisPoll = true;
                 // ERC-1155 approval for subsequent sells
                 updateConditionalApproval(pmTokenId).catch(e => log.debug(`PreMarket approval: ${e.message}`));
-                notify('info', `PRE-MARKET LONG: UP ${pmActualSize}@$${pmActualPrice.toFixed(3)} ($${(pmActualCost ?? pmOrderCost).toFixed(2)}) | TP: $${(pmActualPrice * (1 + BOT_CONFIG.preMarketLong.profitTargetPct)).toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+                notify('info', `PRE-MARKET LONG: UP ${pmActualSize}@$${pmActualPrice.toFixed(3)} ($${(pmActualCost ?? pmOrderCost).toFixed(2)}) | HOLD→settlement | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
               } catch (err) {
                 setPendingCost(0);
                 log.error(`Pre-market LONG order FAILED: ${err.message}`);
