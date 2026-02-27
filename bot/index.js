@@ -12,7 +12,12 @@
 import { config as dotenvConfig } from 'dotenv';
 import { dirname as _dotenvDirname, resolve as _dotenvResolve } from 'path';
 import { fileURLToPath as _dotenvFtu } from 'url';
-// Load .env from bot/ directory regardless of process.cwd() (PM2 sets cwd to frontend/)
+// ENV LOADING NOTE:
+// Primary: --env-file=./bot/.env in ecosystem.config.cjs (Node.js native, loads before JS)
+// Backup: dotenvConfig() below (for manual `node bot/index.js` without --env-file flag)
+// ES module imports are hoisted above this call, so BOT_CONFIG reads process.env during import.
+// With --env-file, env is already set → BOT_CONFIG correct. Without it, some === 'true' checks
+// default to false (safe). Critical paths (Telegram, pre-market) read process.env directly.
 dotenvConfig({ path: _dotenvResolve(_dotenvDirname(_dotenvFtu(import.meta.url)), '.env') });
 
 // ── Node.js polyfills for browser APIs used by shared modules ──
