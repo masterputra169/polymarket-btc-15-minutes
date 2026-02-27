@@ -28,6 +28,16 @@ export let plattA = 1.0;
 export let plattB = 0.0;
 export let plattOnLogits = false; // v9: Platt applied to raw logits (not post-sigmoid)
 
+// Hysteresis state — prevents mlSide flip-flop at uncertain prices
+export let lastMlSide = null;
+export let lastMlProbUp = 0.5;
+
+/** Reset hysteresis on market switch / model unload. */
+export function resetHysteresis() {
+  lastMlSide = null;
+  lastMlProbUp = 0.5;
+}
+
 // Setters (needed since `let` exports are read-only from outside)
 export function setState(updates) {
   if ('processedTrees' in updates) processedTrees = updates.processedTrees;
@@ -43,4 +53,6 @@ export function setState(updates) {
   if ('plattA' in updates) plattA = updates.plattA;
   if ('plattB' in updates) plattB = updates.plattB;
   if ('plattOnLogits' in updates) plattOnLogits = updates.plattOnLogits;
+  if ('lastMlSide' in updates) lastMlSide = updates.lastMlSide;
+  if ('lastMlProbUp' in updates) lastMlProbUp = updates.lastMlProbUp;
 }

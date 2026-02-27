@@ -63,6 +63,7 @@ import {
 
 // ML (loaded from disk)
 import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds } from './adapters/mlLoader.js';
+import { resetHysteresis } from '../../src/engines/ml/state.js';
 
 // Feedback (JSON file persistence)
 import {
@@ -278,6 +279,7 @@ function resetMarketCache() {
   resetCaches();
   resetSignalState();
   resetMarketUpHistory();
+  resetHysteresis(); // Clear ML side hysteresis on market switch
   clearMetEngineCache(); // Clear smart money cache on market switch
   currentMarketEndMs = null;
   currentConditionId = null;

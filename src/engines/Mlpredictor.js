@@ -12,7 +12,7 @@
 
 import { ML_CONFIDENCE } from '../config.js';
 import * as S from './ml/state.js';
-import { BASE_FEATURES, setBaseFeatureCount } from './ml/state.js';
+import { BASE_FEATURES, setBaseFeatureCount, resetHysteresis } from './ml/state.js';
 import { indexTree, predictXGBoost } from './ml/treeEval.js';
 import { calibrate, calibrateLogit } from './ml/calibration.js';
 import { featureBuf, extractLiveFeaturesInPlace, getDataQualityScore } from './ml/featureExtract.js';
@@ -199,6 +199,7 @@ export function unloadMLModel() {
   ensembleWeightLgb = 0.5;
   trainedSignalModifiers = null;
   calibratedPhaseThresholds = null;
+  resetHysteresis();
   unloadLgbModel();
   if (IS_DEV) console.log('[ML] Models unloaded');
 }
@@ -235,7 +236,19 @@ export function predictML(features) {
   }
 
   const confidence = Math.abs(probUp - 0.5) * 2;
-  const side = probUp >= 0.5 ? 'UP' : 'DOWN';
+
+  // Hysteresis deadband (3%) prevents mlSide flip-flop at uncertain prices
+  const HYSTERESIS_BAND = 0.03;
+  let side;
+  if (S.lastMlSide === null) {
+    side = probUp >= 0.5 ? 'UP' : 'DOWN';
+  } else if (S.lastMlSide === 'UP') {
+    side = probUp < (0.5 - HYSTERESIS_BAND) ? 'DOWN' : 'UP';
+  } else {
+    side = probUp > (0.5 + HYSTERESIS_BAND) ? 'UP' : 'DOWN';
+  }
+  S.setState({ lastMlSide: side, lastMlProbUp: probUp });
+
   const isHighConfidence = probUp > S.optimalThreshold || probUp < (1 - S.optimalThreshold);
 
   return { probUp, confidence, side, isHighConfidence, threshold: S.optimalThreshold };
