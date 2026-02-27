@@ -147,6 +147,7 @@ const BOT_CONFIG = {
     enabled: process.env.PREMARKET_LONG_ENABLED === 'true',
     riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.20, 0.05, 0.50),          // 20% of bankroll
     // take-profit removed — full hold to settlement
+    maxEntryPrice: envNum(process.env.PREMARKET_LONG_MAX_ENTRY_PRICE, 0.60, 0.30, 0.80), // max 60c — don't buy expensive tokens
     windowStartH: envInt(process.env.PREMARKET_LONG_WINDOW_START_H, 9, 0, 23),       // 09:00 EST
     windowStartM: envInt(process.env.PREMARKET_LONG_WINDOW_START_M, 0, 0, 59),
     windowEndH: envInt(process.env.PREMARKET_LONG_WINDOW_END_H, 9, 0, 23),           // 09:15 EST

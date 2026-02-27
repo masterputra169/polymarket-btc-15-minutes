@@ -53,14 +53,18 @@ function getETNow() {
  * @param {boolean} params.hasPosition - Whether bot already has an open position
  * @param {number} params.bankroll - Current bankroll
  * @param {boolean} params.settlementPending - Whether settlement is in progress
+ * @param {number} params.marketUpPrice - Current UP token price
  * @param {Object} params.config - preMarketLong config from BOT_CONFIG
  * @returns {{ shouldEnter: boolean, reason: string }}
  */
-export function checkPreMarketEntry({ hasPosition, bankroll, settlementPending, config }) {
-  if (!config.enabled) return { shouldEnter: false, reason: 'disabled' };
+export function checkPreMarketEntry({ hasPosition, bankroll, settlementPending, marketUpPrice, config }) {
+  if (process.env.PREMARKET_LONG_ENABLED !== 'true') return { shouldEnter: false, reason: 'disabled' };
   if (hasPosition) return { shouldEnter: false, reason: 'has_position' };
   if (settlementPending) return { shouldEnter: false, reason: 'settlement_pending' };
   if (bankroll < 2) return { shouldEnter: false, reason: 'low_bankroll' };
+  if (marketUpPrice > config.maxEntryPrice) {
+    return { shouldEnter: false, reason: `price_too_high (${(marketUpPrice * 100).toFixed(0)}c > ${(config.maxEntryPrice * 100).toFixed(0)}c)` };
+  }
 
   const et = getETNow();
 

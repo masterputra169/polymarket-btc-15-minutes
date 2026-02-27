@@ -1040,9 +1040,13 @@ export async function pollOnce() {
 
     // ── 6c. Cut-loss check (skip ARB — guaranteed profit, never cut) ──
     const pos = getCurrentPosition();
-    if (pos && !pos.settled && pos.side !== 'ARB' && !smartSellTriggered) {
+    const isPreMarketPos = pos && isPreMarketPosition(marketSlug);
+    if (pos && !pos.settled) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       updatePositionMarketPrice(tokenPrice); // Fix M: keep mark-to-market drawdown current
+    }
+    if (pos && !pos.settled && pos.side !== 'ARB' && !smartSellTriggered && !isPreMarketPos) {
+      const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       const tokenBook = pos.side === 'UP' ? orderbookUp : orderbookDown;
 
       const cutResult = evaluateCutLoss({
@@ -1384,13 +1388,15 @@ export async function pollOnce() {
     // Bypasses ML, edge, signal stability gates — pure time-window momentum play.
     let preMarketEnteredThisPoll = false;
     // Check if we're inside pre-market window and already traded — blocks regular entries after pre-market TP
-    const pmStatus = BOT_CONFIG.preMarketLong.enabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : null;
+    const preMarketEnabled = process.env.PREMARKET_LONG_ENABLED === 'true';
+    const pmStatus = preMarketEnabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : null;
     const preMarketWindowActive = pmStatus?.inWindow && pmStatus?.tradedToday;
-    if (BOT_CONFIG.preMarketLong.enabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
+    if (preMarketEnabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
       const pmCheck = checkPreMarketEntry({
         hasPosition: alreadyHasPosition,
         bankroll,
         settlementPending,
+        marketUpPrice: marketUp,
         config: BOT_CONFIG.preMarketLong,
       });
 
