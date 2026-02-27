@@ -299,7 +299,7 @@ function makeSettlementActions() {
     settlePrediction,
     setLastSettled,
     getBankroll,
-    notifyTrade: BOT_CONFIG.telegramNotifyTrades
+    notifyTrade: process.env.TELEGRAM_NOTIFY_TRADES === 'true'
       ? (msg) => notify('info', msg, { key: 'trade:settle' })
       : null,
   };
@@ -1359,7 +1359,7 @@ export async function pollOnce() {
     const alreadyHasPosition = hasOpenPosition(marketSlug);
     const hasPending = hasPendingOrder();
 
-    const notifyTradeFn = BOT_CONFIG.telegramNotifyTrades
+    const notifyTradeFn = process.env.TELEGRAM_NOTIFY_TRADES === 'true'
       ? (msg) => notify('info', msg, { key: 'trade:entry' })
       : null;
 

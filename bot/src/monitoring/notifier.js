@@ -67,8 +67,10 @@ function extractInlineButton(text) {
  * @returns {boolean} true if sent successfully
  */
 async function sendTelegram(text) {
-  const token = BOT_CONFIG.telegramBotToken;
-  const chatId = BOT_CONFIG.telegramChatId;
+  // Read from process.env directly — BOT_CONFIG captures empty strings because
+  // ES module imports are hoisted before dotenvConfig() runs in index.js body.
+  const token = process.env.TELEGRAM_BOT_TOKEN || '';
+  const chatId = process.env.TELEGRAM_CHAT_ID || '';
   if (!token || !chatId) return false;
 
   try {
