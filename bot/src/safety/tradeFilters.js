@@ -90,14 +90,23 @@ export function applyTradeFilters({
   const reasons = [];
 
   // 1. ML Confidence gate
-  // During tilt protection (post-cut-loss), use the higher threshold
-  const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > TRADE_FILTERS.MIN_ML_CONFIDENCE)
-    ? tiltMlConfMin
+  // During tilt protection (post-cut-loss), use the higher threshold.
+  // Edge bypass (Audit v5 A+B): When edge ≥ 15%, the price-based signal is strong enough
+  // that moderate ML uncertainty shouldn't block. Relax ML threshold from 65% → 45%.
+  // Rationale: edge = modelProb - marketPrice. At 15%+ edge, ensemble strongly favors the side
+  // even if ML specifically is uncertain (rule-based indicators still contribute).
+  const highEdgeBypass = bestEdge != null && bestEdge >= 0.15;
+  const baseMLMin = highEdgeBypass
+    ? Math.min(TRADE_FILTERS.MIN_ML_CONFIDENCE, 0.45) // relax to 45% when edge is strong
     : TRADE_FILTERS.MIN_ML_CONFIDENCE;
+  const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > baseMLMin)
+    ? tiltMlConfMin
+    : baseMLMin;
   if (mlAvailable && mlConfidence != null) {
     if (mlConfidence < mlConfMin) {
       const tiltTag = tiltMlConfMin != null ? ' [tilt]' : '';
-      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}`);
+      const edgeTag = highEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥15%→relaxed]` : '';
+      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}${edgeTag}`);
     }
   }
 
@@ -171,10 +180,13 @@ export function applyTradeFilters({
   // 4c. LATE/VERY_LATE phase ML gate — data: LATE 50% WR, -$1.63
   // Late entries need high ML confidence to justify reduced time for resolution.
   // EARLY/MID unaffected (76%/74% WR, working well).
+  // Edge bypass (Audit v5 A+B): edge ≥ 15% → relax from 80% to 55% (price advantage compensates time pressure)
   if (Number.isFinite(timeLeftMin) && timeLeftMin < 5) {
-    const LATE_ML_MIN = 0.80;
+    const lateEdgeBypass = bestEdge != null && bestEdge >= 0.15;
+    const LATE_ML_MIN = lateEdgeBypass ? 0.55 : 0.80;
     if (mlAvailable && mlConfidence != null && mlConfidence < LATE_ML_MIN) {
-      reasons.push(`LATE phase ML gate: conf ${(mlConfidence * 100).toFixed(0)}% < ${LATE_ML_MIN * 100}% (${timeLeftMin.toFixed(1)}min left)`);
+      const edgeTag = lateEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥15%→relaxed]` : '';
+      reasons.push(`LATE phase ML gate: conf ${(mlConfidence * 100).toFixed(0)}% < ${LATE_ML_MIN * 100}% (${timeLeftMin.toFixed(1)}min left)${edgeTag}`);
     }
   }
 
@@ -261,7 +273,10 @@ export function applyTradeFilters({
   // Three gates that ALL must pass when regime = 'trending':
   //   a) Require MID/LATE phase only — EARLY entries (>10m) had 7/9 losses
   //   b) Token price ≥ 0.60 — losses avg 0.509 (market says 50/50, not trending)
-  //   c) ML confidence ≥ 0.65 — losses avg ML 53.82% (ML unsure = trust trend less)
+  //   c) ML confidence — direction-aware + edge bypass (Audit v5 A+B):
+  //      Signal aligned with BTC direction → 55% (relaxed, trend supports us)
+  //      Signal against BTC direction → 65% (strict, fighting trend)
+  //      Edge ≥ 15% → bypass ML gate entirely (strong price signal)
   if (regime === 'trending') {
     // Gate a: Block EARLY phase — losses entered avg 11.87 min left, win at 4.47 min
     const TRENDING_MAX_TIME_LEFT = 10; // min — require MID or LATE phase
@@ -273,10 +288,24 @@ export function applyTradeFilters({
     if (marketPrice != null && marketPrice < TRENDING_MIN_TOKEN) {
       reasons.push(`Trending+low price blocked: ${(marketPrice * 100).toFixed(0)}c < ${TRENDING_MIN_TOKEN * 100}c (market says 50/50, not trending)`);
     }
-    // Gate c: ML must be confident in Trending — losses avg ML conf 53.82%
-    const TRENDING_MIN_ML = 0.65;
-    if (mlAvailable && mlConfidence != null && mlConfidence < TRENDING_MIN_ML) {
-      reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${TRENDING_MIN_ML * 100}% (ML unsure in trending = high loss rate)`);
+    // Gate c: ML confidence in trending — direction-aware with edge bypass
+    const TRENDING_ML_WITH = 0.55;    // signal aligns with BTC direction (trend supports us)
+    const TRENDING_ML_AGAINST = 0.65; // signal fights BTC direction (riskier)
+    const TRENDING_EDGE_BYPASS = 0.15; // edge ≥ 15% → price signal strong enough, bypass ML gate
+    const trendEdgeBypass = bestEdge != null && bestEdge >= TRENDING_EDGE_BYPASS;
+    if (!trendEdgeBypass && mlAvailable && mlConfidence != null) {
+      // Direction alignment: does our signal match where BTC sits relative to PTB?
+      const btcFavorsUp = btcPrice != null && priceToBeat != null && btcPrice > priceToBeat;
+      const btcFavorsDown = btcPrice != null && priceToBeat != null && btcPrice < priceToBeat;
+      const signalAligned = (signalSide === 'UP' && btcFavorsUp) || (signalSide === 'DOWN' && btcFavorsDown);
+      const trendMlMin = signalAligned ? TRENDING_ML_WITH : TRENDING_ML_AGAINST;
+      if (mlConfidence < trendMlMin) {
+        const alignTag = signalAligned ? 'aligned' : 'against';
+        reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${trendMlMin * 100}% (${alignTag} trend, ML unsure)`);
+      }
+    } else if (trendEdgeBypass) {
+      // Log bypass for transparency (not a blocking reason)
+      // Logged at info level in the filter summary, not added to reasons[]
     }
   }
 
