@@ -26,8 +26,10 @@ const log = createLogger('LimitOrder');
 // ── Anti-loop protection (module-level, persists across state resets) ──
 // Prevents place→cancel→place cycle that caused $16 loss on 2026-03-02.
 // Scoped by market slug — fresh market = fresh attempts.
-const MAX_ATTEMPTS_PER_MARKET = 1;     // Max 1 limit order attempt per market (after cancel → FOK only)
-const CANCEL_COOLDOWN_MS = 120_000;    // 2 min cooldown after cancel before any new placement
+// v2: Raised to 2 — allows ONE re-placement after confirmed cancel (not phantom fill).
+//     Phantom fills count as attempt, confirmed cancels allow 1 retry.
+const MAX_ATTEMPTS_PER_MARKET = 2;     // Max 2 limit order attempts per market (cancel + retry allowed)
+const CANCEL_COOLDOWN_MS = 60_000;     // 1 min cooldown after cancel before re-placement (was 2min)
 let attemptCount = 0;
 let lastCancelAt = 0;
 let marketForAttempts = null;
@@ -548,7 +550,7 @@ export async function cancelLimitOrder(reason, deps) {
   const savedMarketSlug = state.marketSlug;
   state.cancelReason = reason;
 
-  let cancelSucceeded = false;
+  let cancelApiOk = false;
 
   try {
     const result = await deps.cancelOrder(orderId);
@@ -557,21 +559,28 @@ export async function cancelLimitOrder(reason, deps) {
     if (result?.error) {
       log.warn(`LIMIT cancel rejected by CLOB: ${JSON.stringify(result.error)} — verifying order status`);
     } else {
-      cancelSucceeded = true;
+      cancelApiOk = true;
     }
   } catch (err) {
     log.warn(`LIMIT ORDER cancel threw (${reason}): ${err.message} — verifying order status`);
   }
 
-  // If cancel didn't clearly succeed, verify via open orders query
-  if (!cancelSucceeded && deps.getOrderById) {
+  // ── ALWAYS verify order status after cancel (v2 race-condition fix) ──
+  // CLOB cancel API "success" does NOT guarantee the order wasn't filled.
+  // Race condition: matching engine fills the order, THEN processes cancel (nothing to cancel = "success").
+  // We MUST check open orders to distinguish "truly cancelled" vs "phantom fill".
+  if (deps.getOrderById) {
     try {
       const order = await deps.getOrderById(orderId);
       const holdMs = state.placedAt ? Date.now() - state.placedAt : Infinity;
+
       if (order === null && holdMs >= FILL_GRACE_MS) {
-        // Order gone from open orders AND past grace period → was FILLED, not cancelled!
+        // Order gone from open orders AND past grace period.
+        // If cancel API also succeeded, this is the race condition — order was filled, not cancelled!
+        // If cancel API failed, also a phantom fill.
+        const scenario = cancelApiOk ? 'CANCEL_API_OK_BUT_FILLED' : 'CANCEL_FAILED_AND_FILLED';
         log.warn(
-          `LIMIT ORDER PHANTOM FILL: cancel failed (${reason}) but order ${orderId} gone from book → ` +
+          `LIMIT ORDER PHANTOM FILL (${scenario}): cancel(${reason}) order ${orderId} gone from book → ` +
           `recording as filled: ${savedFillData.side} ${savedFillData.size}@${(savedFillData.price * 100).toFixed(1)}c`
         );
         deps.setPendingCost(0);
@@ -587,16 +596,17 @@ export async function cancelLimitOrder(reason, deps) {
           `LIMIT ORDER cancel: order null but only ${Math.round(holdMs / 1000)}s after placement ` +
           `(< ${Math.round(FILL_GRACE_MS / 1000)}s grace) — treating as cancelled, not filled`
         );
+      } else if (order !== null && !cancelApiOk) {
+        // Order still on book AND cancel failed — retry cancel once
+        log.warn(`LIMIT ORDER still on book after failed cancel — retry once`);
+        try {
+          await deps.cancelOrder(orderId);
+          log.info(`LIMIT ORDER cancel retry succeeded: ${orderId}`);
+        } catch (retryErr) {
+          log.warn(`LIMIT ORDER cancel retry also failed: ${retryErr.message} — GTD expiration is safety net`);
+        }
       }
-
-      // Order still on book — retry cancel once
-      if (order !== null) log.warn(`LIMIT ORDER still on book after failed cancel — retry once`);
-      try {
-        await deps.cancelOrder(orderId);
-        log.info(`LIMIT ORDER cancel retry succeeded: ${orderId}`);
-      } catch (retryErr) {
-        log.warn(`LIMIT ORDER cancel retry also failed: ${retryErr.message} — GTD expiration is safety net`);
-      }
+      // else: order still on book + cancel API OK → truly cancelled (order just hasn't been removed from index yet)
     } catch (checkErr) {
       log.warn(`Order status verification failed: ${checkErr.message} — GTD expiration is safety net`);
     }
@@ -607,7 +617,8 @@ export async function cancelLimitOrder(reason, deps) {
   // Preserve event for frontend transition display
   lastEvent = { type: 'CANCELLED', data: { ...savedFillData, reason }, at: Date.now() };
 
-  // Track attempt + cooldown (prevents immediate re-placement)
+  // Track cooldown (prevents immediate re-placement)
+  // Note: only increment attemptCount — MAX_ATTEMPTS_PER_MARKET=2 allows one re-try after confirmed cancel
   attemptCount++;
   lastCancelAt = Date.now();
   marketForAttempts = savedMarketSlug;

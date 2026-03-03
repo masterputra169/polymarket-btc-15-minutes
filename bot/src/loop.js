@@ -1593,7 +1593,7 @@ export async function pollOnce() {
                 `${cancelEmoji} LIMIT ORDER CANCELLED\n` +
                 `Side: ${limStatus.side ?? '?'} | Was @ ${limStatus.targetPrice ? (limStatus.targetPrice * 100).toFixed(1) + '¢' : '?'}\n` +
                 `Reason: ${readableReason}\n` +
-                (isTimeCutoff ? `→ FOK fallback now active\n` : `→ No re-entry this market (anti-loop)\n`) +
+                (isTimeCutoff ? `→ FOK fallback now active\n` : `→ May retry limit order (cooldown 1min)\n`) +
                 `Bankroll: $${getBankroll().toFixed(2)}`,
                 { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit cancel: ${e.message}`));
             }
