@@ -1485,16 +1485,17 @@ export async function pollOnce() {
                 marketEndMs: settlementMs,
                 bankroll: getAvailableBankroll(),
                 mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+                sessionQuality: limFilterResult.sessionQuality ?? 1.0, // Fix #7: session quality scaling
               }, { placeLimitBuyOrder, setPendingCost });
 
               if (placeResult.placed) {
                 limitOrderBlocksFOK = true;
-                const limCost = (limitEval.targetPrice * Math.floor(getAvailableBankroll() * 0.05 / limitEval.targetPrice)).toFixed(2);
-                const limSize = Math.floor(getAvailableBankroll() * 0.05 / limitEval.targetPrice);
+                // Fix #8: Use actual placed data from getLimitOrderStatus() instead of recalculating
+                const limSt = getLimitOrderStatus();
                 notify('info',
                   `📋 LIMIT ORDER PLACED\n` +
                   `Side: ${limitEval.side} | Price: ${(limitEval.targetPrice * 100).toFixed(1)}¢\n` +
-                  `Size: ${limSize} shares ($${limCost})\n` +
+                  `Size: ${limSt.size ?? '?'} shares ($${limSt.size && limSt.targetPrice ? (limSt.size * limSt.targetPrice).toFixed(2) : '?'})\n` +
                   `ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | Bankroll: $${getBankroll().toFixed(2)}\n` +
                   `Waiting for fill (max ${BOT_CONFIG.limitOrder.cancelAfterElapsedMin}min)...\n` +
                   `<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`,
@@ -1537,6 +1538,7 @@ export async function pollOnce() {
               marketSlug: fd.marketSlug, orderId: fd.orderId,
               actualCost: fd.price * fd.size,
             });
+            confirmFill(); // Fix #1: limit order fills are confirmed (order gone from book = filled)
             entryRegime = regimeInfo?.regime ?? 'moderate';
             recordTradeForMarket(fd.marketSlug);
             captureEntrySnapshot({
@@ -1571,6 +1573,7 @@ export async function pollOnce() {
               marketSlug: fd.marketSlug, orderId: fd.orderId,
               actualCost: fd.price * fd.size,
             });
+            confirmFill(); // Fix #1: partial fill confirmed (tokens on-chain from matched portion)
             entryRegime = regimeInfo?.regime ?? 'moderate';
             recordTradeForMarket(fd.marketSlug);
             captureEntrySnapshot({
@@ -1622,6 +1625,7 @@ export async function pollOnce() {
                 marketSlug: fd.marketSlug, orderId: fd.orderId,
                 actualCost: fd.price * fd.size,
               });
+              confirmFill(); // Fix #1: phantom fill = tokens already on-chain (order was filled before cancel)
               entryRegime = regimeInfo?.regime ?? 'moderate';
               recordTradeForMarket(fd.marketSlug);
               captureEntrySnapshot({

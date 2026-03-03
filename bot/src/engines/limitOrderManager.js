@@ -222,6 +222,15 @@ export function evaluateLimitEntry({
   const bestBid = side === 'UP' ? bestBidUp : bestBidDown;
   const targetPrice = computeTargetPrice(mlConfidence, bestBid);
 
+  // Fix #3: Limit-specific edge gate — mlConfidence minus entry price must be positive.
+  // Unlike FOK edge (model_prob - market_price), limit edge uses our actual entry price.
+  // Example: ML 65%, target 55c → limit_edge = 10% (good). ML 55%, target 54c → 1% (marginal).
+  const MIN_LIMIT_EDGE = 0.05; // 5% minimum edge at our entry price
+  const limitEdge = mlConfidence - targetPrice;
+  if (limitEdge < MIN_LIMIT_EDGE) {
+    return no(`limit_edge_${(limitEdge * 100).toFixed(1)}%<${(MIN_LIMIT_EDGE * 100).toFixed(0)}%`);
+  }
+
   // Increment eval count
   state.evalCount++;
 
@@ -253,6 +262,7 @@ export function evaluateLimitEntry({
  * @param {number} params.marketEndMs - Market end timestamp (ms)
  * @param {number} params.bankroll - Available bankroll
  * @param {number} params.mlConfidence - ML conf at placement
+ * @param {number} [params.sessionQuality] - Session quality multiplier (1.0=US, 0.85=Asia, 0.7=Off)
  * @param {Object} deps - Dependencies
  * @param {Function} deps.placeLimitBuyOrder - CLOB limit order function
  * @param {Function} deps.setPendingCost - Reserve bankroll
@@ -260,7 +270,7 @@ export function evaluateLimitEntry({
  */
 export async function placeLimitOrder({
   side, targetPrice, tokenId, marketSlug, conditionId,
-  marketEndMs, bankroll, mlConfidence,
+  marketEndMs, bankroll, mlConfidence, sessionQuality,
 }, deps) {
   const cfg = BOT_CONFIG.limitOrder;
 
@@ -287,12 +297,19 @@ export async function placeLimitOrder({
     : mlConfidence >= 0.70 ? 0.06
     : 0.04;
 
-  const maxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;
+  // Fix #5: Scale maxBet with bankroll (same as tradePipeline.js audit v5 M4)
+  const fixedMaxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;
+  const maxBet = Math.max(fixedMaxBet, bankroll * kellyCapPct);
   const kellyBet = bankroll * rawKelly * HALF_KELLY;
   const kellyCap = bankroll * kellyCapPct;
   const betAmount = Math.min(kellyBet, kellyCap, maxBet);
 
-  let size = Math.floor(betAmount / targetPrice);
+  // Fix #7: Apply session quality scaling (Asia=0.85, Off=0.7)
+  const sq = (sessionQuality != null && Number.isFinite(sessionQuality) && sessionQuality > 0) ? sessionQuality : 1.0;
+  const sqBetAmount = sq < 1.0 ? Math.round(betAmount * sq * 100) / 100 : betAmount;
+  if (sq < 1.0) log.info(`LIMIT session quality: $${betAmount.toFixed(2)} × ${sq} = $${sqBetAmount.toFixed(2)}`);
+
+  let size = Math.floor(sqBetAmount / targetPrice);
 
   // Enforce CLOB minimum 5 shares — bump up if affordable
   if (size < CLOB_MIN_SHARES) {
@@ -491,6 +508,9 @@ export async function monitorLimitOrder({
           `LIMIT ORDER PARTIAL ACCEPT: ${(fillRatio * 100).toFixed(0)}% filled (${sizeMatched}/${originalSize}) | ` +
           `${state.side} @${(state.targetPrice * 100).toFixed(1)}c | held ${(holdMs / 1000).toFixed(0)}s`
         );
+        // Fix #6: Use actual sizeMatched (not Math.floor) — CLOB reports exact filled shares.
+        // Flooring loses real shares → bankroll drift. Round to nearest integer for ERC-1155.
+        const acceptedSize = Math.round(sizeMatched);
         return {
           action: 'PARTIAL_ACCEPT',
           detail: `partial_${(fillRatio * 100).toFixed(0)}%`,
@@ -498,7 +518,7 @@ export async function monitorLimitOrder({
             side: state.side,
             tokenId: state.tokenId,
             price: state.targetPrice,
-            size: Math.floor(sizeMatched), // Only record filled portion
+            size: Math.max(1, acceptedSize), // At least 1 share if partial accepted
             conditionId: state.conditionId,
             marketSlug: state.marketSlug,
             orderId: state.orderId,
