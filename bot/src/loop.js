@@ -147,6 +147,7 @@ import {
   resetLimitOrderState, resetLimitAttempts, getLimitOrderStatus, isLimitOrderActive,
   recordFillEvent,
 } from './engines/limitOrderManager.js';
+import { routeOrder } from './engines/orderRouter.js';
 
 // Safety
 import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp, exportTradeTimestamps, importTradeTimestamps } from './safety/guards.js';
@@ -1389,6 +1390,7 @@ export async function pollOnce() {
     // Places GTD limit orders at 55-62¢ during first 0:30-3:00 of market.
     // Monitors fill status; cancels on signal flip or 10 min timeout → FOK fallback.
     let limitOrderBlocksFOK = false;
+    let smartRouteFOK = false;
     if (BOT_CONFIG.limitOrder.enabled && !settlementPending) {
       const limitActive = isLimitOrderActive();
       // Compute elapsed minutes since market opened (15 min markets)
@@ -1397,6 +1399,27 @@ export async function pollOnce() {
       const limHasPending = hasPendingOrder();
 
       if (!limitActive && !limAlreadyHasPos && !limHasPending && elapsedMin != null) {
+        // ── Smart Order Router ──
+        const limMlConf = mlResult.available ? mlResult.mlConfidence : null;
+        const limMlSide = mlResult.available ? mlResult.mlSide : null;
+        const bestAskForSide = limMlSide === 'UP'
+          ? (orderbookUp?.bestAsk ?? marketUp ?? null)
+          : (orderbookDown?.bestAsk ?? marketDown ?? null);
+
+        const routeDecision = routeOrder({
+          bestAsk: bestAskForSide,
+          mlConf: limMlConf,
+          elapsedMin,
+          delta1m,
+          mlSide: limMlSide,
+          regime: regimeInfo?.regime ?? 'moderate',
+        });
+
+        if (routeDecision.route === 'FOK') {
+          smartRouteFOK = true;
+          log.info(`SMART_ROUTE→FOK: ${routeDecision.reason}`);
+          // Skip limit order evaluation, let step 10b handle FOK entry
+        } else if (routeDecision.route === 'LIMIT') {
         // ── Apply trade filters to limit orders (relaxed vs FOK) ──
         // Limit orders enter at 55-62¢ (vs FOK 65-75¢) during first 0:30-3:00 of market.
         // evaluateLimitEntry() has its own gates: ML ≥ 60%, edge ≥ 5%, BTC-PTB consensus.
@@ -1413,7 +1436,6 @@ export async function pollOnce() {
         //                        (limitOrderManager has own BTC-PTB consensus gate)
         // Kept safety filters: blackout (#10), loss cooldown (#5), max trades (#6),
         //   counter-trend (#9, uses btcPrice+delta1m), low vol (#3), ML degradation (#13), VPIN (#14)
-        const limMlSide = mlResult.available ? mlResult.mlSide : null;
         const limEtHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
 
         const limFilterResult = applyTradeFilters({
@@ -1519,9 +1541,31 @@ export async function pollOnce() {
             }
           }
         }
+        } // end routeDecision === 'LIMIT'
+        // WAIT → neither limit nor FOK fires this poll
       } else if (limitActive) {
         // Monitor active limit order
         limitOrderBlocksFOK = true;
+
+        // ── Dynamic ML Upgrade: cancel limit → FOK when ML rises significantly ──
+        const upgradeMlConf = mlResult.available ? mlResult.mlConfidence : null;
+        if (upgradeMlConf != null && upgradeMlConf >= BOT_CONFIG.orderRouter.upgradeMLThreshold) {
+          const limStatus = getLimitOrderStatus();
+          const holdingSec = limStatus.placedAt ? (Date.now() - limStatus.placedAt) / 1000 : 0;
+          if (holdingSec > 30) {
+            log.info(`SMART_ROUTE→UPGRADE: ML ${(upgradeMlConf * 100).toFixed(0)}% ≥ ${(BOT_CONFIG.orderRouter.upgradeMLThreshold * 100).toFixed(0)}% — cancel limit → FOK`);
+            try {
+              await cancelLimitOrder('smart_upgrade_fok', { cancelOrder, setPendingCost, getOrderById });
+              limitOrderBlocksFOK = false;
+              smartRouteFOK = true;
+            } catch (upgradeErr) {
+              log.error(`Smart upgrade cancel failed: ${upgradeErr.message}`);
+            }
+          }
+        }
+
+        // Skip monitoring if upgrade cancelled the limit order
+        if (!smartRouteFOK) {
         const elapsedMinForMonitor = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
         try {
           const monResult = await monitorLimitOrder({
@@ -1660,6 +1704,7 @@ export async function pollOnce() {
         } catch (err) {
           log.error(`Limit order monitor failed (bot kept alive): ${err.message}`);
         }
+        } // end !smartRouteFOK guard
       }
     }
 
@@ -1799,7 +1844,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !limitOrderBlocksFOK) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && (!limitOrderBlocksFOK || smartRouteFOK)) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         await executeDirectionalTrade({

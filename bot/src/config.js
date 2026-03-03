@@ -169,11 +169,22 @@ const BOT_CONFIG = {
     priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.56, 0.45, 0.65),     // 60→56¢ — ML 70-85%: need 56% WR
     priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.52, 0.40, 0.60),     // 55→52¢ — ML 60-70%: need 52% WR
     minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.40, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin
-    cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 10.0, 5, 14),
+    cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 7.0, 5, 14),  // 10→7 min — earlier FOK fallback gives more room
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
     expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
     minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough
     checkIntervalMs: envInt(process.env.LIMIT_CHECK_INTERVAL_MS, 2000, 500, 10000),
+  },
+
+  // Smart Order Router — dynamic FOK vs LIMIT selection based on ML + price + momentum
+  orderRouter: {
+    enabled:             process.env.ORDER_ROUTER_ENABLED !== 'false',  // Default ON
+    fokMlThreshold:      envNum(process.env.ROUTER_FOK_ML, 0.88, 0.75, 0.95),
+    fokMaxPrice:         envNum(process.env.ROUTER_FOK_MAX_PRICE, 0.62, 0.50, 0.75),
+    cheapPriceThreshold: envNum(process.env.ROUTER_CHEAP_PRICE, 0.55, 0.45, 0.65),
+    cheapMlThreshold:    envNum(process.env.ROUTER_CHEAP_ML, 0.70, 0.55, 0.85),
+    momentumThreshold:   envNum(process.env.ROUTER_MOMENTUM, 30, 10, 100),
+    upgradeMLThreshold:  envNum(process.env.ROUTER_UPGRADE_ML, 0.90, 0.80, 0.95),
   },
 
   // Monte Carlo simulation (Quant risk assessment)
