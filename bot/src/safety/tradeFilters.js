@@ -301,7 +301,7 @@ export function applyTradeFilters({
       const trendMlMin = signalAligned ? TRENDING_ML_WITH : TRENDING_ML_AGAINST;
       if (mlConfidence < trendMlMin) {
         const alignTag = signalAligned ? 'aligned' : 'against';
-        reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${trendMlMin * 100}% (${alignTag} trend, ML unsure)`);
+        reasons.push(`Trending+low ML blocked: ${(mlConfidence * 100).toFixed(0)}% < ${(trendMlMin * 100).toFixed(0)}% (${alignTag} trend, ML unsure)`);
       }
     } else if (trendEdgeBypass) {
       // Log bypass for transparency (not a blocking reason)
