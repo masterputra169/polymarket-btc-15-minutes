@@ -163,11 +163,11 @@ const BOT_CONFIG = {
     enabled: process.env.LIMIT_ORDER_ENABLED === 'true',
     minElapsedMin: envNum(process.env.LIMIT_MIN_ELAPSED_MIN, 0.5, 0, 5),
     maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 5.0, 1, 10),         // 3→5 min — wider placement window
-    maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.65, 0.40, 0.75),   // 62→65¢ — still far better than FOK 70-80¢
+    maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.60, 0.40, 0.75),   // 65→60¢ — data: 60-64c bucket is +$43, 65-69c is -$8
     minEntryPrice: envNum(process.env.LIMIT_MIN_ENTRY_PRICE, 0.50, 0.30, 0.60),
-    priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.65, 0.50, 0.70),   // 62→65¢ for ML≥85%
-    priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.60, 0.45, 0.65),     // 58→60¢ for ML 70-85%
-    priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.55, 0.40, 0.60),
+    priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.60, 0.50, 0.70),   // 65→60¢ — ML≥85%: max 60c, need 60% WR (achievable)
+    priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.56, 0.45, 0.65),     // 60→56¢ — ML 70-85%: need 56% WR
+    priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.52, 0.40, 0.60),     // 55→52¢ — ML 60-70%: need 52% WR
     minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.40, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin
     cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 10.0, 5, 14),
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
