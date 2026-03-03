@@ -9,12 +9,14 @@
  * Parameters:
  *   - Window:   09:00-09:15 EST (configurable)
  *   - Direction: Always UP (LONG)
- *   - Sizing:   20% of bankroll (configurable)
+ *   - Sizing:   5% of bankroll (configurable, half-Kelly for binary)
  *   - Take-profit: 50% of invested amount (configurable)
  *   - Limit:    1 trade per day, weekdays only
  *
- * Expected compounding: $100 × 1.10^22 weekdays ≈ $814 (+714% monthly)
- * (20% risk × 50% profit target = 10% net return per win, assuming ~100% WR in window)
+ * Expected compounding (at 5% risk per trade):
+ *   At 70% WR: $100 × 1.035^22 ≈ $214/month (+114%)
+ *   At 60% WR: $100 × 1.01^22 ≈ $124/month (+24%)
+ *   At 50% WR: breakeven (no edge, TP gains offset losses)
  */
 
 import { createLogger } from '../logger.js';

@@ -81,6 +81,8 @@ export function getAccuracyStats(windowSize = 20) {
   let confidenceMultiplier, label;
   const pct = accuracy !== null ? (accuracy * 100).toFixed(0) : '0';
 
+  // Audit v4 M15: Statistical note — n=20 requires ≥70% for significance (Wilson score 95% CI above 50%).
+  // At n=20, 55% accuracy has CI=[32%,76%] — indistinguishable from random. Only ≥70% is meaningful.
   if (accuracy >= 0.70) { confidenceMultiplier = 1.15; label = `\uD83D\uDD25 Hot (${pct}% of last ${recentTotal})`; }
   else if (accuracy >= 0.55) { confidenceMultiplier = 1.05; label = `\u2705 Good (${pct}% of last ${recentTotal})`; }
   else if (accuracy >= 0.45) { confidenceMultiplier = 1.0; label = `\u2796 Average (${pct}% of last ${recentTotal})`; }

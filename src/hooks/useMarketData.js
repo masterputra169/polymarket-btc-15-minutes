@@ -323,7 +323,7 @@ export function useMarketData({ clobWs } = {}) {
         // Smart money features — null (neutral defaults) in browser, MetEngine in bot
         smBullRatio: null, smFlowIntensity: null, smEarlySignal: null,
         smFlowAccel: null, smActivity: null,
-      }, timeAware.adjustedUp);
+      }, timeAware.adjustedUp, regimeInfo.regime);
 
       // ═══ Step 3: Recompute edge using ML ensemble probability ═══
       const ensembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;

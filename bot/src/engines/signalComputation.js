@@ -16,6 +16,7 @@ import { detectArbitrage } from './arbitrage.js';
 import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.js';
 import { getSignalModifiers } from '../adapters/signalPerfStore.js';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.js';
+import { simulateBTCPaths } from './monteCarlo.js';
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -199,7 +200,16 @@ export function computeSignals({
     spreadPct: orderbookUp?.spread ?? null,
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
     smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
-  }, timeAware.adjustedUp);
+  }, timeAware.adjustedUp, regimeInfo.regime);
+
+  // ── Monte Carlo simulation (independent probability from GBM price paths) ──
+  const mcResult = simulateBTCPaths({
+    currentBTC: lastPrice,
+    targetPrice: updatedPriceToBeat.value,
+    timeLeftSec: (timeLeftMin ?? 0) * 60,
+    atrPct: atr?.atrPct ?? null,
+    tokenPrice: marketUp,
+  });
 
   // ── Ensemble edge (spread-aware) ──
   const ensembleUp = mlResult.available ? mlResult.ensembleProbUp : timeAware.adjustedUp;
@@ -240,6 +250,9 @@ export function computeSignals({
 
     // Edge
     edge,
+
+    // Monte Carlo
+    mcResult,
 
     // Metadata
     session, fundingRate,

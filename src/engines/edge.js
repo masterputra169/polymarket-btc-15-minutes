@@ -230,6 +230,7 @@ export function decide({
   session = null,
   calibratedThresholds = null,  // from norm_browser.json phase_thresholds (audit H3)
   smartFlowSignal = null,       // from smartMoneyTracker (time-windowed CLOB flow)
+  dataQualityScore = null,       // Audit v4 M11: from ML feature extraction (0-1)
 }) {
   // ═══ Phase thresholds — calibrated from holdout if available, else v3 defaults ═══
   let phase, minEdge, minProb, minAgreement, preferMultiTf;
@@ -249,7 +250,7 @@ export function decide({
     preferMultiTf = true;
   } else if (remainingMinutes > 2) {
     phase = 'LATE';
-    minEdge = cal?.LATE?.minEdge ?? 0.05;    // v5: 0.12→0.05 — Polymarket is efficient, LATE edge natural range 3-8%; 12% blocked ALL high-prob entries
+    minEdge = cal?.LATE?.minEdge ?? 0.07;    // Audit v4 M12: 0.05→0.07 — LATE was inverted (lower than EARLY 6%); 7% restores monotonic phase progression
     minProb = cal?.LATE?.minProb ?? 0.57;
     minAgreement = 2;                         // v5: 3→2 — late phase signals converge, fewer families strongly agree
     preferMultiTf = false;
@@ -318,6 +319,11 @@ export function decide({
     }
   }
 
+  // Audit v4 M11: Data quality gate — when feature extraction quality is poor, require more edge
+  if (dataQualityScore != null && dataQualityScore < 0.70) {
+    minEdge = Math.min(minEdge + 0.03, 0.25);
+  }
+
   // ML high-confidence relaxation: when ML probUp >= 0.70 (confidence >= HIGH),
   // the model's 75%+ accuracy justifies relaxing thresholds by 2%
   // v5: Floor lowered 0.04→0.02 — edge is already net of spread+fees; 2% floor = genuine edge.
@@ -328,14 +334,28 @@ export function decide({
   // v6: Agreement reduction — ML as independent "family" (74%+ accuracy at high conf).
   //   When ML ≥ 80% and agrees with rules, minAgreement -= 1 (min 1).
   //   Fixes: P:93% E:5.9% ML:98% → WAIT because agreement < 2 (structural deadlock).
+  // v7: ML trust-alone — when ML ≥ 85%, apply relaxation even when rules disagree.
+  //   Root cause: rule-based adjustedUp can be ~50% (mixed indicators) while ML is 95%.
+  //   mlAgreesWithRules = false → no relaxation → Off-hours +2% makes minEdge 9% > edge 8.5% → WAIT.
+  //   At 85%+ conf (84% accuracy on 45K samples), ML should override noisy indicator disagreement.
+  //   Also allows minAgreement = 0 when ML is sole signal (no family agreement needed).
   const mlIsHighConf = mlConfidence !== null && mlConfidence >= ML_CONFIDENCE.HIGH;
-  if (mlIsHighConf && mlAgreesWithRules) {
+  const mlTrustAlone = mlConfidence !== null && mlConfidence >= 0.85;
+  if (mlIsHighConf && (mlAgreesWithRules || mlTrustAlone)) {
     const mlRelax = mlConfidence >= 0.90 ? 0.03 : 0.02;
     const mlFloor = mlConfidence >= 0.90 ? 0.015 : mlConfidence >= 0.75 ? 0.02 : 0.03;
     minEdge = Math.max(minEdge - mlRelax, mlFloor);
     minProb = Math.max(minProb - 0.02, 0.52);
     // ML counts as one independent agreement family — reduce required indicator agreement
-    if (mlConfidence >= 0.80) {
+    // v7: At 85%+ conf trusting alone, ML substitutes for ALL indicator families:
+    //   - minAgreement = 0 (no family agreement needed)
+    //   - preferMultiTf = false (skip 5m timeframe confirmation)
+    //   Root cause: BTC > PTB but indicators see recent downtrend → agreement=0, multiTf=false
+    //   ML (94% conf, 84% accuracy on 45K samples) correctly predicts UP from full feature set
+    if (mlTrustAlone) {
+      minAgreement = 0;
+      preferMultiTf = false;
+    } else if (mlConfidence >= 0.80) {
       minAgreement = Math.max(minAgreement - 1, 1);
     }
   }

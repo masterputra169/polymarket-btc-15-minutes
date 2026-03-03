@@ -318,7 +318,7 @@ async function reconcile() {
           const discMsg = entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10
             ? `\n⚠️ Selisih P&amp;L: local=$${entry.localPnl?.toFixed(2) ?? '?'} vs verified=${pnlStr} (diff=$${entry.discrepancy.toFixed(2)})`
             : '';
-          notify('info', `${emoji} <b>Reconciled (delayed)</b>: ${entry.outcome ?? '?'} | P&amp;L: <b>${pnlStr}</b>\n📊 ${entry.marketSlug?.slice(-30) ?? conditionId.slice(0, 16)}${discMsg}\n<i>Notif ini terlambat karena bot restart atau oracle delay</i>`, { key: `reconcile:${conditionId}` }).catch(() => {});
+          notify('info', `${emoji} <b>Reconciled (delayed)</b>: ${entry.outcome ?? '?'} | P&amp;L: <b>${pnlStr}</b>\n📊 ${entry.marketSlug?.slice(-30) ?? conditionId.slice(0, 16)}${discMsg}\n<i>Notif ini terlambat karena bot restart atau oracle delay</i>`, { key: `reconcile:${conditionId}` }).catch(e => log.debug(`Notify reconcile: ${e.message}`));
         }
       } else {
         // New entry — append
@@ -330,7 +330,7 @@ async function reconcile() {
           adjustBankrollForReconciliation({ delta: entry.discrepancy, reason: `reconciler_discrepancy`, slug: entry.marketSlug });
           // RC4 Fix: kirim Telegram
           const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
-          notify('warn', `⚠️ <b>P&amp;L Discrepancy</b>!\nLocal: $${entry.localPnl?.toFixed(2) ?? '?'} vs Verified: ${pnlStr}\nSelisih: $${entry.discrepancy.toFixed(2)} | ${entry.marketSlug?.slice(-30) ?? ''}`, { key: `discrepancy:${conditionId}` }).catch(() => {});
+          notify('warn', `⚠️ <b>P&amp;L Discrepancy</b>!\nLocal: $${entry.localPnl?.toFixed(2) ?? '?'} vs Verified: ${pnlStr}\nSelisih: $${entry.discrepancy.toFixed(2)} | ${entry.marketSlug?.slice(-30) ?? ''}`, { key: `discrepancy:${conditionId}` }).catch(e => log.debug(`Notify discrepancy: ${e.message}`));
         }
       }
 

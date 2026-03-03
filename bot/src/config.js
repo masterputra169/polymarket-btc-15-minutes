@@ -32,9 +32,9 @@ const BOT_CONFIG = {
   dryRun: process.env.DRY_RUN !== 'false',
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
-  maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 5, 1, 50),
+  maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 7, 1, 50),  // Audit v4 C4: 5→7 — P(7 losses at 56% WR) = 0.32%, avoids false halt ~4x/year
   maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),  // Audit v2 H6: 20→25% — P(4 consec full loss)=3.7% at 56% WR; 20% too tight for normal variance
-  circuitBreakerCooldownMs: envInt(process.env.CB_COOLDOWN_MS, 30 * 60 * 1000, 0, 24 * 60 * 60 * 1000), // Auto-recover after cooldown (default 30min)
+  circuitBreakerCooldownMs: envInt(process.env.CB_COOLDOWN_MS, 4 * 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000), // Audit v4 C3: 30min→4hr — after consecutive losses, 30min too short; prevents 54% daily risk
   logLevel: process.env.LOG_LEVEL || 'info',
 
   // External notifications (optional — no-ops if not set)
@@ -96,6 +96,7 @@ const BOT_CONFIG = {
     minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 240, 0, 600),        // v11: 180→240s (4min) before evaluating
     minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
     cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
+    crashCooldownMs: envInt(process.env.CUT_LOSS_CRASH_COOLDOWN_MS, 1500, 500, 10000), // v14: faster retry during crash/urgent — 1.5s vs 5s normal
     maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
     minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 45, 1, 90), // Audit v2 C2: 35→45% — 33% of all trades are cuts with 42% FP rate; settlement WR 71% > cut-loss WR
     consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 3, 1, 20), // v11: 2→3 polls to confirm (not a fluke)
@@ -145,7 +146,7 @@ const BOT_CONFIG = {
   // Expected: ~10% compounding per win → +700% monthly at high win rate.
   preMarketLong: {
     enabled: process.env.PREMARKET_LONG_ENABLED === 'true',
-    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.20, 0.05, 0.50),          // 20% of bankroll
+    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.10, 0.01, 0.50),          // 10% bankroll for pre-market LONG
     // take-profit removed — full hold to settlement
     maxEntryPrice: envNum(process.env.PREMARKET_LONG_MAX_ENTRY_PRICE, 0.60, 0.30, 0.80), // max 60c — don't buy expensive tokens
     windowStartH: envInt(process.env.PREMARKET_LONG_WINDOW_START_H, 9, 0, 23),       // 09:00 EST
@@ -153,6 +154,38 @@ const BOT_CONFIG = {
     windowEndH: envInt(process.env.PREMARKET_LONG_WINDOW_END_H, 9, 0, 23),           // 09:15 EST
     windowEndM: envInt(process.env.PREMARKET_LONG_WINDOW_END_M, 15, 0, 59),
     // stop-loss removed — hold to settlement (settlement WR 87.5%)
+  },
+
+  // Limit order strategy — passive entry at optimal prices (GTD orders at 55-65¢)
+  // Places limit orders early in market (0:30-5:00), cancels at 10 min if unfilled → FOK fallback
+  // At 58¢ entry: only need 58% WR to break even (vs 75% at 75¢ FOK) → can be aggressive
+  limitOrder: {
+    enabled: process.env.LIMIT_ORDER_ENABLED === 'true',
+    minElapsedMin: envNum(process.env.LIMIT_MIN_ELAPSED_MIN, 0.5, 0, 5),
+    maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 5.0, 1, 10),         // 3→5 min — wider placement window
+    maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.65, 0.40, 0.75),   // 62→65¢ — still far better than FOK 70-80¢
+    minEntryPrice: envNum(process.env.LIMIT_MIN_ENTRY_PRICE, 0.50, 0.30, 0.60),
+    priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.65, 0.50, 0.70),   // 62→65¢ for ML≥85%
+    priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.60, 0.45, 0.65),     // 58→60¢ for ML 70-85%
+    priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.55, 0.40, 0.60),
+    minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.58, 0.40, 0.90),     // Min 58% ML confidence for limit order
+    cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 10.0, 5, 14),
+    partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
+    expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
+    minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough
+    checkIntervalMs: envInt(process.env.LIMIT_CHECK_INTERVAL_MS, 2000, 500, 10000),
+  },
+
+  // Monte Carlo simulation (Quant risk assessment)
+  // GBM price path simulation → independent P(UP) + tail risk + sizing multiplier
+  monteCarlo: {
+    enabled: process.env.MC_ENABLED !== 'false',
+    numPaths: envInt(process.env.MC_NUM_PATHS, 1000, 100, 10000),
+    numSteps: envInt(process.env.MC_NUM_STEPS, 20, 5, 100),
+    // Gate: block when MC P(betSide) below this threshold
+    minAgreementProb: envNum(process.env.MC_MIN_AGREEMENT, 0.35, 0.10, 0.50),
+    // Tail risk: block when P(adverse extreme >0.5%) exceeds this
+    maxTailRisk: envNum(process.env.MC_MAX_TAIL_RISK, 0.55, 0.01, 1.0),
   },
 
   // MetEngine smart money API (x402, Solana USDC payments)

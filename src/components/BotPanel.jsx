@@ -100,6 +100,14 @@ function BotPanel({ connected, data }) {
   const portfolioTotal = data.bankroll != null
     ? data.bankroll + (rtPositionValue ?? botPosition?.cost ?? 0) : null;
 
+  // Limit order status
+  const limitOrder = data.limitOrder ?? null;
+  const limActive = limitOrder?.phase === 'MONITORING' || limitOrder?.phase === 'PLACED';
+  const limElapsedSec = limActive && limitOrder?.elapsedMs ? Math.round(limitOrder.elapsedMs / 1000) : 0;
+  const limEvent = limitOrder?.lastEvent;  // Recent fill/cancel event (persists ~20s)
+  const limFilled = limEvent?.type === 'FILLED';
+  const limCancelled = limEvent?.type === 'CANCELLED';
+
   // getStats() only tracks consecutiveLosses, not consecutive wins
   const streak = stats?.consecutiveLosses > 0
     ? `L${stats.consecutiveLosses}`
@@ -381,6 +389,80 @@ function BotPanel({ connected, data }) {
           }}>
             Portfolio
           </div>
+          {/* Active limit order — waiting for fill */}
+          {limActive && (
+            <div style={{
+              padding: '4px 8px',
+              marginBottom: 6,
+              borderRadius: 4,
+              background: 'rgba(255,193,7,0.08)',
+              border: '1px solid rgba(255,193,7,0.25)',
+              fontSize: '0.72rem',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#ffc107' }}>
+                  LIMIT {limitOrder.side === 'UP' ? '↑' : '↓'} {limitOrder.side}
+                </span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                  {limElapsedSec}s
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, color: 'var(--text-secondary)' }}>
+                <span>{limitOrder.size} @ {(limitOrder.targetPrice * 100).toFixed(1)}¢</span>
+                <span>${(limitOrder.targetPrice * limitOrder.size).toFixed(2)}</span>
+              </div>
+              <div style={{ fontSize: '0.6rem', color: '#ffc107', opacity: 0.8, marginTop: 2 }}>
+                Waiting for fill...
+              </div>
+            </div>
+          )}
+          {/* Limit order filled — transition banner (persists ~20s) */}
+          {!limActive && limFilled && (
+            <div style={{
+              padding: '4px 8px',
+              marginBottom: 6,
+              borderRadius: 4,
+              background: 'rgba(76,175,80,0.12)',
+              border: '1px solid rgba(76,175,80,0.35)',
+              fontSize: '0.72rem',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#4caf50' }}>
+                  FILLED {limEvent.side === 'UP' ? '↑' : '↓'} {limEvent.side}
+                </span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                  {limEvent.ageSec}s ago
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, color: 'var(--text-secondary)' }}>
+                <span>{limEvent.size} @ {(limEvent.price * 100).toFixed(1)}¢</span>
+                <span>${(limEvent.price * limEvent.size).toFixed(2)}</span>
+              </div>
+            </div>
+          )}
+          {/* Limit order cancelled — transition banner (persists ~20s) */}
+          {!limActive && limCancelled && (
+            <div style={{
+              padding: '4px 8px',
+              marginBottom: 6,
+              borderRadius: 4,
+              background: 'rgba(244,67,54,0.08)',
+              border: '1px solid rgba(244,67,54,0.25)',
+              fontSize: '0.72rem',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontWeight: 700, color: '#f44336' }}>
+                  CANCELLED {limEvent.side === 'UP' ? '↑' : '↓'} {limEvent.side}
+                </span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.65rem' }}>
+                  {limEvent.ageSec}s ago
+                </span>
+              </div>
+              <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: 2 }}>
+                {limEvent.reason?.replace(/_/g, ' ') ?? 'unknown'}
+              </div>
+            </div>
+          )}
           {botPosition ? (
             <>
               <div className="data-row">
@@ -465,6 +547,22 @@ function BotPanel({ connected, data }) {
           <span className="status-pill" style={{ padding: '2px 8px', fontSize: '0.62rem' }}>
             Fill:{(data.fillTracker.fillRate * 100).toFixed(0)}%
             {data.fillTracker.pending && <b style={{ color: '#ffc107' }}> [pending]</b>}
+          </span>
+        )}
+        {limitOrder?.enabled && (
+          <span className="status-pill" style={{
+            padding: '2px 8px', fontSize: '0.62rem',
+            color: limActive ? '#ffc107' : limFilled ? '#4caf50' : limCancelled ? '#f44336' : 'var(--text-dim)',
+            fontWeight: limActive || limFilled ? 700 : 400,
+            borderColor: limActive ? 'rgba(255,193,7,0.3)' : limFilled ? 'rgba(76,175,80,0.3)' : limCancelled ? 'rgba(244,67,54,0.3)' : undefined,
+          }}>
+            LIM:{limActive
+              ? `${limitOrder.side}@${(limitOrder.targetPrice * 100).toFixed(0)}¢`
+              : limFilled
+                ? `FILLED ${limEvent.side}@${(limEvent.price * 100).toFixed(0)}¢`
+                : limCancelled
+                  ? `X:${(limEvent.reason ?? '').replace(/_/g, ' ').slice(0, 15)}`
+                  : 'idle'}
           </span>
         )}
         {data.signalStability && (

@@ -348,7 +348,7 @@ export function settleTrade(won) {
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTrade')) return false;
 
-  // C2 FIX: Update ALL financial state in memory BEFORE first saveState().
+  // C2 FIX: Update ALL financial state in memory BEFORE saveState().
   // Counters (wins/losses/consecutiveLosses) must be saved atomically with bankroll + settled.
   // If bot crashes after save, the reloaded state will have correct counters — no drift.
   state.bankroll = roundMoney(state.bankroll + payout);
@@ -367,8 +367,6 @@ export function settleTrade(won) {
     state.consecutiveLosses++;
     state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
-
-  saveState(); // Atomic: bankroll + settled + all counters saved together
 
   const pnl = roundMoney(payout - pos.cost);
 
@@ -393,6 +391,8 @@ export function settleTrade(won) {
   state.currentPosition = null;
   lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
   lastKnownTokenPriceTs = 0;  // H9: reset timestamp
+
+  // M2 audit fix: single atomic saveState (was two writes — bankroll+counters then position clear)
   saveState();
   return true;
 }
@@ -452,8 +452,6 @@ export function settleTradeEarlyExit(recoveredUsdc) {
     state.lastLossTimestamp = Date.now(); // FINTECH: persist for cooldown
   }
 
-  saveState(); // Atomic: bankroll + settled + all counters saved together
-
   state.cutLossCount = (state.cutLossCount || 0) + 1; // L4: pre-computed counter
 
   state.trades.push({
@@ -489,6 +487,8 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   state.currentPosition = null;
   lastKnownTokenPrice = null; // Fix M: reset MtM price so next trade starts fresh
   lastKnownTokenPriceTs = 0;  // H9: reset timestamp
+
+  // M2 audit fix: single atomic saveState (was two writes — bankroll+counters then position clear)
   saveState();
   return true;
 }
@@ -844,6 +844,12 @@ export function resetConsecutiveLosses() {
 export function adjustBankrollForReconciliation({ delta, reason, slug }) {
   if (!Number.isFinite(delta) || delta === 0) return;
   if (!assertBankrollOk('reconcileAdjust')) return;
+  // Audit v4 M13: Reject unreasonably large reconciliation deltas (> 50% of bankroll)
+  if (state.bankroll > 0 && Math.abs(delta) > state.bankroll * 0.50) {
+    log.error(`Reconciliation REJECTED: |delta|=$${Math.abs(delta).toFixed(2)} > 50% of bankroll $${state.bankroll.toFixed(2)} — likely data error`);
+    auditLog({ type: 'RECONCILE_REJECTED', delta, bankroll: state.bankroll, reason: 'delta_exceeds_50pct', slug });
+    return;
+  }
   const prev = state.bankroll;
   state.bankroll = roundMoney(state.bankroll + delta);
   if (state.bankroll > state.peakBankroll) state.peakBankroll = state.bankroll;

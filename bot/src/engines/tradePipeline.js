@@ -47,7 +47,7 @@ function fokBuyPrice(targetPrice, spread) {
   // Audit v2 M2: Reduced slippage 2%→1% — systematic overpayment ≈ 0.5-1% per trade.
   // 1% still provides 6-7 ticks tolerance on a $0.65 token.
   const fixedSlippage = Math.max(0.005, targetPrice * 0.005);
-  const pctSlippage = targetPrice * 0.01; // 1% of target price (was 2%)
+  const pctSlippage = targetPrice * 0.005; // GC4: 1%→0.5% — reduces systematic overpayment ~$0.30/trade
   const spreadSlippage = (spread != null && Number.isFinite(spread)) ? spread * 0.5 : 0;
   const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
@@ -253,6 +253,8 @@ export async function executeDirectionalTrade({
   marketUp, marketDown, obFlow,
   // Smart money flow
   smartFlowSignal,
+  // Monte Carlo simulation
+  mcResult,
 }, deps) {
   // ── Signal Confirmation Gate ──
   // Audit v2 H3: Edge-adaptive confirmation. High edge (≥15%) or high ML (≥80%) → fast entry.
@@ -323,6 +325,37 @@ export async function executeDirectionalTrade({
     }
   }
 
+  // ── Monte Carlo Simulation Gate ──
+  // Independent P(UP) from GBM price paths. Block when MC strongly disagrees or tail risk elevated.
+  if (mcResult && BOT_CONFIG.monteCarlo.enabled) {
+    const mcProbForSide = betSide === 'UP' ? mcResult.pUp : mcResult.pDown;
+    const minAgree = BOT_CONFIG.monteCarlo.minAgreementProb;
+
+    // Gate 1: MC direction disagreement (MC says <35% chance our side wins)
+    if (mcProbForSide < minAgree) {
+      log.info(`MC gate blocked: P(${betSide})=${(mcProbForSide * 100).toFixed(0)}% < ${(minAgree * 100).toFixed(0)}% min | BTC dist=${(mcResult.currentDistance * 100).toFixed(2)}%`);
+      return false;
+    }
+
+    // Gate 2: Tail risk elevated (high probability of adverse extreme move)
+    const adverseTailP = betSide === 'UP' ? mcResult.tailRisk.pBigDown : mcResult.tailRisk.pBigUp;
+    if (adverseTailP > BOT_CONFIG.monteCarlo.maxTailRisk) {
+      log.info(`MC tail risk blocked: P(adverse >0.5%)=${(adverseTailP * 100).toFixed(0)}% > ${(BOT_CONFIG.monteCarlo.maxTailRisk * 100).toFixed(0)}% | σ=${(mcResult.totalSigma * 100).toFixed(2)}%`);
+      return false;
+    }
+
+    // Gate 3: Agent noise detection — token price diverges >15pp from MC fair value
+    // Bypass when ML is very confident (>=85%) — ML trained on 45K real samples beats GBM random walk
+    if (mcResult.priceEfficiency?.isNoisy && mcResult.priceEfficiency.absDivergence > 0.15) {
+      if (mlConf != null && mlConf >= 0.85) {
+        log.info(`MC noise gate BYPASSED (ML ${(mlConf * 100).toFixed(0)}%≥85%): token ${(mcResult.priceEfficiency.tokenPrice * 100).toFixed(0)}c vs MC fair ${(mcResult.priceEfficiency.mcFairValue * 100).toFixed(0)}c | div=${(mcResult.priceEfficiency.absDivergence * 100).toFixed(0)}pp`);
+      } else {
+        log.info(`MC noise gate: token ${(mcResult.priceEfficiency.tokenPrice * 100).toFixed(0)}c vs MC fair ${(mcResult.priceEfficiency.mcFairValue * 100).toFixed(0)}c | div=${(mcResult.priceEfficiency.absDivergence * 100).toFixed(0)}pp`);
+        return false;
+      }
+    }
+  }
+
   if (!filterResult.pass) {
     log.info(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
     return false;
@@ -343,7 +376,7 @@ export async function executeDirectionalTrade({
       const meResult = await deps.querySmartMoney(currentConditionId, betSide);
       if (meResult.blocked) {
         log.info(`[MetEngine] Gate blocked: ${meResult.reason}`);
-        notify('warn', `🧠 MetEngine BLOCKED ${betSide}: ${meResult.reason}`, { key: `me:block:${currentConditionId}` }).catch(() => {});
+        notify('warn', `🧠 MetEngine BLOCKED ${betSide}: ${meResult.reason}`, { key: `me:block:${currentConditionId}` }).catch(e => log.debug(`Notify ME block: ${e.message}`));
         return false;
       }
       if (meResult.boost) {
@@ -382,7 +415,7 @@ export async function executeDirectionalTrade({
 
   // Audit v2 C3: Confidence-tiered Kelly cap — replaces flat 3% cap that made sizing irrelevant.
   // LOW=2%, MEDIUM=3%, HIGH=4%, VERY_HIGH=5% of bankroll.
-  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.05, HIGH: 0.04, MEDIUM: 0.03, LOW: 0.02 };
+  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.07, HIGH: 0.05, MEDIUM: 0.04, LOW: 0.02 }; // GC5c: raised caps for compounding
   const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
   const currentBankroll = deps.getBankroll();
   const kellyMaxBet = currentBankroll * kellyCapPct;
@@ -398,6 +431,19 @@ export async function executeDirectionalTrade({
     const sqScaled = Math.round(effectiveBetAmount * sessionQuality * 100) / 100;
     log.info(`Session quality: $${effectiveBetAmount.toFixed(2)} × ${sessionQuality} = $${sqScaled.toFixed(2)} (${getSessionName()})`);
     effectiveBetAmount = sqScaled;
+  }
+
+  // Solution D: Asymmetry-aware scaling — at higher entry prices, loss/win ratio worsens.
+  // Binary option at price p: win payout = (1-p)/p of bet, loss = 100% of bet.
+  // At 50c: symmetric. At 65c: loss 1.86× win. At 68c: loss 2.13× win.
+  // Scale bet inversely: factor = max(0.60, 2 × (1 - price)).
+  // 55c→0.90, 60c→0.80, 65c→0.70, 68c→0.64. Floor 0.60.
+  // Equalizes dollar impact: smaller bets where losses are disproportionately large.
+  const asymFactor = Math.max(0.70, Math.min(1.0, 2 * (1 - betMarketPrice))); // GC5f: 0.60→0.70 floor — less penalty at high entry prices
+  if (asymFactor < 0.99) {
+    const asymScaled = Math.round(effectiveBetAmount * asymFactor * 100) / 100;
+    log.info(`Asymmetry adj: $${effectiveBetAmount.toFixed(2)} \u00d7 ${asymFactor.toFixed(2)} = $${asymScaled.toFixed(2)} (${(betMarketPrice * 100).toFixed(0)}c entry)`);
+    effectiveBetAmount = asymScaled;
   }
 
   if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {
@@ -581,7 +627,7 @@ export async function executeDirectionalTrade({
           `📐 Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | 🤖 ML: ${mlStr}`,
           `⏱ Market ends in ${timeText}`,
           `<a href="${marketUrl}">View Market</a>`,
-        ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(() => {});
+        ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(e => log.debug(`Notify ME align: ${e.message}`));
       } else {
         const marketUrl = `https://polymarket.com/event/${marketSlug}`;
         deps.notifyTrade(

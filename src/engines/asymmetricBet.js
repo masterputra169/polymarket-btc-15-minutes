@@ -26,16 +26,25 @@ function accuracyMultiplier(accuracy) {
   return { multiplier: 1.0, label: `Avg (${(accuracy * 100).toFixed(0)}%)` };
 }
 
-// ML multiplier — high-conf agree boosts, disagree dampens
+// ML multiplier — tiered confidence scaling (Solution B: confidence-scaled sizing)
+// Wider range: 0.50x (ML opposes strongly) to 1.30x (ML agrees strongly)
+// Addresses P&L asymmetry: bigger bets on high-conf wins, smaller on uncertain trades
 function mlMultiplier(ml, side) {
   if (!ml || ml.status !== 'ready' || ml.confidence == null) {
     return { multiplier: 1.0, label: 'N/A' };
   }
-  const hiConf = ml.confidence >= 0.58;  // Audit fix H3: 0.55→0.58 — sync with MIN_ML_CONFIDENCE in config
+  const conf = ml.confidence;
   const agrees = ml.side === side;
-  if (hiConf && agrees) return { multiplier: 1.15, label: 'Hi-Conf \u2713' };
-  if (hiConf && !agrees) return { multiplier: 0.70, label: 'Hi-Conf \u2717' };
-  return { multiplier: 1.0, label: `${(ml.confidence * 100).toFixed(0)}%` };
+  if (agrees) {
+    if (conf >= 0.85) return { multiplier: 1.30, label: `ML\u2191${(conf * 100).toFixed(0)}%` };
+    if (conf >= 0.75) return { multiplier: 1.15, label: `ML\u2191${(conf * 100).toFixed(0)}%` };
+    if (conf >= 0.65) return { multiplier: 1.05, label: `ML\u2713${(conf * 100).toFixed(0)}%` };
+    return { multiplier: 1.00, label: `ML~${(conf * 100).toFixed(0)}%` };
+  } else {
+    if (conf >= 0.80) return { multiplier: 0.50, label: `ML\u2193${(conf * 100).toFixed(0)}%` };
+    if (conf >= 0.65) return { multiplier: 0.65, label: `ML\u2717${(conf * 100).toFixed(0)}%` };
+    return { multiplier: 0.85, label: `ML?${(conf * 100).toFixed(0)}%` };
+  }
 }
 
 // Execution-risk multiplier (from Math Part 2.5: Kelly with execution risk)
@@ -54,7 +63,7 @@ function executionMultiplier(ctx) {
   // depth=0 or null means empty/unknown orderbook → heavy penalty
   let liqMult = 1.0;
   const depth = ctx.askLiquidity ?? 0;
-  if (depth <= 0) liqMult = 0.30;
+  if (depth <= 0) liqMult = 0.60;  // Audit v4 H9: 0.30→0.60 — 0.30 makes bet below $1 minimum
   else if (depth < EXECUTION.LIQ_VERY_THIN) liqMult = 0.50;
   else if (depth < EXECUTION.LIQ_THIN) liqMult = 0.70;
   else if (depth < EXECUTION.LIQ_MODERATE) liqMult = 0.85;
@@ -90,6 +99,7 @@ export function computeBetSizing({
   executionContext,
   smartFlowSignal,   // from smartMoneyTracker { direction, strength, confidence, agreesWithSide }
   entryTimingScore,  // from smartMoneyTracker.getEntryTimingScore { score, label, inSweetSpot }
+  mcResult,          // from monteCarlo.simulateBTCPaths { pUp, pDown, mcConfidence, priceEfficiency }
 }) {
   const noBet = {
     shouldBet: false, side: null,
@@ -132,7 +142,11 @@ export function computeBetSizing({
   // Dynamic fee (Feb 2026): feeRate = 0.25 × (p×(1−p))². At 65c: 1.29%, at 70c: 1.10%.
   const grossB = (1 / marketPrice) - 1;
   const feeRate = polyFeeRate(marketPrice);
-  const b = grossB * (1 - feeRate);    // net decimal odds after dynamic fee
+  // Audit v4 H7: Include spread cost + avg slippage in Kelly denominator (not just Polymarket fee)
+  const spreadCost = executionContext?.spread ? executionContext.spread * 0.5 : 0.015;
+  const slippage = executionContext?.avgSlippage ?? 0.005;
+  const totalCost = feeRate + spreadCost + slippage;
+  const b = grossB * (1 - totalCost);    // net decimal odds after fee + spread + slippage
   const p = ensembleProb;              // model probability of winning
   const q = 1 - p;
   const rawKelly = (b * p - q) / b;
@@ -142,12 +156,23 @@ export function computeBetSizing({
     return noBet;
   }
 
+  // Audit v4 C2: Dynamic Kelly gate — reduce sizing when actual WR is poor.
+  // Hard suspend at <35% (clearly broken), soft penalty 50-55%. Requires ≥10 samples to avoid
+  // deadlock from small feedback window (40% on 5 trades = 2 correct, not statistically meaningful).
+  const actualWR = feedbackStats?.accuracy;
+  const wrSampleCount = feedbackStats?.total ?? 0;
+  if (actualWR != null && wrSampleCount >= 10 && actualWR < 0.35) {
+    noBet.rationale = `Actual WR ${(actualWR * 100).toFixed(0)}% < 35% (n=${wrSampleCount}) \u2014 suspending`;
+    return noBet;
+  }
+  const wrPenalty = (actualWR != null && wrSampleCount >= 10 && actualWR < 0.50) ? 0.50 : 1.0;
+
   // Dynamic Kelly fraction from calibration data
   const kellyTune = computeKellyTune(KELLY_FRACTION);
   const effectiveKelly = kellyTune.kellyFraction;
 
   // Fractional Kelly (rawKelly is mathematically bounded by p ≤ 1.0, no cap needed)
-  let frac = rawKelly * effectiveKelly;
+  let frac = rawKelly * effectiveKelly * wrPenalty;  // Audit v4 C2: wrPenalty halves sizing when WR 50-55%
 
   // ── Multipliers ──
 
@@ -189,7 +214,7 @@ export function computeBetSizing({
   // Fix P1: When ML confidence ≥ 0.80 and agrees with trade side, bypass confidence
   // tier penalty — ML at this level already encodes signal quality, double-dampening
   // causes systematic under-sizing ("death by a thousand cuts").
-  const mlVeryHighConf = ml?.status === 'ready' && ml?.confidence >= 0.80 && ml?.side === side;
+  const mlVeryHighConf = ml?.status === 'ready' && ml?.confidence >= 0.75 && ml?.side === side;
   const confMult = mlVeryHighConf ? 1.0 : (CONF_MULT[confidence] ?? 0.55);
   const confidenceAdj = {
     multiplier: confMult,
@@ -199,18 +224,26 @@ export function computeBetSizing({
   // Execution risk
   const executionAdj = executionMultiplier(executionContext);
 
-  // Autocorrelation penalty — consecutive loss streaks signal correlated regime failure.
-  // Quant fix H7: Gate behind accuracy check — don't penalize random variance.
-  // Kelly assumes independence; streak penalty only valid when accuracy is also statistically poor.
-  // With 65% WR, P(5 consecutive losses) = 0.35^5 = 0.52% — can happen by chance alone.
-  // Only apply if recent accuracy < 45% (well below random 50%) confirming systematic failure.
+  // Solution C: Anti-martingale — progressive bet reduction after losses.
+  // Key insight: after losing, reduce next bet immediately to protect accumulated profits.
+  // Directly fixes "many small wins wiped by one loss" — losses now get smaller bets.
+  // After win streaks, mild boost (Kelly-optimal under confirmed positive edge).
   let autoCorr = { multiplier: 1.0, label: 'N/A' };
   const streak = feedbackStats?.streak;
-  // accRaw already declared above (line ~166) — reuse for streak accuracy gate
-  const accPoor = accRaw === null || accRaw < 0.45;  // null = no data → conservative, apply penalty
-  if (streak && streak.count >= 3 && streak.type === 'loss' && accPoor) {
-    if (streak.count >= 5) { autoCorr = { multiplier: 0.60, label: `${streak.count}× corr (acc=${accRaw != null ? (accRaw*100).toFixed(0)+'%' : 'N/A'})` }; }
-    else { autoCorr = { multiplier: 0.80, label: `${streak.count}× corr (acc=${accRaw != null ? (accRaw*100).toFixed(0)+'%' : 'N/A'})` }; }
+  if (streak && streak.type === 'loss' && streak.count >= 1) {
+    if (streak.count >= 4) {
+      autoCorr = { multiplier: 0.60, label: `${streak.count}L streak` };  // GC5e: 0.50→0.60 — less harsh, 4L streaks normal at 60.5% WR
+    } else if (streak.count >= 3) {
+      autoCorr = { multiplier: 0.70, label: `${streak.count}L streak` };  // GC5e: 0.60→0.70
+    } else if (streak.count === 2) {
+      autoCorr = { multiplier: 0.80, label: '2L streak' };               // GC5e: 0.75→0.80
+    } else {
+      // Single recent loss — near-neutral after single loss
+      autoCorr = { multiplier: 0.95, label: '1L cool' };                 // GC5e: 0.90→0.95
+    }
+  } else if (streak && streak.type === 'win' && streak.count >= 3) {
+    // Hot streak — mild boost (Kelly says increase when running hot)
+    autoCorr = { multiplier: 1.10, label: `${streak.count}W hot` };
   }
 
   // ── Smart money flow multiplier ──
@@ -241,22 +274,51 @@ export function computeBetSizing({
     };
   }
 
+  // ── Monte Carlo agreement multiplier ──
+  // MC provides independent P(win) from GBM BTC price path simulation.
+  // Boost when MC confirms our direction, dampen when MC disagrees.
+  let mcAdj = { multiplier: 1.0, label: 'N/A' };
+  if (mcResult) {
+    const mcProbForSide = side === 'UP' ? mcResult.pUp : mcResult.pDown;
+    if (mcProbForSide >= 0.65) {
+      // MC strongly agrees → boost (scaled by MC probability)
+      mcAdj = {
+        multiplier: Math.min(1.25, 1.0 + (mcProbForSide - 0.50) * 0.5),
+        label: `MC\u2191${(mcProbForSide * 100).toFixed(0)}%`,
+      };
+    } else if (mcProbForSide < 0.40) {
+      // MC disagrees → reduce size
+      mcAdj = {
+        multiplier: Math.max(0.60, 0.70 + (mcProbForSide - 0.30) * 1.0),
+        label: `MC\u2193${(mcProbForSide * 100).toFixed(0)}%`,
+      };
+    } else {
+      mcAdj = { multiplier: 1.0, label: `MC~${(mcProbForSide * 100).toFixed(0)}%` };
+    }
+
+    // Price efficiency bonus: if token is cheaper than MC fair value, extra edge
+    if (mcResult.priceEfficiency?.favorableGap) {
+      mcAdj.multiplier = Math.min(1.30, mcAdj.multiplier * 1.10);
+      mcAdj.label += ' eff\u2713';
+    }
+  }
+
   // Audit v2 H2: Group correlated multipliers to prevent double-counting.
   // Regime+accuracy are correlated (choppy→cold accuracy). ML+confidence are correlated.
   // Group them and cap each group's combined penalty, then multiply groups together.
   const safeMult = (v) => Number.isFinite(v) ? v : 1.0;
 
   // Group 1: Market quality (regime × accuracy × autocorrelation) — correlated via regime
-  const marketQuality = Math.max(0.40, safeMult(regimeAdj.multiplier) * safeMult(accuracyAdj.multiplier) * safeMult(autoCorr.multiplier));
+  const marketQuality = Math.max(0.35, safeMult(regimeAdj.multiplier) * safeMult(accuracyAdj.multiplier) * safeMult(autoCorr.multiplier)); // GC5d: 0.40→0.35 floor
   // Group 2: Signal quality (ML × confidence × smartFlow) — correlated via model agreement
-  const signalQuality = Math.max(0.40, safeMult(mlAdj.multiplier) * safeMult(confidenceAdj.multiplier) * safeMult(smartFlowAdj.multiplier));
-  // Group 3: Execution (independent)
-  const execQuality = safeMult(executionAdj.multiplier) * safeMult(timingAdj.multiplier);
+  const signalQuality = Math.max(0.35, safeMult(mlAdj.multiplier) * safeMult(confidenceAdj.multiplier) * safeMult(smartFlowAdj.multiplier)); // GC5d: 0.40→0.35 floor
+  // Group 3: Execution + MC (independent — MC is physics-based, not correlated with model/regime)
+  const execQuality = safeMult(executionAdj.multiplier) * safeMult(timingAdj.multiplier) * safeMult(mcAdj.multiplier);
 
   const rawMultiplier = marketQuality * signalQuality * execQuality;
   // Audit v2 H2: Floor 0.15→0.25 — 0.15 produces near-zero bets that waste fees.
   // At $45 bankroll × 5% Kelly × 0.15 = $0.34 bet — below Polymarket $1 minimum anyway.
-  const clampedMultiplier = Math.max(0.25, Math.min(3.0, rawMultiplier));
+  const clampedMultiplier = Math.max(0.20, Math.min(3.0, rawMultiplier)); // GC5d: 0.25→0.20 global floor
   let adjustedFraction = frac * clampedMultiplier;
   adjustedFraction = Math.min(Math.max(adjustedFraction, 0), MAX_BET_PCT);
 
@@ -286,9 +348,10 @@ export function computeBetSizing({
     ` \u00d7 ml(${mlAdj.multiplier})` +
     ` \u00d7 conf(${confidenceAdj.multiplier})` +
     ` \u00d7 exec(${executionAdj.multiplier})` +
-    (autoCorr.multiplier !== 1.0 ? ` \u00d7 corr(${autoCorr.multiplier})` : '') +
+    (autoCorr.multiplier !== 1.0 ? ` \u00d7 streak(${autoCorr.multiplier})` : '') +
     (smartFlowAdj.multiplier !== 1.0 ? ` \u00d7 flow(${smartFlowAdj.multiplier.toFixed(2)})` : '') +
     (timingAdj.multiplier !== 1.0 ? ` \u00d7 timing(${timingAdj.multiplier})` : '') +
+    (mcAdj.multiplier !== 1.0 ? ` \u00d7 mc(${mcAdj.multiplier.toFixed(2)})` : '') +
     ` = ${(betPercent * 100).toFixed(1)}%` +
     ` \u2192 $${betAmount.toFixed(2)}` +
     ` [${riskLevel(betPercent)}]`;
@@ -311,6 +374,7 @@ export function computeBetSizing({
     autoCorrAdj: autoCorr,
     smartFlowAdj,
     timingAdj,
+    mcAdj,
     expectedValue,
     rationale,
     kellyTune,

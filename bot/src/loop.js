@@ -69,6 +69,7 @@ import { resetHysteresis } from '../../src/engines/ml/state.js';
 import {
   getAccuracyStats,
   getDetailedStats,
+  getMLAccuracy,
   recordPrediction,
   settlePrediction,
   autoSettle,
@@ -101,7 +102,7 @@ import {
 } from './trading/fillTracker.js';
 
 // Trading
-import { placeBuyOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.js';
+import { placeBuyOrder, placeLimitBuyOrder, getOrderById, cancelOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
@@ -141,6 +142,11 @@ import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm,
 import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
 import { onCutLoss as recoveryOnCutLoss, tick as recoveryTick, reset as resetRecovery, getRecoveryStatus, isRecoveryActive } from './trading/recoveryBuy.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
+import {
+  evaluateLimitEntry, placeLimitOrder, monitorLimitOrder, cancelLimitOrder,
+  resetLimitOrderState, resetLimitAttempts, getLimitOrderStatus, isLimitOrderActive,
+  recordFillEvent,
+} from './engines/limitOrderManager.js';
 
 // Safety
 import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp, exportTradeTimestamps, importTradeTimestamps } from './safety/guards.js';
@@ -260,6 +266,9 @@ const TILT_MARKETS = 2;
 let entryRegime = null;
 export function resetEntryRegime() { entryRegime = null; }
 
+// ── Limit order filter log throttle ──
+let limitOrderFilterLogAt = 0;
+
 let pollCounter = 0;
 let polling = false;
 let tokenIdsNotified = false;
@@ -315,19 +324,20 @@ export async function pollOnce() {
     return;
   }
   polling = true;
-  applyPendingSync(getBankroll, setBankroll);
-  pollCounter++;
-
-  // H7: Restore per-market trade counts + loss cooldown from persisted state on first poll
-  if (!startupTradeCountsLoaded) {
-    startupTradeCountsLoaded = true;
-    importMarketTradeCounts(getMarketTradeCounts());
-    importLastLossTimestamp(getLastLossTimestamp()); // FINTECH: restore cooldown across restart
-    importTradeTimestamps(getTradeTimestamps()); // M2 audit fix: restore hourly trade limit across restart
-  }
   const _pollStart = performance.now();
 
   try {
+    // H4 audit fix: applyPendingSync inside try block — if it throws, polling guard still releases in finally
+    applyPendingSync(getBankroll, setBankroll);
+    pollCounter++;
+
+    // H7: Restore per-market trade counts + loss cooldown from persisted state on first poll
+    if (!startupTradeCountsLoaded) {
+      startupTradeCountsLoaded = true;
+      importMarketTradeCounts(getMarketTradeCounts());
+      importLastLossTimestamp(getLastLossTimestamp()); // FINTECH: restore cooldown across restart
+      importTradeTimestamps(getTradeTimestamps()); // M2 audit fix: restore hourly trade limit across restart
+    }
     // ── 1. Circuit Breaker ──
     // Audit v2 H4: Reset consecutiveLosses after 4hr inactivity — stale streak from different
     // regime is not informative. lastLossTimestamp tracks when the streak started.
@@ -719,6 +729,12 @@ export async function pollOnce() {
       resetTakeProfitState();
       resetRecovery(); // Cancel any pending recovery on market switch
       clearPendingOrders(); // H2 audit fix: stale orders from previous market
+      if (isLimitOrderActive()) {
+        cancelLimitOrder('market_switch', { cancelOrder, setPendingCost, getOrderById })
+          .catch(err => log.warn(`Limit cancel on switch: ${err.message}`));
+      }
+      resetLimitOrderState();
+      resetLimitAttempts(); // New market = fresh limit order attempts
       resetFlow();
       resetSmartFlow();
       resetMarketTradeCount(oldSlug);
@@ -755,6 +771,7 @@ export async function pollOnce() {
         resetCutLossState();
         resetTakeProfitState();
         resetRecovery(); // Cancel any pending recovery on stale position recovery
+        resetLimitOrderState();
       });
     }
 
@@ -821,7 +838,11 @@ export async function pollOnce() {
       scored, timeAware, ruleEdge,
       mlResult, ensembleUp, ensembleDown, mlAgreesWithRules,
       edge, session,
+      mcResult: mcResultRaw,
     } = sig;
+
+    // Null out MC when disabled — prevents noise from GBM random walk affecting sizing/gates
+    const mcResult = BOT_CONFIG.monteCarlo.enabled ? mcResultRaw : null;
 
     // ── 5a. Smart money flow update (time-windowed CLOB flow) ──
     updateSmartFlow({
@@ -905,6 +926,7 @@ export async function pollOnce() {
               resetCutLossState();
               resetTakeProfitState();
               resetRecovery(); // Emergency cut cancels any pending recovery
+              resetLimitOrderState();
               notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${emergencyPos.marketSlug}">View Market</a>`);
             }
           } finally { releaseSellLock(); }
@@ -974,6 +996,7 @@ export async function pollOnce() {
               resetCutLossState();
               resetTakeProfitState();
               resetRecovery(); // Smart sell cancels any pending recovery
+              resetLimitOrderState();
               if (sfPnl < 0) recordLoss();
               notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
             } else {
@@ -988,6 +1011,7 @@ export async function pollOnce() {
                 resetCutLossState();
                 resetTakeProfitState();
                 resetRecovery(); // Smart sell cancels any pending recovery
+                resetLimitOrderState();
                 if (sfPnl < 0) recordLoss();
                 notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
               } catch (err) {
@@ -1092,7 +1116,7 @@ export async function pollOnce() {
               `CUT-LOSS v4: ${pos.side} drop ${cutResult.dropPct.toFixed(1)}% | ` +
               `sell ${sellSize} shares @$${cutResult.sellPrice.toFixed(3)} | ` +
               `recover $${cutResult.recoveryAmount.toFixed(2)} of $${pos.cost.toFixed(2)}` +
-              `${cutResult.reason === 'CRASH' ? ' [CRASH]' : ''}`
+              `${cutResult.urgency === 'crash' ? ` [${cutResult.reason}]` : ''}`
             );
             const exitData = {
               btcPrice: lastPrice, priceToBeat: priceToBeat.value,
@@ -1113,6 +1137,7 @@ export async function pollOnce() {
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
               resetCutLossState();
               resetTakeProfitState();
+              resetLimitOrderState();
               // Trigger recovery buy sampling (captures side/token before pos is cleared)
               recoveryOnCutLoss({ side: pos.side, tokenId: pos.tokenId, conditionId: pos.conditionId, marketSlug: pos.marketSlug });
               if (cutPnl < 0) {
@@ -1133,6 +1158,7 @@ export async function pollOnce() {
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
                 resetCutLossState();
                 resetTakeProfitState();
+                resetLimitOrderState();
                 // Trigger recovery buy sampling (captures side/token before pos is cleared)
                 recoveryOnCutLoss({ side: pos.side, tokenId: pos.tokenId, conditionId: pos.conditionId, marketSlug: pos.marketSlug });
                 if (cutPnl < 0) {
@@ -1152,6 +1178,7 @@ export async function pollOnce() {
                   writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: -pos.cost, exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
                   resetCutLossState();
                   resetTakeProfitState();
+                  resetLimitOrderState();
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
                   notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
@@ -1214,6 +1241,7 @@ export async function pollOnce() {
               resetCutLossState();
               resetTakeProfitState();
               resetRecovery(); // Take-profit cancels any pending recovery
+              resetLimitOrderState();
               notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
             } else {
               try {
@@ -1227,6 +1255,7 @@ export async function pollOnce() {
                 resetCutLossState();
                 resetTakeProfitState();
                 resetRecovery(); // Take-profit cancels any pending recovery
+                resetLimitOrderState();
                 notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
               } catch (err) {
                 log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
@@ -1310,6 +1339,7 @@ export async function pollOnce() {
       remainingMinutes: timeLeftMin,
       edgeUp: edge.edgeUp, edgeDown: edge.edgeDown,
       modelUp: ensembleUp, modelDown: ensembleDown,
+      effectiveUp: edge.effectiveUp, effectiveDown: edge.effectiveDown,
       breakdown: scored.breakdown,
       multiTfConfirmed: multiTfConfirm?.agreement ?? false,
       mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
@@ -1347,12 +1377,267 @@ export async function pollOnce() {
       executionContext,
       smartFlowSignal,
       entryTimingScore,
+      mcResult,
     });
 
     // ── 9. Feedback tracking (stale cleanup) ──
     try {
       autoSettle(marketSlug, lastPrice, priceToBeat.value, timeLeftMin);
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
+
+    // ── 9b. Limit Order Strategy (passive entry at optimal prices) ──
+    // Places GTD limit orders at 55-62¢ during first 0:30-3:00 of market.
+    // Monitors fill status; cancels on signal flip or 10 min timeout → FOK fallback.
+    let limitOrderBlocksFOK = false;
+    if (BOT_CONFIG.limitOrder.enabled && !settlementPending) {
+      const limitActive = isLimitOrderActive();
+      // Compute elapsed minutes since market opened (15 min markets)
+      const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
+      const limAlreadyHasPos = hasOpenPosition(marketSlug);
+      const limHasPending = hasPendingOrder();
+
+      if (!limitActive && !limAlreadyHasPos && !limHasPending && elapsedMin != null) {
+        // ── Apply FOK trade filters to limit orders (prevents early-trigger losses) ──
+        // Adaptations for limit order context:
+        //   marketPrice=null  → skip price floor/ceiling (limit orders intentionally target 50-62¢)
+        //   timeLeftMin=null  → skip "too early"/"too close" time gates (limit has own window: minElapsedMin-maxElapsedMin)
+        //   mlConfidence uses limit order's own threshold (58%) not FOK's (65%) — discount price compensates
+        // Active gates: blackout hours, loss cooldown, spread, ML degradation, VPIN, counter-trend,
+        //   weekend, edge ceiling, spread widening, trending regime, max trades per market
+        const limMlSide = mlResult.available ? mlResult.mlSide : null;
+        const limMlConf = mlResult.available ? mlResult.mlConfidence : null;
+        const limEtHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+        const limSpread = limMlSide === 'UP' ? orderbookUp?.spread : limMlSide === 'DOWN' ? orderbookDown?.spread : (orderbookUp?.spread ?? null);
+
+        const limFilterResult = applyTradeFilters({
+          mlConfidence: limMlConf,
+          mlAvailable: mlResult.available,
+          marketPrice: null,                         // Skip price floor/ceiling (limit orders target 50-62¢)
+          atrRatio: atr?.atrRatio ?? null,
+          timeLeftMin: null,                         // Skip time gates (limit has own window: 0:30-3:00)
+          marketSlug,
+          consecutiveLosses: getConsecutiveLosses(),
+          session: getSessionName(),
+          btcPrice: lastPrice,
+          priceToBeat: priceToBeat.value,
+          tiltMlConfMin: tiltMarketsLeft > 0 ? TILT_ML_CONF_MIN : null,
+          bestEdge: edge.bestEdge,
+          delta1m,
+          signalSide: limMlSide,
+          regime: regimeInfo?.regime ?? 'moderate',
+          etHour: limEtHour,
+          spread: limSpread,
+          mlAccuracy: getMLAccuracy?.() ?? null,
+          buyRatio: volDelta?.buyRatio ?? null,
+        });
+
+        if (!limFilterResult.pass) {
+          // Log filter rejection (throttled to avoid spam — every 30s)
+          if (!limitOrderFilterLogAt || Date.now() - limitOrderFilterLogAt > 30_000) {
+            log.info(`LIMIT_FILTERED: ${limFilterResult.reasons.join(' | ')}`);
+            limitOrderFilterLogAt = Date.now();
+          }
+        }
+
+        // Evaluate whether to place a limit order (during 0:30-3:00 window)
+        const haltForLimit = shouldHalt({
+          dailyPnLPct: getDailyPnLPct(),
+          bankroll: getBankroll(),
+          consecutiveLosses: getConsecutiveLosses(),
+          drawdownPct: getDrawdownPct(),
+        });
+        const limitEval = limFilterResult.pass ? evaluateLimitEntry({
+          mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+          mlSide: mlResult.available ? mlResult.mlSide : null,
+          btcPrice: lastPrice,
+          priceToBeat: priceToBeat.value,
+          bestBidUp: orderbookUp?.bestBid ?? null,
+          bestBidDown: orderbookDown?.bestBid ?? null,
+          hasPosition: limAlreadyHasPos,
+          isHalted: haltForLimit.halt,
+          marketSlug,
+          elapsedMin,
+        }) : { shouldPlace: false, side: null, targetPrice: null, reason: `filtered: ${limFilterResult.reasons[0] ?? 'unknown'}` };
+
+        if (limitEval.shouldPlace && poly.tokens) {
+          const limitTokenId = limitEval.side === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
+          if (limitTokenId && settlementMs) {
+            try {
+              const placeResult = await placeLimitOrder({
+                side: limitEval.side,
+                targetPrice: limitEval.targetPrice,
+                tokenId: limitTokenId,
+                marketSlug,
+                conditionId: currentConditionId ?? poly?.market?.conditionId ?? poly?.market?.condition_id ?? null,
+                marketEndMs: settlementMs,
+                bankroll: getAvailableBankroll(),
+                mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+              }, { placeLimitBuyOrder, setPendingCost });
+
+              if (placeResult.placed) {
+                limitOrderBlocksFOK = true;
+                const limCost = (limitEval.targetPrice * Math.floor(getAvailableBankroll() * 0.05 / limitEval.targetPrice)).toFixed(2);
+                const limSize = Math.floor(getAvailableBankroll() * 0.05 / limitEval.targetPrice);
+                notify('info',
+                  `📋 LIMIT ORDER PLACED\n` +
+                  `Side: ${limitEval.side} | Price: ${(limitEval.targetPrice * 100).toFixed(1)}¢\n` +
+                  `Size: ${limSize} shares ($${limCost})\n` +
+                  `ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | Bankroll: $${getBankroll().toFixed(2)}\n` +
+                  `Waiting for fill (max ${BOT_CONFIG.limitOrder.cancelAfterElapsedMin}min)...\n` +
+                  `<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`,
+                  { key: 'trade:limit' }).catch(e => log.debug(`Notify limit placed: ${e.message}`));
+              }
+            } catch (err) {
+              log.error(`Limit order placement failed (bot kept alive): ${err.message}`);
+              notify('warn',
+                `⚠️ LIMIT ORDER FAILED\n` +
+                `Side: ${limitEval.side} | Price: ${(limitEval.targetPrice * 100).toFixed(1)}¢\n` +
+                `Error: ${err.message.slice(0, 100)}\n` +
+                `FOK fallback active`,
+                { key: 'trade:limit:fail' }).catch(e => log.debug(`Notify limit fail: ${e.message}`));
+            }
+          }
+        }
+      } else if (limitActive) {
+        // Monitor active limit order
+        limitOrderBlocksFOK = true;
+        const elapsedMinForMonitor = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
+        try {
+          const monResult = await monitorLimitOrder({
+            mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+            mlSide: mlResult.available ? mlResult.mlSide : null,
+            ensembleProb: getLimitOrderStatus().side === 'UP' ? ensembleUp : ensembleDown,
+            btcPrice: lastPrice,
+            priceToBeat: priceToBeat.value,
+            elapsedMin: elapsedMinForMonitor,
+            marketSlug,
+          }, { getOrderById, cancelOrder, setPendingCost });
+
+          if (monResult.action === 'FILLED' && monResult.fillData) {
+            // Order filled — record position
+            const fd = monResult.fillData;
+            setPendingCost(0);
+            recordTrade({
+              side: fd.side, tokenId: fd.tokenId,
+              conditionId: fd.conditionId,
+              price: fd.price, size: fd.size,
+              marketSlug: fd.marketSlug, orderId: fd.orderId,
+              actualCost: fd.price * fd.size,
+            });
+            entryRegime = regimeInfo?.regime ?? 'moderate';
+            recordTradeForMarket(fd.marketSlug);
+            captureEntrySnapshot({
+              side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
+              priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
+              cost: fd.price * fd.size, size: fd.size,
+              confidence: 'LIMIT', phase: rec?.phase, reason: 'limit_order_filled',
+              timeLeftMin, session: getSessionName(),
+            });
+            if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
+              updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Limit fill approval: ${e.message}`));
+            }
+            notify('info',
+              `✅ LIMIT ORDER FILLED\n` +
+              `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+              `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
+              `Now holding → settlement\n` +
+              `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+              { key: 'trade:limit:fill' }).catch(e => log.debug(`Notify limit fill: ${e.message}`));
+            recordFillEvent(fd);  // Persist fill event for frontend transition display
+            resetLimitOrderState();
+            limitOrderBlocksFOK = false;
+          } else if (monResult.action === 'PARTIAL_ACCEPT' && monResult.fillData) {
+            // Partial fill accepted — cancel remainder, record position
+            const fd = monResult.fillData;
+            recordFillEvent(fd);  // Persist fill event for frontend transition display
+            await cancelLimitOrder('partial_accept_remainder', { cancelOrder, setPendingCost, getOrderById });
+            recordTrade({
+              side: fd.side, tokenId: fd.tokenId,
+              conditionId: fd.conditionId,
+              price: fd.price, size: fd.size,
+              marketSlug: fd.marketSlug, orderId: fd.orderId,
+              actualCost: fd.price * fd.size,
+            });
+            entryRegime = regimeInfo?.regime ?? 'moderate';
+            recordTradeForMarket(fd.marketSlug);
+            captureEntrySnapshot({
+              side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
+              priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
+              cost: fd.price * fd.size, size: fd.size,
+              confidence: 'LIMIT_PARTIAL', phase: rec?.phase, reason: 'limit_order_partial',
+              timeLeftMin, session: getSessionName(),
+            });
+            if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
+              updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Limit partial approval: ${e.message}`));
+            }
+            notify('info',
+              `⚡ LIMIT PARTIAL FILL\n` +
+              `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+              `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
+              `Remainder cancelled — holding partial position\n` +
+              `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+              { key: 'trade:limit:partial' }).catch(e => log.debug(`Notify limit partial: ${e.message}`));
+            limitOrderBlocksFOK = false;
+          } else if (monResult.action.startsWith('CANCEL_') || monResult.action === 'PARTIAL_REJECT') {
+            // Signal flip, time cutoff, market switch, or partial reject — cancel
+            const cancelReason = monResult.action === 'PARTIAL_REJECT' ? 'partial_reject' : monResult.detail;
+            const limStatus = getLimitOrderStatus();
+            const cancelResult = await cancelLimitOrder(cancelReason, { cancelOrder, setPendingCost, getOrderById });
+
+            // Notify: cancelled — with human-readable reason
+            if (cancelResult && !cancelResult.filledInstead) {
+              const isTimeCutoff = monResult.action === 'CANCEL_TIME_CUTOFF';
+              const cancelEmoji = isTimeCutoff ? '⏰' : '❌';
+              const readableReason = cancelReason.replace(/_/g, ' ').replace(/\b\w/g, c => c);
+              notify('info',
+                `${cancelEmoji} LIMIT ORDER CANCELLED\n` +
+                `Side: ${limStatus.side ?? '?'} | Was @ ${limStatus.targetPrice ? (limStatus.targetPrice * 100).toFixed(1) + '¢' : '?'}\n` +
+                `Reason: ${readableReason}\n` +
+                (isTimeCutoff ? `→ FOK fallback now active\n` : `→ No re-entry this market (anti-loop)\n`) +
+                `Bankroll: $${getBankroll().toFixed(2)}`,
+                { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit cancel: ${e.message}`));
+            }
+
+            // Phantom fill detection: if cancel failed because order was already filled
+            if (cancelResult?.filledInstead && cancelResult.fillData) {
+              const fd = cancelResult.fillData;
+              log.warn(`PHANTOM FILL detected during cancel (${cancelReason}) — recording position`);
+              recordTrade({
+                side: fd.side, tokenId: fd.tokenId,
+                conditionId: fd.conditionId,
+                price: fd.price, size: fd.size,
+                marketSlug: fd.marketSlug, orderId: fd.orderId,
+                actualCost: fd.price * fd.size,
+              });
+              entryRegime = regimeInfo?.regime ?? 'moderate';
+              recordTradeForMarket(fd.marketSlug);
+              captureEntrySnapshot({
+                side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
+                priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
+                cost: fd.price * fd.size, size: fd.size,
+                confidence: 'LIMIT_PHANTOM', phase: rec?.phase, reason: `phantom_fill_${cancelReason}`,
+                timeLeftMin, session: getSessionName(),
+              });
+              if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
+                updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Phantom fill approval: ${e.message}`));
+              }
+              notify('warn',
+                `🔴 PHANTOM FILL DETECTED\n` +
+                `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+                `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
+                `Cancel failed — order was filled on-book\n` +
+                `Position auto-recorded → holding to settlement\n` +
+                `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+                { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify limit phantom: ${e.message}`));
+            }
+            limitOrderBlocksFOK = false;
+          }
+          // HOLD — keep waiting
+        } catch (err) {
+          log.error(`Limit order monitor failed (bot kept alive): ${err.message}`);
+        }
+      }
+    }
 
     // ── 10. Trade execution ──
     // H8: settlementPending only blocks trade entry (steps 10a/10b), not signal computation or broadcast.
@@ -1490,7 +1775,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !limitOrderBlocksFOK) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         await executeDirectionalTrade({
@@ -1505,6 +1790,7 @@ export async function pollOnce() {
           consec, delta1m, delta3m, orderbookSignal, orderbookUp,
           marketUp, marketDown, obFlow,
           smartFlowSignal,
+          mcResult,
         }, {
           updateConfirmation,
           isSignalStable,
@@ -1568,18 +1854,22 @@ export async function pollOnce() {
     const fillTag = `Fill:${(getFillRate() * 100).toFixed(0)}%`;
     const flowTag = obFlow.sampleCount >= 5 ? `Flow:${obFlow.flowSignal}` : '';
     const sfTag = smartFlowSignal.sampleCount >= 3 ? `SF:${smartFlowSignal.direction}(${smartFlowSignal.strength})` : '';
+    const mcTag = mcResult ? `MC:${(mcResult.pUp * 100).toFixed(0)}%` : '';
     const clSrc = chainlinkResolved.source === 'polymarket_ws' ? 'PolyWS'
       : chainlinkResolved.source === 'chainlink_wss' ? 'CLWSS' : 'RPC';
     const srcTag = `${isBinanceConnected() ? 'WS' : 'REST'}+${useClobWs ? 'WS' : 'REST'}+CL:${clSrc}`;
 
     const _pollMs = (performance.now() - _pollStart).toFixed(0);
     const stabTag = `Stab:${getConfirmCount()}/${SIGNAL_CONFIRM_POLLS}${recentFlipCount > 0 ? ` F${recentFlipCount}` : ''}`;
+    const recTag = rec.action === 'WAIT' && rec.reason
+      ? `${rec.action} [${rec.confidence}] ${rec.phase} (${rec.reason})`
+      : `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase}`;
     log.info(
       `#${pollCounter} [${_pollMs}ms] | BTC $${lastPrice.toFixed(0)} | PTB $${(priceToBeat.value ?? 0).toFixed(0)} | ` +
       `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
-      `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase} | ` +
+      `${recTag} | ` +
       `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
-      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} | ${srcTag}`
+      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} ${mcTag} | ${srcTag}`
     );
 
     // ── 13. Compute narratives + broadcast full state to dashboard ──
@@ -1652,6 +1942,13 @@ export async function pollOnce() {
       orderbookFlow: obFlow,
       smartFlow: smartFlowSignal,
       entryTiming: entryTimingScore,
+      monteCarlo: mcResult ? {
+        pUp: mcResult.pUp, pDown: mcResult.pDown,
+        mcConfidence: mcResult.mcConfidence,
+        tailRisk: mcResult.tailRisk,
+        priceEfficiency: mcResult.priceEfficiency,
+        sigma: mcResult.totalSigma,
+      } : null,
       tradeFilters: getFilterStatus(),
       tiltProtection: tiltMarketsLeft > 0 ? { active: true, marketsLeft: tiltMarketsLeft, minMlConf: TILT_ML_CONF_MIN } : { active: false },
 
@@ -1723,6 +2020,9 @@ export async function pollOnce() {
 
       // Recovery buy status
       recoveryBuy: getRecoveryStatus(),
+
+      // Limit order status
+      limitOrder: BOT_CONFIG.limitOrder.enabled ? getLimitOrderStatus() : { enabled: false },
     });
 
     // Periodic save

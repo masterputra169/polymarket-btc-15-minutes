@@ -21,6 +21,12 @@ export function ensemblePrediction(mlProbUp, mlConfidence, ruleProbUp, isHighCon
     source = 'Rule-dominant';
   }
 
+  // Audit v4 H8: ML features include rule_prob_up (feature[12]) + bestEdge (feature[15]).
+  // Blending again = double-counting. When ML is high-confidence, increase ML weight.
+  if (mlConfidence >= 0.65) {
+    alpha = Math.min(alpha + 0.10, 0.90);
+  }
+
   const mlSide = mlProbUp >= 0.5;
   const ruleSide = ruleProbUp >= 0.5;
 

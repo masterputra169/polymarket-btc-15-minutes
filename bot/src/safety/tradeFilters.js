@@ -31,7 +31,9 @@ let lastLossTimestamp = 0;
 let tradesThisMarket = {};  // { [slug]: count }
 
 // Spread baseline tracker (rolling ring buffer for spread widening detection)
-const SPREAD_BUF_SIZE = 10;
+// H5 audit fix: scale buffer to ~5s of data regardless of poll rate (50ms→100, 3s→10)
+const _pollMs = parseInt(process.env.POLL_INTERVAL_MS, 10) || 3000;
+const SPREAD_BUF_SIZE = Math.max(10, Math.min(200, Math.ceil(5000 / _pollMs)));
 const spreadBuf = new Float64Array(SPREAD_BUF_SIZE);
 let spreadBufIdx = 0;
 let spreadBufCount = 0;
@@ -136,12 +138,16 @@ export function applyTradeFilters({
     }
   }
 
-  // 2d. Entry price ceiling — data shows entries above 72c have 40% WR (expensive + low upside)
-  // H2: Allow expensive entries when ML confidence >= 75% (strong ML conviction overrides price filter)
-  if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
-    const mlBypass = mlConfidence != null && mlConfidence >= 0.75;
+  // 2d. Entry price ceiling — binary option math: at Xc entry, need X% WR to break even.
+  // MAX_ENTRY_PRICE=63c (need 63% WR). ML ≥85% bypass up to 68c (need 68% WR, achievable at high conf).
+  // HARD CAP at 68c — no ML confidence can bypass (above 68c, loss:win > 2.1:1, unsustainable).
+  const HARD_ENTRY_CAP = 0.68;
+  if (marketPrice != null && marketPrice > HARD_ENTRY_CAP) {
+    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR, unsustainable)`);
+  } else if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
+    const mlBypass = mlConfidence != null && mlConfidence >= 0.85;
     if (!mlBypass) {
-      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling`);
+      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling (ML ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < 85%)`);
     }
   }
 
@@ -226,8 +232,9 @@ export function applyTradeFilters({
   // Quant analysis (94 trades): edge 10-15% is sweet spot,
   // edge 15-20% has poor WR, edge 20%+ had 0-14% WR.
   // High edge = model diverges from market = model is usually wrong.
-  // Hard block regardless of ML confidence or regime.
-  const maxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
+  // ML ≥85% raises ceiling to 35% — v16 model trusted at high confidence.
+  const baseMaxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
+  const maxEdge = (mlConfidence != null && mlConfidence >= 0.85) ? 0.35 : baseMaxEdge;
   if (bestEdge != null && bestEdge > maxEdge) {
     reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > ${(maxEdge * 100).toFixed(0)}% (high edge = poor WR in journal)`);
   }

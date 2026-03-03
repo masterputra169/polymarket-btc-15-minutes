@@ -51,6 +51,7 @@ let lastSellAttemptMs = 0;
 let consecutiveCutPolls = 0;
 let firstLargeDropMs = 0; // Fix D: timestamp when position first crossed persistentDropPct threshold
 let peakTokenPrice = 0;   // Fix 6: trailing stop — track peak price since entry
+let lastCutUrgent = false; // v14: Track if last cut was urgent (crash/maxLoss) for faster retry cooldown
 
 // Token price ring buffer (for dashboard trajectory tracking)
 const TOKEN_BUF_SIZE = 12; // 12 polls ≈ 36s at 3s interval
@@ -115,9 +116,25 @@ export function evaluateCutLoss({
 
   // ── Gate 4: Cooldown elapsed since last failed sell? ──
   const now = Date.now();
-  if (lastSellAttemptMs > 0 && (now - lastSellAttemptMs) < cfg.cooldownMs) {
-    return no('cooldown');
+  // v14: Crash-aware cooldown — 1.5s retry during crash vs 5s normal.
+  // After a failed urgent sell, we need to retry FAST before token drops further.
+  const effectiveCooldown = lastCutUrgent ? (cfg.crashCooldownMs ?? 1500) : cfg.cooldownMs;
+  if (lastSellAttemptMs > 0 && (now - lastSellAttemptMs) < effectiveCooldown) {
+    return no(`cooldown_${lastCutUrgent ? 'crash' : 'normal'}`);
   }
+
+  // Track peak token price (before Gate 5 for profit reversal hold bypass)
+  if (currentTokenPrice != null && Number.isFinite(currentTokenPrice) && currentTokenPrice > peakTokenPrice) {
+    peakTokenPrice = currentTokenPrice;
+  }
+
+  // Profit reversal detection: position peaked at 85¢+ then giving back 15%+ from peak.
+  // Reduces min hold to 60s so trailing stop can fire early to protect gains.
+  const PROFIT_PEAK_THRESHOLD = 0.85;
+  const PROFIT_REVERSAL_DRAWDOWN = 15; // 15% drawdown from peak triggers hold bypass
+  const profitPeakDrawdown = (peakTokenPrice >= PROFIT_PEAK_THRESHOLD && currentTokenPrice != null && Number.isFinite(currentTokenPrice))
+    ? ((peakTokenPrice - currentTokenPrice) / peakTokenPrice) * 100 : 0;
+  const profitReversalActive = peakTokenPrice >= PROFIT_PEAK_THRESHOLD && profitPeakDrawdown >= PROFIT_REVERSAL_DRAWDOWN;
 
   // ── Gate 5: Min hold time met? ──
   const holdSec = (now - position.enteredAt) / 1000;
@@ -131,7 +148,9 @@ export function evaluateCutLoss({
   const hasPtbEarly = btcPrice != null && priceToBeat != null &&
     Number.isFinite(btcPrice) && Number.isFinite(priceToBeat) && priceToBeat > 0;
   const btcConfirmsEarly = hasPtbEarly && (position.side === 'UP' ? btcPrice < priceToBeat : btcPrice >= priceToBeat);
-  const minHoldRequired = (isSteeplyFalling && earlyDropPct >= 15 && btcConfirmsEarly) ? Math.min(60, cfg.minHoldSec) : cfg.minHoldSec;
+  const steepFallHold = (isSteeplyFalling && earlyDropPct >= 15 && btcConfirmsEarly) ? Math.min(60, cfg.minHoldSec) : cfg.minHoldSec;
+  // Profit reversal: peak ≥85¢ + drawdown ≥15% → allow early exit (60s hold) to protect gains
+  const minHoldRequired = profitReversalActive ? Math.min(60, steepFallHold) : steepFallHold;
   if (holdSec < minHoldRequired) return no(`hold_${Math.round(holdSec)}s/${minHoldRequired}s`);
 
   // ── Gate 6: Not too close to settlement? ──
@@ -143,7 +162,7 @@ export function evaluateCutLoss({
   if (entryPrice < 0.01) return no('bad_entry_price'); // M3: min Polymarket token price is $0.01
 
   recordTokenPrice(currentTokenPrice);
-  if (currentTokenPrice > peakTokenPrice) peakTokenPrice = currentTokenPrice;
+  // peakTokenPrice already updated above Gate 5 for profit reversal hold bypass
 
   const dropPct = ((entryPrice - currentTokenPrice) / entryPrice) * 100;
   const hasPtb = btcPrice != null && priceToBeat != null &&
@@ -205,11 +224,20 @@ export function evaluateCutLoss({
 
   // ── Gate 6f: TRAILING STOP fast-track — protect unrealized gains from complete reversal ──
   const trailingActivation = cfg.trailingStopActivationPct ?? 15; // need 15%+ gain first
-  const trailingDropPct = cfg.trailingStopDropPct ?? 50;          // cut at 50% give-back
+  const baseTrailingDrop = cfg.trailingStopDropPct ?? 50;         // normal: 50% give-back
   const gainFromEntry = entryPrice > 0 ? ((peakTokenPrice - entryPrice) / entryPrice) * 100 : 0;
   const peakDrawdown = peakTokenPrice > 0 ? ((peakTokenPrice - currentTokenPrice) / peakTokenPrice) * 100 : 0;
-  const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= trailingDropPct
-    && (modelProbability == null || modelProbability < 0.60); // model not strongly supporting
+  // High-peak profit protection: when peak >= 85¢, tighten drawdown threshold.
+  // With BTC reversal confirmed: 20% give-back. Without BTC confirm: 30%. Normal: 50%.
+  // Skip model check for high-peak — model is unreliable during fast reversals.
+  const highPeak = peakTokenPrice >= PROFIT_PEAK_THRESHOLD;
+  const btcConfirmsReversal = hasPtb && btcFavorable === false;
+  const effectiveTrailingDrop = (highPeak && btcConfirmsReversal) ? 20 : highPeak ? 30 : baseTrailingDrop;
+  const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= effectiveTrailingDrop
+    && (highPeak || modelProbability == null || modelProbability < 0.60);
+
+  // v14: Urgency flag — crash/maxLoss/lateForceCut/timeBased need faster slippage + retry
+  const isUrgent = isCrash || isMaxLoss || isLateForceCut || isTimeBased;
 
   // ── Gate 6.5: Recovery gate (applies to ALL paths including fast-tracks) ──
   // If token is actively bouncing back, don't cut at the bottom — let it recover.
@@ -245,6 +273,8 @@ export function evaluateCutLoss({
   }
   computedEvThreshold *= timeDecayScale;
 
+  let dropTier = null; // v14: signal-strength tier (set in normal path, null for fast-tracks)
+
   if (!isCrash && !isLateForceCut && !isTimeBased && !isMaxLoss && !isTrailingStop) {
 
     // ── Gate 7a: EV-NEGATIVE — model agrees position is losing ──
@@ -273,8 +303,18 @@ export function evaluateCutLoss({
         : 'no_model_data');
     }
 
-    // ── Gate 8: Minimum damage threshold (vol-scaled) ──
-    const scaledMinDrop = cfg.minTokenDropPct * volScale;
+    // ── Gate 8: Minimum damage threshold (signal-strength-tiered, vol-scaled) ──
+    // v14: Stronger evidence → cut at lower drop. Both signals agreeing = high confidence in loss.
+    // Double-confirmed (EV-neg + ML-flip): 50% of threshold (e.g., 40% × 0.50 = 20% drop)
+    // Single signal: 70% of threshold (e.g., 40% × 0.70 = 28% drop)
+    // BTC momentum amplifier: fast unfavorable BTC movement lowers threshold further.
+    dropTier = 1.0;
+    if (evNegative && mlFlipped) dropTier = 0.50;       // both signals → 50% of threshold
+    else if (evNegative || mlFlipped) dropTier = 0.70;   // one signal → 70%
+    if (btcDelta1m != null && Number.isFinite(btcDelta1m) && btcFavorable === false) {
+      if (Math.abs(btcDelta1m) > 50) dropTier *= 0.85;  // BTC >$50/min against → 15% lower
+    }
+    const scaledMinDrop = cfg.minTokenDropPct * volScale * dropTier;
     if (dropPct < scaledMinDrop) {
       return no(`drop_${dropPct.toFixed(1)}%<${scaledMinDrop.toFixed(1)}%`);
     }
@@ -311,27 +351,33 @@ export function evaluateCutLoss({
   }
 
   // ═══ All gates passed — compute sell details ═══
-  // Progressive slippage (attempt-based):
-  //   Attempt 1: 1x base (2%)  |  Attempt 2: 2x (4%)
-  //   Attempt 3: 3x (6%)       |  Attempt 4: 5x (10%)
-  //   Attempt 5+: market order (bestBid - 3 cents)
+  // v14: Progressive slippage (attempt-based, urgency-aware):
+  // URGENT (crash/maxLoss/lateForceCut/timeBased): 5%, 10%, market — fill ASAP, 3 attempts max
+  // NORMAL: 2%, 4%, 6%, 10%, market — gradual 5-attempt escalation
+  // Key fix: old 2% initial slippage was too tight for crash — FOK failed, token dropped further
   const rawSellPrice = (orderbook?.bestBid != null && orderbook.bestBid > 0)
     ? orderbook.bestBid
     : currentTokenPrice;
 
   const attempt = sellAttempts + 1;
-  const baseSlippage = 0.02;
+  const baseSlippage = isUrgent ? 0.05 : 0.02;
   let slippageMultiplier;
-  if (attempt >= 5)      slippageMultiplier = null;
-  else if (attempt === 4) slippageMultiplier = 5;
-  else                    slippageMultiplier = attempt;
+  if (isUrgent) {
+    // Urgent: 5%, 10%, market (3 attempts max before market order)
+    if (attempt >= 3)      slippageMultiplier = null;
+    else if (attempt === 2) slippageMultiplier = 2;
+    else                    slippageMultiplier = 1;
+  } else {
+    // Normal: 2%, 4%, 6%, 10%, market
+    if (attempt >= 5)      slippageMultiplier = null;
+    else if (attempt === 4) slippageMultiplier = 5;
+    else                    slippageMultiplier = attempt;
+  }
 
   let sellPrice;
   if (slippageMultiplier === null) {
-    // H6: Proportional slippage instead of hardcoded $0.03.
-    // $0.03 is 30% on a $0.10 token but only 3% on a $1.00 token.
-    // 10% market slippage scales correctly across all price levels.
-    sellPrice = Math.max(0.01, rawSellPrice * 0.90);
+    // Market order: 15% slippage for guaranteed fill (was 10% — still failed in thin crash books)
+    sellPrice = Math.max(0.01, rawSellPrice * 0.85);
   } else {
     sellPrice = Math.max(0.01, rawSellPrice * (1 - baseSlippage * slippageMultiplier));
   }
@@ -346,9 +392,11 @@ export function evaluateCutLoss({
   const reason = isCrash ? 'CRASH'
     : isLateForceCut ? 'LATE_FORCE_CUT'
     : isMaxLoss ? `MAX_LOSS(cost_loss=${costLossPct.toFixed(1)}%)`
-    : isTrailingStop ? `TRAILING_STOP(gain=${gainFromEntry.toFixed(1)}%,drawdown=${peakDrawdown.toFixed(1)}%)`
+    : isTrailingStop ? `TRAILING_STOP(peak=${(peakTokenPrice * 100).toFixed(0)}¢,gain=${gainFromEntry.toFixed(1)}%,drawdown=${peakDrawdown.toFixed(1)}%/${effectiveTrailingDrop}%)`
     : isTimeBased ? `TIME_BASED(drop=${dropPct.toFixed(1)}%,${(persistentDropDurationMs / 60_000).toFixed(1)}min)`
     : cutReason ?? 'triggered';
+
+  lastCutUrgent = isUrgent;
 
   return {
     shouldCut: true,
@@ -356,6 +404,7 @@ export function evaluateCutLoss({
     sellPrice,
     dropPct,
     recoveryAmount,
+    urgency: isUrgent ? 'crash' : 'normal',
     diagnostics: {
       btcDistPct,
       btcFavorable,
@@ -376,6 +425,9 @@ export function evaluateCutLoss({
       isTimeBased,
       isMaxLoss,
       isTrailingStop,
+      profitReversalActive,
+      highPeak,
+      profitPeakDrawdown: parseFloat(profitPeakDrawdown.toFixed(1)),
       costLossPct: position.cost > 0 ? parseFloat(costLossPct.toFixed(1)) : null,
       timeDecayScale,
       gainFromEntry: parseFloat(gainFromEntry.toFixed(1)),
@@ -383,6 +435,8 @@ export function evaluateCutLoss({
       persistentDropDurationMin: persistentDropDurationMs > 0 ? parseFloat((persistentDropDurationMs / 60_000).toFixed(1)) : null,
       sellAttempt: attempt,
       slippageMode: slippageMultiplier === null ? 'market' : `${slippageMultiplier}x`,
+      isUrgent,
+      dropTier,
     },
   };
 }
@@ -396,6 +450,7 @@ export function resetCutLossState() {
   consecutiveCutPolls = 0;
   firstLargeDropMs = 0;
   peakTokenPrice = 0;
+  lastCutUrgent = false;
   tokenPriceBuf.fill(0);
   tokenBufIdx = 0;
   tokenBufCount = 0;

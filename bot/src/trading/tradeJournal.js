@@ -218,7 +218,7 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
   incrementDailyCounters(outcome, pnl ?? 0);
 
   // ── Telegram trade alert ──
-  _sendTradeAlert(record).catch(() => {});
+  _sendTradeAlert(record).catch(e => log.debug(`Trade alert send failed: ${e.message}`));
 
   // Clear entry snapshot after writing
   entrySnapshot = null;

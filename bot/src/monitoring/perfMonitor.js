@@ -15,6 +15,7 @@ import { createLogger } from '../logger.js';
 import { getStats } from '../trading/positionTracker.js';
 import { pauseBot } from '../loop.js';
 import { notify } from './notifier.js';
+import { checkRollback } from './rollbackMonitor.js';
 
 const log = createLogger('Monitor');
 
@@ -58,6 +59,12 @@ function monitorCycle() {
     checkWinRate();
   } catch (err) {
     log.warn(`Win rate check failed: ${err.message}`);
+  }
+
+  try {
+    checkRollback();
+  } catch (err) {
+    log.warn(`Rollback check failed: ${err.message}`);
   }
 
   try {

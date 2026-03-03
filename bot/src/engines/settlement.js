@@ -188,7 +188,7 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
       ``,
       `<i>journalReconciler akan verifikasi ulang dalam ~30 menit</i>`,
       pos.marketSlug ? `<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>` : null,
-    ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(() => {});
+    ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
   }
 
   // FINTECH: Round P&L to cents. Subtract 2% Polymarket fee on profit (matches positionTracker math).

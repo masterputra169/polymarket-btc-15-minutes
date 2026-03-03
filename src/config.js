@@ -7,9 +7,9 @@ export const WS_POLYMARKET_LIVE = { pingMs: 15_000, heartbeatDeadMs: 30_000 };
 export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStaleMs: 20_000 };
 
 export const BET_SIZING = {
-  KELLY_FRACTION: 0.15,
-  MAX_BET_PCT: 0.05,
-  MIN_BET_PCT: 0.025,            // Quant fix M1: 0.01→0.025 — at $45 bankroll 1%=$0.45 < Polymarket $1 min; 2.5%=$1.13 safely above
+  KELLY_FRACTION: 0.20,           // GC5a: 0.15→0.20 — 20% Kelly, still conservative for binary options
+  MAX_BET_PCT: 0.07,              // GC5a: 0.05→0.07 — at $66: max $4.62 (was $3.30)
+  MIN_BET_PCT: 0.020,             // GC5a: 0.025→0.020 — allow smaller exploratory bets during uncertain conditions
   MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
   BANKROLL_STORAGE_KEY: 'btc15m_bankroll',
@@ -31,24 +31,24 @@ export const EXECUTION = {
   LIQ_MODERATE: 500,           // $200-500 (mult 0.85)
   FILL_POOR_RATE: 0.5,         // <50% fill rate (mult 0.70)
   FILL_TIMEOUT_MS: 30_000,     // 30s stale order timeout
-  FOK_SLIPPAGE: 0.01,          // 1¢ slippage tolerance on FOK buy limit price
+  FOK_SLIPPAGE: 0.005,         // GC4: 1¢→0.5¢ slippage tolerance — saves ~$0.30/trade at 65c entry
 };
 
 export const TRADE_FILTERS = {
-  MIN_ML_CONFIDENCE: 0.58,       // 0.60→0.58 — model avg conf 58%, gate 0.60 blocked 74% of trades
+  MIN_ML_CONFIDENCE: 0.65,       // 0.58→0.65 — fewer but higher-quality entries; 58% let too many uncertain trades through
   MARKET_5050_RANGE: [0.47, 0.53], // widened — 47-53c is genuinely uncertain/random-walk territory
   MARKET_PRICE_RANGE: [0.15, 0.85], // reject extreme contrarian entries
   MIN_ATR_RATIO: 0.3,           // minimum ATR ratio for volatility (below = no edge)
   MIN_TIME_LEFT_MIN: 2.0,       // minimum minutes before settlement
-  MAX_TIME_LEFT_MIN: 14.5,      // relaxed from 14.0 — open 30s earlier for early signals
+  MAX_TIME_LEFT_MIN: 12.0,      // GC3: 14.5→12.0 — block entries before 3min elapsed (early entries have lower WR)
   MIN_BTC_DIST_PCT: 0.04,       // raised 0.015→0.04 — at $90k BTC, 0.015% = $13 from PTB = near coin-flip
   LOSS_COOLDOWN_MS: 60_000,     // Audit v2 M3: 120s→60s — 120s spans market boundaries in 15-min markets, causing missed entries
   MAX_TRADES_PER_MARKET: 2,     // Audit v2 C1: 3→2 — data shows multi-leg WR 46%; allow 1 re-entry only with conditional gate in tradeFilters
   REENTRY_MIN_EDGE: 0.12,       // Audit v2 C1: re-entry requires ≥12% edge (higher bar than first entry)
-  MIN_ENTRY_PRICE: 0.58,        // user override to 58c (has edge ≥ 8% bypass for lower prices)
-  MAX_ENTRY_PRICE: 0.72,        // entries above 72c have 40% WR — expensive + low upside
+  MIN_ENTRY_PRICE: 0.50,        // 58→50c — allow cheaper entries with better risk/reward (win 50c vs lose 50c = 50% WR break-even)
+  MAX_ENTRY_PRICE: 0.63,        // 68→63c — at 63c: win 37c lose 63c, need 63% WR (achievable). 68c needed 68% WR (too hard)
   MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
-  BLACKOUT_HOURS_ET: [22, 23, 0, 1, 2, 3, 4, 5, 6, 7], // overnight/Asia session: low WR, block 10PM-8AM ET (10:00-20:00 WIB)
+  BLACKOUT_HOURS_ET: [2, 22], // Data (170 trades, Feb 22+): 02ET=62% WR(-$1.61), 22ET=67% WR(-$0.71). Blocking saves +$2.32, +2.2pp WR
   MAX_ENTRY_SPREAD_PCT: 8,    // hard reject: spread > 8%
   SPREAD_EDGE_MIN: 8,         // soft: spread > 4% needs edge ≥ 8%
   VPIN_BLOCK_THRESHOLD: 0.70, // VPIN > 70% + opposing flow = informed trader, block entry

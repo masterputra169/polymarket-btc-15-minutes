@@ -37,6 +37,7 @@ let cutLossMarketSlug = null;  // Market slug
 let stateEnteredAt = 0;        // When current state started
 let baselinePrice = null;      // Token price captured during SAMPLING
 let baselinePrices = [];       // Prices collected during sampling window
+let recoveryAttemptCount = 0;  // Audit v4 H6: max 1 recovery attempt per cut-loss cycle
 
 /**
  * Called immediately after a successful cut-loss.
@@ -86,7 +87,7 @@ export function onCutLoss({ side, tokenId, conditionId, marketSlug }) {
 export function tick({
   tokenPrice, timeLeftMin, mlConfidence, mlSide,
   ensembleProb, hasPosition, isHalted, bankroll, marketSlug,
-  smartFlowSignal,
+  smartFlowSignal, edge,
 }) {
   const cfg = BOT_CONFIG.recoveryBuy;
   const no = (reason) => ({ shouldBuy: false, reason });
@@ -108,7 +109,8 @@ export function tick({
   // ── SAMPLING phase: collect baseline prices ──
   if (state === STATE.SAMPLING) {
     if (tokenPrice != null && Number.isFinite(tokenPrice)) {
-      baselinePrices.push(tokenPrice);
+      // H6 audit fix: cap array to prevent unbounded growth at fast poll rates (50ms → 200/10s)
+      if (baselinePrices.length < 200) baselinePrices.push(tokenPrice);
     }
 
     if (elapsed < cfg.samplingMs) {
@@ -187,12 +189,28 @@ export function tick({
       return no(`prob_${ensembleProb != null ? (ensembleProb * 100).toFixed(0) + '%' : 'null'}<${(cfg.minEnsembleProb * 100).toFixed(0)}%`);
     }
 
+    // Gate 9 (Audit v4 H5): Minimum edge — don't re-enter with negative/tiny edge
+    {
+      const recoveryEdge = (ensembleProb != null && tokenPrice != null)
+        ? ensembleProb - tokenPrice : 0;
+      if (recoveryEdge < 0.08) {
+        return no(`edge_too_low_${(recoveryEdge * 100).toFixed(1)}pct`);
+      }
+    }
+
+    // Gate 10 (Audit v4 H6): Max 1 recovery attempt per cut-loss — prevent revenge trading
+    if (recoveryAttemptCount > 0) {
+      return no('already_attempted_recovery');
+    }
+
     // ═══ All gates passed — signal buy ═══
     log.info(
       `Recovery BUY signal: ${cutLossSide} | price=${(tokenPrice * 100).toFixed(1)}c | ` +
       `baseline=${(baselinePrice * 100).toFixed(1)}c | ML=${(mlConfidence * 100).toFixed(0)}% | ` +
       `prob=${(ensembleProb * 100).toFixed(0)}% | size=${(cfg.maxRecoveryPct * 100).toFixed(0)}%`
     );
+
+    recoveryAttemptCount++;  // Audit v4 H6: track attempt count
 
     const result = {
       shouldBuy: true,
@@ -222,6 +240,7 @@ export function reset() {
   stateEnteredAt = 0;
   baselinePrice = null;
   baselinePrices = [];
+  recoveryAttemptCount = 0;  // Audit v4 H6: reset on settlement/market switch
 }
 
 /**

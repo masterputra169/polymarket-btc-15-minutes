@@ -21,6 +21,9 @@ import { loadLgbModel, isLgbReady, predictLgb, unloadLgbModel } from './ml/lgbPr
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
+// Audit v4 M10: Current regime for adaptive hysteresis band
+let currentRegime = 'moderate';
+
 // Ensemble weights (loaded from norm_browser.json or model metadata)
 let ensembleWeightXgb = 0.5;
 let ensembleWeightLgb = 0.5;
@@ -28,6 +31,11 @@ let ensembleWeightLgb = 0.5;
 // Calibrated params from training (audit H2/H3)
 let trainedSignalModifiers = null;   // { ptbDistance: 1.2, momentum: 0.8, ... }
 let calibratedPhaseThresholds = null; // { EARLY: { minEdge, minProb }, ... }
+
+/** Audit v4 M10: Set current regime for adaptive hysteresis. */
+export function setCurrentRegime(regime) {
+  if (typeof regime === 'string') currentRegime = regime;
+}
 
 /** Set ensemble weights (used by bot's disk-based loader). */
 export function setEnsembleWeights(xgb, lgb) {
@@ -237,8 +245,8 @@ export function predictML(features) {
 
   const confidence = Math.abs(probUp - 0.5) * 2;
 
-  // Hysteresis deadband (3%) prevents mlSide flip-flop at uncertain prices
-  const HYSTERESIS_BAND = 0.03;
+  // Audit v4 M10: Regime-adaptive hysteresis — wider band in choppy (more noise), tighter in trending (clearer signals)
+  const HYSTERESIS_BAND = currentRegime === 'choppy' ? 0.05 : currentRegime === 'trending' ? 0.02 : 0.03;
   let side;
   if (S.lastMlSide === null) {
     side = probUp >= 0.5 ? 'UP' : 'DOWN';
@@ -265,7 +273,10 @@ export { ensemblePrediction } from './ml/ensemble.js';
 /**
  * Full Pipeline: Extract -> Engineer -> Predict -> Ensemble
  */
-export function getMLPrediction(marketState, ruleProbUp) {
+export function getMLPrediction(marketState, ruleProbUp, regime) {
+  // Audit v4 M10: Update regime for adaptive hysteresis before prediction
+  if (regime) currentRegime = regime;
+
   if (!isMLReady()) {
     return {
       available: false,

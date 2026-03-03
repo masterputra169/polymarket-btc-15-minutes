@@ -171,6 +171,53 @@ export async function placeBuyOrder({ tokenId, price, size }) {
 }
 
 /**
+ * Place a GTD (Good-Til-Date) limit buy order on Polymarket CLOB.
+ * Unlike FOK, this order stays on the book until filled or expiration.
+ * @param {Object} params
+ * @param {string} params.tokenId - The outcome token ID to buy
+ * @param {number} params.price - Limit price (0-1)
+ * @param {number} params.size - Number of shares
+ * @param {number} params.expiration - Unix timestamp (seconds) when order auto-cancels
+ * @returns {Object} Order result from CLOB
+ */
+export async function placeLimitBuyOrder({ tokenId, price, size, expiration }) {
+  if (!client) throw new Error('CLOB client not initialized');
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (expiration <= nowSec) throw new Error(`GTD expiration ${expiration} already past`);
+
+  const result = await Promise.race([
+    client.createAndPostOrder(
+      { tokenID: tokenId, price, side: 'BUY', size, expiration },
+      undefined,
+      'GTD',   // Good-Til-Date — auto-cancels at expiration
+    ),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('GTD BUY timeout (15s)')), 15000)),
+  ]);
+
+  validateOrderResponse(result, 'LIMIT_BUY');
+  const orderId = extractOrderId(result);
+  log.info(`LIMIT order: GTD BUY ${size}@${price} exp=${new Date(expiration * 1000).toISOString()} | id=${orderId}`);
+  return { ...result, orderId };
+}
+
+/**
+ * Look up an order by ID among open orders.
+ * Returns the order object if found, null if not found (likely filled or expired).
+ * @param {string} orderId - Order ID to look up
+ * @returns {Object|null}
+ */
+export async function getOrderById(orderId) {
+  if (!client) throw new Error('CLOB client not initialized');
+  try {
+    const openOrders = await getOpenOrders();
+    return openOrders.find(o => (o.id ?? o.orderID ?? o.order_id) === orderId) ?? null;
+  } catch (err) {
+    log.debug(`getOrderById failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Cancel an open order.
  */
 export async function cancelOrder(orderId) {
