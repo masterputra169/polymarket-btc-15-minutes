@@ -1397,20 +1397,27 @@ export async function pollOnce() {
       const limHasPending = hasPendingOrder();
 
       if (!limitActive && !limAlreadyHasPos && !limHasPending && elapsedMin != null) {
-        // ── Apply FOK trade filters to limit orders (prevents early-trigger losses) ──
-        // Adaptations for limit order context:
-        //   marketPrice=null  → skip price floor/ceiling (limit orders intentionally target 50-62¢)
-        //   timeLeftMin=null  → skip "too early"/"too close" time gates (limit has own window: minElapsedMin-maxElapsedMin)
-        //   mlConfidence uses limit order's own threshold (58%) not FOK's (65%) — discount price compensates
-        // Active gates: blackout hours, loss cooldown, spread, ML degradation, VPIN, counter-trend,
-        //   weekend, edge ceiling, spread widening, trending regime, max trades per market
+        // ── Apply trade filters to limit orders (relaxed vs FOK) ──
+        // Limit orders enter at 55-62¢ (vs FOK 65-75¢) during first 0:30-3:00 of market.
+        // evaluateLimitEntry() has its own gates: ML ≥ 60%, edge ≥ 5%, BTC-PTB consensus.
+        // Skip FOK-specific filters that don't apply to early-market limit context:
+        //   mlConfidence=null  → skip ML conf gate (#1), dead zone (#1b), trending ML (#11c)
+        //                        (limitOrderManager has own 60% gate — cheaper price compensates)
+        //   marketPrice=null   → skip price floor/ceiling (limit targets 50-62¢)
+        //   timeLeftMin=null   → skip time gates (limit has own window: 0:30-3:00)
+        //   bestEdge=null      → skip edge ceiling (#8) — early tokens are cheap, edge naturally high
+        //                        (limitOrderManager has own 5% edge gate)
+        //   spread=null        → skip wide spread (#12) + spread widening (#15)
+        //                        (spreads naturally wider in first 3 min as orderbook forms)
+        //   priceToBeat=null   → skip BTC distance from PTB (#4c) — BTC naturally near PTB early
+        //                        (limitOrderManager has own BTC-PTB consensus gate)
+        // Kept safety filters: blackout (#10), loss cooldown (#5), max trades (#6),
+        //   counter-trend (#9, uses btcPrice+delta1m), low vol (#3), ML degradation (#13), VPIN (#14)
         const limMlSide = mlResult.available ? mlResult.mlSide : null;
-        const limMlConf = mlResult.available ? mlResult.mlConfidence : null;
         const limEtHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
-        const limSpread = limMlSide === 'UP' ? orderbookUp?.spread : limMlSide === 'DOWN' ? orderbookDown?.spread : (orderbookUp?.spread ?? null);
 
         const limFilterResult = applyTradeFilters({
-          mlConfidence: limMlConf,
+          mlConfidence: null,                        // Skip — limitOrderManager has own 60% ML gate
           mlAvailable: mlResult.available,
           marketPrice: null,                         // Skip price floor/ceiling (limit orders target 50-62¢)
           atrRatio: atr?.atrRatio ?? null,
@@ -1419,14 +1426,14 @@ export async function pollOnce() {
           consecutiveLosses: getConsecutiveLosses(),
           session: getSessionName(),
           btcPrice: lastPrice,
-          priceToBeat: priceToBeat.value,
-          tiltMlConfMin: tiltMarketsLeft > 0 ? TILT_ML_CONF_MIN : null,
-          bestEdge: edge.bestEdge,
+          priceToBeat: null,                         // Skip BTC distance — own BTC-PTB consensus gate
+          tiltMlConfMin: null,                       // Skip — limit has own gates
+          bestEdge: null,                            // Skip edge ceiling — own 5% edge gate
           delta1m,
           signalSide: limMlSide,
           regime: regimeInfo?.regime ?? 'moderate',
           etHour: limEtHour,
-          spread: limSpread,
+          spread: null,                              // Skip — spreads naturally wider early
           mlAccuracy: getMLAccuracy?.() ?? null,
           buyRatio: volDelta?.buyRatio ?? null,
         });
