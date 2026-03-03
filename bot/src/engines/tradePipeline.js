@@ -439,16 +439,22 @@ export async function executeDirectionalTrade({
   // Scale bet inversely: factor = max(0.60, 2 × (1 - price)).
   // 55c→0.90, 60c→0.80, 65c→0.70, 68c→0.64. Floor 0.60.
   // Equalizes dollar impact: smaller bets where losses are disproportionately large.
-  const asymFactor = Math.max(0.70, Math.min(1.0, 2 * (1 - betMarketPrice))); // GC5f: 0.60→0.70 floor — less penalty at high entry prices
+  const asymFactor = Math.max(0.85, Math.min(1.0, 2 * (1 - betMarketPrice))); // Audit v5 M2: 0.70→0.85 floor — Kelly already accounts for price asymmetry via b=(1/p-1), double-penalization was causing ~20-30% under-betting at 60-65¢
   if (asymFactor < 0.99) {
     const asymScaled = Math.round(effectiveBetAmount * asymFactor * 100) / 100;
     log.info(`Asymmetry adj: $${effectiveBetAmount.toFixed(2)} \u00d7 ${asymFactor.toFixed(2)} = $${asymScaled.toFixed(2)} (${(betMarketPrice * 100).toFixed(0)}c entry)`);
     effectiveBetAmount = asymScaled;
   }
 
-  if (BOT_CONFIG.maxBetAmountUsd && effectiveBetAmount > BOT_CONFIG.maxBetAmountUsd) {
-    log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${BOT_CONFIG.maxBetAmountUsd.toFixed(2)} (maxBetAmountUsd)`);
-    effectiveBetAmount = BOT_CONFIG.maxBetAmountUsd;
+  // Audit v5 M4: Scale max bet with bankroll — fixed $2.50 prevents Kelly-optimal sizing at higher bankrolls.
+  // Use the LARGER of: (a) configured dollar cap, (b) bankroll × tier cap percentage.
+  // At $30 bankroll: max(2.50, 30×0.07) = max(2.50, 2.10) = $2.50 (cap binds — safe)
+  // At $100 bankroll: max(2.50, 100×0.07) = max(2.50, 7.00) = $7.00 (bankroll-proportional)
+  const bankrollForCap = deps.getBankroll?.() ?? 0;
+  const scaledMaxBet = Math.max(BOT_CONFIG.maxBetAmountUsd, bankrollForCap * kellyCapPct);
+  if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
+    log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
+    effectiveBetAmount = scaledMaxBet;
   }
 
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;

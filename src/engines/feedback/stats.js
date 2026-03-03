@@ -95,10 +95,11 @@ export function getAccuracyStats(windowSize = 20) {
   if (confidenceMultiplier < 0.50) confidenceMultiplier = 0.50;
   else if (confidenceMultiplier > 1.25) confidenceMultiplier = 1.25;
 
-  // Short-term accuracy (last 10) for rapid sizing adaptation
+  // Short-term accuracy (last 15) for rapid sizing adaptation
+  // Audit v5 M1: 10→15 — at 10 trades, P(≤5 wins at 70% WR)=15% → false "cold" triggers too often
   let shortTermAccuracy = null;
-  if (settledCount >= 10) {
-    let stSkip = settledCount - 10;
+  if (settledCount >= 15) {
+    let stSkip = settledCount - 15;
     let stCorrect = 0, stTotal = 0;
     for (let i = 0; i < S.cache.length; i++) {
       const p = S.cache[i];

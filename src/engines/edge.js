@@ -409,7 +409,7 @@ export function decide({
   {
     const PRICE_FLOOR = 0.65;
     const PRICE_SCALE = 0.35;
-    const mlConfBypass = mlConfidence !== null && mlConfidence >= 0.65;
+    const mlConfBypass = mlConfidence !== null && mlConfidence >= 0.75; // Audit v5 M6: 0.65→0.75 — MAX_ENTRY_PRICE (63¢/68¢) is the real guard; 65% was too aggressive for price-scaling bypass
     if (!mlConfBypass) {
       // C4 fix: use raw effective prices directly, not reconstructed from edge
       // (edge = model - effective - spread - fee, so model - edge = effective + spread + fee, overstating price)

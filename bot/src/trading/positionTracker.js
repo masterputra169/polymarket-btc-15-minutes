@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.js';
+import { polyFeeRate } from '../../../src/config.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('Position');
@@ -20,8 +21,18 @@ const roundMoney = (n) => Math.round(n * 100) / 100;
 /** Round percentage to 2 decimal places (e.g. 25.00%, not 25.000000000004%). */
 const roundPct = (n) => Math.round(n * 100) / 100;
 
-/** Polymarket fee rate on profit (2%). */
-const POLYMARKET_FEE_RATE = 0.02;
+/**
+ * Polymarket dynamic fee on profit.
+ * Uses actual formula: 0.25 × (p(1-p))² — max 1.56% at p=0.50, decreases at extremes.
+ * Falls back to conservative 2% if entry price unavailable.
+ * Audit v5 H1: was flat 2%, now dynamic — fixes systematic P&L under-tracking.
+ */
+const FALLBACK_FEE_RATE = 0.02;
+function getSettlementFeeRate(entryPrice) {
+  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || entryPrice >= 1) return FALLBACK_FEE_RATE;
+  const rate = polyFeeRate(entryPrice);
+  return rate > 0 ? rate : FALLBACK_FEE_RATE;
+}
 
 /**
  * Assert bankroll integrity before any modification.
@@ -335,7 +346,8 @@ export function settleTrade(won) {
   } else {
     profit = Math.max(0, grossPayout - pos.cost);
   }
-  const fee = roundMoney(profit * POLYMARKET_FEE_RATE);
+  const feeRate = getSettlementFeeRate(pos.price);
+  const fee = roundMoney(profit * feeRate);
   const payout = roundMoney(grossPayout - fee);
 
   // C7: NaN guard after fee calculation — prevent bankroll corruption

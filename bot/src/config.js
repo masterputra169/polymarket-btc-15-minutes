@@ -133,7 +133,7 @@ const BOT_CONFIG = {
     enabled: process.env.RECOVERY_BUY_ENABLED === 'true',
     samplingMs: envInt(process.env.RECOVERY_SAMPLING_MS, 10_000, 3_000, 30_000),       // 10s baseline capture
     monitoringMs: envInt(process.env.RECOVERY_MONITORING_MS, 30_000, 10_000, 120_000),  // 30s max monitoring window
-    minTokenPrice: envNum(process.env.RECOVERY_MIN_TOKEN_PRICE, 0.70, 0.30, 0.95),     // >= 70c — high-prob only
+    minTokenPrice: envNum(process.env.RECOVERY_MIN_TOKEN_PRICE, 0.55, 0.30, 0.95),     // Audit v5 M5: 0.70→0.55 — at 70¢ recovery never triggers (need 112% rally from 33¢ cut); 55¢ allows actual recovery at cheaper price
     minTimeLeftMin: envNum(process.env.RECOVERY_MIN_TIME_LEFT, 3.0, 1.0, 10.0),        // >= 3 min to settlement
     minBankroll: envNum(process.env.RECOVERY_MIN_BANKROLL, 1.0, 0.50, 100.0),          // >= $1 available
     maxRecoveryPct: envNum(process.env.RECOVERY_MAX_PCT, 0.50, 0.10, 1.00),            // max 50% of normal bet size
@@ -146,7 +146,7 @@ const BOT_CONFIG = {
   // Expected: ~10% compounding per win → +700% monthly at high win rate.
   preMarketLong: {
     enabled: process.env.PREMARKET_LONG_ENABLED === 'true',
-    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.10, 0.01, 0.50),          // 10% bankroll for pre-market LONG
+    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.05, 0.01, 0.50),          // Audit v5 L5: 0.10→0.05 — half-Kelly for single daily binary trade (Audit v4 C1 recommendation)
     // take-profit removed — full hold to settlement
     maxEntryPrice: envNum(process.env.PREMARKET_LONG_MAX_ENTRY_PRICE, 0.60, 0.30, 0.80), // max 60c — don't buy expensive tokens
     windowStartH: envInt(process.env.PREMARKET_LONG_WINDOW_START_H, 9, 0, 23),       // 09:00 EST
@@ -168,7 +168,7 @@ const BOT_CONFIG = {
     priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.65, 0.50, 0.70),   // 62→65¢ for ML≥85%
     priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.60, 0.45, 0.65),     // 58→60¢ for ML 70-85%
     priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.55, 0.40, 0.60),
-    minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.58, 0.40, 0.90),     // Min 58% ML confidence for limit order
+    minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.40, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin
     cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 10.0, 5, 14),
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
     expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
