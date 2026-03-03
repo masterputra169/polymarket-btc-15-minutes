@@ -20,6 +20,13 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
   if (!cfg?.enabled) return { route: 'LIMIT', reason: 'router_disabled' };
   if (bestAsk == null || mlConf == null) return { route: 'LIMIT', reason: 'no_data' };
 
+  // Price floor — tokens below limit minEntryPrice are priced low because market
+  // expects them to lose, not because they're a discount. Don't route these.
+  const minPrice = BOT_CONFIG.limitOrder.minEntryPrice ?? 0.50;
+  if (bestAsk < minPrice) {
+    return { route: 'WAIT', reason: `price${(bestAsk * 100) | 0}¢<floor${(minPrice * 100) | 0}¢` };
+  }
+
   // Past limit window → FOK only
   if (elapsedMin > BOT_CONFIG.limitOrder.maxElapsedMin) {
     return { route: 'FOK', reason: 'past_limit_window' };
