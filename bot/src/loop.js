@@ -1439,6 +1439,19 @@ export async function pollOnce() {
           }
         }
 
+        // ── Signal stability gate for limit orders ──
+        // Relaxed: half of FOK required polls (discount price compensates for less confirmation).
+        // Prevents placing limit orders on flip-flopping signals that haven't stabilized.
+        const limStabPolls = Math.max(2, Math.ceil(SIGNAL_CONFIRM_POLLS / 2));
+        const limSignalStable = isSignalStable(limStabPolls);
+        if (!limSignalStable && limFilterResult.pass) {
+          const stabReasons = getInstabilityReasons(limStabPolls);
+          if (!limitOrderFilterLogAt || Date.now() - limitOrderFilterLogAt > 30_000) {
+            log.info(`LIMIT_STAB_WAIT: ${stabReasons.join(' | ')}`);
+            limitOrderFilterLogAt = Date.now();
+          }
+        }
+
         // Evaluate whether to place a limit order (during 0:30-3:00 window)
         const haltForLimit = shouldHalt({
           dailyPnLPct: getDailyPnLPct(),
@@ -1446,7 +1459,7 @@ export async function pollOnce() {
           consecutiveLosses: getConsecutiveLosses(),
           drawdownPct: getDrawdownPct(),
         });
-        const limitEval = limFilterResult.pass ? evaluateLimitEntry({
+        const limitEval = (limFilterResult.pass && limSignalStable) ? evaluateLimitEntry({
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,
           btcPrice: lastPrice,
@@ -1457,7 +1470,7 @@ export async function pollOnce() {
           isHalted: haltForLimit.halt,
           marketSlug,
           elapsedMin,
-        }) : { shouldPlace: false, side: null, targetPrice: null, reason: `filtered: ${limFilterResult.reasons[0] ?? 'unknown'}` };
+        }) : { shouldPlace: false, side: null, targetPrice: null, reason: !limFilterResult.pass ? `filtered: ${limFilterResult.reasons[0] ?? 'unknown'}` : `unstable: ${getInstabilityReasons(limStabPolls).join(', ')}` };
 
         if (limitEval.shouldPlace && poly.tokens) {
           const limitTokenId = limitEval.side === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
