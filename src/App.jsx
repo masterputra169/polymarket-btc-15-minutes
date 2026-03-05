@@ -13,6 +13,7 @@ import AccuracyPanel from './components/AccuracyPanel.jsx';
 import BetSizingPanel from './components/BetSizingPanel.jsx';
 import BotPanel from './components/BotPanel.jsx';
 import PositionPanel from './components/PositionPanel.jsx';
+import LimitOrderPanel from './components/LimitOrderPanel.jsx';
 import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.jsx';
 import SessionInfo from './components/SessionInfo.jsx';
 
@@ -373,6 +374,23 @@ export default function App() {
     return { betSizing: data.betSizing, rec: data.rec, regimeInfo: data.regimeInfo };
   }, [data?.betSizing?.betPercent, data?.betSizing?.shouldBet, data?.betSizing?.riskLevel, data?.betSizing?.bankroll, data?.rec?.action, data?.rec?.side, data?.regimeInfo?.regime, data?.regimeInfo?.confidence]);
 
+  // LimitOrderPanel: limit order state + market prices for discount calc
+  const limitOrderData = useMemo(() => {
+    if (!data) return null;
+    return {
+      limitOrder: data.limitOrder ?? null,
+      marketUp: data.marketUp,
+      marketDown: data.marketDown,
+    };
+  }, [
+    data?.limitOrder?.phase, data?.limitOrder?.side,
+    data?.limitOrder?.targetPrice, data?.limitOrder?.size,
+    data?.limitOrder?.placedAt, data?.limitOrder?.cancelReason,
+    data?.limitOrder?.lastEvent?.type, data?.limitOrder?.lastEvent?.ageSec,
+    data?.limitOrder?.cancelAfterMin,
+    data?.marketUp, data?.marketDown,
+  ]);
+
   // BotPanel: extract only what BotPanel needs (was passing full `data` = ~200 fields retained)
   const botData = useMemo(() => {
     if (!data) return null;
@@ -390,6 +408,7 @@ export default function App() {
       usdcBalance: data.usdcBalance,
       metEngine: data.metEngine,
       positions: data.positions,
+      limitOrder: data.limitOrder,
     };
   }, [
     data?.ts, data?.pollCounter, data?.paused, data?.dryRun,
@@ -470,7 +489,10 @@ export default function App() {
           {/* Row 0b: Positions (full width) */}
           <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />
 
-          {/* Row 0c: Trader Discovery (full width) */}
+          {/* Row 0c: Limit Order (full width, auto-hides when idle) */}
+          <LimitOrderPanel data={limitOrderData} />
+
+          {/* Row 0d: Trader Discovery (full width) */}
           <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />
 
           {/* Row 1: Price + Timer (full width) */}
