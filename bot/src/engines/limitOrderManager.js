@@ -29,7 +29,7 @@ const log = createLogger('LimitOrder');
 // v2: Raised to 2 — allows ONE re-placement after confirmed cancel (not phantom fill).
 //     Phantom fills count as attempt, confirmed cancels allow 1 retry.
 const MAX_ATTEMPTS_PER_MARKET = 2;     // Max 2 limit order attempts per market (cancel + retry allowed)
-const CANCEL_COOLDOWN_MS = 60_000;     // 1 min cooldown after cancel before re-placement (was 2min)
+const CANCEL_COOLDOWN_MS = 30_000;     // 30s cooldown after cancel before re-placement (was 1min)
 let attemptCount = 0;
 let lastCancelAt = 0;
 let marketForAttempts = null;
