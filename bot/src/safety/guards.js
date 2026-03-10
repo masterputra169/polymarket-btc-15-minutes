@@ -29,28 +29,20 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownP
   }
 
   if (dailyPnLPct <= -(BOT_CONFIG.maxDailyLossPct - EPSILON)) {
-    const reason = `Daily loss ${dailyPnLPct.toFixed(1)}% exceeds max ${BOT_CONFIG.maxDailyLossPct}%`;
-    log.error(`CIRCUIT BREAKER: ${reason}`);
-    return { halt: true, reason };
+    return { halt: true, reason: `Daily loss ${dailyPnLPct.toFixed(1)}% exceeds max ${BOT_CONFIG.maxDailyLossPct}%` };
   }
 
   // Max drawdown from peak bankroll (catches slow multi-day bleed)
   if (drawdownPct >= BOT_CONFIG.maxDrawdownPct - EPSILON) {
-    const reason = `Drawdown ${drawdownPct.toFixed(1)}% from peak exceeds max ${BOT_CONFIG.maxDrawdownPct}%`;
-    log.error(`CIRCUIT BREAKER: ${reason}`);
-    return { halt: true, reason };
+    return { halt: true, reason: `Drawdown ${drawdownPct.toFixed(1)}% from peak exceeds max ${BOT_CONFIG.maxDrawdownPct}%` };
   }
 
   if (consecutiveLosses >= BOT_CONFIG.maxConsecutiveLosses) {
-    const reason = `${consecutiveLosses} consecutive losses (max: ${BOT_CONFIG.maxConsecutiveLosses})`;
-    log.error(`CIRCUIT BREAKER: ${reason}`);
-    return { halt: true, reason };
+    return { halt: true, reason: `${consecutiveLosses} consecutive losses (max: ${BOT_CONFIG.maxConsecutiveLosses})` };
   }
 
   if (bankroll < 1 + EPSILON) {
-    const reason = `Bankroll depleted: $${bankroll.toFixed(2)}`;
-    log.error(`CIRCUIT BREAKER: ${reason}`);
-    return { halt: true, reason };
+    return { halt: true, reason: `Bankroll depleted: $${bankroll.toFixed(2)}` };
   }
 
   return { halt: false, reason: '' };

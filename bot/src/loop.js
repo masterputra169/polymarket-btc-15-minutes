@@ -102,7 +102,7 @@ import {
 } from './trading/fillTracker.js';
 
 // Trading
-import { placeBuyOrder, placeLimitBuyOrder, getOrderById, cancelOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.js';
+import { placeBuyOrder, placeLimitBuyOrder, getOrderById, getOrderStatus, cancelOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.js';
 import {
   recordTrade,
   settleTrade,
@@ -142,6 +142,7 @@ import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm,
 import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.js';
 import { onCutLoss as recoveryOnCutLoss, tick as recoveryTick, reset as resetRecovery, getRecoveryStatus, isRecoveryActive } from './trading/recoveryBuy.js';
 import { captureEntrySnapshot, writeJournalEntry, clearEntrySnapshot, getEntrySnapshot, getRecentJournal } from './trading/tradeJournal.js';
+import { getJournalAnalytics } from './trading/journalAnalytics.js';
 import {
   evaluateLimitEntry, placeLimitOrder, monitorLimitOrder, cancelLimitOrder,
   resetLimitOrderState, resetLimitAttempts, getLimitOrderStatus, isLimitOrderActive,
@@ -162,6 +163,9 @@ import {
   getLastLossTimestamp as getFilterLastLoss,
   importLastLossTimestamp,
 } from './safety/tradeFilters.js';
+
+// Daily profit target (WIB timezone)
+import { checkProfitTarget, getProfitTargetStatus, isTargetReached, initDayBaseline } from './safety/dailyProfitTarget.js';
 
 // Orderbook flow tracking
 import { checkFlowAlignment, resetFlow } from './engines/orderbookFlow.js';
@@ -210,6 +214,7 @@ import {
   invalidateSync,
   getUsdcBalanceData,
   forceUsdcSync,
+  isReconcileCooldownActive,
 } from './engines/usdcSync.js';
 import {
   handleExpiry,
@@ -381,10 +386,12 @@ export async function pollOnce() {
         const LOG_THROTTLE_MS = 5 * 60 * 1000;
         if (now - cbLastLogMs >= LOG_THROTTLE_MS) {
           const remainMin = Math.ceil((cooldownMs - elapsed) / 60_000);
-          log.warn(`HALTED: ${haltCheck.reason} | Cooldown: ${remainMin}min remaining`);
           if (cbLastLogMs === 0) {
-            // First time — send notification
+            // First time — log error + send notification
+            log.error(`CIRCUIT BREAKER: ${haltCheck.reason} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
             notify('critical', `CIRCUIT BREAKER: ${haltCheck.reason} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
+          } else {
+            log.warn(`HALTED: ${haltCheck.reason} | Cooldown: ${remainMin}min remaining`);
           }
           cbLastLogMs = now;
         }
@@ -396,6 +403,32 @@ export async function pollOnce() {
       if (cbHaltStartMs > 0) {
         cbHaltStartMs = 0;
         cbLastLogMs = 0;
+      }
+    }
+
+    // ── 1a2. Daily profit target check (WIB timezone, on-chain USDC) ──
+    if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
+      const usdcBal = getUsdcBalanceData();
+      if (usdcBal && Number.isFinite(usdcBal.balance)) {
+        const pos = getCurrentPosition();
+        const deployedCost = (pos && !pos.settled) ? (pos.cost ?? 0) : 0;
+        const wasReached = isTargetReached();
+        const ptCheck = checkProfitTarget(usdcBal.balance, deployedCost);
+        if (ptCheck.reached) {
+          // First time reaching — send notification
+          if (!wasReached) {
+            notify('info',
+              `PROFIT TARGET REACHED! +$${ptCheck.profit.toFixed(2)} / $${ptCheck.target.toFixed(2)} target | ` +
+              `Bot paused for the day (WIB) | Bankroll: $${getBankroll().toFixed(2)}`
+            );
+          }
+          broadcast({
+            profitTargetReached: true,
+            profitTarget: getProfitTargetStatus(),
+            ts: Date.now(), bankroll: getBankroll(), stats: getStats(),
+          });
+          return;
+        }
       }
     }
 
@@ -446,6 +479,10 @@ export async function pollOnce() {
           const onChain = result.balance;
           const drift = Math.abs(localBankroll - onChain);
           log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
+          // Initialize daily profit target baseline from on-chain balance
+          if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
+            initDayBaseline(onChain);
+          }
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
           // M17: Use 5% relative threshold instead of fixed $5 — $5 doesn't scale with bankroll
@@ -670,7 +707,7 @@ export async function pollOnce() {
     const AUTO_FORCE_SYNC_INTERVAL_MS = 10 * 60_000;
     const _autoSyncPos = getCurrentPosition();
     const _autoSyncHasPos = _autoSyncPos != null && !_autoSyncPos.settled;
-    if (isClientReady() && !_autoSyncHasPos && now - lastAutoForceSyncMs >= AUTO_FORCE_SYNC_INTERVAL_MS) {
+    if (isClientReady() && !_autoSyncHasPos && !isReconcileCooldownActive() && now - lastAutoForceSyncMs >= AUTO_FORCE_SYNC_INTERVAL_MS) {
       lastAutoForceSyncMs = now;
       forceUsdcSync(getUsdcBalance, getBankroll, setBankroll)
         .then(r => {
@@ -731,8 +768,45 @@ export async function pollOnce() {
       resetRecovery(); // Cancel any pending recovery on market switch
       clearPendingOrders(); // H2 audit fix: stale orders from previous market
       if (isLimitOrderActive()) {
-        cancelLimitOrder('market_switch', { cancelOrder, setPendingCost, getOrderById })
-          .catch(err => log.warn(`Limit cancel on switch: ${err.message}`));
+        const limStatus = getLimitOrderStatus();
+        try {
+          const switchCancelResult = await cancelLimitOrder('market_switch', { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
+          if (switchCancelResult?.filledInstead && switchCancelResult.fillData) {
+            const fd = switchCancelResult.fillData;
+            log.warn(`PHANTOM FILL on market switch — recording position: ${fd.side} ${fd.size}@${(fd.price * 100).toFixed(1)}c`);
+            recordTrade({
+              side: fd.side, tokenId: fd.tokenId,
+              conditionId: fd.conditionId,
+              price: fd.price, size: fd.size,
+              marketSlug: fd.marketSlug, orderId: fd.orderId,
+              actualCost: fd.price * fd.size,
+            });
+            confirmFill();
+            captureEntrySnapshot({
+              side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
+              priceToBeat: priceToBeat?.value, marketSlug: fd.marketSlug,
+              cost: fd.price * fd.size, size: fd.size,
+              confidence: 'LIMIT_PHANTOM', phase: 'market_switch', reason: 'phantom_fill_market_switch',
+              timeLeftMin, session: getSessionName(),
+            });
+            notify('warn',
+              `🔴 PHANTOM FILL on market switch\n` +
+              `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+              `Cost: $${(fd.price * fd.size).toFixed(2)}\n` +
+              `Order was filled before cancel — position recorded`,
+              { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify phantom: ${e.message}`));
+          } else {
+            // Notify user about market switch cancel (was silently dropped before)
+            notify('info',
+              `⏰ LIMIT ORDER EXPIRED (market switch)\n` +
+              `Side: ${limStatus.side ?? '?'} | Was @ ${limStatus.targetPrice ? (limStatus.targetPrice * 100).toFixed(1) + '¢' : '?'}\n` +
+              `Market ended — order cancelled\n` +
+              `Bankroll: $${getBankroll().toFixed(2)}`,
+              { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit switch cancel: ${e.message}`));
+          }
+        } catch (err) {
+          log.warn(`Limit cancel on switch: ${err.message}`);
+        }
       }
       resetLimitOrderState();
       resetLimitAttempts(); // New market = fresh limit order attempts
@@ -1406,6 +1480,10 @@ export async function pollOnce() {
           ? (orderbookUp?.bestAsk ?? marketUp ?? null)
           : (orderbookDown?.bestAsk ?? marketDown ?? null);
 
+        const spreadForSide = limMlSide === 'UP'
+          ? (orderbookUp?.spread ?? null)
+          : (orderbookDown?.spread ?? null);
+
         const routeDecision = routeOrder({
           bestAsk: bestAskForSide,
           mlConf: limMlConf,
@@ -1413,6 +1491,8 @@ export async function pollOnce() {
           delta1m,
           mlSide: limMlSide,
           regime: regimeInfo?.regime ?? 'moderate',
+          spread: spreadForSide,
+          btcPrice: lastPrice ?? 0,
         });
 
         if (routeDecision.route === 'FOK') {
@@ -1552,12 +1632,41 @@ export async function pollOnce() {
         if (upgradeMlConf != null && upgradeMlConf >= BOT_CONFIG.orderRouter.upgradeMLThreshold) {
           const limStatus = getLimitOrderStatus();
           const holdingSec = limStatus.placedAt ? (Date.now() - limStatus.placedAt) / 1000 : 0;
-          if (holdingSec > 30) {
+          if (holdingSec > (BOT_CONFIG.orderRouter.upgradeHoldSec ?? 60)) {
             log.info(`SMART_ROUTE→UPGRADE: ML ${(upgradeMlConf * 100).toFixed(0)}% ≥ ${(BOT_CONFIG.orderRouter.upgradeMLThreshold * 100).toFixed(0)}% — cancel limit → FOK`);
             try {
-              await cancelLimitOrder('smart_upgrade_fok', { cancelOrder, setPendingCost, getOrderById });
-              limitOrderBlocksFOK = false;
-              smartRouteFOK = true;
+              const upgradeResult = await cancelLimitOrder('smart_upgrade_fok', { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
+              if (upgradeResult?.filledInstead && upgradeResult.fillData) {
+                // Limit order was already filled — record position, skip FOK
+                const fd = upgradeResult.fillData;
+                log.warn(`PHANTOM FILL during upgrade — limit was already filled: ${fd.side} ${fd.size}@${(fd.price * 100).toFixed(1)}c`);
+                recordTrade({
+                  side: fd.side, tokenId: fd.tokenId,
+                  conditionId: fd.conditionId,
+                  price: fd.price, size: fd.size,
+                  marketSlug: fd.marketSlug, orderId: fd.orderId,
+                  actualCost: fd.price * fd.size,
+                });
+                confirmFill();
+                entryRegime = regimeInfo?.regime ?? 'moderate';
+                recordTradeForMarket(fd.marketSlug);
+                captureEntrySnapshot({
+                  side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
+                  priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
+                  cost: fd.price * fd.size, size: fd.size,
+                  confidence: 'LIMIT_PHANTOM', phase: rec?.phase, reason: 'phantom_fill_upgrade',
+                  timeLeftMin, session: getSessionName(),
+                });
+                notify('warn',
+                  `🔴 PHANTOM FILL during upgrade\n` +
+                  `Limit was already filled: ${fd.side} ${fd.size}@${(fd.price * 100).toFixed(1)}¢\n` +
+                  `Position recorded — skipping FOK`,
+                  { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify phantom: ${e.message}`));
+                // DON'T set smartRouteFOK — limit already filled, don't double-buy
+              } else {
+                limitOrderBlocksFOK = false;
+                smartRouteFOK = true;
+              }
             } catch (upgradeErr) {
               log.error(`Smart upgrade cancel failed: ${upgradeErr.message}`);
             }
@@ -1576,7 +1685,7 @@ export async function pollOnce() {
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
             marketSlug,
-          }, { getOrderById, cancelOrder, setPendingCost });
+          }, { getOrderById, getOrderStatus, cancelOrder, setPendingCost });
 
           if (monResult.action === 'FILLED' && monResult.fillData) {
             // Order filled — record position
@@ -1616,7 +1725,7 @@ export async function pollOnce() {
             // Partial fill accepted — cancel remainder, record position
             const fd = monResult.fillData;
             recordFillEvent(fd);  // Persist fill event for frontend transition display
-            await cancelLimitOrder('partial_accept_remainder', { cancelOrder, setPendingCost, getOrderById });
+            await cancelLimitOrder('partial_accept_remainder', { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
             recordTrade({
               side: fd.side, tokenId: fd.tokenId,
               conditionId: fd.conditionId,
@@ -1645,11 +1754,21 @@ export async function pollOnce() {
               `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
               { key: 'trade:limit:partial' }).catch(e => log.debug(`Notify limit partial: ${e.message}`));
             limitOrderBlocksFOK = false;
+          } else if (monResult.action === 'CANCEL_EXPIRED') {
+            // GTD expired on-chain — state already reset in monitorLimitOrder
+            log.info(`LIMIT ORDER expired (GTD) — not filled`);
+            notify('info',
+              `⏰ LIMIT ORDER EXPIRED\n` +
+              `Order expired on CLOB (GTD timeout)\n` +
+              `→ May retry limit order (cooldown 1min)\n` +
+              `Bankroll: $${getBankroll().toFixed(2)}`,
+              { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit expired: ${e.message}`));
+            limitOrderBlocksFOK = false;
           } else if (monResult.action.startsWith('CANCEL_') || monResult.action === 'PARTIAL_REJECT') {
             // Signal flip, time cutoff, market switch, or partial reject — cancel
             const cancelReason = monResult.action === 'PARTIAL_REJECT' ? 'partial_reject' : monResult.detail;
             const limStatus = getLimitOrderStatus();
-            const cancelResult = await cancelLimitOrder(cancelReason, { cancelOrder, setPendingCost, getOrderById });
+            const cancelResult = await cancelLimitOrder(cancelReason, { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
 
             // Notify: cancelled — with human-readable reason
             if (cancelResult && !cancelResult.filledInstead) {
@@ -1765,9 +1884,9 @@ export async function pollOnce() {
           // Polymarket minimum order $1.00
           if (pmOrderCost >= 1.00) {
             log.info(
-              `PRE-MARKET LONG: BUY UP ${pmShares} shares @ $${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | ` +
+              `PRE-MARKET LONG: GTD BUY UP ~${pmShares} shares @ ~$${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | ` +
               `Risk: ${(BOT_CONFIG.preMarketLong.riskPct * 100).toFixed(0)}% of $${bankroll.toFixed(2)} | ` +
-              `Strategy: FULL HOLD to settlement`
+              `Strategy: BEST ENTRY (limit @ bestBid) → HOLD to settlement`
             );
 
             if (BOT_CONFIG.dryRun) {
@@ -1781,27 +1900,47 @@ export async function pollOnce() {
             } else {
               try {
                 setPendingCost(pmOrderCost);
-                const fokPrice = Math.min(Math.round((pmPrice + Math.max(0.005, pmPrice * 0.01)) * 1000) / 1000, 0.99);
-                const pmResult = await placeBuyOrder({ tokenId: pmTokenId, price: fokPrice, size: pmShares });
+
+                // Best entry: use orderbook bestBid for cheapest passive fill
+                const bestBid = orderbookUp?.bestBid ?? null;
+                // Entry price priority: bestBid (cheapest) → 2% discount from market → market
+                const limitPrice = bestBid != null && bestBid > 0.01 && bestBid < pmPrice
+                  ? Math.round(bestBid * 1000) / 1000
+                  : Math.round(Math.max(0.01, pmPrice - 0.02) * 1000) / 1000;
+
+                // GTD expiration: remaining time until pre-market window end
+                // Use Intl to get current ET time reliably, then compute remaining seconds
+                const _etParts = new Intl.DateTimeFormat('en-US', {
+                  timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false,
+                }).formatToParts(new Date());
+                const _etH = parseInt(_etParts.find(p => p.type === 'hour').value, 10);
+                const _etM = parseInt(_etParts.find(p => p.type === 'minute').value, 10);
+                const _windowEndMin = BOT_CONFIG.preMarketLong.windowEndH * 60 + BOT_CONFIG.preMarketLong.windowEndM;
+                const _remainingSec = Math.max(60, (_windowEndMin - (_etH * 60 + _etM)) * 60);
+                const pmExpirySec = Math.floor(Date.now() / 1000) + _remainingSec;
+
+                // Recalculate shares at the limit price (lower price = more shares for same cost)
+                const pmLimitShares = Math.floor(pmOrderCost / limitPrice);
+                const pmLimitCost = Math.round(pmLimitShares * limitPrice * 100) / 100;
+
+                log.info(`PRE-MARKET GTD: bestBid=${bestBid?.toFixed(3) ?? 'N/A'} market=${pmPrice.toFixed(3)} → limit=${limitPrice.toFixed(3)} | ${pmLimitShares} shares ($${pmLimitCost.toFixed(2)}) | exp=${new Date(pmExpirySec * 1000).toISOString()} (${Math.round(_remainingSec / 60)}min)`);
+
+                const pmResult = await placeLimitBuyOrder({ tokenId: pmTokenId, price: limitPrice, size: pmLimitShares, expiration: pmExpirySec });
                 const pmOrderId = pmResult?.orderId ?? null;
-                const pmFillCost = parseClobAmount(pmResult?.makingAmount, null);
-                const pmActualSize = parseClobAmount(pmResult?.takingAmount, null) ?? pmShares;
-                const pmActualPrice = (pmFillCost != null && pmFillCost > 0 && pmActualSize > 0) ? pmFillCost / pmActualSize : pmPrice;
-                const pmActualCost = (pmFillCost != null && pmFillCost > 0) ? pmFillCost : null;
 
                 setPendingCost(0);
-                if (pmOrderId) trackOrderPlacement(pmOrderId, { tokenId: pmTokenId, price: pmActualPrice, size: pmActualSize, side: 'UP', confirmed: !!(pmResult?.makingAmount || pmResult?.takingAmount) });
-                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmActualPrice, size: pmActualSize, marketSlug, orderId: pmOrderId, actualCost: pmActualCost });
+                if (pmOrderId) trackOrderPlacement(pmOrderId, { tokenId: pmTokenId, price: limitPrice, size: pmLimitShares, side: 'UP', confirmed: false, gtd: true });
+                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId });
                 entryRegime = regimeInfo?.regime ?? null;
-                captureEntrySnapshot({ side: 'UP', tokenPrice: pmActualPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmActualCost ?? pmOrderCost, size: pmActualSize, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
-                onPreMarketEntry(pmActualPrice, marketSlug);
+                captureEntrySnapshot({ side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
+                onPreMarketEntry(limitPrice, marketSlug);
                 preMarketEnteredThisPoll = true;
                 // ERC-1155 approval for subsequent sells
                 updateConditionalApproval(pmTokenId).catch(e => log.debug(`PreMarket approval: ${e.message}`));
-                notify('info', `PRE-MARKET LONG: UP ${pmActualSize}@$${pmActualPrice.toFixed(3)} ($${(pmActualCost ?? pmOrderCost).toFixed(2)}) | HOLD→settlement | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+                notify('info', `PRE-MARKET GTD: UP ${pmLimitShares}@${(limitPrice * 100).toFixed(1)}c ($${pmLimitCost.toFixed(2)}) | bestBid=${bestBid?.toFixed(3) ?? 'N/A'} | HOLD→settlement | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
               } catch (err) {
                 setPendingCost(0);
-                log.error(`Pre-market LONG order FAILED: ${err.message}`);
+                log.error(`Pre-market LONG GTD order FAILED: ${err.message}`);
               }
             }
           }
@@ -2047,6 +2186,9 @@ export async function pollOnce() {
       // Trade journal
       recentJournal: getRecentJournal(5),
 
+      // Journal time-series analytics (cached, recomputes on new trade)
+      journalAnalytics: getJournalAnalytics(getStats().totalTrades),
+
       // Volume features
       volumeRecent, volumeAvg,
       volumeRatio: volumeAvg > 0 ? volumeRecent / volumeAvg : 1,
@@ -2092,6 +2234,9 @@ export async function pollOnce() {
 
       // Limit order status
       limitOrder: BOT_CONFIG.limitOrder.enabled ? getLimitOrderStatus() : { enabled: false },
+
+      // Daily profit target (WIB timezone)
+      profitTarget: getProfitTargetStatus(),
     });
 
     // Periodic save

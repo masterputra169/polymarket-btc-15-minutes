@@ -16,6 +16,7 @@ import PositionPanel from './components/PositionPanel.jsx';
 import LimitOrderPanel from './components/LimitOrderPanel.jsx';
 import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.jsx';
 import SessionInfo from './components/SessionInfo.jsx';
+import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.jsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
 const StatusPill = memo(function StatusPill({ connected, label }) {
@@ -341,6 +342,12 @@ export default function App() {
   }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions,
       data?.detailedFeedback?.totalSettled]);
 
+  // JournalTimeSeriesPanel: time-series analytics from bot
+  const journalAnalyticsData = useMemo(() => {
+    if (!data?.journalAnalytics) return null;
+    return data.journalAnalytics;
+  }, [data?.journalAnalytics?.computedAt, data?.journalAnalytics?.patterns?.totalTrades]);
+
   // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot
   const positionData = useMemo(() => {
     if (!data) return null;
@@ -515,7 +522,10 @@ export default function App() {
           {/* Row 6: Accuracy Dashboard (full width) */}
           <AccuracyPanel data={accuracyData} />
 
-          {/* Row 7: Session (full width) */}
+          {/* Row 7: Journal Time-Series Analytics (full width) */}
+          <JournalTimeSeriesPanel data={journalAnalyticsData} />
+
+          {/* Row 8: Session (full width) */}
           <SessionInfo />
         </div>
       )}
