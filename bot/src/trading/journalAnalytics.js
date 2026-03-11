@@ -5,7 +5,7 @@
  * Cached in-memory; recomputes only when trade count changes.
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, statSync } from 'fs';
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 
@@ -15,7 +15,9 @@ const log = createLogger('JournalAnalytics');
 let _cache = null;
 let _lastTradeCount = -1;
 let _lastComputeMs = 0;
-const RECOMPUTE_INTERVAL_MS = 15_000; // max recompute every 15s
+let _lastJournalMtimeMs = 0;   // track file modification time
+let _lastAuditMtimeMs = 0;
+const RECOMPUTE_INTERVAL_MS = 15_000; // throttle recompute to max every 15s
 
 // Session definitions (ET hours)
 const SESSIONS = {
@@ -33,23 +35,42 @@ const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  */
 export function getJournalAnalytics(currentTradeCount) {
   const now = Date.now();
-  const needsRecompute =
+
+  // Throttle: don't recompute more often than every 15s
+  if (_cache && (now - _lastComputeMs) < RECOMPUTE_INTERVAL_MS) return _cache;
+
+  // Check if data actually changed (trade count OR file modification time)
+  const journalMtime = _safeFileMtime(BOT_CONFIG.journalFile);
+  const auditFile = BOT_CONFIG.stateFile.replace('state.json', 'state_audit.jsonl');
+  const auditMtime = _safeFileMtime(auditFile);
+
+  const dataChanged =
     !_cache ||
     currentTradeCount !== _lastTradeCount ||
-    (now - _lastComputeMs) > RECOMPUTE_INTERVAL_MS;
+    journalMtime !== _lastJournalMtimeMs ||
+    auditMtime !== _lastAuditMtimeMs;
 
-  if (!needsRecompute) return _cache;
+  if (!dataChanged) return _cache;
 
   try {
     _cache = computeAnalytics();
     _lastTradeCount = currentTradeCount;
     _lastComputeMs = now;
+    _lastJournalMtimeMs = journalMtime;
+    _lastAuditMtimeMs = auditMtime;
   } catch (err) {
     log.warn(`Analytics computation failed: ${err.message}`);
     if (!_cache) _cache = emptyAnalytics();
   }
 
   return _cache;
+}
+
+/** Get file mtime in ms, 0 if not found. */
+function _safeFileMtime(filePath) {
+  try {
+    return existsSync(filePath) ? statSync(filePath).mtimeMs : 0;
+  } catch { return 0; }
 }
 
 /** Force recompute on next call. */

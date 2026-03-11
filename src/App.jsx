@@ -343,10 +343,29 @@ export default function App() {
       data?.detailedFeedback?.totalSettled]);
 
   // JournalTimeSeriesPanel: time-series analytics from bot
+  // Granular deps — only re-render when actual data changes, NOT computedAt (which ticks every recompute)
   const journalAnalyticsData = useMemo(() => {
     if (!data?.journalAnalytics) return null;
-    return data.journalAnalytics;
-  }, [data?.journalAnalytics?.computedAt, data?.journalAnalytics?.patterns?.totalTrades, data?.journalAnalytics?.sources?.total]);
+    const ja = data.journalAnalytics;
+    return {
+      patterns: ja.patterns,
+      hourly: ja.hourly,
+      sessions: ja.sessions,
+      dayOfWeek: ja.dayOfWeek,
+      equityCurve: ja.equityCurve,
+      events: ja.events,
+      sources: ja.sources,
+      computedAt: ja.computedAt,
+    };
+  }, [
+    data?.journalAnalytics?.patterns?.totalTrades,
+    data?.journalAnalytics?.patterns?.totalPnl,
+    data?.journalAnalytics?.patterns?.overallWr,
+    data?.journalAnalytics?.patterns?.currentStreak?.count,
+    data?.journalAnalytics?.sources?.total,
+    data?.journalAnalytics?.events?.length,
+    data?.journalAnalytics?.equityCurve?.length,
+  ]);
 
   // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot
   const positionData = useMemo(() => {
@@ -398,7 +417,9 @@ export default function App() {
     data?.marketUp, data?.marketDown,
   ]);
 
-  // BotPanel: extract only what BotPanel needs (was passing full `data` = ~200 fields retained)
+  // BotPanel: extract only what BotPanel needs
+  // NOTE: ts/pollCounter excluded from deps — they change every ~50ms poll but are cosmetic.
+  // BotPanel uses a local interval to tick the "Xs ago" display independently.
   const botData = useMemo(() => {
     if (!data) return null;
     return {
@@ -418,7 +439,7 @@ export default function App() {
       limitOrder: data.limitOrder,
     };
   }, [
-    data?.ts, data?.pollCounter, data?.paused, data?.dryRun,
+    data?.paused, data?.dryRun,
     data?.rec?.action, data?.rec?.side, data?.rec?.confidence, data?.rec?.phase,
     data?.ml?.available, data?.ml?.probUp, data?.ml?.confidence, data?.ml?.side,
     data?.edge?.bestEdge, data?.bankroll, data?.stats?.wins, data?.stats?.losses,
@@ -428,6 +449,10 @@ export default function App() {
     data?.arbitrage?.found,
     data?.metEngine?.last?.ts, data?.metEngine?.enabled,
     data?.positions?.botPosition?.side, data?.positions?.botPosition?.size,
+    data?.limitOrder?.phase, data?.limitOrder?.lastEvent?.type,
+    data?.fillTracker?.fillRate, data?.fillTracker?.pending,
+    data?.btcPrice, data?.priceToBeat, data?.timeLeftMin,
+    data?.usdcBalance?.balance,
   ]);
 
   return (

@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useState, useEffect } from 'react';
 import { ML_CONFIDENCE } from '../config.js';
 
 /**
@@ -42,6 +42,13 @@ const colHeaderStyle = {
 };
 
 function BotPanel({ connected, data }) {
+  // Local 2s ticker for "Xs ago" and MetEngine age — avoids re-render every 50ms poll
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(id);
+  }, []);
+
   // Offline state
   if (!connected || !data) {
     return (
@@ -82,7 +89,7 @@ function BotPanel({ connected, data }) {
   const meEnabled  = me?.enabled === true;
   const meIsBlock  = meLast?.blocked === true;
   const meIsBoost  = meLast?.boost === true;
-  const meAgeSec   = meLast?.ts ? Math.round((Date.now() - meLast.ts) / 1000) : null;
+  const meAgeSec   = meLast?.ts ? Math.round((now - meLast.ts) / 1000) : null;
   const meStale    = meAgeSec != null && meAgeSec > 120;
 
   const winRate = stats?.totalTrades > 0 && stats?.winRate != null
@@ -113,7 +120,7 @@ function BotPanel({ connected, data }) {
     ? `L${stats.consecutiveLosses}`
     : '-';
 
-  const ageSec = data.ts ? ((Date.now() - data.ts) / 1000).toFixed(1) : '-';
+  const ageSec = data.ts ? ((now - data.ts) / 1000).toFixed(1) : '-';
 
   // Card glow: green on ENTER, dim otherwise
   const cardGlow = isPaused ? '' : isEnter ? ' card--glow-green' : '';
@@ -583,7 +590,7 @@ function BotPanel({ connected, data }) {
           const last = me.last;
           const isBlocked = last?.blocked === true;
           const isBoost   = last?.boost === true;
-          const ageSec    = last?.ts ? Math.round((Date.now() - last.ts) / 1000) : null;
+          const ageSec    = last?.ts ? Math.round((now - last.ts) / 1000) : null;
           const stale     = ageSec != null && ageSec > 120; // >2min stale
           const color     = !me.configured ? 'var(--text-dim)'
             : isBlocked ? 'var(--red-bright)'
@@ -617,10 +624,37 @@ function BotPanel({ connected, data }) {
 }
 
 export default memo(BotPanel, (prev, next) => {
+  const a = prev.data;
+  const b = next.data;
+  if (!a || !b) return a === b;
   return (
     prev.connected === next.connected &&
-    prev.data?.ts === next.data?.ts &&
-    prev.data?.pollCounter === next.data?.pollCounter &&
-    prev.data?.paused === next.data?.paused
+    a.paused === b.paused &&
+    a.dryRun === b.dryRun &&
+    a.rec?.action === b.rec?.action &&
+    a.rec?.side === b.rec?.side &&
+    a.rec?.confidence === b.rec?.confidence &&
+    a.rec?.phase === b.rec?.phase &&
+    a.ml?.confidence === b.ml?.confidence &&
+    a.ml?.side === b.ml?.side &&
+    a.edge?.bestEdge === b.edge?.bestEdge &&
+    a.bankroll === b.bankroll &&
+    a.regime === b.regime &&
+    a.ensembleUp === b.ensembleUp &&
+    a.stats?.wins === b.stats?.wins &&
+    a.stats?.losses === b.stats?.losses &&
+    a.stats?.dailyPnL === b.stats?.dailyPnL &&
+    a.stats?.consecutiveLosses === b.stats?.consecutiveLosses &&
+    a.marketUp === b.marketUp &&
+    a.marketDown === b.marketDown &&
+    a.positions?.botPosition?.side === b.positions?.botPosition?.side &&
+    a.positions?.botPosition?.size === b.positions?.botPosition?.size &&
+    a.arbitrage?.found === b.arbitrage?.found &&
+    a.limitOrder?.phase === b.limitOrder?.phase &&
+    a.limitOrder?.lastEvent?.type === b.limitOrder?.lastEvent?.type &&
+    a.metEngine?.last?.ts === b.metEngine?.last?.ts &&
+    a.signalStability?.confirmCount === b.signalStability?.confirmCount &&
+    a.btcPrice === b.btcPrice &&
+    a.fillTracker?.fillRate === b.fillTracker?.fillRate
   );
 });

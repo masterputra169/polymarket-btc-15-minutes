@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useState, useEffect } from 'react';
 
 const TABS = ['overview', 'hourly', 'events', 'equity'];
 const TAB_LABELS = { overview: 'Overview', hourly: 'Hourly', events: 'Events', equity: 'Equity' };
@@ -125,6 +125,14 @@ function StatBox({ label, value, color, sub }) {
 
 function OverviewTab({ data }) {
   const { patterns, sessions, dayOfWeek, sources, computedAt } = data;
+
+  // Live-ticking "Updated Xs ago" — re-renders every 5s independently
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, []);
+
   if (!patterns || patterns.totalTrades === 0) {
     return <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.78rem' }}>No trade data</div>;
   }
@@ -132,8 +140,7 @@ function OverviewTab({ data }) {
   const p = patterns;
   const streak = p.currentStreak;
 
-  // Compute "last updated X ago"
-  const ageSec = computedAt ? Math.round((Date.now() - computedAt) / 1000) : null;
+  const ageSec = computedAt ? Math.round((now - computedAt) / 1000) : null;
   const ageStr = ageSec != null ? (ageSec < 60 ? `${ageSec}s ago` : `${Math.floor(ageSec / 60)}m ago`) : '';
   const sourceStr = sources
     ? `${sources.journal} journal${sources.verified > 0 ? ` + ${sources.verified} on-chain` : ''}`
@@ -492,8 +499,12 @@ export default memo(JournalTimeSeriesPanel, (prev, next) => {
   const b = next.data;
   if (!a || !b) return a === b;
   return (
-    a.computedAt === b.computedAt &&
     a.patterns?.totalTrades === b.patterns?.totalTrades &&
-    a.sources?.total === b.sources?.total
+    a.patterns?.totalPnl === b.patterns?.totalPnl &&
+    a.patterns?.overallWr === b.patterns?.overallWr &&
+    a.patterns?.currentStreak?.count === b.patterns?.currentStreak?.count &&
+    a.sources?.total === b.sources?.total &&
+    a.events?.length === b.events?.length &&
+    a.equityCurve?.length === b.equityCurve?.length
   );
 });
