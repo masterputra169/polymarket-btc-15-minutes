@@ -20,6 +20,7 @@
 
 import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
+import { getSpreadTrend } from './executionTiming.js';
 
 const log = createLogger('LimitOrder');
 
@@ -156,6 +157,7 @@ export function evaluateLimitEntry({
   mlConfidence, mlSide, btcPrice, priceToBeat,
   bestBidUp, bestBidDown, hasPosition, isHalted,
   marketSlug, elapsedMin,
+  btcDelta1m, spread,
 }) {
   const cfg = BOT_CONFIG.limitOrder;
   const no = (reason) => {
@@ -206,6 +208,27 @@ export function evaluateLimitEntry({
     }
     if (side === 'DOWN' && distPct > PTB_BUFFER_PCT) {
       return no(`btc_above_ptb_+${(distPct * 100).toFixed(2)}%`);
+    }
+  }
+
+  // ── Momentum gate — don't place limit orders during active selling pressure ──
+  // Problem: limit orders placed during selloff get filled right as price keeps dropping.
+  // Solution: wait for selling pressure to stabilize before placing.
+  // Gate 1: BTC momentum opposing signal direction (strong move against us)
+  if (btcDelta1m != null && Number.isFinite(btcDelta1m)) {
+    const ADVERSE_MOMENTUM_USD = 30; // $30 BTC move against us in 1 min = strong adverse momentum
+    if (side === 'UP' && btcDelta1m < -ADVERSE_MOMENTUM_USD) {
+      return no(`momentum_adverse_delta_${btcDelta1m.toFixed(0)}`);
+    }
+    if (side === 'DOWN' && btcDelta1m > ADVERSE_MOMENTUM_USD) {
+      return no(`momentum_adverse_delta_+${btcDelta1m.toFixed(0)}`);
+    }
+  }
+  // Gate 2: Spread widening = orderbook stress, price likely still moving
+  if (spread != null && Number.isFinite(spread)) {
+    const spreadTrend = getSpreadTrend(spread);
+    if (spreadTrend === 'wide') {
+      return no(`spread_wide_${(spread * 100).toFixed(1)}%`);
     }
   }
 

@@ -7,6 +7,7 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react(),],
   server: {
+    host: '0.0.0.0',  // expose to local network (access from phone)
     port: 3000,
     proxy: {
       '/gamma-api': {

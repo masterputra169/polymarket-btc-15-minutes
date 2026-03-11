@@ -176,6 +176,17 @@ import { updateSmartFlow, getSmartFlowSignal, getEntryTimingScore, resetSmartFlo
 // MetEngine smart money API gates (F1: consensus, F2: insider score, F3: conviction wallet)
 import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats } from './engines/metEngineClient.js';
 
+// Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
+import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.js';
+
+// Execution timing optimizer
+import { evaluateExecutionTiming, getExecutionTimingStatus, resetExecutionTiming, recordSpreadTick, recordVolumeTick } from './engines/executionTiming.js';
+
+// AI analysis (dashboard display)
+import { getLastAnalysis } from './ai/postTradeAnalyst.js';
+import { getOptimizerStatus } from './ai/selfOptimizer.js';
+import { getOpenRouterStats } from './ai/openrouterClient.js';
+
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
 
@@ -690,6 +701,11 @@ export async function pollOnce() {
     // Funding rate — always null (blocked in user's region)
     const fundingRate = null;
 
+    // ── 3a2. Sentiment signal (every 5 min, non-blocking) ──
+    if (BOT_CONFIG.ai?.sentimentEnabled !== false && pollCounter % 100 === 0) {
+      fetchSentiment().catch(() => {}); // fire-and-forget, cached
+    }
+
     // ── 3b. USDC balance (every 30s — non-blocking) ──
     // M1: Cooldown was redeemInterval+5min = 65min — too long. Tokens typically redeem in <15min.
     // Use 15min fixed cooldown so bankroll syncs sooner after settlement.
@@ -812,6 +828,7 @@ export async function pollOnce() {
       resetLimitAttempts(); // New market = fresh limit order attempts
       resetFlow();
       resetSmartFlow();
+      resetExecutionTiming();
       resetMarketTradeCount(oldSlug);
       onMarketSwitch(oldSlug, marketSlug);
 
@@ -929,6 +946,10 @@ export async function pollOnce() {
     });
     const smartFlowSignal = getSmartFlowSignal();
     const entryTimingScore = getEntryTimingScore(timeLeftMin);
+
+    // ── 5a2. Execution timing tick recording ──
+    if (orderbookUp?.spread != null) recordSpreadTick(orderbookUp.spread);
+    if (volumeRecent != null) recordVolumeTick(volumeRecent);
 
     // ── 5b. Signal flip tracking (anti-whipsaw) ──
     const currentSide = ensembleUp >= 0.5 ? 'UP' : 'DOWN';
@@ -1579,6 +1600,8 @@ export async function pollOnce() {
           isHalted: haltForLimit.halt,
           marketSlug,
           elapsedMin,
+          btcDelta1m: delta1m,
+          spread: spreadForSide,
         }) : { shouldPlace: false, side: null, targetPrice: null, reason: !limFilterResult.pass ? `filtered: ${limFilterResult.reasons[0] ?? 'unknown'}` : `unstable: ${getInstabilityReasons(limStabPolls).join(', ')}` };
 
         if (limitEval.shouldPlace && poly.tokens) {
@@ -2188,6 +2211,13 @@ export async function pollOnce() {
 
       // Journal time-series analytics (cached, recomputes on new trade)
       journalAnalytics: getJournalAnalytics(getStats().totalTrades),
+
+      // AI Agent status
+      aiAnalysis: getLastAnalysis(),
+      aiOptimizer: getOptimizerStatus(),
+      aiStats: getOpenRouterStats(),
+      sentiment: getSentimentStats(),
+      executionTiming: getExecutionTimingStatus(),
 
       // Volume features
       volumeRecent, volumeAvg,

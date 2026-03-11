@@ -33,6 +33,11 @@ const FILL_VERIFY_FIRST_CHECK_MS = 5_000;  // Wait 5s before first trade history
 const FILL_VERIFY_DEADLINE_MS = 20_000;     // Give up verifying after 20s
 const FILL_VERIFY_MIN_ATTEMPTS = 3;         // Need 3+ failed checks before concluding rejected
 
+// GTD (limit) orders: longer verification — they sit on the book, may fill minutes later
+const GTD_VERIFY_FIRST_CHECK_MS = 15_000;   // Wait 15s before first check (CLOB indexing lag)
+const GTD_VERIFY_DEADLINE_MS = 120_000;      // 2 min before giving up (order may sit on book)
+const GTD_VERIFY_MIN_ATTEMPTS = 5;           // Need 5+ failed checks
+
 // ── Module state ──
 // M3: Support multiple concurrent pending orders (e.g. arb legs)
 let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, side, placedAt, confirmed, verifyAttempts }
@@ -49,7 +54,7 @@ let uncertainFills = [];         // Track uncertain fills for manual review (sel
  * @param {boolean} [info.confirmed] - If true, CLOB response included fill data (makingAmount/takingAmount).
  *   This is direct proof of fill — skip trade history verification entirely.
  */
-export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false }) {
+export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false, gtd = false }) {
   // M9: Cap pending orders to prevent unbounded growth if checkPendingFill fails repeatedly
   const MAX_PENDING = 20;
   if (pendingOrders.size >= MAX_PENDING && !pendingOrders.has(orderId)) {
@@ -62,9 +67,10 @@ export function trackOrderPlacement(orderId, { tokenId, price, size, side, confi
     orderId, tokenId, price, size, side,
     placedAt: Date.now(),
     confirmed,         // CLOB response had fill data → skip verification
+    gtd,               // GTD limit order → longer verification, default to assumed-filled (not rejected)
     verifyAttempts: 0, // Number of trade history checks attempted
   });
-  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price} confirmed=${confirmed} (${pendingOrders.size} pending)`);
+  log.debug(`Tracking order ${orderId}: ${side} ${size}@${price} confirmed=${confirmed} gtd=${gtd} (${pendingOrders.size} pending)`);
 }
 
 /**
@@ -125,7 +131,9 @@ export async function checkPendingFill() {
       }
 
       // ── Wait before first trade history check ──
-      if (elapsed < FILL_VERIFY_FIRST_CHECK_MS) {
+      // GTD orders get longer wait — CLOB indexing lag for limit orders is longer
+      const firstCheckMs = pending.gtd ? GTD_VERIFY_FIRST_CHECK_MS : FILL_VERIFY_FIRST_CHECK_MS;
+      if (elapsed < firstCheckMs) {
         continue;
       }
 
@@ -169,14 +177,25 @@ export async function checkPendingFill() {
         log.info(`Order ${orderId} fill CONFIRMED via trade history (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s)${adverseSelection ? ' [ADVERSE]' : ''}`);
         pendingOrders.delete(orderId);
         results.push(fill);
-      } else if (!apiError && elapsed >= FILL_VERIFY_DEADLINE_MS && pending.verifyAttempts >= FILL_VERIFY_MIN_ATTEMPTS) {
+      } else if (!apiError && !pending.gtd && elapsed >= FILL_VERIFY_DEADLINE_MS && pending.verifyAttempts >= FILL_VERIFY_MIN_ATTEMPTS) {
         // ── Strong evidence of rejection: multiple failed checks, no API errors, past deadline ──
+        // NOTE: GTD orders skip this path — they default to assumed-filled (conservative safety)
         const fill = { orderId, filled: false, rejected: true, verified: false, timeToFill: elapsed, adverseSelection: false };
         recordFill(fill);
         log.warn(`Order ${orderId} REJECTED: not found after ${pending.verifyAttempts} checks over ${(elapsed / 1000).toFixed(1)}s`);
         pendingOrders.delete(orderId);
         results.push(fill);
-      } else if (elapsed >= FILL_VERIFY_DEADLINE_MS * 2) {
+      } else if (pending.gtd && !apiError && elapsed >= GTD_VERIFY_DEADLINE_MS && pending.verifyAttempts >= GTD_VERIFY_MIN_ATTEMPTS) {
+        // ── GTD order deadline: default to assumed-filled (conservative) ──
+        // GTD orders were accepted by CLOB → they sat on the book. If not in openOrders AND not in
+        // trade history after 2 min, most likely filled but trade history has lag. Better to track a
+        // phantom than unwind a real position.
+        const fill = { orderId, filled: true, rejected: false, verified: false, timeToFill: elapsed, adverseSelection: false };
+        recordFill(fill);
+        log.warn(`GTD order ${orderId} ASSUMED FILLED: not found after ${pending.verifyAttempts} checks over ${(elapsed / 1000).toFixed(1)}s — defaulting to filled (conservative)`);
+        pendingOrders.delete(orderId);
+        results.push(fill);
+      } else if (elapsed >= (pending.gtd ? GTD_VERIFY_DEADLINE_MS : FILL_VERIFY_DEADLINE_MS) * 2) {
         // ── Absolute deadline (40s) ──
         // SELL orders: Mark as UNCERTAIN and release sell lock so cut-loss can retry.
         // Assuming a sell filled when it didn't blocks cut-loss protection entirely.

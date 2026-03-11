@@ -12,8 +12,9 @@ import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } fr
 import { dirname } from 'path';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
-import { getTradeHistory, isClientReady } from './clobClient.js';
+import { getTradeHistory, isClientReady, getProxyAddress } from './clobClient.js';
 import { adjustBankrollForReconciliation } from './positionTracker.js';
+import { invalidateSync, setReconcileCooldown } from '../engines/usdcSync.js';
 import { notify } from '../monitoring/notifier.js';
 
 const log = createLogger('Reconciler');
@@ -250,6 +251,31 @@ async function reconcile() {
 
   log.info(`Fetched ${trades.length} trade(s) from CLOB API`);
 
+  // Filter trades to only include our wallet's trades.
+  // CLOB getTrades() returns all market trades, not just the authenticated wallet's.
+  //
+  // Trade ownership identification:
+  //   - maker_address: hex wallet address of the maker (CHECKSUM-CASED, e.g. 0x2F8b...)
+  //     → matches our proxy address for ALL our trades (we're always maker on Polymarket CTF)
+  //   - owner: API key UUID (e.g. "87428c86-40e..."), NOT a wallet address
+  //     → matches our API key ID for our trades
+  //
+  // IMPORTANT: maker_address uses EIP-55 checksum casing (mixed case), so comparison
+  // MUST be case-insensitive. The old code compared case-sensitively → 0 matches.
+  const proxyAddr = (getProxyAddress() || '').toLowerCase();
+  const apiKeyId = process.env.POLYMARKET_API_KEY || '';
+  if (proxyAddr || apiKeyId) {
+    const before = trades.length;
+    trades = trades.filter(t => {
+      const maker = (t.maker_address || '').toLowerCase();
+      const owner = t.owner || '';
+      return maker === proxyAddr || owner === apiKeyId;
+    });
+    if (trades.length < before) {
+      log.info(`Wallet filter: ${before} → ${trades.length} trades (excluded ${before - trades.length} foreign trades)`);
+    }
+  }
+
   // Group trades by market (conditionId)
   const byMarket = new Map();
   for (const trade of trades) {
@@ -289,6 +315,11 @@ async function reconcile() {
   let totalPnl = 0;
   let marketCount = 0;
   let tradeCount = 0;
+
+  // Block USDC syncs during reconciliation — on-chain USDC doesn't reflect
+  // reconciler P&L corrections and would overwrite them (race condition fix).
+  // 120s cooldown: covers reconcile duration + margin for async USDC fetch callbacks.
+  setReconcileCooldown(120_000);
 
   // Collect updated entries for unresolved markets that are now resolved
   const updatedEntries = [];

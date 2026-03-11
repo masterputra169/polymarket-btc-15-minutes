@@ -218,14 +218,44 @@ export async function getOrderById(orderId) {
 }
 
 /**
+ * Get the definitive status of an order by ID via /data/order/{id}.
+ * More reliable than getOpenOrders() for fill detection — reflects matching engine state.
+ * Returns the order object with status field, or null if not found/error.
+ * @param {string} orderId
+ * @returns {Object|null} order with status: 'LIVE'|'MATCHED'|'CANCELLED'|'DELAYED' etc.
+ */
+export async function getOrderStatus(orderId) {
+  if (!client) return null;
+  try {
+    const result = await Promise.race([
+      client.getOrder(orderId),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('getOrderStatus timeout (5s)')), 5_000)),
+    ]);
+    if (result?.error) {
+      log.debug(`getOrderStatus(${orderId}): ${result.error}`);
+      return null;
+    }
+    return result ?? null;
+  } catch (err) {
+    log.debug(`getOrderStatus failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Cancel an open order.
  */
 export async function cancelOrder(orderId) {
   if (!client) throw new Error('CLOB client not initialized');
-  const result = await client.cancelOrder(orderId);
+  // CLOB client expects { orderID: string }, NOT a raw string.
+  // Passing raw string caused "Invalid order payload" (HTTP 400) on every cancel.
+  const result = await client.cancelOrder({ orderID: orderId });
   // L2: Log cancel errors (non-critical — don't throw)
-  if (result?.error) log.warn(`Cancel order warning: ${result.error}`);
-  log.info(`Order cancelled: ${orderId}`);
+  if (result?.error) {
+    log.warn(`Cancel order error: ${result.error} — order may have been filled`);
+  } else {
+    log.info(`Order cancelled: ${orderId}`);
+  }
   return result;
 }
 
@@ -347,6 +377,10 @@ export function getWalletAddress() {
 
 export function isClientReady() {
   return client !== null;
+}
+
+export function getProxyAddress() {
+  return process.env.POLYMARKET_PROXY_ADDRESS || wallet?.address || null;
 }
 
 /**

@@ -9,7 +9,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * Writes to ref + throttled state flush (same pattern as useBinanceStream).
  */
 
-const BOT_WS_URL = 'ws://localhost:3099';
+const BOT_WS_URL = `ws://${window.location.hostname}:3099`;  // dynamic: works from phone + localhost
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 const STALE_TIMEOUT_MS = 15_000;

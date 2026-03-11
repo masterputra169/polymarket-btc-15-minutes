@@ -6,11 +6,14 @@
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.js';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.js';
+import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.js';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.js';
 import { resetCutLossState } from './trading/cutLoss.js';
 import { resetTakeProfitState } from './trading/takeProfit.js';
 import { recordLoss } from './safety/tradeFilters.js';
 import { forceUsdcSync } from './engines/usdcSync.js';
+import { maybeAnalyze, getLastAnalysis } from './ai/postTradeAnalyst.js';
+import { maybeOptimize, getOptimizerStatus } from './ai/selfOptimizer.js';
 
 const log = createLogger('StatusWS');
 
@@ -262,6 +265,22 @@ export function startStatusServer() {
         } else if (msg.type === 'removeTracker' && _removeTracker && msg.address) {
           const ok = _removeTracker(msg.address);
           respond('removeTracker', { ok, address: msg.address });
+        // ── Profit Target reset ──
+        } else if (msg.type === 'resetProfitTarget') {
+          resetProfitTarget();
+          if (_resumeBot) _resumeBot('profitTargetReset');
+          respond('resetProfitTarget', { ok: true, status: getProfitTargetStatus() });
+
+        // ── AI Agent commands ──
+        } else if (msg.type === 'analyzeNow') {
+          maybeAnalyze(0)
+            .then(() => respond('analyzeNow', { ok: true, analysis: getLastAnalysis() }))
+            .catch(err => respond('analyzeNow', { ok: false, error: err.message }));
+        } else if (msg.type === 'optimizeNow') {
+          maybeOptimize()
+            .then(() => respond('optimizeNow', { ok: true, status: getOptimizerStatus() }))
+            .catch(err => respond('optimizeNow', { ok: false, error: err.message }));
+
         } else if (msg.type === 'simulateTrader' && _simulateTrader && msg.address) {
           _simulateTrader(msg.address)
             .then(result => respond('simulateTrader', result))

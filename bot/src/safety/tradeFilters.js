@@ -19,10 +19,13 @@
  * 13. ML accuracy degradation
  * 14. VPIN — informed flow opposing signal
  * 15. Spread widening — sudden spread increase
+ * 16. Asia session hard gate
+ * 17. Extreme sentiment — block during panic/euphoria (Fear & Greed API)
  */
 
 import { TRADE_FILTERS } from '../../../src/config.js';
 import { createLogger } from '../logger.js';
+import { checkExtremeSentiment } from '../engines/sentimentSignal.js';
 
 const log = createLogger('Filter');
 
@@ -57,10 +60,10 @@ function getSpreadBaseline() {
 // Off-hours and weekends have lower liquidity → lower reliability
 const SESSION_QUALITY = {
   'US':           1.0,
-  'EU/US Overlap': 1.0,
-  'Europe':       0.9,
-  'Asia':         0.85,
-  'Off-hours':    0.7,
+  'EU/US Overlap': 0.85,  // v4: 1.0→0.85 — data: 69% WR (worst session), reduce bet sizing
+  'Europe':       1.0,    // 86% WR — best session, no penalty
+  'Asia':         0.70,   // 77% WR — tighten significantly (was 0.85)
+  'Off-hours':    0.60,   // further tightened
 };
 
 /**
@@ -148,13 +151,22 @@ export function applyTradeFilters({
   }
 
   // 2d. Entry price ceiling — binary option math: at Xc entry, need X% WR to break even.
-  // MAX_ENTRY_PRICE=63c (need 63% WR). ML ≥85% bypass up to 68c (need 68% WR, achievable at high conf).
-  // HARD CAP at 68c — no ML confidence can bypass (above 68c, loss:win > 2.1:1, unsustainable).
-  const HARD_ENTRY_CAP = 0.68;
+  // v4: Data shows >75c entries: 70% WR, -$3.48 PnL. Tightened caps.
+  // BASE_HARD_CAP: 68c normal, TRENDING_HARD_CAP: 72c (was 75c) with ML ≥80%.
+  // ULTRA ML bypass: ML ≥90% can go up to 75c (v16 ≥90% = near-certain).
+  const BASE_HARD_CAP = 0.68;
+  const TRENDING_HARD_CAP = 0.72;   // v4: 0.75→0.72 — >75c is negative EV bucket
+  const ULTRA_ML_CAP = 0.75;        // v4: only ML ≥90% can reach 75c
+  const trendingPremium = regime === 'trending' && mlConfidence != null && mlConfidence >= 0.80;
+  const ultraMl = mlConfidence != null && mlConfidence >= 0.90;
+  const HARD_ENTRY_CAP = ultraMl ? ULTRA_ML_CAP : (trendingPremium ? TRENDING_HARD_CAP : BASE_HARD_CAP);
   if (marketPrice != null && marketPrice > HARD_ENTRY_CAP) {
-    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR, unsustainable)`);
+    const trendTag = trendingPremium ? ' [trending premium active]' : '';
+    const mlTag = ultraMl ? ' [ultra ML active]' : '';
+    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR)${trendTag}${mlTag}`);
   } else if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
-    const mlBypass = mlConfidence != null && mlConfidence >= 0.85;
+    // Soft cap bypass: ML ≥85% OR trending + ML ≥80%
+    const mlBypass = mlConfidence != null && (mlConfidence >= 0.85 || trendingPremium);
     if (!mlBypass) {
       reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling (ML ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < 85%)`);
     }
@@ -361,8 +373,23 @@ export function applyTradeFilters({
     recordSpread(spread);
   }
 
+  // 16. Asia session hard gate — require higher ML confidence (data: 69% WR vs 92% Europe)
+  if (session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < 0.75) {
+    reasons.push(`Asia session: ML ${(mlConfidence * 100).toFixed(0)}% < 75% required`);
+  }
+
+  // 17. Extreme sentiment gate — block during market panic/euphoria
+  const extremeSentiment = checkExtremeSentiment();
+  if (extremeSentiment && extremeSentiment.block) {
+    // ML ≥90% bypass: very high ML confidence can override sentiment
+    const mlSentimentBypass = mlConfidence != null && mlConfidence >= 0.90;
+    if (!mlSentimentBypass) {
+      reasons.push(`Sentiment: ${extremeSentiment.reason}`);
+    }
+  }
+
   // Session quality score (used as multiplier downstream, not a hard filter)
-  const sessionQuality = SESSION_QUALITY[session] ?? 0.85;
+  const sessionQuality = SESSION_QUALITY[session] ?? 0.70;
 
   const pass = reasons.length === 0;
   if (!pass) {

@@ -56,6 +56,11 @@ import { startRedeemer, stopRedeemer } from './src/trading/redeemer.js';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.js';
 import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } from './src/trading/tradeJournal.js';
 
+// AI Agent modules
+import { initOpenRouter } from './src/ai/openrouterClient.js';
+import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/postTradeAnalyst.js';
+import { maybeOptimize } from './src/ai/selfOptimizer.js';
+
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
 
@@ -145,6 +150,15 @@ async function main() {
   // 4c. Schedule daily trade summary (Telegram alert at midnight ET)
   scheduleDailySummary();
 
+  // 4d. Initialize AI agent (OpenRouter + post-trade analysis)
+  if (BOT_CONFIG.ai.enabled) {
+    initOpenRouter(BOT_CONFIG.ai);
+    loadAnalysisFromDisk();
+    log.info(`AI Agent: model=${BOT_CONFIG.ai.model}, interval=${Math.round(BOT_CONFIG.ai.analyzeIntervalMs / 60_000)}min, autoOptimize=${BOT_CONFIG.ai.autoOptimize}`);
+  } else {
+    log.info('AI Agent: disabled (set AI_AGENT_ENABLED=true to enable)');
+  }
+
   // 5. Start WebSocket streams (real-time data)
   log.info('Connecting WebSocket streams...');
   connectBinanceWs();
@@ -185,6 +199,20 @@ async function main() {
   await pollOnce();
   const intervalId = setInterval(pollOnce, POLL_MS);
 
+  // 6b. AI analysis interval (runs alongside poll loop)
+  let aiIntervalId = null;
+  if (BOT_CONFIG.ai.enabled) {
+    aiIntervalId = setInterval(async () => {
+      try {
+        const stats = getStats();
+        await maybeAnalyze(stats.totalTrades);
+        await maybeOptimize();
+      } catch (err) {
+        log.debug(`AI interval error: ${err.message}`);
+      }
+    }, 60_000); // Check every minute (actual analysis throttled by analyzeIntervalMs)
+  }
+
   // 7. Graceful shutdown handler
   let shuttingDown = false;
   async function shutdown(signal) {
@@ -193,6 +221,7 @@ async function main() {
 
     log.info(`\n${signal} received — shutting down gracefully...`);
     clearInterval(intervalId);
+    if (aiIntervalId) clearInterval(aiIntervalId);
 
     // Disconnect WebSockets
     disconnectBinanceWs();

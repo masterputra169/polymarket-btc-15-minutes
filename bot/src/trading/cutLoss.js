@@ -192,8 +192,8 @@ export function evaluateCutLoss({
   // v11→v15: Tightened from (1.5min + 30%) → (1.0min + 40%).
   // Settlement WR 87.5% beats cut-loss 23.3% — only force cut in truly catastrophic scenarios.
   // At <1 min left with 40%+ drop, recovery is statistically impossible.
-  const LATE_FORCE_CUT_MIN = 1.0;
-  const LATE_FORCE_CUT_DROP = 40;
+  const LATE_FORCE_CUT_MIN = 0.5;   // v16: only last 30s
+  const LATE_FORCE_CUT_DROP = 70;   // v16: 70% drop required
   const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Gate 6d: TIME-BASED PERSISTENT LOSS fast-track (Fix D) ──
@@ -229,13 +229,18 @@ export function evaluateCutLoss({
   const gainFromEntry = entryPrice > 0 ? ((peakTokenPrice - entryPrice) / entryPrice) * 100 : 0;
   const peakDrawdown = peakTokenPrice > 0 ? ((peakTokenPrice - currentTokenPrice) / peakTokenPrice) * 100 : 0;
   // High-peak profit protection: when peak >= 85¢, tighten drawdown threshold.
-  // With BTC reversal confirmed: 20% give-back. Without BTC confirm: 30%. Normal: 50%.
-  // Skip model check for high-peak — model is unreliable during fast reversals.
+  // With BTC reversal confirmed: 20% give-back. Without BTC confirm: 40%. Normal: 50%.
+  // v15 fix: When BTC is favorable (our side winning), require BOTH highPeak AND model < 0.60.
+  // Previous bug: highPeak alone skipped model check → cut winning positions on token noise.
+  // Token prices on Polymarket 15m are noisy — 89¢→60¢ swings happen even when BTC is winning.
   const highPeak = peakTokenPrice >= PROFIT_PEAK_THRESHOLD;
   const btcConfirmsReversal = hasPtb && btcFavorable === false;
-  const effectiveTrailingDrop = (highPeak && btcConfirmsReversal) ? 20 : highPeak ? 30 : baseTrailingDrop;
+  const effectiveTrailingDrop = (highPeak && btcConfirmsReversal) ? 20 : highPeak ? 40 : baseTrailingDrop;
+  // v15: Only bypass model check when BTC confirms reversal (unfavorable).
+  // When BTC is still favorable, always require model agreement (prob < 0.60).
+  const trailingModelBypass = highPeak && btcConfirmsReversal;
   const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= effectiveTrailingDrop
-    && (highPeak || modelProbability == null || modelProbability < 0.60);
+    && (trailingModelBypass || modelProbability == null || modelProbability < 0.60);
 
   // v14: Urgency flag — crash/maxLoss/lateForceCut/timeBased need faster slippage + retry
   const isUrgent = isCrash || isMaxLoss || isLateForceCut || isTimeBased;

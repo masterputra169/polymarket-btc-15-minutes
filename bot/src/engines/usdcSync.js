@@ -19,6 +19,7 @@ const USDC_BALANCE_INTERVAL = 30_000;
 let pendingUsdcSync = null;
 let usdcBalanceData = null;
 let usdcBalanceLastFetchMs = 0;
+let reconcileCooldownUntil = 0; // block syncs during/after reconciliation
 
 /**
  * Apply any pending USDC sync (called at top of each poll).
@@ -27,6 +28,13 @@ let usdcBalanceLastFetchMs = 0;
  */
 export function applyPendingSync(getBankroll, setBankroll) {
   if (pendingUsdcSync !== null) {
+    // Block sync if reconciler recently adjusted bankroll — on-chain USDC doesn't
+    // reflect reconciler P&L corrections, so syncing would revert them.
+    if (Date.now() < reconcileCooldownUntil) {
+      log.debug(`USDC sync blocked: reconcile cooldown active (${Math.ceil((reconcileCooldownUntil - Date.now()) / 1000)}s left)`);
+      pendingUsdcSync = null;
+      return;
+    }
     const syncVal = pendingUsdcSync;
     pendingUsdcSync = null;
     const current = getBankroll();
@@ -55,6 +63,7 @@ export function scheduleUsdcCheck({
   fetchBalance, getBankroll, getCurrentPosition, getPendingCost,
 }) {
   if (settlementCooldownActive) return;
+  if (now < reconcileCooldownUntil) return; // skip fetch during reconcile cooldown
   if (now - usdcBalanceLastFetchMs <= USDC_BALANCE_INTERVAL) return;
   if (!clientReady) return;
 
@@ -108,6 +117,25 @@ export function queueSync(value) {
  */
 export function invalidateSync() {
   pendingUsdcSync = null;
+}
+
+/**
+ * Block USDC syncs for `durationMs` — used by reconciler to prevent
+ * on-chain USDC balance from overwriting reconciler P&L corrections.
+ * On-chain USDC doesn't include unredeemed ERC-1155 token value,
+ * so syncing during/after reconciliation would revert corrections.
+ */
+export function setReconcileCooldown(durationMs) {
+  reconcileCooldownUntil = Date.now() + durationMs;
+  pendingUsdcSync = null; // also clear any stale queued sync
+  log.debug(`Reconcile cooldown set: ${(durationMs / 1000).toFixed(0)}s`);
+}
+
+/**
+ * Check if reconcile cooldown is active.
+ */
+export function isReconcileCooldownActive() {
+  return Date.now() < reconcileCooldownUntil;
 }
 
 /**

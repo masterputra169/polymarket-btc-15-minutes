@@ -73,8 +73,11 @@ const BOT_CONFIG = {
 
   // Auto-redeem resolved positions
   redeemEnabled: process.env.REDEEM_ENABLED !== 'false',
-  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 37 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 20 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
   redeemedFile: resolve(__dirname, '..', 'data', 'redeemed.json'),
+
+  // Daily profit target — pause trading when on-chain profit reaches target (WIB timezone)
+  dailyProfitTargetUsd: envNum(process.env.DAILY_PROFIT_TARGET_USD, 10, 0, 10_000),
 
   // Performance monitoring
   monitorIntervalMs: envInt(process.env.MONITOR_INTERVAL_MS, 15 * 60 * 1000, 60_000, 60 * 60 * 1000),
@@ -91,26 +94,29 @@ const BOT_CONFIG = {
   //   3. True crash: >=42% token drop with BTC confirming
   //   4. Extreme persistent: >=42% drop for 15+ minutes (position clearly dead)
   //   5. Late rescue: <1.5min left + >=30% drop (handled in cutLoss.js)
+  // v16 NUCLEAR HOLD: Data proves settlement WR 87.5% >> cut-loss WR 23.3%.
+  // 180 cut-losses destroyed ~$40+ of edge. Cut-loss is now LAST RESORT only.
+  // Only fires on absolute catastrophic crashes (70%+ drop, 90%+ capital loss).
   cutLoss: {
     enabled: process.env.CUT_LOSS_ENABLED !== 'false',
-    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 240, 0, 600),        // v11: 180→240s (4min) before evaluating
-    minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.05, 0.01, 0.50),
-    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 5000, 1000, 120000),
-    crashCooldownMs: envInt(process.env.CUT_LOSS_CRASH_COOLDOWN_MS, 1500, 500, 10000), // v14: faster retry during crash/urgent — 1.5s vs 5s normal
-    maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 7, 1, 20),
-    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 45, 1, 90), // Audit v2 C2: 35→45% — 33% of all trades are cuts with 42% FP rate; settlement WR 71% > cut-loss WR
-    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 3, 1, 20), // v11: 2→3 polls to confirm (not a fluke)
+    minHoldSec: envInt(process.env.CUT_LOSS_MIN_HOLD_SEC, 720, 0, 900),        // 720s (12min) — only last 3min of 15min market allows cut
+    minTokenPrice: envNum(process.env.CUT_LOSS_MIN_TOKEN_PRICE, 0.03, 0.01, 0.50), // lowered — if cutting, sell even cheap tokens
+    cooldownMs: envInt(process.env.CUT_LOSS_COOLDOWN_MS, 10000, 1000, 120000),  // 10s cooldown — slow retry
+    crashCooldownMs: envInt(process.env.CUT_LOSS_CRASH_COOLDOWN_MS, 3000, 500, 10000),
+    maxAttempts: envInt(process.env.CUT_LOSS_MAX_ATTEMPTS, 3, 1, 20),           // 3 attempts max then give up
+    minTokenDropPct: envNum(process.env.CUT_LOSS_MIN_TOKEN_DROP_PCT, 70, 1, 90), // 70% drop required — catastrophic only
+    consecutivePolls: envInt(process.env.CUT_LOSS_CONSECUTIVE_POLLS, 20, 1, 50), // 20 polls @ 50ms = 1s sustained signal
     minBidLiquidity: envNum(process.env.CUT_LOSS_MIN_BID_LIQUIDITY, 2, 0, 1000),
     maxCutSpreadPct: envNum(process.env.CUT_LOSS_MAX_CUT_SPREAD_PCT, 15, 1, 50),
-    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 42, 10, 90),      // v11: 35→42% — only true crashes
-    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.20, 0.01, 5.0),
-    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.80, 0.05, 1.50),        // C2: 0.85→0.80 with floor 0.40 — uniform 80% threshold across price levels
-    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.75, 0.40, 0.99), // Fix 5: 0.65→0.75 — with 87.5% settlement WR, ML must be very sure
-    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 42, 5, 90),   // v11: 35→42% — truly dead position
-    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 7, 1, 30), // Fix 4: 15→7min — dynamic capping handles the rest
-    maxLossOfCostPct: envNum(process.env.CUT_LOSS_MAX_LOSS_OF_COST_PCT, 75, 20, 95), // Fix 2: force cut at 75% capital loss
-    trailingStopActivationPct: envNum(process.env.CUT_LOSS_TRAILING_ACTIVATION_PCT, 15, 5, 50), // Fix 6: need 15%+ gain to activate
-    trailingStopDropPct: envNum(process.env.CUT_LOSS_TRAILING_DROP_PCT, 50, 20, 80),            // Fix 6: cut at 50% give-back from peak
+    crashDropPct: envNum(process.env.CUT_LOSS_CRASH_DROP_PCT, 70, 10, 90),      // 70% crash threshold
+    crashBtcDistPct: envNum(process.env.CUT_LOSS_CRASH_BTC_DIST_PCT, 0.50, 0.01, 5.0), // BTC must move 0.5%+ against
+    evBuffer: envNum(process.env.CUT_LOSS_EV_BUFFER, 0.50, 0.05, 1.50),        // model must say <50% of entry price = dead
+    mlFlipConfidence: envNum(process.env.CUT_LOSS_ML_FLIP_CONF, 0.92, 0.40, 0.99), // ML must be 92%+ sure of flip
+    persistentDropPct: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_PCT, 65, 5, 90), // 65%+ for 10min = truly dead
+    persistentDropMinutes: envNum(process.env.CUT_LOSS_PERSISTENT_DROP_MIN, 10, 1, 30),
+    maxLossOfCostPct: envNum(process.env.CUT_LOSS_MAX_LOSS_OF_COST_PCT, 90, 20, 99), // only at 90% capital loss
+    trailingStopActivationPct: envNum(process.env.CUT_LOSS_TRAILING_ACTIVATION_PCT, 30, 5, 50), // need 30%+ gain first
+    trailingStopDropPct: envNum(process.env.CUT_LOSS_TRAILING_DROP_PCT, 70, 20, 90),            // 70% give-back from peak
   },
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
@@ -146,7 +152,7 @@ const BOT_CONFIG = {
   // Expected: ~10% compounding per win → +700% monthly at high win rate.
   preMarketLong: {
     enabled: process.env.PREMARKET_LONG_ENABLED === 'true',
-    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.05, 0.01, 0.50),          // Audit v5 L5: 0.10→0.05 — half-Kelly for single daily binary trade (Audit v4 C1 recommendation)
+    riskPct: envNum(process.env.PREMARKET_LONG_RISK_PCT, 0.10, 0.01, 0.50),          // 10% portfolio — aggressive pre-market entry
     // take-profit removed — full hold to settlement
     maxEntryPrice: envNum(process.env.PREMARKET_LONG_MAX_ENTRY_PRICE, 0.60, 0.30, 0.80), // max 60c — don't buy expensive tokens
     windowStartH: envInt(process.env.PREMARKET_LONG_WINDOW_START_H, 9, 0, 23),       // 09:00 EST
@@ -162,7 +168,7 @@ const BOT_CONFIG = {
   limitOrder: {
     enabled: process.env.LIMIT_ORDER_ENABLED === 'true',
     minElapsedMin: envNum(process.env.LIMIT_MIN_ELAPSED_MIN, 0.5, 0, 5),
-    maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 5.0, 1, 10),         // 3→5 min — wider placement window
+    maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 7.0, 1, 10),         // v3: 5→7 min — wider LIMIT window, data shows LIMIT 81% WR >> FOK 71%
     maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.60, 0.40, 0.75),   // 65→60¢ — data: 60-64c bucket is +$43, 65-69c is -$8
     minEntryPrice: envNum(process.env.LIMIT_MIN_ENTRY_PRICE, 0.50, 0.30, 0.60),
     priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.60, 0.50, 0.70),   // 65→60¢ — ML≥85%: max 60c, need 60% WR (achievable)
@@ -176,15 +182,19 @@ const BOT_CONFIG = {
     checkIntervalMs: envInt(process.env.LIMIT_CHECK_INTERVAL_MS, 2000, 500, 10000),
   },
 
-  // Smart Order Router — dynamic FOK vs LIMIT selection based on ML + price + momentum
+  // Smart Order Router v2 — 7-rule decision tree with spread + relative momentum + regime
   orderRouter: {
-    enabled:             process.env.ORDER_ROUTER_ENABLED !== 'false',  // Default ON
-    fokMlThreshold:      envNum(process.env.ROUTER_FOK_ML, 0.88, 0.75, 0.95),
-    fokMaxPrice:         envNum(process.env.ROUTER_FOK_MAX_PRICE, 0.62, 0.50, 0.75),
-    cheapPriceThreshold: envNum(process.env.ROUTER_CHEAP_PRICE, 0.55, 0.45, 0.65),
-    cheapMlThreshold:    envNum(process.env.ROUTER_CHEAP_ML, 0.70, 0.55, 0.85),
-    momentumThreshold:   envNum(process.env.ROUTER_MOMENTUM, 30, 10, 100),
-    upgradeMLThreshold:  envNum(process.env.ROUTER_UPGRADE_ML, 0.90, 0.80, 0.95),
+    enabled:               process.env.ORDER_ROUTER_ENABLED !== 'false',
+    fokMlThreshold:        envNum(process.env.ROUTER_FOK_ML, 0.88, 0.70, 0.95),          // v3: 0.80→0.88 — LIMIT 81% WR >> FOK 71%, reserve FOK for very-high ML only
+    fokMaxPrice:           envNum(process.env.ROUTER_FOK_MAX_PRICE, 0.58, 0.50, 0.75),   // v3: 0.62→0.58 — tighter FOK price cap, push more to LIMIT
+    fokMaxPriceTrending:   envNum(process.env.ROUTER_FOK_MAX_PRICE_TREND, 0.68, 0.60, 0.85),  // v3: 0.75→0.68 — even trending should prefer LIMIT unless very cheap
+    cheapPriceThreshold:   envNum(process.env.ROUTER_CHEAP_PRICE, 0.52, 0.45, 0.65),     // v3: 0.55→0.52 — only truly cheap tokens get FOK
+    cheapMlThreshold:      envNum(process.env.ROUTER_CHEAP_ML, 0.75, 0.55, 0.85),        // v3: 0.70→0.75 — raise ML bar for cheap FOK
+    momentumRelThreshold:  envNum(process.env.ROUTER_MOMENTUM_REL, 0.0007, 0.0003, 0.003), // v2: $30 fixed→0.07% relative (~$47 at $67K)
+    spreadNarrowThreshold: envNum(process.env.ROUTER_SPREAD_NARROW, 0.03, 0.01, 0.06),     // v2: <3% = narrow, limit gives no discount
+    spreadWideThreshold:   envNum(process.env.ROUTER_SPREAD_WIDE, 0.03, 0.02, 0.10),       // v2: ≥3% = wide, real discount available
+    upgradeMLThreshold:    envNum(process.env.ROUTER_UPGRADE_ML, 0.90, 0.80, 0.95),
+    upgradeHoldSec:        envNum(process.env.ROUTER_UPGRADE_HOLD_SEC, 60, 20, 180),       // v2: 30→60s — prevent premature limit cancel
   },
 
   // Monte Carlo simulation (Quant risk assessment)
@@ -205,6 +215,25 @@ const BOT_CONFIG = {
   // F3: consensus ≥ convictionBlockStrength AND conviction wallet (score≥convictionScoreMin, USDC≥convictionMinUSDC, non-hedger) → BLOCK
   // F1b: consensus ≥ 85% of F1 threshold AND dumb money contrarian → BLOCK
   // Cost: ~$0.01–0.05/request, cached 90s per market → ~$0.50–1.00/day
+  // AI Agent — OpenRouter-powered trade analysis + self-optimization
+  // Uses OpenRouter API (supports Claude, Gemini, GPT, etc.) for:
+  // 1. Post-trade analysis: journal pattern detection every analyzeIntervalMs
+  // 2. Self-optimization: auto-tune .env params (requires AI_AUTO_OPTIMIZE=true)
+  // 3. Sentiment signal: Fear & Greed + BTC Dominance (free APIs, no key needed)
+  // Cost: ~$0.001/day with Gemini Flash on OpenRouter
+  ai: {
+    enabled: process.env.AI_AGENT_ENABLED === 'true',
+    apiKey: process.env.OPENROUTER_API_KEY || '',
+    model: process.env.AI_MODEL || 'google/gemini-2.0-flash-001',
+    maxTokens: envInt(process.env.AI_MAX_TOKENS, 2000, 100, 8000),
+    timeoutMs: envInt(process.env.AI_TIMEOUT_MS, 30000, 3000, 60000),
+    rateLimitPerMin: envInt(process.env.AI_RATE_LIMIT, 10, 1, 60),
+    analyzeIntervalMs: envInt(process.env.AI_ANALYZE_INTERVAL_MS, 4 * 60 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+    autoOptimize: process.env.AI_AUTO_OPTIMIZE === 'true',
+    sentimentEnabled: process.env.SENTIMENT_ENABLED !== 'false',  // on by default (free APIs)
+    sentimentCacheMs: envInt(process.env.SENTIMENT_CACHE_MS, 5 * 60 * 1000, 60_000, 30 * 60 * 1000),
+  },
+
   metEngine: {
     enabled: process.env.METENGINE_ENABLED === 'true',
     baseUrl: process.env.METENGINE_BASE_URL || 'https://agent.metengine.xyz',

@@ -415,7 +415,7 @@ export async function executeDirectionalTrade({
 
   // Audit v2 C3: Confidence-tiered Kelly cap — replaces flat 3% cap that made sizing irrelevant.
   // LOW=2%, MEDIUM=3%, HIGH=4%, VERY_HIGH=5% of bankroll.
-  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.07, HIGH: 0.05, MEDIUM: 0.04, LOW: 0.02 }; // GC5c: raised caps for compounding
+  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.05, HIGH: 0.05, MEDIUM: 0.04, LOW: 0.02 }; // Max 5% porto per entry
   const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
   const currentBankroll = deps.getBankroll();
   const kellyMaxBet = currentBankroll * kellyCapPct;

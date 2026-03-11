@@ -15,7 +15,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * only JSON.parse'd on flush. Cuts object allocation by ~50%.
  */
 
-const BOT_WS_URL = 'ws://localhost:3099';
+const BOT_WS_URL = `ws://${window.location.hostname}:3099`;  // dynamic: works from phone + localhost
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const STALE_TIMEOUT_MS = 15_000;
