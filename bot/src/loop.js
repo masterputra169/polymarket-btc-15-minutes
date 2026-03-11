@@ -1087,8 +1087,8 @@ export async function pollOnce() {
               const sfPnl = sfRecovery - sfPos.cost;
               settleTradeEarlyExit(sfRecovery);
               invalidateSync();
-              clearEntrySnapshot();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
+              clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
               resetRecovery(); // Smart sell cancels any pending recovery
@@ -1102,8 +1102,8 @@ export async function pollOnce() {
                 const sfPnl = sfActualRecovery - sfPos.cost;
                 settleTradeEarlyExit(sfActualRecovery);
                 invalidateSync();
-                clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
+                clearEntrySnapshot();
                 resetCutLossState();
                 resetTakeProfitState();
                 resetRecovery(); // Smart sell cancels any pending recovery
@@ -1229,8 +1229,8 @@ export async function pollOnce() {
               const cutPnl = recovery - pos.cost;
               settleTradeEarlyExit(recovery);
               invalidateSync();
-              clearEntrySnapshot();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
+              clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
               resetLimitOrderState();
@@ -1250,8 +1250,8 @@ export async function pollOnce() {
                 const cutPnl = actualRecovery - pos.cost;
                 settleTradeEarlyExit(actualRecovery);
                 invalidateSync();
-                clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
+                clearEntrySnapshot();
                 resetCutLossState();
                 resetTakeProfitState();
                 resetLimitOrderState();
@@ -1270,8 +1270,8 @@ export async function pollOnce() {
                   log.error(`CUT-LOSS: Phantom position — no tokens found on-chain. Unwinding position state (loss=$${pos.cost.toFixed(2)})`);
                   settleTradeEarlyExit(0); // 0 recovery
                   invalidateSync();
-                  clearEntrySnapshot();
                   writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: -pos.cost, exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
+                  clearEntrySnapshot();
                   resetCutLossState();
                   resetTakeProfitState();
                   resetLimitOrderState();
@@ -1332,8 +1332,8 @@ export async function pollOnce() {
               const tpPnl = tpResult.recoveryAmount - tpPos.cost;
               settleTradeEarlyExit(tpResult.recoveryAmount);
               invalidateSync();
-              clearEntrySnapshot();
               writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: tpExitData });
+              clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
               resetRecovery(); // Take-profit cancels any pending recovery
@@ -1346,8 +1346,8 @@ export async function pollOnce() {
                 const tpPnl = tpActualRecovery - tpPos.cost;
                 settleTradeEarlyExit(tpActualRecovery);
                 invalidateSync();
-                clearEntrySnapshot();
                 writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...tpExitData, recovered: tpActualRecovery } });
+                clearEntrySnapshot();
                 resetCutLossState();
                 resetTakeProfitState();
                 resetRecovery(); // Take-profit cancels any pending recovery

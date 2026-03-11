@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react(),],
   server: {
     host: '0.0.0.0',  // expose to local network (access from phone)
-    port: 3000,
+    port: 3010,
     proxy: {
       '/gamma-api': {
         target: 'https://gamma-api.polymarket.com',

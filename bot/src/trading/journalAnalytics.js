@@ -15,7 +15,7 @@ const log = createLogger('JournalAnalytics');
 let _cache = null;
 let _lastTradeCount = -1;
 let _lastComputeMs = 0;
-const RECOMPUTE_INTERVAL_MS = 60_000; // max recompute every 60s
+const RECOMPUTE_INTERVAL_MS = 15_000; // max recompute every 15s
 
 // Session definitions (ET hours)
 const SESSIONS = {
@@ -74,13 +74,24 @@ function emptyAnalytics() {
  */
 function computeAnalytics() {
   const trades = loadTradeJournal();
+  const verifiedTrades = loadVerifiedJournal();
   const auditEvents = loadStateAudit();
 
   // Filter to real trades only (exclude DRY_RUN, REJECTED, UNWIND without PnL)
-  const realTrades = trades.filter(t => {
+  const journalReal = trades.filter(t => {
     const outcome = t.analysis?.outcome;
     return outcome && outcome !== 'DRY_RUN' && outcome !== 'REJECTED';
   });
+
+  // Merge verified trades that aren't already in journal (by marketSlug + side)
+  const journalKeys = new Set(journalReal.map(t =>
+    `${t.entry?.marketSlug ?? ''}_${t.entry?.side ?? ''}`
+  ));
+  const uniqueVerified = verifiedTrades.filter(v =>
+    !journalKeys.has(`${v.entry?.marketSlug ?? ''}_${v.entry?.side ?? ''}`)
+  );
+
+  const realTrades = [...journalReal, ...uniqueVerified];
 
   // ── 1. Hourly breakdown ──
   const hourly = computeHourly(realTrades);
@@ -107,6 +118,11 @@ function computeAnalytics() {
     equityCurve,
     events,
     patterns,
+    sources: {
+      journal: journalReal.length,
+      verified: uniqueVerified.length,
+      total: realTrades.length,
+    },
     computedAt: Date.now(),
   };
 }
@@ -125,6 +141,51 @@ function loadTradeJournal() {
     return entries;
   } catch (err) {
     log.debug(`Failed to load trade journal: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Load verified journal and convert to trade_journal format for merging.
+ * Verified journal has on-chain confirmed trades that may be missing from trade_journal.
+ */
+function loadVerifiedJournal() {
+  try {
+    if (!existsSync(BOT_CONFIG.verifiedJournalFile)) return [];
+    const raw = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8');
+    const lines = raw.trim().split('\n').filter(Boolean);
+    const entries = [];
+    for (const line of lines) {
+      try {
+        const v = JSON.parse(line);
+        // Only include resolved entries with known PnL
+        if (!v.outcome || v.netPnl == null) continue;
+        const firstTrade = v.trades?.[0];
+        if (!firstTrade) continue;
+        // Convert to trade_journal-compatible format
+        entries.push({
+          entry: {
+            side: firstTrade.tokenSide ?? 'UP',
+            tokenPrice: firstTrade.price ?? 0,
+            btcPrice: null,
+            priceToBeat: null,
+            marketSlug: v.marketSlug,
+            cost: v.totalCost ?? 0,
+            size: v.netPosition ?? 0,
+            enteredAt: firstTrade.matchTime ? parseInt(firstTrade.matchTime) * 1000 : v.marketTime,
+          },
+          analysis: {
+            outcome: v.netPnl > 0 ? 'WIN' : 'LOSS',
+            pnl: v.netPnl,
+            holdDurationSec: null,
+          },
+          _ts: v._fetchedAt ?? v.marketTime,
+          _source: 'verified',
+        });
+      } catch { /* skip */ }
+    }
+    return entries;
+  } catch {
     return [];
   }
 }

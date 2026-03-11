@@ -124,7 +124,7 @@ function StatBox({ label, value, color, sub }) {
 // ─────────────── Tab: Overview ───────────────
 
 function OverviewTab({ data }) {
-  const { patterns, sessions, dayOfWeek } = data;
+  const { patterns, sessions, dayOfWeek, sources, computedAt } = data;
   if (!patterns || patterns.totalTrades === 0) {
     return <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.78rem' }}>No trade data</div>;
   }
@@ -132,8 +132,21 @@ function OverviewTab({ data }) {
   const p = patterns;
   const streak = p.currentStreak;
 
+  // Compute "last updated X ago"
+  const ageSec = computedAt ? Math.round((Date.now() - computedAt) / 1000) : null;
+  const ageStr = ageSec != null ? (ageSec < 60 ? `${ageSec}s ago` : `${Math.floor(ageSec / 60)}m ago`) : '';
+  const sourceStr = sources
+    ? `${sources.journal} journal${sources.verified > 0 ? ` + ${sources.verified} on-chain` : ''}`
+    : '';
+
   return (
     <>
+      {/* Data source info */}
+      <div style={{ fontSize: '0.52rem', color: 'var(--text-dim)', marginBottom: 6, textAlign: 'right' }}>
+        {sourceStr && <span>{sourceStr}</span>}
+        {ageStr && <span style={{ marginLeft: 8 }}>Updated {ageStr}</span>}
+      </div>
+
       {/* Summary Stats */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
         <StatBox label="Trades" value={p.totalTrades} />
@@ -480,6 +493,7 @@ export default memo(JournalTimeSeriesPanel, (prev, next) => {
   if (!a || !b) return a === b;
   return (
     a.computedAt === b.computedAt &&
-    a.patterns?.totalTrades === b.patterns?.totalTrades
+    a.patterns?.totalTrades === b.patterns?.totalTrades &&
+    a.sources?.total === b.sources?.total
   );
 });

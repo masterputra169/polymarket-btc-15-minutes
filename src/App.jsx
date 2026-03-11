@@ -346,7 +346,7 @@ export default function App() {
   const journalAnalyticsData = useMemo(() => {
     if (!data?.journalAnalytics) return null;
     return data.journalAnalytics;
-  }, [data?.journalAnalytics?.computedAt, data?.journalAnalytics?.patterns?.totalTrades]);
+  }, [data?.journalAnalytics?.computedAt, data?.journalAnalytics?.patterns?.totalTrades, data?.journalAnalytics?.sources?.total]);
 
   // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot
   const positionData = useMemo(() => {
