@@ -48,7 +48,7 @@ export const TRADE_FILTERS = {
   MIN_ENTRY_PRICE: 0.50,        // 58→50c — allow cheaper entries with better risk/reward (win 50c vs lose 50c = 50% WR break-even)
   MAX_ENTRY_PRICE: 0.63,        // 68→63c — at 63c: win 37c lose 63c, need 63% WR (achievable). 68c needed 68% WR (too hard)
   MAX_EDGE: 0.25,               // Quant fix L4: 0.18→0.25 — spread/fee already penalize edge; blanket cap blocks genuine high-EV opportunities
-  BLACKOUT_HOURS_ET: [], // DISABLED — was [2, 22]
+  BLACKOUT_HOURS_ET: [16, 17, 18, 19, 20, 21, 22, 23], // RE-ENABLED — data shows 31.6% WR during 16-23 ET
   MAX_ENTRY_SPREAD_PCT: 8,    // hard reject: spread > 8%
   SPREAD_EDGE_MIN: 8,         // soft: spread > 4% needs edge ≥ 8%
   VPIN_BLOCK_THRESHOLD: 0.70, // VPIN > 70% + opposing flow = informed trader, block entry

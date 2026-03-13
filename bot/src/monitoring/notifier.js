@@ -48,17 +48,25 @@ export async function notify(level, message, opts) {
   }
 }
 
+const PROFILE_URL = 'https://polymarketscan.org/address/0x2f8b9af5a465e2bdd5f9b541c3878bc64659b472';
+
 /**
- * Extract inline button from <a href="...">Label</a> tag in text.
- * Returns { cleanText, inlineKeyboard } — inlineKeyboard is null if no link found.
+ * Extract inline buttons from <a href="...">Label</a> tags in text,
+ * and always append a "View Profile" button row.
+ * Returns { cleanText, inlineKeyboard }.
  */
 function extractInlineButton(text) {
   const linkRe = /\n?<a href="([^"]+)">([^<]+)<\/a>/;
   const match = text.match(linkRe);
-  if (!match) return { cleanText: text, inlineKeyboard: null };
-  const cleanText = text.replace(linkRe, '').trimEnd();
-  const inlineKeyboard = { inline_keyboard: [[{ text: `🔗 ${match[2]}`, url: match[1] }]] };
-  return { cleanText, inlineKeyboard };
+  const buttons = [];
+  let cleanText = text;
+  if (match) {
+    cleanText = text.replace(linkRe, '').trimEnd();
+    buttons.push([{ text: `🔗 ${match[2]}`, url: match[1] }]);
+  }
+  // Always add profile button
+  buttons.push([{ text: '📊 View Profile', url: PROFILE_URL }]);
+  return { cleanText, inlineKeyboard: { inline_keyboard: buttons } };
 }
 
 /**

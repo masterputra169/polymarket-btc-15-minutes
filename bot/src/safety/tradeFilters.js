@@ -113,6 +113,15 @@ export function applyTradeFilters({
     }
   }
 
+  // 1a. Asia session ML minimum — Asia WR 77% vs US 85%. Low liquidity + manipulation risk.
+  // Require ML ≥80% to trade during Asia hours (21:00-04:00 ET).
+  const ASIA_ML_MIN = 0.80;
+  if (session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < ASIA_ML_MIN) {
+    if (!highEdgeBypass) {
+      reasons.push(`Asia session: ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(ASIA_ML_MIN * 100).toFixed(0)}% minimum`);
+    }
+  }
+
   // 1b. ML 75-80% dead zone — data (15 trades): 53.3% WR, -$4.54
   // This confidence band is unreliable; require strong edge to compensate.
   // 80%+ ML unaffected (90.9% WR, no extra gate needed).

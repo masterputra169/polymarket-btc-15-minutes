@@ -146,6 +146,17 @@ export function getUsdcBalanceData() {
 }
 
 /**
+ * Force the next USDC check to run immediately by resetting the fetch timer.
+ * Called by redeemer after successful on-chain redemption so bankroll syncs
+ * within ~30s instead of waiting for settlement cooldown to expire.
+ */
+export function queueUsdcSyncAfterRedeem() {
+  usdcBalanceLastFetchMs = 0; // Reset timer — next scheduleUsdcCheck will fetch immediately
+  reconcileCooldownUntil = 0; // Clear reconcile cooldown
+  log.info('USDC sync queued after redeem — will fetch on next poll');
+}
+
+/**
  * Force-sync local bankroll with on-chain USDC balance.
  * Bypasses all guards (settlement cooldown, open position, race detection).
  * Used by dashboard forceSync command for manual reconciliation.

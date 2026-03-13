@@ -355,6 +355,7 @@ export default function App() {
       equityCurve: ja.equityCurve,
       events: ja.events,
       sources: ja.sources,
+      actualPnl: ja.actualPnl,
       computedAt: ja.computedAt,
     };
   }, [
@@ -365,6 +366,7 @@ export default function App() {
     data?.journalAnalytics?.sources?.total,
     data?.journalAnalytics?.events?.length,
     data?.journalAnalytics?.equityCurve?.length,
+    data?.journalAnalytics?.actualPnl?.lastBankroll,
   ]);
 
   // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot

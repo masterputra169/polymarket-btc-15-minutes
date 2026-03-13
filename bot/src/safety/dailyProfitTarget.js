@@ -76,23 +76,26 @@ function saveState() {
  * @param {number} onChainBalance - Current on-chain USDC balance
  * @returns {boolean} Whether baseline was (re)set
  */
-export function initDayBaseline(onChainBalance) {
+export function initDayBaseline(onChainBalance, deployedCapital = 0) {
   if (!Number.isFinite(onChainBalance) || onChainBalance < 0) return false;
 
+  const deployed = Number.isFinite(deployedCapital) && deployedCapital > 0 ? deployedCapital : 0;
+  const effectiveBalance = onChainBalance + deployed;
   const today = getWibDate();
 
   if (currentWibDate !== today) {
-    // New WIB day — reset baseline
+    // New WIB day — reset baseline (include deployed capital so open positions don't count as profit)
     const prevDate = currentWibDate;
     const prevBaseline = startOfDayBalance;
-    startOfDayBalance = onChainBalance;
+    startOfDayBalance = effectiveBalance;
     currentWibDate = today;
     targetReached = false;
     lastProfit = 0;
     saveState();
     log.info(
-      `New WIB day (${today}) — profit target baseline: $${onChainBalance.toFixed(2)}, ` +
-      `target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}` +
+      `New WIB day (${today}) — profit target baseline: $${effectiveBalance.toFixed(2)}` +
+      (deployed > 0 ? ` (on-chain $${onChainBalance.toFixed(2)} + deployed $${deployed.toFixed(2)})` : '') +
+      `, target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}` +
       (prevDate ? ` (prev: ${prevDate}, $${prevBaseline?.toFixed(2) ?? '?'})` : '')
     );
     return true;
@@ -100,12 +103,13 @@ export function initDayBaseline(onChainBalance) {
 
   // Same day — set baseline only if not yet set (first startup of the day)
   if (startOfDayBalance === null) {
-    startOfDayBalance = onChainBalance;
+    startOfDayBalance = effectiveBalance;
     currentWibDate = today;
     saveState();
     log.info(
-      `Profit target baseline set: $${onChainBalance.toFixed(2)} ` +
-      `(${today} WIB), target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}`
+      `Profit target baseline set: $${effectiveBalance.toFixed(2)}` +
+      (deployed > 0 ? ` (on-chain $${onChainBalance.toFixed(2)} + deployed $${deployed.toFixed(2)})` : '') +
+      ` (${today} WIB), target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}`
     );
     return true;
   }
@@ -116,28 +120,32 @@ export function initDayBaseline(onChainBalance) {
 /**
  * Check if daily profit target has been reached.
  *
+ * Effective balance = on-chain USDC + open position cost + unredeemed settled winnings.
+ * This captures the full account value even when ERC-1155 tokens haven't been redeemed yet.
+ *
  * @param {number} onChainBalance - Current on-chain USDC balance
  * @param {number} [positionCost=0] - Cost of open position (deployed capital on-chain as tokens)
+ * @param {number} [pendingRedeemValue=0] - Value of settled winning positions awaiting on-chain redeem
  * @returns {{ reached: boolean, profit: number, target: number, baseline: number }}
  */
-export function checkProfitTarget(onChainBalance, positionCost = 0) {
+export function checkProfitTarget(onChainBalance, positionCost = 0, pendingRedeemValue = 0) {
   const target = BOT_CONFIG.dailyProfitTargetUsd;
 
   if (target <= 0) {
     return { reached: false, profit: 0, target: 0, baseline: 0 };
   }
 
-  // Handle day rollover
-  initDayBaseline(onChainBalance);
+  // Handle day rollover (pass deployed capital so baseline includes open positions)
+  const deployedCapital = Number.isFinite(positionCost) && positionCost > 0 ? positionCost : 0;
+  const pendingRedeem = Number.isFinite(pendingRedeemValue) && pendingRedeemValue > 0 ? pendingRedeemValue : 0;
+  initDayBaseline(onChainBalance, deployedCapital);
 
   if (startOfDayBalance === null || !Number.isFinite(onChainBalance)) {
     return { reached: false, profit: 0, target, baseline: 0 };
   }
 
-  // Effective balance = on-chain USDC + deployed capital in tokens
-  // Conservative: position cost is lower bound of token value
-  const deployedCapital = Number.isFinite(positionCost) && positionCost > 0 ? positionCost : 0;
-  const effectiveBalance = onChainBalance + deployedCapital;
+  // Effective balance = on-chain USDC + deployed capital + unredeemed settled winnings
+  const effectiveBalance = onChainBalance + deployedCapital + pendingRedeem;
   const profit = effectiveBalance - startOfDayBalance;
   lastProfit = profit;
   const reached = profit >= target;
@@ -149,6 +157,7 @@ export function checkProfitTarget(onChainBalance, positionCost = 0) {
       `DAILY PROFIT TARGET REACHED! +$${profit.toFixed(2)} >= $${target.toFixed(2)} target | ` +
       `Baseline: $${startOfDayBalance.toFixed(2)} | On-chain: $${onChainBalance.toFixed(2)}` +
       (deployedCapital > 0 ? ` + $${deployedCapital.toFixed(2)} deployed` : '') +
+      (pendingRedeem > 0 ? ` + $${pendingRedeem.toFixed(2)} unredeemed` : '') +
       ` | Bot will pause trading for the rest of this WIB day`
     );
   }

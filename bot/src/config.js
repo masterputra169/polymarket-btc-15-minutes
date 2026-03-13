@@ -73,11 +73,11 @@ const BOT_CONFIG = {
 
   // Auto-redeem resolved positions
   redeemEnabled: process.env.REDEEM_ENABLED !== 'false',
-  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 20 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
+  redeemIntervalMs: envInt(process.env.REDEEM_INTERVAL_MS, 5 * 60 * 1000, 60_000, 24 * 60 * 60 * 1000),
   redeemedFile: resolve(__dirname, '..', 'data', 'redeemed.json'),
 
   // Daily profit target — pause trading when on-chain profit reaches target (WIB timezone)
-  dailyProfitTargetUsd: envNum(process.env.DAILY_PROFIT_TARGET_USD, 10, 0, 10_000),
+  dailyProfitTargetUsd: envNum(process.env.DAILY_PROFIT_TARGET_USD, 20, 0, 10_000),
 
   // Performance monitoring
   monitorIntervalMs: envInt(process.env.MONITOR_INTERVAL_MS, 15 * 60 * 1000, 60_000, 60 * 60 * 1000),

@@ -104,6 +104,41 @@ function computeAnalytics() {
     return outcome && outcome !== 'DRY_RUN' && outcome !== 'REJECTED';
   });
 
+  // Build verified PnL lookup (marketSlug → on-chain netPnl)
+  // Verified journal has on-chain confirmed PnL which is more accurate than local estimates.
+  const verifiedPnlMap = new Map();
+  for (const v of verifiedTrades) {
+    const slug = v.entry?.marketSlug;
+    if (slug && v.analysis?.pnl != null) {
+      verifiedPnlMap.set(slug, v.analysis.pnl);
+    }
+  }
+
+  // Override journal PnL with verified on-chain PnL where available
+  let verifiedOverrides = 0;
+  for (const t of journalReal) {
+    const slug = t.entry?.marketSlug;
+    if (slug && verifiedPnlMap.has(slug) && t.analysis) {
+      const onChainPnl = verifiedPnlMap.get(slug);
+      if (Math.abs((t.analysis.pnl ?? 0) - onChainPnl) > 0.01) {
+        t.analysis._localPnl = t.analysis.pnl; // preserve original estimate
+        t.analysis.pnl = onChainPnl;
+        // Fix outcome if local said LOSS but on-chain was WIN (or vice versa)
+        if (onChainPnl > 0 && t.analysis.outcome === 'LOSS') {
+          t.analysis._localOutcome = t.analysis.outcome;
+          t.analysis.outcome = 'WIN';
+        } else if (onChainPnl < 0 && t.analysis.outcome === 'WIN') {
+          t.analysis._localOutcome = t.analysis.outcome;
+          t.analysis.outcome = 'LOSS';
+        }
+        verifiedOverrides++;
+      }
+    }
+  }
+  if (verifiedOverrides > 0) {
+    log.info(`PnL corrected from verified journal: ${verifiedOverrides} trades updated`);
+  }
+
   // Merge verified trades that aren't already in journal (by marketSlug + side)
   const journalKeys = new Set(journalReal.map(t =>
     `${t.entry?.marketSlug ?? ''}_${t.entry?.side ?? ''}`
@@ -132,6 +167,9 @@ function computeAnalytics() {
   // ── 6. Pattern detection ──
   const patterns = computePatterns(realTrades, hourly, sessions, dayOfWeek);
 
+  // ── 7. Actual PnL from audit trail (bankroll-based, reflects on-chain reality) ──
+  const actualPnl = computeActualPnlFromAudit(auditEvents);
+
   return {
     hourly,
     sessions,
@@ -139,9 +177,11 @@ function computeAnalytics() {
     equityCurve,
     events,
     patterns,
+    actualPnl,
     sources: {
       journal: journalReal.length,
       verified: uniqueVerified.length,
+      verifiedOverrides,
       total: realTrades.length,
     },
     computedAt: Date.now(),
@@ -256,6 +296,58 @@ function getSession(etHour) {
     if (sess.hours.includes(etHour)) return key;
   }
   return 'off';
+}
+
+/**
+ * Compute actual PnL from audit trail — reflects on-chain reality (USDC syncs, settlements).
+ * More accurate than journal PnL which uses local settlement estimates.
+ */
+function computeActualPnlFromAudit(auditEvents) {
+  if (auditEvents.length === 0) return null;
+
+  // Find earliest and latest bankroll from meaningful events
+  let firstBankroll = null;
+  let firstTs = null;
+  let lastBankroll = null;
+  let lastTs = null;
+  let settleCount = 0;
+  let settlePnlSum = 0;
+  let cutLossCount = 0;
+  let cutLossPnlSum = 0;
+
+  for (const ev of auditEvents) {
+    if (ev.bankrollAfter == null || ev._ts == null) continue;
+
+    if (firstBankroll === null) {
+      firstBankroll = ev.bankrollAfter;
+      firstTs = ev._ts;
+    }
+    lastBankroll = ev.bankrollAfter;
+    lastTs = ev._ts;
+
+    if (ev.type === 'SETTLE' && ev.pnl != null) {
+      settleCount++;
+      settlePnlSum += ev.pnl;
+    }
+    if (ev.type === 'CUT_LOSS' && ev.pnl != null) {
+      cutLossCount++;
+      cutLossPnlSum += ev.pnl;
+    }
+  }
+
+  if (firstBankroll === null || lastBankroll === null) return null;
+
+  return {
+    firstBankroll: roundMoney(firstBankroll),
+    lastBankroll: roundMoney(lastBankroll),
+    bankrollChange: roundMoney(lastBankroll - firstBankroll),
+    firstTs,
+    lastTs,
+    settlePnl: roundMoney(settlePnlSum),
+    settleCount,
+    cutLossPnl: roundMoney(cutLossPnlSum),
+    cutLossCount,
+  };
 }
 
 /** Check if a trade is a "win". */

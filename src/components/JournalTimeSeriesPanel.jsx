@@ -124,7 +124,7 @@ function StatBox({ label, value, color, sub }) {
 // ─────────────── Tab: Overview ───────────────
 
 function OverviewTab({ data }) {
-  const { patterns, sessions, dayOfWeek, sources, computedAt } = data;
+  const { patterns, sessions, dayOfWeek, sources, computedAt, actualPnl } = data;
 
   // Live-ticking "Updated Xs ago" — re-renders every 5s independently
   const [now, setNow] = useState(Date.now());
@@ -165,6 +165,35 @@ function OverviewTab({ data }) {
           color={streak?.type === 'win' ? 'var(--green-mid)' : streak?.type === 'loss' ? 'var(--red-mid)' : undefined}
         />
       </div>
+
+      {/* Actual vs Estimated PnL (from audit trail) */}
+      {actualPnl && (
+        <div style={{
+          display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap',
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-dim)',
+          borderRadius: 'var(--radius-sm)', padding: '6px 8px',
+          fontSize: '0.62rem',
+        }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.52rem', textTransform: 'uppercase' }}>Actual P&L (on-chain)</div>
+            <div style={{ fontWeight: 700, color: pnlColor(actualPnl.bankrollChange) }}>
+              {pnlStr(actualPnl.bankrollChange)}
+            </div>
+            <div style={{ fontSize: '0.5rem', color: 'var(--text-dim)' }}>
+              ${actualPnl.firstBankroll} → ${actualPnl.lastBankroll}
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.52rem', textTransform: 'uppercase' }}>Journal Est.</div>
+            <div style={{ fontWeight: 700, color: pnlColor(p.totalPnl) }}>
+              {pnlStr(p.totalPnl)}
+            </div>
+            <div style={{ fontSize: '0.5rem', color: 'var(--text-dim)' }}>
+              {sources?.verifiedOverrides > 0 ? `${sources.verifiedOverrides} verified` : 'local estimates'}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Avg P&L + Hold Time */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>

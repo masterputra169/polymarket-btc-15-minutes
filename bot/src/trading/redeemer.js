@@ -19,6 +19,7 @@ import { ethers } from 'ethers';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { getWalletAddress } from './clobClient.js';
+import { clearPendingRedeem } from './positionTracker.js';
 
 const log = createLogger('Redeemer');
 
@@ -735,6 +736,8 @@ async function redeemCycle() {
         redeemedSet.add(r.value.pos.conditionId);
         // Remove from pending queue (zero balance = already redeemed)
         pendingQueue = pendingQueue.filter(p => p.conditionId !== r.value.pos.conditionId);
+        // Clear pending redeem value (tokens already converted to USDC)
+        clearPendingRedeem(r.value.pos.conditionId);
       }
     } else {
       log.debug(`Balance check failed: ${r.reason?.message ?? r.reason}`);
@@ -765,6 +768,8 @@ async function redeemCycle() {
       redeemedSet.add(pos.conditionId);
       // Remove from pending queue after successful redeem
       pendingQueue = pendingQueue.filter(p => p.conditionId !== pos.conditionId);
+      // Clear pending redeem value in positionTracker (profit target now sees on-chain USDC)
+      clearPendingRedeem(pos.conditionId);
       redeemed++;
     } catch (err) {
       log.warn(`${tag} Redeem failed for ${short}...: ${err.message}`);
@@ -776,6 +781,14 @@ async function redeemCycle() {
   }
 
   savePersistence();
+
+  // After successful redeem, queue USDC sync so bankroll reflects on-chain immediately
+  if (redeemed > 0) {
+    try {
+      const { queueUsdcSyncAfterRedeem } = await import('../engines/usdcSync.js');
+      if (queueUsdcSyncAfterRedeem) queueUsdcSyncAfterRedeem();
+    } catch { /* usdcSync not available — sync will happen on next 30s cycle */ }
+  }
 
   log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed out of ${toRedeem.length} positions`);
   } finally { redeemCycleRunning = false; }

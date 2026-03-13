@@ -136,6 +136,7 @@ import {
   updatePositionMarketPrice,
   getTradeTimestamps,
   setTradeTimestamps,
+  getPendingRedeemValue,
 } from './trading/positionTracker.js';
 import { closePosition } from './trading/positionManager.js';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.js';
@@ -417,30 +418,34 @@ export async function pollOnce() {
       }
     }
 
-    // ── 1a2. Daily profit target check (WIB timezone, on-chain USDC) ──
+    // ── 1a2. Daily profit target check (WIB timezone) ──
+    // NOTE: Does NOT return early — position management (fill tracking, settlement,
+    // cut-loss) must still run. Only blocks new trade entries (checked in section 7+).
+    // STICKY: once target reached, stays paused for the rest of the WIB day.
+    // Use resetProfitTarget() (via dashboard RPC) to manually resume.
+    // Uses on-chain USDC when available, falls back to internal bankroll.
+    let profitTargetPaused = isTargetReached(); // sticky — persisted across polls & restarts
     if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
+      const pos = getCurrentPosition();
+      const deployedCost = (pos && !pos.settled) ? (pos.cost ?? 0) : 0;
+      const unredeemedValue = getPendingRedeemValue();
+
+      // Prefer on-chain USDC; fallback to internal bankroll + deployed cost
       const usdcBal = getUsdcBalanceData();
-      if (usdcBal && Number.isFinite(usdcBal.balance)) {
-        const pos = getCurrentPosition();
-        const deployedCost = (pos && !pos.settled) ? (pos.cost ?? 0) : 0;
-        const wasReached = isTargetReached();
-        const ptCheck = checkProfitTarget(usdcBal.balance, deployedCost);
-        if (ptCheck.reached) {
-          // First time reaching — send notification
-          if (!wasReached) {
-            notify('info',
-              `PROFIT TARGET REACHED! +$${ptCheck.profit.toFixed(2)} / $${ptCheck.target.toFixed(2)} target | ` +
-              `Bot paused for the day (WIB) | Bankroll: $${getBankroll().toFixed(2)}`
-            );
-          }
-          broadcast({
-            profitTargetReached: true,
-            profitTarget: getProfitTargetStatus(),
-            ts: Date.now(), bankroll: getBankroll(), stats: getStats(),
-          });
-          return;
-        }
+      const balanceForCheck = (usdcBal && Number.isFinite(usdcBal.balance))
+        ? usdcBal.balance
+        : getBankroll() + deployedCost; // bankroll already deducted position cost, add it back
+
+      const wasReached = isTargetReached();
+      const ptCheck = checkProfitTarget(balanceForCheck, deployedCost, unredeemedValue);
+      if (ptCheck.reached && !wasReached) {
+        const source = usdcBal ? 'on-chain' : 'internal';
+        notify('info',
+          `PROFIT TARGET REACHED! +$${ptCheck.profit.toFixed(2)} / $${ptCheck.target.toFixed(2)} target (${source}) | ` +
+          `Bot paused for the rest of the day (WIB) | Bankroll: $${getBankroll().toFixed(2)}`
+        );
       }
+      profitTargetPaused = isTargetReached(); // update after checkProfitTarget may set it
     }
 
     // ── 1b. Check pending order fills (non-blocking) ──
@@ -490,12 +495,13 @@ export async function pollOnce() {
           const onChain = result.balance;
           const drift = Math.abs(localBankroll - onChain);
           log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
-          // Initialize daily profit target baseline from on-chain balance
-          if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
-            initDayBaseline(onChain);
-          }
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
+          // Initialize daily profit target baseline from on-chain balance + deployed capital
+          if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
+            const deployedCost = hasPos ? (pos.cost ?? 0) : 0;
+            initDayBaseline(onChain, deployedCost);
+          }
           // M17: Use 5% relative threshold instead of fixed $5 — $5 doesn't scale with bankroll
           const driftPct = localBankroll > 0 ? (drift / localBankroll) * 100 : 0;
           const driftSignificant = driftPct > 5;
@@ -598,7 +604,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
-          triggerRedeem(45_000, currentConditionId); // Auto-redeem after oracle settlement
+          triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -707,9 +713,10 @@ export async function pollOnce() {
     }
 
     // ── 3b. USDC balance (every 30s — non-blocking) ──
-    // M1: Cooldown was redeemInterval+5min = 65min — too long. Tokens typically redeem in <15min.
-    // Use 15min fixed cooldown so bankroll syncs sooner after settlement.
-    const SETTLEMENT_SYNC_COOLDOWN_MS = 15 * 60_000;
+    // Cooldown prevents stale on-chain USDC from overwriting internal bankroll after settlement.
+    // Redeem takes ~60-90s (45s delay + tx), so 2 min is sufficient.
+    // Previously 15min — way too long, bankroll stayed stale for 15 min after every settle.
+    const SETTLEMENT_SYNC_COOLDOWN_MS = 2 * 60_000;
     const settlementCooldownActive = (now - getLastSettlementMs()) < SETTLEMENT_SYNC_COOLDOWN_MS;
     scheduleUsdcCheck({
       now, settlementCooldownActive, clientReady: isClientReady(),
@@ -769,7 +776,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
-          triggerRedeem(45_000, currentConditionId); // Auto-redeem after oracle settlement
+          triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -859,7 +866,7 @@ export async function pollOnce() {
       ).finally(() => {
         settlementPending = false;
         settlementAbort = null;
-        triggerRedeem(45_000, stalePos?.conditionId); // Auto-redeem after stale position settlement
+        triggerRedeem(15_000, stalePos?.conditionId); // Auto-redeem after stale position settlement
         resetCutLossState();
         resetTakeProfitState();
         resetRecovery(); // Cancel any pending recovery on stale position recovery
@@ -1486,7 +1493,7 @@ export async function pollOnce() {
     // Monitors fill status; cancels on signal flip or 10 min timeout → FOK fallback.
     let limitOrderBlocksFOK = false;
     let smartRouteFOK = false;
-    if (BOT_CONFIG.limitOrder.enabled && !settlementPending) {
+    if (BOT_CONFIG.limitOrder.enabled && !settlementPending && !profitTargetPaused) {
       const limitActive = isLimitOrderActive();
       // Compute elapsed minutes since market opened (15 min markets)
       const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
@@ -1744,6 +1751,7 @@ export async function pollOnce() {
             recordFillEvent(fd);  // Persist fill event for frontend transition display
             resetLimitOrderState();
             limitOrderBlocksFOK = false;
+            alreadyHasPosition = true;  // Fix: prevent FOK double-buy in same poll after limit fill
           } else if (monResult.action === 'PARTIAL_ACCEPT' && monResult.fillData) {
             // Partial fill accepted — cancel remainder, record position
             const fd = monResult.fillData;
@@ -1777,6 +1785,7 @@ export async function pollOnce() {
               `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
               { key: 'trade:limit:partial' }).catch(e => log.debug(`Notify limit partial: ${e.message}`));
             limitOrderBlocksFOK = false;
+            alreadyHasPosition = true;  // Fix: prevent FOK double-buy in same poll after partial fill
           } else if (monResult.action === 'CANCEL_EXPIRED') {
             // GTD expired on-chain — state already reset in monitorLimitOrder
             log.info(`LIMIT ORDER expired (GTD) — not filled`);
@@ -1856,7 +1865,10 @@ export async function pollOnce() {
     if (settlementPending) {
       log.debug('Settlement in progress — skipping trade entry this poll (signal/broadcast still active)');
     }
-    const alreadyHasPosition = hasOpenPosition(marketSlug);
+    if (profitTargetPaused) {
+      log.debug('Profit target reached — skipping trade entry this poll (position management still active)');
+    }
+    let alreadyHasPosition = hasOpenPosition(marketSlug);
     const hasPending = hasPendingOrder();
 
     const notifyTradeFn = process.env.TELEGRAM_NOTIFY_TRADES === 'true'
@@ -1887,7 +1899,7 @@ export async function pollOnce() {
     const preMarketEnabled = process.env.PREMARKET_LONG_ENABLED === 'true';
     const pmStatus = preMarketEnabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : null;
     const preMarketWindowActive = pmStatus?.inWindow && pmStatus?.tradedToday;
-    if (preMarketEnabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
+    if (preMarketEnabled && !profitTargetPaused && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
       const pmCheck = checkPreMarketEntry({
         hasPosition: alreadyHasPosition,
         bankroll,
@@ -1978,7 +1990,7 @@ export async function pollOnce() {
     }
 
     // 10a. Arbitrage execution (priority over directional)
-    if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
       try {
@@ -2006,7 +2018,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && (!limitOrderBlocksFOK || smartRouteFOK)) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK)) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         await executeDirectionalTrade({
@@ -2267,6 +2279,7 @@ export async function pollOnce() {
 
       // Daily profit target (WIB timezone)
       profitTarget: getProfitTargetStatus(),
+      profitTargetPaused,
     });
 
     // Periodic save

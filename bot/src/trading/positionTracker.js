@@ -69,6 +69,7 @@ let state = {
   marketTradeCounts: {},     // H7: Per-market trade counts (persisted across restarts)
   lastLossTimestamp: 0,      // FINTECH: Persisted loss cooldown timestamp (survives restart)
   tradeTimestamps: [],       // M2 audit fix: Persisted hourly trade timestamps (survives restart)
+  pendingRedeems: [],        // Settled winning positions awaiting on-chain redeem: [{ conditionId, value, settledAt }]
 };
 
 // ── Sell guard: prevents dashboard sell, cut-loss, and take-profit from racing ──
@@ -373,6 +374,16 @@ export function settleTrade(won) {
     // Update high-water mark on winning trade
     if (state.bankroll > state.peakBankroll) {
       state.peakBankroll = state.bankroll;
+    }
+    // Track unredeemed value — on-chain USDC doesn't include this until ERC-1155 redeem
+    if (payout > 0 && pos.conditionId) {
+      if (!Array.isArray(state.pendingRedeems)) state.pendingRedeems = [];
+      state.pendingRedeems.push({
+        conditionId: pos.conditionId,
+        value: roundMoney(payout),
+        settledAt: Date.now(),
+      });
+      log.info(`Pending redeem tracked: $${payout.toFixed(2)} (${pos.conditionId.slice(0, 16)}...)`);
     }
   } else {
     state.losses++;
@@ -1023,4 +1034,33 @@ export function getTradeTimestamps() { return Array.isArray(state.tradeTimestamp
 /** M2 audit fix: Set persisted trade timestamps (from guards). */
 export function setTradeTimestamps(timestamps) {
   state.tradeTimestamps = Array.isArray(timestamps) ? timestamps : [];
+}
+
+/**
+ * Get total value of settled positions awaiting on-chain redeem.
+ * These are winning ERC-1155 tokens not yet converted back to USDC.
+ */
+export function getPendingRedeemValue() {
+  if (!Array.isArray(state.pendingRedeems)) return 0;
+  // Expire entries older than 4 hours (redeemer should have handled them by then)
+  const MAX_AGE_MS = 4 * 60 * 60 * 1000;
+  const now = Date.now();
+  state.pendingRedeems = state.pendingRedeems.filter(p => now - p.settledAt < MAX_AGE_MS);
+  let total = 0;
+  for (const p of state.pendingRedeems) total += p.value;
+  return roundMoney(total);
+}
+
+/**
+ * Clear a pending redeem after successful on-chain redemption.
+ * Called by redeemer.js after ERC-1155 tokens are redeemed to USDC.
+ */
+export function clearPendingRedeem(conditionId) {
+  if (!Array.isArray(state.pendingRedeems)) return;
+  const before = state.pendingRedeems.length;
+  state.pendingRedeems = state.pendingRedeems.filter(p => p.conditionId !== conditionId);
+  if (state.pendingRedeems.length < before) {
+    log.info(`Pending redeem cleared: ${conditionId.slice(0, 16)}... (${before - state.pendingRedeems.length} entry)`);
+    saveState();
+  }
 }

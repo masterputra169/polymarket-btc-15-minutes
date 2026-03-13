@@ -10,15 +10,16 @@ module.exports = {
       watch: false,
       max_memory_restart: '512M',
     },
-    {
-      name: 'ml-retrain',
-      script: 'bot/src/autoRetrain.js',
-      cwd: __dirname,
-      node_args: '--env-file=./bot/.env',
-      instances: 1,
-      autorestart: true,
-      watch: false,
-      max_memory_restart: '1G',
-    },
+    // ml-retrain DISABLED — retrain hanya manual via perintah user
+    // {
+    //   name: 'ml-retrain',
+    //   script: 'bot/src/autoRetrain.js',
+    //   cwd: __dirname,
+    //   node_args: '--env-file=./bot/.env',
+    //   instances: 1,
+    //   autorestart: true,
+    //   watch: false,
+    //   max_memory_restart: '1G',
+    // },
   ],
 };
