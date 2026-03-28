@@ -268,6 +268,7 @@ let currentMarketSlug = null;
 let currentMarketEndMs = null;
 let currentConditionId = null;
 let priceToBeat = { slug: null, value: null, updatedAt: 0 };
+let startupPtbFetched = false;  // Guards the one-shot startup PTB resolution on restart
 
 // ── Pre-scheduled PTB capture ──
 // Polymarket snapshots Chainlink Data Streams at eventStartTime for PTB.
@@ -912,6 +913,43 @@ export async function pollOnce() {
             log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
           }
         }).catch(err => log.debug(`Chainlink PTB fetch failed: ${err.message}`));
+      }
+    }
+
+    // ── 4a2. Startup PTB resolution (first poll after restart) ──
+    // slugChanged requires currentMarketSlug !== null — so it never fires on startup.
+    // Without this, priceToBeat stays as 'oracle' (current live BTC price, not market-open price)
+    // for the entire session after restart.
+    if (!startupPtbFetched && marketSlug && currentMarketSlug === null) {
+      startupPtbFetched = true;
+      const startupEventSlug = poly.market?.slug ?? marketSlug;
+      const startupEventStartTime = poly.market?.eventStartTime;
+      log.info(`Startup PTB resolution for market: ${startupEventSlug}`);
+
+      fetchPolymarketPtb(startupEventSlug).then(result => {
+        if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
+          const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
+          const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
+          if (isExact || currentIsLowPriority) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
+            if (prev !== result.priceToBeat) {
+              log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
+            }
+          }
+        }
+      }).catch(err => log.debug(`Startup PTB scrape failed: ${err.message}`));
+
+      if (startupEventStartTime) {
+        const targetSec = Math.floor(new Date(startupEventStartTime).getTime() / 1000);
+        fetchChainlinkAtTimestamp(targetSec).then(result => {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug
+              && !['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
+            log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
+          }
+        }).catch(err => log.debug(`Startup Chainlink PTB failed: ${err.message}`));
       }
     }
 
