@@ -7,6 +7,18 @@
 
 ---
 
+## Recent Updates (Mar 2026)
+
+| Date | Change |
+|------|--------|
+| Mar 29 | **Fix:** Limit orders on weekends were always blocked — weekend filter incorrectly treated intentionally-omitted `mlConfidence` (limit path uses its own 60% ML gate) as "ML unavailable". Now only blocks when model is truly not loaded. |
+| Mar 29 | **Fix:** Signal stability flip gate (`MAX_FLIPS_TO_ENTER`) now scales with `POLL_INTERVAL_MS`. At 50ms polling, stable signals produce 4–7 micro-oscillation flips in 15s; the old hardcoded limit of 3 blocked valid FOK entries. Now: ≤100ms → 10, ≤1s → 6, >1s → 3. |
+| Mar 28 | **Fix:** PTB (Price to Beat) mismatch on bot restart — added `schedulePtbPageUpgrade()` which retries at +15min and +30min to upgrade PTB from approximate source to exact `finalPrice` once Polymarket publishes it. |
+| Mar 28 | **Fix:** PTB consensus buffer widened 0.05% → 0.3% to restore limit order fill rate after PTB accuracy improvements. |
+| Mar 28 | **Fix:** Profit target baseline symmetry — daily baseline now resets correctly on WIB date boundary. |
+
+---
+
 ## What Is This?
 
 Every 15 minutes, Polymarket runs a binary market: **"Will BTC be higher in 15 minutes?"** You bet YES or NO at the current market price (e.g., 65¢ for YES), and collect $1.00 if correct.
@@ -362,7 +374,7 @@ Every entry passes all 15 gates:
 | 4 | Time window 0.75–14.5 min | Avoid too-early or too-late entries |
 | 5 | Post-loss cooldown | Prevent revenge trading |
 | 6 | Max 2 trades per market | Anti-overtrading |
-| 7 | Weekend liquidity | Reduced size on low-volume days |
+| 7 | Weekend ML gate | Block on Sat/Sun if ML model not loaded or confidence < 65% |
 | 8 | Edge ceiling < 20% | Avoid mispriced markets |
 | 9 | Counter-trend momentum | Don't fight strong momentum |
 | 10 | Blackout hours 16:00–23:00 ET | Skip historically low-WR hours |
