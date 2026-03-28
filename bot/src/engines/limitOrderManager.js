@@ -197,10 +197,13 @@ export function evaluateLimitEntry({
   // ML gives direction, BTC vs PTB confirms market agrees
   let side = mlSide;
 
-  // BTC-PTB consensus gate (relaxed): only block when BTC is significantly on the wrong side.
-  // BTC oscillates around PTB in early market — strict binary check blocked too many good entries.
-  // Buffer: 0.05% (~$36 at $72k BTC) allows limit orders when BTC is near PTB.
-  const PTB_BUFFER_PCT = 0.0005;
+  // BTC-PTB consensus gate: only block when BTC has meaningfully moved against the signal direction.
+  // BTC naturally oscillates ±0.1-0.3% around PTB in the early market — tight buffer causes
+  // excessive blocking. With accurate scheduled_ws PTB (exact Chainlink at market start),
+  // 0.3% buffer (~$250 at $83k) ensures only meaningful directional moves block limit orders.
+  // Previously 0.05% was accidentally bypassed when PTB source was 'pending' (value=0),
+  // which made distPct=Infinity and passed all UP trades. Raising to 0.3% restores prior fill rate.
+  const PTB_BUFFER_PCT = 0.003;
   if (btcPrice != null && priceToBeat != null && Number.isFinite(btcPrice) && Number.isFinite(priceToBeat)) {
     const distPct = (btcPrice - priceToBeat) / priceToBeat;
     if (side === 'UP' && distPct < -PTB_BUFFER_PCT) {
