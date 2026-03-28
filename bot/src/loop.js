@@ -268,6 +268,26 @@ let currentMarketEndMs = null;
 let currentConditionId = null;
 let priceToBeat = { slug: null, value: null, updatedAt: 0 };
 
+// ── Pre-scheduled PTB capture ──
+// Polymarket snapshots Chainlink Data Streams at eventStartTime for PTB.
+// We schedule a WS price capture at the known next market start (= current endDate).
+let ptbScheduleTimer = null;
+let ptbScheduledPrice = null;  // { price, capturedAt }
+
+function schedulePtbCapture(nextStartMs) {
+  if (ptbScheduleTimer) { clearTimeout(ptbScheduleTimer); ptbScheduleTimer = null; }
+  ptbScheduledPrice = null;
+  const delayMs = nextStartMs - Date.now();
+  if (delayMs < 0 || delayMs > 20 * 60_000) return; // sanity: max 20min ahead
+  ptbScheduleTimer = setTimeout(() => {
+    const p = getPolyLivePrice() || getChainlinkWssPrice();
+    if (p && p > 0) {
+      ptbScheduledPrice = { price: p, capturedAt: Date.now() };
+      log.info(`PTB pre-captured: $${p.toFixed(2)} (scheduled at eventStartTime)`);
+    }
+  }, delayMs);
+}
+
 // ── Market transition grace period ──
 let marketTransitionMs = 0;
 const MARKET_TRANSITION_GRACE_MS = 5_000; // M15: 2s→5s — WS reconnection measured at 3-4s; 2s grace caused stale data trades
@@ -695,7 +715,11 @@ export async function pollOnce() {
         updatePolySnapshot(polyFetched, now);
         if (polyFetched.market?.endDate) {
           const endMs = new Date(polyFetched.market.endDate).getTime();
-          if (Number.isFinite(endMs)) currentMarketEndMs = endMs;
+          if (Number.isFinite(endMs)) {
+            // Schedule PTB capture at endDate (= next market's eventStartTime)
+            if (endMs !== currentMarketEndMs) schedulePtbCapture(endMs);
+            currentMarketEndMs = endMs;
+          }
         }
         const mktCondId = polyFetched.market?.conditionId ?? polyFetched.market?.condition_id;
         if (mktCondId) currentConditionId = mktCondId;
@@ -846,14 +870,26 @@ export async function pollOnce() {
       }
       entryRegime = null;
 
-      // ── Async: resolve PTB from Chainlink on-chain rounds (fallback) ──
-      // Only needed when eventMetadata.priceToBeat is not yet available from Gamma API.
-      // polymarket_api source is exact — never overwrite it with on-chain approximation.
+      // ── PTB: use pre-scheduled WS capture if available (highest priority) ──
+      // Pre-captured at the exact eventStartTime via schedulePtbCapture()
+      if (ptbScheduledPrice?.price > 0) {
+        const age = Date.now() - ptbScheduledPrice.capturedAt;
+        if (age < 30_000) { // Accept if captured within 30s of now
+          priceToBeat = { slug: marketSlug, value: ptbScheduledPrice.price, source: 'scheduled_ws', updatedAt: ptbScheduledPrice.capturedAt };
+          log.info(`PTB from scheduled capture: $${ptbScheduledPrice.price.toFixed(2)} (${(age / 1000).toFixed(1)}s ago)`);
+        }
+        ptbScheduledPrice = null; // consumed
+      }
+
+      // ── Async fallback: resolve PTB from Chainlink on-chain rounds ──
+      // Only fires if scheduled capture missed or WS was down.
+      // scheduled_ws: locked in — never overwrite with on-chain approximation.
       const eventStartTime = poly.market?.eventStartTime;
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug && priceToBeat.source !== 'polymarket_api') {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug
+              && priceToBeat.source !== 'polymarket_api' && priceToBeat.source !== 'scheduled_ws') {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
             log.info(`PTB updated: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (Chainlink round, ${result.diff}s from start)`);

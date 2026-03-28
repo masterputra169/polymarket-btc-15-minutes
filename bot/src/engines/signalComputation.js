@@ -72,31 +72,22 @@ export function computeSignals({
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   } = ind;
 
-  // ── Price to beat (exact from Polymarket API → Chainlink fallback) ──
-  // Priority: polymarket_api (exact) > chainlink_round (on-chain) > oracle (WS live)
-  const apiPtb = poly.market?.eventMetadata?.priceToBeat;
-  const hasApiPtb = apiPtb != null && Number.isFinite(Number(apiPtb)) && Number(apiPtb) > 0;
+  // ── Price to beat (Chainlink-sourced, same as Polymarket resolution) ──
+  // Priority: scheduled_ws (pre-captured at eventStartTime) > chainlink_round (on-chain) > oracle (WS live)
+  // scheduled_ws / chainlink_round: locked in by loop.js — signalComputation only sets oracle/pending as interim
   let updatedPriceToBeat = priceToBeat;
 
   if (marketSlug && priceToBeat.slug !== marketSlug) {
-    // New market detected
-    if (hasApiPtb) {
-      // Exact PTB from Polymarket (Chainlink Data Streams) — gold standard
-      updatedPriceToBeat = { slug: marketSlug, value: Number(apiPtb), source: 'polymarket_api', updatedAt: now };
-    } else {
-      // Market just started, API PTB not yet available — use live Chainlink WS as interim
-      updatedPriceToBeat = {
-        slug: marketSlug,
-        value: oraclePrice ?? null,
-        source: oraclePrice ? 'oracle' : 'pending',
-        updatedAt: oraclePrice ? now : 0,
-      };
-    }
-  } else if (hasApiPtb && priceToBeat.source !== 'polymarket_api') {
-    // Same market: upgrade to exact API PTB if we only had oracle/chainlink_round/pending
-    updatedPriceToBeat = { slug: priceToBeat.slug, value: Number(apiPtb), source: 'polymarket_api', updatedAt: now };
+    // New market detected — use live Chainlink WS as interim
+    // (loop.js will overwrite with scheduled_ws or chainlink_round shortly after)
+    updatedPriceToBeat = {
+      slug: marketSlug,
+      value: oraclePrice ?? null,
+      source: oraclePrice ? 'oracle' : 'pending',
+      updatedAt: oraclePrice ? now : 0,
+    };
   }
-  // polymarket_api: locked in — never overwritten by subsequent polls
+  // scheduled_ws / chainlink_round: locked in — never overwritten by subsequent polls
 
   // ── Market prices: WS (instant) → REST (fallback) ──
   const useClobWs = clobConnected && !clobStale;
