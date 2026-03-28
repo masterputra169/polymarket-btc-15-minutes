@@ -291,6 +291,27 @@ function schedulePtbCapture(nextStartMs) {
   }, delayMs);
 }
 
+// ── PTB page upgrade scheduler ──
+// Polymarket's finalPrice (= exact PTB) usually appears in __NEXT_DATA__ 15-30min after market start.
+// When initial PTB fetch returns a low-priority source (chainlink_round, polymarket_page_approx),
+// schedule 2 retries to upgrade to polymarket_page_prev once finalPrice becomes available.
+function schedulePtbPageUpgrade(slug) {
+  const attempt = (delayMs) => setTimeout(() => {
+    if (priceToBeat.slug !== slug) return; // market already switched
+    if (['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) return; // already good
+    fetchPolymarketPtb(slug).then(result => {
+      if (!result?.priceToBeat || priceToBeat.slug !== slug) return;
+      if (['polymarket_page', 'polymarket_page_prev'].includes(result.source)) {
+        const prev = priceToBeat.value;
+        priceToBeat = { slug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
+        log.info(`PTB upgraded: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
+      }
+    }).catch(() => {});
+  }, delayMs);
+  attempt(15 * 60_000);  // 15 min: finalPrice may be available by now
+  attempt(30 * 60_000);  // 30 min fallback: almost always available by this point
+}
+
 // ── Market transition grace period ──
 let marketTransitionMs = 0;
 const MARKET_TRANSITION_GRACE_MS = 5_000; // M15: 2s→5s — WS reconnection measured at 3-4s; 2s grace caused stale data trades
@@ -914,6 +935,9 @@ export async function pollOnce() {
           }
         }).catch(err => log.debug(`Chainlink PTB fetch failed: ${err.message}`));
       }
+
+      // 4. Schedule delayed upgrade: finalPrice (exact PTB) usually available 15-30min after market start
+      schedulePtbPageUpgrade(marketSlug);
     }
 
     // ── 4a2. Startup PTB resolution (first poll after restart) ──
@@ -951,6 +975,9 @@ export async function pollOnce() {
           }
         }).catch(err => log.debug(`Startup Chainlink PTB failed: ${err.message}`));
       }
+
+      // Schedule delayed upgrade: finalPrice (exact PTB) usually available 15-30min after market start
+      schedulePtbPageUpgrade(marketSlug);
     }
 
     if (marketSlug) currentMarketSlug = marketSlug;
