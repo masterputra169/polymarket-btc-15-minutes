@@ -86,9 +86,9 @@ export function computeSignals({
     const bestPtb = (oraclePrice && nearStart) ? oraclePrice : ptb;
     const src = (oraclePrice && nearStart) ? 'oracle' : 'klines';
     updatedPriceToBeat = { slug: marketSlug, value: bestPtb, source: src, updatedAt: bestPtb !== null ? now : 0 };
-  } else if (ptb !== null && priceToBeat.source !== 'oracle') {
+  } else if (ptb !== null && priceToBeat.source !== 'oracle' && priceToBeat.source !== 'chainlink_round') {
     // Same market, klines-sourced: keep refreshing from klines (consistent Binance open).
-    // oracle-sourced: locked in at market start — do not overwrite with Binance price.
+    // oracle/chainlink_round: locked in — do not overwrite with Binance price.
     updatedPriceToBeat = { ...priceToBeat, value: ptb, updatedAt: now };
   }
 

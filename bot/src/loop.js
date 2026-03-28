@@ -59,6 +59,7 @@ import {
   fetchLastPrice,
   fetchPolymarketSnapshot,
   fetchChainlinkBtcUsd,
+  fetchChainlinkAtTimestamp,
 } from './adapters/dataFetcher.js';
 
 // ML (loaded from disk)
@@ -844,6 +845,21 @@ export async function pollOnce() {
         log.info(`Tilt protection: ${tiltMarketsLeft} markets remaining (ML conf >= ${TILT_ML_CONF_MIN * 100}%)`);
       }
       entryRegime = null;
+
+      // ── Async: resolve accurate PTB from Chainlink on-chain rounds ──
+      // Polymarket resolves via Chainlink Data Streams, NOT Binance.
+      // On-chain Chainlink is the closest public source (~$5-20 from Data Streams).
+      const eventStartTime = poly.market?.eventStartTime;
+      if (eventStartTime) {
+        const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
+        fetchChainlinkAtTimestamp(targetSec).then(result => {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
+            log.info(`PTB updated: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (Chainlink round, ${result.diff}s from start)`);
+          }
+        }).catch(err => log.debug(`Chainlink PTB fetch failed: ${err.message}`));
+      }
     }
 
     if (marketSlug) currentMarketSlug = marketSlug;

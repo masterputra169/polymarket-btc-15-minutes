@@ -250,6 +250,84 @@ export async function fetchChainlinkBtcUsd() {
 }
 
 /**
+ * Fetch Chainlink BTC/USD price at a specific timestamp by searching rounds.
+ * Used for accurate PTB — Polymarket resolves via Chainlink, not Binance.
+ *
+ * @param {number} targetSec - Unix timestamp in SECONDS for the desired price
+ * @returns {Promise<{price: number, updatedAt: number, diff: number}|null>}
+ */
+const GET_ROUND_DATA_SELECTOR = '0x9a6fc8f5'; // getRoundData(uint80)
+export async function fetchChainlinkAtTimestamp(targetSec) {
+  const aggregator = CONFIG.chainlink?.btcUsdAggregator ?? '';
+  if (!aggregator || !targetSec) return null;
+
+  // Build RPC list: configured HTTP RPCs + HTTPS versions of WSS URLs
+  const rpcs = [
+    ...(CONFIG.chainlink?.polygonRpcUrls ?? []),
+    ...(CONFIG.chainlink?.polygonWssUrls ?? []).map(u => u.replace('wss://', 'https://')),
+  ];
+  if (!rpcs.length) return null;
+  const rpc = rpcs.find(u => !u.includes('polygon-rpc.com')) || rpcs[0]; // prefer working RPC
+  const decimals = cachedDecimals ?? 8;
+
+  try {
+    // 1. Get latest round
+    const latRes = await fetch(rpc, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: aggregator, data: LATEST_ROUND_DATA_SELECTOR }, 'latest'] }),
+      signal: AbortSignal.timeout(5000),
+    });
+    const latHex = (await latRes.json()).result?.slice(2);
+    if (!latHex || latHex.length < 320) return null;
+
+    const latRoundId = BigInt('0x' + latHex.slice(0, 64));
+    const latUpdatedAt = Number(BigInt('0x' + latHex.slice(192, 256)));
+    if (latUpdatedAt <= 0) return null;
+
+    // 2. Estimate target round (Polygon Chainlink ~27-34s per round)
+    const secAgo = latUpdatedAt - targetSec;
+    const estRoundsBack = Math.round(secAgo / 30);
+    const targetRound = latRoundId - BigInt(estRoundsBack);
+
+    // 3. Check ±7 rounds around estimate in parallel (~7min window at ~30s/round)
+    const offsets = [-7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6, 7];
+    const roundFetches = offsets.map(async (off) => {
+      const rid = targetRound + BigInt(off);
+      const padded = rid.toString(16).padStart(64, '0');
+      const r = await fetch(rpc, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'eth_call',
+          params: [{ to: aggregator, data: GET_ROUND_DATA_SELECTOR + padded }, 'latest'] }),
+        signal: AbortSignal.timeout(5000),
+      });
+      const hex = (await r.json()).result?.slice(2);
+      if (!hex || hex.length < 320) return null;
+      let answer = BigInt('0x' + hex.slice(64, 128));
+      if (answer >= (1n << 255n)) answer -= (1n << 256n);
+      const updatedAt = Number(BigInt('0x' + hex.slice(192, 256)));
+      return { price: Number(answer) / (10 ** decimals), updatedAt, diff: updatedAt - targetSec };
+    });
+
+    const results = (await Promise.all(roundFetches)).filter(Boolean);
+    if (!results.length) return null;
+
+    // 4. Pick the round closest to targetSec (absolute time difference)
+    results.sort((a, b) => Math.abs(a.diff) - Math.abs(b.diff));
+    const best = results[0];
+
+    if (best && best.price > 0) {
+      log.info(`Chainlink PTB: $${best.price.toFixed(2)} (${best.diff}s from target)`);
+      return best;
+    }
+    return null;
+  } catch (err) {
+    log.debug(`Chainlink round query error: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Funding rate — returns null (all sources blocked in user's network).
  */
 export async function fetchFundingRate() {
