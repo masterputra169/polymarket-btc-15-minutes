@@ -11,7 +11,7 @@ import { computeAllIndicators } from '../../../src/hooks/computeIndicators.js';
 import { scoreDirection, applyTimeAwareness } from '../../../src/engines/probability.js';
 import { computeEdge } from '../../../src/engines/edge.js';
 import { analyzeOrderbook } from '../../../src/engines/orderbook.js';
-import { extractPriceToBeat, getSessionName } from '../../../src/utils.js';
+import { getSessionName } from '../../../src/utils.js';
 import { detectArbitrage } from './arbitrage.js';
 import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.js';
 import { getSignalModifiers } from '../adapters/signalPerfStore.js';
@@ -72,25 +72,20 @@ export function computeSignals({
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   } = ind;
 
-  // ── Price to beat ──
-  // Source priority: oraclePrice (Polymarket Chainlink WS = same source as resolution)
-  //                → klines open at eventStartTime (Binance, fallback)
-  const ptb = extractPriceToBeat(poly.market, klines1m);
+  // ── Price to beat (Chainlink only — same source as Polymarket resolution) ──
+  // oraclePrice = live Chainlink from PolyLive WS (interim until async round query resolves)
+  // chainlink_round = accurate on-chain round at eventStartTime (set by loop.js async)
   let updatedPriceToBeat = priceToBeat;
   if (marketSlug && priceToBeat.slug !== marketSlug) {
-    // New market detected. Use live oracle price only if we're within 90s of market start
-    // (avoids using stale current price when bot restarts mid-market).
-    const marketStartMs = poly.market?.eventStartTime
-      ? new Date(poly.market.eventStartTime).getTime() : null;
-    const nearStart = marketStartMs !== null && Math.abs(now - marketStartMs) < 90_000;
-    const bestPtb = (oraclePrice && nearStart) ? oraclePrice : ptb;
-    const src = (oraclePrice && nearStart) ? 'oracle' : 'klines';
-    updatedPriceToBeat = { slug: marketSlug, value: bestPtb, source: src, updatedAt: bestPtb !== null ? now : 0 };
-  } else if (ptb !== null && priceToBeat.source !== 'oracle' && priceToBeat.source !== 'chainlink_round') {
-    // Same market, klines-sourced: keep refreshing from klines (consistent Binance open).
-    // oracle/chainlink_round: locked in — do not overwrite with Binance price.
-    updatedPriceToBeat = { ...priceToBeat, value: ptb, updatedAt: now };
+    // New market: use live Chainlink WS as interim PTB (async round query will overwrite)
+    updatedPriceToBeat = {
+      slug: marketSlug,
+      value: oraclePrice ?? null,
+      source: oraclePrice ? 'oracle' : 'pending',
+      updatedAt: oraclePrice ? now : 0,
+    };
   }
+  // chainlink_round / oracle: locked in — never overwritten by subsequent polls
 
   // ── Market prices: WS (instant) → REST (fallback) ──
   const useClobWs = clobConnected && !clobStale;
