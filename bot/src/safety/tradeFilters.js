@@ -249,13 +249,15 @@ export function applyTradeFilters({
   }
 
   // 7. Weekend low-liquidity filter (Saturday/Sunday UTC)
-  // Block when ML unavailable (can't assess confidence) or confidence too low.
+  // Block when ML truly unavailable (can't assess confidence) or confidence too low.
+  // Note: mlConfidence=null is intentionally passed for limit order calls (limitOrderManager
+  // has its own 60% ML gate). Only block when mlAvailable=false (model not loaded).
   const dayOfWeek = new Date().getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   if (isWeekend) {
-    if (!mlAvailable || mlConfidence == null) {
+    if (!mlAvailable) {
       reasons.push('Weekend + ML unavailable — cannot assess confidence');
-    } else if (mlConfidence < 0.65) {
+    } else if (mlConfidence != null && mlConfidence < 0.65) {
       // v5: 0.35→0.65 — old threshold was below MIN_ML_CONFIDENCE (0.60), never triggered
       reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}% < 65%`);
     }

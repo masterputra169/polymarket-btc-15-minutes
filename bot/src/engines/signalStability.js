@@ -15,7 +15,13 @@ import { CONFIG } from '../../../src/config.js';
 const POLL_INTERVAL_S = (CONFIG.pollIntervalMs ?? 3000) / 1000;
 export const SIGNAL_CONFIRM_POLLS = Math.max(2, Math.round(9 / POLL_INTERVAL_S));  // ~9s of confirmation
 const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
-const MAX_FLIPS_TO_ENTER = 3;           // v5: 2→3 — with lower edge thresholds, signal oscillates less but still needs some tolerance; 2 was too strict with LATE phase natural flickering
+
+// v6: Scale flip tolerance with actual bot poll rate (from POLL_INTERVAL_MS env var).
+// Faster polling captures micro-oscillations (signal briefly crosses threshold then returns),
+// creating more flip events than at 3s polling even when the market is fundamentally stable.
+// At ≤100ms (bot default 50ms): allow up to 10 flips in 15s. At >1s: original 3.
+const _actualPollMs = parseInt(process.env.POLL_INTERVAL_MS, 10) || (CONFIG.pollIntervalMs ?? 3000);
+const MAX_FLIPS_TO_ENTER = _actualPollMs <= 100 ? 10 : _actualPollMs <= 1000 ? 6 : 3;
 
 // ── State ──
 let signalConfirmCount = 0;
