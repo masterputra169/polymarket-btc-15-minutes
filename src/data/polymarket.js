@@ -13,7 +13,11 @@ export function flattenEventMarkets(events) {
   const out = [];
   for (const e of Array.isArray(events) ? events : []) {
     const markets = Array.isArray(e.markets) ? e.markets : [];
-    for (const m of markets) out.push(m);
+    for (const m of markets) {
+      // Attach event-level metadata (contains exact priceToBeat from Chainlink Data Streams)
+      if (e.eventMetadata) m.eventMetadata = e.eventMetadata;
+      out.push(m);
+    }
   }
   return out;
 }

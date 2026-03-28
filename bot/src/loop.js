@@ -846,14 +846,14 @@ export async function pollOnce() {
       }
       entryRegime = null;
 
-      // ── Async: resolve accurate PTB from Chainlink on-chain rounds ──
-      // Polymarket resolves via Chainlink Data Streams, NOT Binance.
-      // On-chain Chainlink is the closest public source (~$5-20 from Data Streams).
+      // ── Async: resolve PTB from Chainlink on-chain rounds (fallback) ──
+      // Only needed when eventMetadata.priceToBeat is not yet available from Gamma API.
+      // polymarket_api source is exact — never overwrite it with on-chain approximation.
       const eventStartTime = poly.market?.eventStartTime;
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug && priceToBeat.source !== 'polymarket_api') {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
             log.info(`PTB updated: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (Chainlink round, ${result.diff}s from start)`);

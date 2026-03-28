@@ -72,20 +72,31 @@ export function computeSignals({
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   } = ind;
 
-  // ── Price to beat (Chainlink only — same source as Polymarket resolution) ──
-  // oraclePrice = live Chainlink from PolyLive WS (interim until async round query resolves)
-  // chainlink_round = accurate on-chain round at eventStartTime (set by loop.js async)
+  // ── Price to beat (exact from Polymarket API → Chainlink fallback) ──
+  // Priority: polymarket_api (exact) > chainlink_round (on-chain) > oracle (WS live)
+  const apiPtb = poly.market?.eventMetadata?.priceToBeat;
+  const hasApiPtb = apiPtb != null && Number.isFinite(Number(apiPtb)) && Number(apiPtb) > 0;
   let updatedPriceToBeat = priceToBeat;
+
   if (marketSlug && priceToBeat.slug !== marketSlug) {
-    // New market: use live Chainlink WS as interim PTB (async round query will overwrite)
-    updatedPriceToBeat = {
-      slug: marketSlug,
-      value: oraclePrice ?? null,
-      source: oraclePrice ? 'oracle' : 'pending',
-      updatedAt: oraclePrice ? now : 0,
-    };
+    // New market detected
+    if (hasApiPtb) {
+      // Exact PTB from Polymarket (Chainlink Data Streams) — gold standard
+      updatedPriceToBeat = { slug: marketSlug, value: Number(apiPtb), source: 'polymarket_api', updatedAt: now };
+    } else {
+      // Market just started, API PTB not yet available — use live Chainlink WS as interim
+      updatedPriceToBeat = {
+        slug: marketSlug,
+        value: oraclePrice ?? null,
+        source: oraclePrice ? 'oracle' : 'pending',
+        updatedAt: oraclePrice ? now : 0,
+      };
+    }
+  } else if (hasApiPtb && priceToBeat.source !== 'polymarket_api') {
+    // Same market: upgrade to exact API PTB if we only had oracle/chainlink_round/pending
+    updatedPriceToBeat = { slug: priceToBeat.slug, value: Number(apiPtb), source: 'polymarket_api', updatedAt: now };
   }
-  // chainlink_round / oracle: locked in — never overwritten by subsequent polls
+  // polymarket_api: locked in — never overwritten by subsequent polls
 
   // ── Market prices: WS (instant) → REST (fallback) ──
   const useClobWs = clobConnected && !clobStale;
