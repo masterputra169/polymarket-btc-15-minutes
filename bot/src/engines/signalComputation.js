@@ -38,7 +38,7 @@ export function resetMarketUpHistory() {
  * @param {Array} params.klines5m - 5-minute klines
  * @param {number} params.lastPrice - Current BTC price
  * @param {Object} params.poly - Polymarket snapshot
- * @param {Object} params.priceToBeat - { slug, value, updatedAt }
+ * @param {Object} params.priceToBeat - { slug, value, updatedAt, source }
  * @param {string} params.marketSlug - Current market slug
  * @param {number} params.now - Current timestamp
  * @param {boolean} params.clobConnected - Whether CLOB WS is connected
@@ -51,13 +51,14 @@ export function resetMarketUpHistory() {
  * @param {number} params.candleWindowMinutes - Candle window config
  * @param {Function} params.getMLPrediction - ML prediction function
  * @param {number|null} params.fundingRate - Funding rate (null if blocked)
+ * @param {number|null} params.oraclePrice - Live Chainlink price (PolyLive WS → same source as resolution)
  * @returns {Object} All computed signal data
  */
 export function computeSignals({
   klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
   clobConnected, clobStale, getClobUpPrice, getClobDownPrice, getClobOrderbook,
   feedbackStats, timeLeftMin, candleWindowMinutes,
-  getMLPrediction, fundingRate, smartFlowSignal,
+  getMLPrediction, fundingRate, smartFlowSignal, oraclePrice,
 }) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
@@ -72,11 +73,22 @@ export function computeSignals({
   } = ind;
 
   // ── Price to beat ──
+  // Source priority: oraclePrice (Polymarket Chainlink WS = same source as resolution)
+  //                → klines open at eventStartTime (Binance, fallback)
   const ptb = extractPriceToBeat(poly.market, klines1m);
   let updatedPriceToBeat = priceToBeat;
   if (marketSlug && priceToBeat.slug !== marketSlug) {
-    updatedPriceToBeat = { slug: marketSlug, value: ptb, updatedAt: ptb !== null ? now : 0 };
-  } else if (ptb !== null) {
+    // New market detected. Use live oracle price only if we're within 90s of market start
+    // (avoids using stale current price when bot restarts mid-market).
+    const marketStartMs = poly.market?.eventStartTime
+      ? new Date(poly.market.eventStartTime).getTime() : null;
+    const nearStart = marketStartMs !== null && Math.abs(now - marketStartMs) < 90_000;
+    const bestPtb = (oraclePrice && nearStart) ? oraclePrice : ptb;
+    const src = (oraclePrice && nearStart) ? 'oracle' : 'klines';
+    updatedPriceToBeat = { slug: marketSlug, value: bestPtb, source: src, updatedAt: bestPtb !== null ? now : 0 };
+  } else if (ptb !== null && priceToBeat.source !== 'oracle') {
+    // Same market, klines-sourced: keep refreshing from klines (consistent Binance open).
+    // oracle-sourced: locked in at market start — do not overwrite with Binance price.
     updatedPriceToBeat = { ...priceToBeat, value: ptb, updatedAt: now };
   }
 

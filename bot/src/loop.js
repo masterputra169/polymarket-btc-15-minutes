@@ -918,6 +918,7 @@ export async function pollOnce() {
       candleWindowMinutes: CONFIG.candleWindowMinutes,
       getMLPrediction, fundingRate,
       smartFlowSignal: smartFlowSignalForML,
+      oraclePrice: getPolyLivePrice() || getChainlinkWssPrice(),
     });
 
     // Update priceToBeat from signal computation
