@@ -277,7 +277,8 @@ let ptbScheduledPrice = null;  // { price, capturedAt }
 
 function schedulePtbCapture(nextStartMs) {
   if (ptbScheduleTimer) { clearTimeout(ptbScheduleTimer); ptbScheduleTimer = null; }
-  ptbScheduledPrice = null;
+  // Do NOT reset ptbScheduledPrice here — it may hold a pending value for the current new market.
+  // Consumer (every-poll check below) clears it after applying.
   const delayMs = nextStartMs - Date.now();
   if (delayMs < 0 || delayMs > 20 * 60_000) return; // sanity: max 20min ahead
   ptbScheduleTimer = setTimeout(() => {
@@ -878,33 +879,31 @@ export async function pollOnce() {
       const eventSlug = poly.market?.slug ?? marketSlug;
       const eventStartTime = poly.market?.eventStartTime;
 
-      // 1. Scrape exact PTB from Polymarket page (eventMetadata.priceToBeat)
+      // 1. Scrape PTB from Polymarket page (eventMetadata)
+      // polymarket_page / polymarket_page_prev = exact → overwrite anything
+      // polymarket_page_approx = rough estimate → only overwrite oracle/pending
       fetchPolymarketPtb(eventSlug).then(result => {
         if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
-          const prev = priceToBeat.value;
-          priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
-          if (prev !== result.priceToBeat) {
-            log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
+          const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
+          const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
+          if (isExact || currentIsLowPriority) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
+            if (prev !== result.priceToBeat) {
+              log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
+            }
           }
         }
       }).catch(err => log.debug(`Polymarket PTB scrape failed: ${err.message}`));
 
-      // 2. Use pre-scheduled WS capture (if fired at eventStartTime)
-      if (ptbScheduledPrice?.price > 0) {
-        const age = Date.now() - ptbScheduledPrice.capturedAt;
-        if (age < 30_000) {
-          priceToBeat = { slug: marketSlug, value: ptbScheduledPrice.price, source: 'scheduled_ws', updatedAt: ptbScheduledPrice.capturedAt };
-          log.info(`PTB from scheduled capture: $${ptbScheduledPrice.price.toFixed(2)} (${(age / 1000).toFixed(1)}s ago)`);
-        }
-        ptbScheduledPrice = null;
-      }
+      // 2. scheduled_ws capture: handled every poll (see below market-switch block) to avoid race condition
 
       // 3. Chainlink on-chain round query (fallback)
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
           if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && !['polymarket_page', 'polymarket_page_prev'].includes(priceToBeat.source)) {
+              && !['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
             log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
@@ -976,6 +975,18 @@ export async function pollOnce() {
 
     // Get smart flow signal from PREVIOUS poll cycle (point-in-time correct for ML features)
     const smartFlowSignalForML = getSmartFlowSignal();
+
+    // Apply scheduled WS capture every poll (handles race condition: setTimeout fires after market switch check)
+    // The scheduled price is FOR the new market (captured at endDate = next market's startTime).
+    // Only apply when the NEW market is detected (priceToBeat.slug !== marketSlug) — i.e. on first polls of new market.
+    if (ptbScheduledPrice?.price > 0 && marketSlug && priceToBeat.slug !== marketSlug) {
+      const age = Date.now() - ptbScheduledPrice.capturedAt;
+      if (age < 60_000) {
+        priceToBeat = { slug: marketSlug, value: ptbScheduledPrice.price, source: 'scheduled_ws', updatedAt: ptbScheduledPrice.capturedAt };
+        log.info(`PTB from scheduled capture: $${ptbScheduledPrice.price.toFixed(2)} (${(age / 1000).toFixed(1)}s ago)`);
+      }
+      ptbScheduledPrice = null;
+    }
 
     const sig = computeSignals({
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,

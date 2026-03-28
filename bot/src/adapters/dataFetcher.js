@@ -353,52 +353,69 @@ export async function fetchPolymarketPtb(slug) {
     if (!res.ok) return null;
     const html = await res.text();
 
-    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-    if (!match) return null;
+    const scriptMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!scriptMatch) return null;
 
-    const nextData = JSON.parse(match[1]);
-    const str = JSON.stringify(nextData);
+    const nextData = JSON.parse(scriptMatch[1]);
 
-    // Find the active event's PTB or the most recent finalPrice (= next market's PTB)
-    // Strategy: find the event matching this slug, or use the latest finalPrice
-    const ptbRegex = new RegExp(`"slug":"${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[\\s\\S]*?"priceToBeat":(\\d+\\.?\\d*)`);
-    const directMatch = str.match(ptbRegex);
-    if (directMatch) {
-      const ptb = Number(directMatch[1]);
+    // Navigate to dehydratedState queries and find the events array
+    const queries = nextData?.props?.pageProps?.dehydratedState?.queries ?? [];
+    let allEvents = null;
+    for (const q of queries) {
+      const data = q.state?.data;
+      if (data?.events && Array.isArray(data.events)) {
+        allEvents = data.events;
+        break;
+      }
+    }
+    if (!allEvents) return null;
+
+    // Strategy 1: Active event may have its own eventMetadata.priceToBeat
+    const activeEvent = allEvents.find(e => e.slug === slug);
+    if (activeEvent?.eventMetadata?.priceToBeat) {
+      const ptb = Number(activeEvent.eventMetadata.priceToBeat);
       if (Number.isFinite(ptb) && ptb > 10000) {
         const result = { priceToBeat: ptb, source: 'polymarket_page' };
         ptbCache = { slug, value: result, fetchedAt: Date.now() };
-        log.info(`PTB from Polymarket page: $${ptb.toFixed(2)} (direct match for ${slug})`);
+        log.info(`PTB from Polymarket page: $${ptb.toFixed(2)} (active event)`);
         return result;
       }
     }
 
-    // Fallback: find the most recent event with eventMetadata (just before current market)
-    // Pattern: current market's PTB = previous market's finalPrice
-    const allPtbs = [...str.matchAll(/"eventMetadata":\{"finalPrice":([\d.]+),"priceToBeat":([\d.]+)\}/g)];
-    if (allPtbs.length > 0) {
-      // The last finalPrice in the series is the PTB of the next (active) market
-      // Sort by extracting nearby slug timestamps to find the most recent
-      let latestFinalPrice = null;
-      let latestTimestamp = 0;
-      for (const m of allPtbs) {
-        // Extract timestamp from nearby slug (e.g. btc-updown-15m-1774686600)
-        const idx = m.index;
-        const nearby = str.slice(Math.max(0, idx - 500), idx);
-        const tsMatch = nearby.match(/btc-updown-15m-(\d+)/);
-        if (tsMatch) {
-          const ts = Number(tsMatch[1]);
-          if (ts > latestTimestamp) {
-            latestTimestamp = ts;
-            latestFinalPrice = Number(m[1]);
-          }
+    // Strategy 2: Previous market's finalPrice = current market's PTB
+    // Compute previous slug: current timestamp - 900 (15 min)
+    const tsMatch = slug.match(/(\d+)$/);
+    if (tsMatch) {
+      const prevTs = Number(tsMatch[1]) - 900;
+      const prevSlug = `btc-updown-15m-${prevTs}`;
+      const prevEvent = allEvents.find(e => e.slug === prevSlug);
+      if (prevEvent?.eventMetadata?.finalPrice) {
+        const ptb = Number(prevEvent.eventMetadata.finalPrice);
+        if (Number.isFinite(ptb) && ptb > 10000) {
+          const result = { priceToBeat: ptb, source: 'polymarket_page_prev' };
+          ptbCache = { slug, value: result, fetchedAt: Date.now() };
+          log.info(`PTB from previous finalPrice: $${ptb.toFixed(2)} (${prevSlug})`);
+          return result;
         }
       }
-      if (latestFinalPrice && latestFinalPrice > 10000) {
-        const result = { priceToBeat: latestFinalPrice, source: 'polymarket_page_prev' };
-        ptbCache = { slug, value: result, fetchedAt: Date.now() };
-        log.info(`PTB from previous market finalPrice: $${latestFinalPrice.toFixed(2)}`);
-        return result;
+    }
+
+    // Strategy 3: If previous market's finalPrice not available yet,
+    // try its priceToBeat as a rough estimate (off by one settlement delta, typically <$50).
+    // Only accept from the immediately previous market — never use older markets.
+    if (tsMatch) {
+      const prevTs = Number(tsMatch[1]) - 900;
+      const prevSlug = `btc-updown-15m-${prevTs}`;
+      const prevEvent = allEvents.find(e => e.slug === prevSlug);
+      if (prevEvent?.eventMetadata?.priceToBeat) {
+        const ptb = Number(prevEvent.eventMetadata.priceToBeat);
+        if (Number.isFinite(ptb) && ptb > 10000) {
+          // Mark as low-priority — scheduled_ws/chainlink_round should override this
+          const result = { priceToBeat: ptb, source: 'polymarket_page_approx' };
+          ptbCache = { slug, value: result, fetchedAt: Date.now() };
+          log.info(`PTB approx from prev priceToBeat: $${ptb.toFixed(2)} (${prevSlug})`);
+          return result;
+        }
       }
     }
 
