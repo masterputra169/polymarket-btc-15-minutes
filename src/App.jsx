@@ -439,6 +439,8 @@ export default function App() {
       metEngine: data.metEngine,
       positions: data.positions,
       limitOrder: data.limitOrder,
+      profitTarget: data.profitTarget,
+      profitTargetPaused: data.profitTargetPaused,
     };
   }, [
     data?.paused, data?.dryRun,
@@ -455,6 +457,8 @@ export default function App() {
     data?.fillTracker?.fillRate, data?.fillTracker?.pending,
     data?.btcPrice, data?.priceToBeat, data?.timeLeftMin,
     data?.usdcBalance?.balance,
+    data?.profitTarget?.profit, data?.profitTarget?.targetReached,
+    data?.profitTargetPaused,
   ]);
 
   return (

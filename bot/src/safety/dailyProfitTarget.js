@@ -73,18 +73,26 @@ function saveState() {
  * Initialize or reset the daily baseline when a new WIB day starts.
  * Called with on-chain USDC balance.
  *
+ * IMPORTANT: pendingRedeemValue MUST be included in baseline to be symmetric with
+ * checkProfitTarget(). If unredeemed tokens exist at startup (e.g. bot was off
+ * yesterday, won positions not yet redeemed), excluding them from baseline but
+ * including them in effectiveBalance would falsely inflate today's profit.
+ *
  * @param {number} onChainBalance - Current on-chain USDC balance
+ * @param {number} [deployedCapital=0] - Cost of open position (deployed as tokens)
+ * @param {number} [pendingRedeemValue=0] - Value of settled winning positions awaiting redeem
  * @returns {boolean} Whether baseline was (re)set
  */
-export function initDayBaseline(onChainBalance, deployedCapital = 0) {
+export function initDayBaseline(onChainBalance, deployedCapital = 0, pendingRedeemValue = 0) {
   if (!Number.isFinite(onChainBalance) || onChainBalance < 0) return false;
 
   const deployed = Number.isFinite(deployedCapital) && deployedCapital > 0 ? deployedCapital : 0;
-  const effectiveBalance = onChainBalance + deployed;
+  const pendingRedeem = Number.isFinite(pendingRedeemValue) && pendingRedeemValue > 0 ? pendingRedeemValue : 0;
+  const effectiveBalance = onChainBalance + deployed + pendingRedeem;
   const today = getWibDate();
 
   if (currentWibDate !== today) {
-    // New WIB day — reset baseline (include deployed capital so open positions don't count as profit)
+    // New WIB day — reset baseline (include all value so nothing counts as today's profit)
     const prevDate = currentWibDate;
     const prevBaseline = startOfDayBalance;
     startOfDayBalance = effectiveBalance;
@@ -95,6 +103,7 @@ export function initDayBaseline(onChainBalance, deployedCapital = 0) {
     log.info(
       `New WIB day (${today}) — profit target baseline: $${effectiveBalance.toFixed(2)}` +
       (deployed > 0 ? ` (on-chain $${onChainBalance.toFixed(2)} + deployed $${deployed.toFixed(2)})` : '') +
+      (pendingRedeem > 0 ? ` + $${pendingRedeem.toFixed(2)} unredeemed` : '') +
       `, target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}` +
       (prevDate ? ` (prev: ${prevDate}, $${prevBaseline?.toFixed(2) ?? '?'})` : '')
     );
@@ -109,6 +118,7 @@ export function initDayBaseline(onChainBalance, deployedCapital = 0) {
     log.info(
       `Profit target baseline set: $${effectiveBalance.toFixed(2)}` +
       (deployed > 0 ? ` (on-chain $${onChainBalance.toFixed(2)} + deployed $${deployed.toFixed(2)})` : '') +
+      (pendingRedeem > 0 ? ` + $${pendingRedeem.toFixed(2)} unredeemed` : '') +
       ` (${today} WIB), target: +$${BOT_CONFIG.dailyProfitTargetUsd.toFixed(2)}`
     );
     return true;
@@ -135,10 +145,10 @@ export function checkProfitTarget(onChainBalance, positionCost = 0, pendingRedee
     return { reached: false, profit: 0, target: 0, baseline: 0 };
   }
 
-  // Handle day rollover (pass deployed capital so baseline includes open positions)
+  // Handle day rollover (pass all value components so baseline is symmetric with effectiveBalance)
   const deployedCapital = Number.isFinite(positionCost) && positionCost > 0 ? positionCost : 0;
   const pendingRedeem = Number.isFinite(pendingRedeemValue) && pendingRedeemValue > 0 ? pendingRedeemValue : 0;
-  initDayBaseline(onChainBalance, deployedCapital);
+  initDayBaseline(onChainBalance, deployedCapital, pendingRedeem);
 
   if (startOfDayBalance === null || !Number.isFinite(onChainBalance)) {
     return { reached: false, profit: 0, target, baseline: 0 };

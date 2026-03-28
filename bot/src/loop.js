@@ -520,10 +520,13 @@ export async function pollOnce() {
           log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
-          // Initialize daily profit target baseline from on-chain balance + deployed capital
+          // Initialize daily profit target baseline from on-chain balance + deployed capital + unredeemed.
+          // CRITICAL: unredeemed must be in baseline so it's not counted as today's profit when
+          // bot restarts after winning positions from a previous session haven't been redeemed yet.
           if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
             const deployedCost = hasPos ? (pos.cost ?? 0) : 0;
-            initDayBaseline(onChain, deployedCost);
+            const startupUnredeemed = getPendingRedeemValue();
+            initDayBaseline(onChain, deployedCost, startupUnredeemed);
           }
           // M17: Use 5% relative threshold instead of fixed $5 — $5 doesn't scale with bankroll
           const driftPct = localBankroll > 0 ? (drift / localBankroll) * 100 : 0;

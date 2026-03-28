@@ -107,6 +107,14 @@ function BotPanel({ connected, data }) {
   const portfolioTotal = data.bankroll != null
     ? data.bankroll + (rtPositionValue ?? botPosition?.cost ?? 0) : null;
 
+  // Profit target
+  const pt = data.profitTarget ?? null;
+  const ptEnabled = pt?.enabled === true && pt?.target > 0;
+  const ptReached = pt?.targetReached === true;
+  const ptProfit = pt?.profit ?? 0;
+  const ptTarget = pt?.target ?? 0;
+  const ptPct = ptEnabled && ptTarget > 0 ? Math.min(ptProfit / ptTarget, 1) : 0;
+
   // Limit order status
   const limitOrder = data.limitOrder ?? null;
   const limActive = limitOrder?.phase === 'MONITORING' || limitOrder?.phase === 'PLACED';
@@ -368,6 +376,38 @@ function BotPanel({ connected, data }) {
               {stats?.dailyPnL != null ? `${stats.dailyPnL >= 0 ? '+' : ''}${fmtUsd(stats.dailyPnL)}` : '-'}
             </span>
           </div>
+          {ptEnabled && (
+            <div style={{ marginBottom: 4 }}>
+              <div className="data-row" style={{ marginBottom: 2 }}>
+                <span className="data-row__label" style={{ color: ptReached ? '#ffc107' : 'var(--text-dim)' }}>
+                  Target
+                </span>
+                <span className="data-row__value" style={{
+                  fontWeight: 700,
+                  color: ptReached ? '#ffc107' : ptProfit > 0 ? 'var(--green-bright)' : 'var(--text-muted)',
+                }}>
+                  {ptProfit >= 0 ? '+' : ''}{fmtUsd(ptProfit)} / {fmtUsd(ptTarget)}
+                  {ptReached && <span style={{ marginLeft: 4, fontSize: '0.7em' }}>✓</span>}
+                </span>
+              </div>
+              <div style={{
+                height: 3, borderRadius: 2,
+                background: 'var(--bg-surface)',
+                overflow: 'hidden',
+              }}>
+                <div style={{
+                  height: '100%', borderRadius: 2,
+                  width: `${(ptPct * 100).toFixed(1)}%`,
+                  background: ptReached
+                    ? 'linear-gradient(90deg, #ffc107, #ff9800)'
+                    : ptPct > 0.7
+                      ? 'linear-gradient(90deg, var(--green-bright), #00c853)'
+                      : 'linear-gradient(90deg, var(--accent-cyan), var(--green-bright))',
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            </div>
+          )}
           <div className="data-row">
             <span className="data-row__label">Trades</span>
             <span className="data-row__value">
@@ -655,6 +695,8 @@ export default memo(BotPanel, (prev, next) => {
     a.metEngine?.last?.ts === b.metEngine?.last?.ts &&
     a.signalStability?.confirmCount === b.signalStability?.confirmCount &&
     a.btcPrice === b.btcPrice &&
-    a.fillTracker?.fillRate === b.fillTracker?.fillRate
+    a.fillTracker?.fillRate === b.fillTracker?.fillRate &&
+    a.profitTarget?.profit === b.profitTarget?.profit &&
+    a.profitTarget?.targetReached === b.profitTarget?.targetReached
   );
 });
