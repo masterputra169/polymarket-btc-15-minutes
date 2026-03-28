@@ -176,10 +176,12 @@ export function parsePriceToBeat(text) {
   const matches = text.match(/\$[\d,]+(?:\.\d+)?/g);
   if (!matches || matches.length === 0) return null;
 
-  const raw = matches[0].replace(/[$,]/g, '');
-  const num = Number(raw);
-  // Sanity check: must be in plausible BTC price range
-  return Number.isFinite(num) && num >= PTB_MIN_BTC && num <= PTB_MAX_BTC ? num : null;
+  // Iterate all matches — "go up by $1 from $84,500" must skip the $1 and find $84,500
+  for (const m of matches) {
+    const num = Number(m.replace(/[$,]/g, ''));
+    if (Number.isFinite(num) && num >= PTB_MIN_BTC && num <= PTB_MAX_BTC) return num;
+  }
+  return null;
 }
 
 /**
