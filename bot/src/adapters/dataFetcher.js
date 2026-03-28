@@ -328,6 +328,88 @@ export async function fetchChainlinkAtTimestamp(targetSec) {
 }
 
 /**
+ * Fetch exact PTB from Polymarket website's server-rendered data.
+ * Polymarket embeds eventMetadata.priceToBeat in __NEXT_DATA__ for closed markets.
+ * The PTB of market N+1 = finalPrice of market N (Chainlink Data Streams snapshot).
+ *
+ * @param {string} slug - Event slug (e.g. "btc-updown-15m-1774686600")
+ * @returns {Promise<{priceToBeat: number, source: string}|null>}
+ */
+let ptbCache = { slug: null, value: null, fetchedAt: 0 };
+
+export async function fetchPolymarketPtb(slug) {
+  if (!slug) return null;
+
+  // Cache: don't re-fetch for the same slug within 60s
+  if (ptbCache.slug === slug && ptbCache.value && Date.now() - ptbCache.fetchedAt < 60_000) {
+    return ptbCache.value;
+  }
+
+  try {
+    const res = await fetch(`https://polymarket.com/event/${slug}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+    if (!match) return null;
+
+    const nextData = JSON.parse(match[1]);
+    const str = JSON.stringify(nextData);
+
+    // Find the active event's PTB or the most recent finalPrice (= next market's PTB)
+    // Strategy: find the event matching this slug, or use the latest finalPrice
+    const ptbRegex = new RegExp(`"slug":"${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[\\s\\S]*?"priceToBeat":(\\d+\\.?\\d*)`);
+    const directMatch = str.match(ptbRegex);
+    if (directMatch) {
+      const ptb = Number(directMatch[1]);
+      if (Number.isFinite(ptb) && ptb > 10000) {
+        const result = { priceToBeat: ptb, source: 'polymarket_page' };
+        ptbCache = { slug, value: result, fetchedAt: Date.now() };
+        log.info(`PTB from Polymarket page: $${ptb.toFixed(2)} (direct match for ${slug})`);
+        return result;
+      }
+    }
+
+    // Fallback: find the most recent event with eventMetadata (just before current market)
+    // Pattern: current market's PTB = previous market's finalPrice
+    const allPtbs = [...str.matchAll(/"eventMetadata":\{"finalPrice":([\d.]+),"priceToBeat":([\d.]+)\}/g)];
+    if (allPtbs.length > 0) {
+      // The last finalPrice in the series is the PTB of the next (active) market
+      // Sort by extracting nearby slug timestamps to find the most recent
+      let latestFinalPrice = null;
+      let latestTimestamp = 0;
+      for (const m of allPtbs) {
+        // Extract timestamp from nearby slug (e.g. btc-updown-15m-1774686600)
+        const idx = m.index;
+        const nearby = str.slice(Math.max(0, idx - 500), idx);
+        const tsMatch = nearby.match(/btc-updown-15m-(\d+)/);
+        if (tsMatch) {
+          const ts = Number(tsMatch[1]);
+          if (ts > latestTimestamp) {
+            latestTimestamp = ts;
+            latestFinalPrice = Number(m[1]);
+          }
+        }
+      }
+      if (latestFinalPrice && latestFinalPrice > 10000) {
+        const result = { priceToBeat: latestFinalPrice, source: 'polymarket_page_prev' };
+        ptbCache = { slug, value: result, fetchedAt: Date.now() };
+        log.info(`PTB from previous market finalPrice: $${latestFinalPrice.toFixed(2)}`);
+        return result;
+      }
+    }
+
+    return null;
+  } catch (err) {
+    log.debug(`Polymarket PTB scrape failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
  * Funding rate — returns null (all sources blocked in user's network).
  */
 export async function fetchFundingRate() {

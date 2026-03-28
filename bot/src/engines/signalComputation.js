@@ -72,9 +72,9 @@ export function computeSignals({
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   } = ind;
 
-  // ── Price to beat (Chainlink-sourced, same as Polymarket resolution) ──
-  // Priority: scheduled_ws (pre-captured at eventStartTime) > chainlink_round (on-chain) > oracle (WS live)
-  // scheduled_ws / chainlink_round: locked in by loop.js — signalComputation only sets oracle/pending as interim
+  // ── Price to beat ──
+  // Priority: polymarket_page (exact) > scheduled_ws > chainlink_round > oracle (WS live)
+  // All high-priority sources are set async by loop.js — signalComputation only sets oracle/pending as interim
   let updatedPriceToBeat = priceToBeat;
 
   if (marketSlug && priceToBeat.slug !== marketSlug) {

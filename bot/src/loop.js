@@ -60,6 +60,7 @@ import {
   fetchPolymarketSnapshot,
   fetchChainlinkBtcUsd,
   fetchChainlinkAtTimestamp,
+  fetchPolymarketPtb,
 } from './adapters/dataFetcher.js';
 
 // ML (loaded from disk)
@@ -870,29 +871,43 @@ export async function pollOnce() {
       }
       entryRegime = null;
 
-      // ── PTB: use pre-scheduled WS capture if available (highest priority) ──
-      // Pre-captured at the exact eventStartTime via schedulePtbCapture()
+      // ── PTB resolution (async, parallel — first to resolve wins) ──
+      // Priority: polymarket_page (exact) > scheduled_ws > chainlink_round > oracle
+      // All run async; whichever resolves first with a valid price sets PTB.
+      // Higher-priority sources overwrite lower-priority ones.
+      const eventSlug = poly.market?.slug ?? marketSlug;
+      const eventStartTime = poly.market?.eventStartTime;
+
+      // 1. Scrape exact PTB from Polymarket page (eventMetadata.priceToBeat)
+      fetchPolymarketPtb(eventSlug).then(result => {
+        if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
+          const prev = priceToBeat.value;
+          priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
+          if (prev !== result.priceToBeat) {
+            log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
+          }
+        }
+      }).catch(err => log.debug(`Polymarket PTB scrape failed: ${err.message}`));
+
+      // 2. Use pre-scheduled WS capture (if fired at eventStartTime)
       if (ptbScheduledPrice?.price > 0) {
         const age = Date.now() - ptbScheduledPrice.capturedAt;
-        if (age < 30_000) { // Accept if captured within 30s of now
+        if (age < 30_000) {
           priceToBeat = { slug: marketSlug, value: ptbScheduledPrice.price, source: 'scheduled_ws', updatedAt: ptbScheduledPrice.capturedAt };
           log.info(`PTB from scheduled capture: $${ptbScheduledPrice.price.toFixed(2)} (${(age / 1000).toFixed(1)}s ago)`);
         }
-        ptbScheduledPrice = null; // consumed
+        ptbScheduledPrice = null;
       }
 
-      // ── Async fallback: resolve PTB from Chainlink on-chain rounds ──
-      // Only fires if scheduled capture missed or WS was down.
-      // scheduled_ws: locked in — never overwrite with on-chain approximation.
-      const eventStartTime = poly.market?.eventStartTime;
+      // 3. Chainlink on-chain round query (fallback)
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
           if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && priceToBeat.source !== 'polymarket_api' && priceToBeat.source !== 'scheduled_ws') {
+              && !['polymarket_page', 'polymarket_page_prev'].includes(priceToBeat.source)) {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
-            log.info(`PTB updated: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (Chainlink round, ${result.diff}s from start)`);
+            log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
           }
         }).catch(err => log.debug(`Chainlink PTB fetch failed: ${err.message}`));
       }
