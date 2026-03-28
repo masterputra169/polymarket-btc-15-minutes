@@ -23,7 +23,7 @@ const roundPct = (n) => Math.round(n * 100) / 100;
 
 /**
  * Polymarket dynamic fee on profit.
- * Uses actual formula: 0.25 × (p(1-p))² — max 1.56% at p=0.50, decreases at extremes.
+ * Uses actual formula: 0.072 × p × (1-p) — max ~1.80% at p=0.50 (Mar-30-2026 update).
  * Falls back to conservative 2% if entry price unavailable.
  * Audit v5 H1: was flat 2%, now dynamic — fixes systematic P&L under-tracking.
  */

@@ -1,29 +1,36 @@
 # Polymarket BTC 15-Minute Trading Bot
 
-Automated trading bot for Polymarket's BTC 15-minute binary prediction markets. Combines XGBoost/LightGBM ML ensemble, 10 technical indicators, and smart order routing to trade UP/DOWN positions.
+> Automated trading bot for Polymarket's BTC 15-minute binary prediction markets.
+> Combines XGBoost/LightGBM ML ensemble, 10 technical indicators, smart order routing, and real-time risk management.
 
-**Stack**: React 19 + Vite 7 (dashboard) | Node.js + PM2 (bot) | XGBoost + LightGBM (ML)
-
----
-
-## Table of Contents
-
-- [How It Works](#how-it-works)
-- [Prerequisites](#prerequisites)
-- [Installation](#installation)
-- [Wallet Setup](#wallet-setup)
-- [Configuration](#configuration)
-- [Running the Bot](#running-the-bot)
-- [Dashboard](#dashboard)
-- [Trading Strategies](#trading-strategies)
-- [Risk Management](#risk-management)
-- [ML Model](#ml-model)
-- [Monitoring & Alerts](#monitoring--alerts)
-- [Troubleshooting](#troubleshooting)
+**Stack:** React 19 + Vite 7 (dashboard) · Node.js + PM2 (bot) · XGBoost + LightGBM (ML) · Polymarket CLOB API
 
 ---
 
-## How It Works
+## What Is This?
+
+Every 15 minutes, Polymarket runs a binary market: **"Will BTC be higher in 15 minutes?"** You bet YES or NO at the current market price (e.g., 65¢ for YES), and collect $1.00 if correct.
+
+This bot automates that process — it reads BTC price data from 4 live sources, runs an ML ensemble to predict direction, calculates edge vs. market price, and places orders if conditions are favorable. It runs 24/7 and manages its own risk.
+
+---
+
+## Key Features
+
+- **ML Ensemble (v20)** — XGBoost + LightGBM, Platt-calibrated, trained on 34K Polymarket markets
+- **15 Trade Filters** — ML confidence, spread gates, VPIN, session quality, blackout hours, and more
+- **Smart Order Router** — decides between FOK (instant) and Limit orders (passive, better price)
+- **Kelly Sizing** — confidence-tiered fractional Kelly with hard bankroll caps
+- **Cut-Loss System** — 13-gate evaluator; philosophy: hold to settlement wins 87.5% of the time
+- **Auto-Retrain Pipeline** — weekly ML retraining with Optuna HPO, quality gates, auto-rollback
+- **Concept Drift Detection** — CUSUM + hard threshold alerts when model degrades in real time
+- **AI Agent (optional)** — OpenRouter-powered post-trade analysis and self-optimization
+- **Telegram Alerts** — every trade, circuit breaker, daily P&L summary
+- **React Dashboard** — 12 live panels: signals, positions, ML confidence, bet sizing, accuracy
+
+---
+
+## Architecture
 
 ```
 Binance BTC Price (WebSocket) ─┐
@@ -34,30 +41,46 @@ Polymarket LiveData (WebSocket) ──┘         │
                                     ML Ensemble (XGB+LGB)
                                     Regime Detection
                                             │
-                                    ┌───────▼────────┐
-                                    │  Edge Engine    │
-                                    │  (phase-based   │
-                                    │   thresholds)   │
-                                    └───────┬────────┘
+                                   ┌────────▼────────┐
+                                   │   Edge Engine    │
+                                   │  phase-based     │
+                                   │  thresholds      │
+                                   └────────┬────────┘
                                             │
-                                    ┌───────▼────────┐
-                                    │  Order Router   │
-                                    │  FOK / LIMIT    │
-                                    └───────┬────────┘
+                                   ┌────────▼────────┐
+                                   │  Order Router    │
+                                   │  FOK / LIMIT     │
+                                   └────────┬────────┘
                                             │
-                                    Polymarket CLOB API
-                                    (place order, monitor, settle)
+                                   Polymarket CLOB API
+                                   (place → monitor → settle)
 ```
 
-Every ~50ms, the bot:
+Every ~50ms the bot:
 1. Fetches real-time BTC price + Polymarket market data
-2. Computes 10 technical indicators + ML prediction (XGBoost + LightGBM ensemble)
-3. Detects market regime (trending/choppy/mean-reverting)
-4. Calculates edge (model probability minus market price)
-5. Applies 15 trade filters (ML confidence, spreads, time window, session quality, etc.)
-6. Routes order: **FOK** (immediate) or **Limit** (passive) or **WAIT**
-7. Monitors position: cut-loss, take-profit, settlement
+2. Computes 10 technical indicators + ML prediction
+3. Detects market regime (trending / choppy / mean-reverting)
+4. Calculates edge (model probability − market price)
+5. Applies 15 trade filters
+6. Routes order: **LIMIT** (passive entry) · **FOK** (immediate) · **WAIT**
+7. Monitors position: cut-loss gates, settlement detection
 8. Broadcasts full state to React dashboard via WebSocket
+
+---
+
+## Dashboard Preview
+
+```
+┌─ Bot Status ─────────────────────────────┐  ┌─ ML Engine ──────────────────────────┐
+│ RUNNING  │ DRY_RUN: OFF  │ Bankroll $104 │  │ XGBoost: UP 82%  LightGBM: UP 79%   │
+│ Poll #48291  Daily P&L: +$3.42           │  │ Ensemble: UP 81.5%  HIGH confidence  │
+└──────────────────────────────────────────┘  └──────────────────────────────────────┘
+┌─ Price Card ─────────────────────────────┐  ┌─ Edge Engine ────────────────────────┐
+│ BTC $87,234  ▲ +0.3%  │  Chainlink: OK  │  │ Edge: 16.5%  Prob: 81.5%             │
+│ Market: will-btc-go-up-by-1usd-...      │  │ Regime: TRENDING  Phase: EARLY       │
+│ ████████████░░░  11:42 remaining        │  │ RECOMMEND: UP ✓ ENTER                │
+└──────────────────────────────────────────┘  └──────────────────────────────────────┘
+```
 
 ---
 
@@ -66,22 +89,21 @@ Every ~50ms, the bot:
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Node.js | >= 20 | Tested on 25.1.0 |
-| Python | >= 3.10 | For ML training only (3.13.0 tested) |
+| Python | >= 3.10 | ML retraining only (3.13.0 tested) |
 | PM2 | Latest | `npm install -g pm2` |
-| Git | Any | For cloning |
 
 **Polymarket Requirements:**
 - Polygon wallet (EOA) with USDC.e balance
-- Minimum recommended: **$50 USDC.e** on Polygon
-- No ETH needed (Polymarket uses gasless relays)
+- Recommended starting balance: **$50+ USDC.e** on Polygon
+- No ETH needed — Polymarket uses gasless relays
 
 ---
 
 ## Installation
 
 ```bash
-# 1. Clone the repository
-git clone https://github.com/your-username/polymarket-15-minutes.git
+# 1. Clone
+git clone https://github.com/masterputra169/polymarket-15-minutes.git
 cd polymarket-15-minutes/frontend
 
 # 2. Install frontend dependencies
@@ -90,336 +112,331 @@ npm install
 # 3. Install bot dependencies
 cd bot && npm install && cd ..
 
-# 4. Install PM2 globally (if not already)
+# 4. Install PM2
 npm install -g pm2
 
-# 5. Create bot environment file
-cp bot/.env.example bot/.env   # Then edit with your values
+# 5. Create bot config
+cp bot/.env.example bot/.env   # then edit with your values
 ```
 
-If `.env.example` doesn't exist, create `bot/.env` manually (see [Configuration](#configuration)).
+> If `.env.example` doesn't exist, create `bot/.env` manually — see [Configuration](#configuration).
 
 ---
 
 ## Wallet Setup
 
-### Option A: New Wallet (Recommended for Bot)
+### Option A: New Wallet (Recommended)
 
 ```bash
-# Generate a new wallet (save the private key securely!)
-node -e "const { ethers } = require('ethers'); const w = ethers.Wallet.createRandom(); console.log('Address:', w.address); console.log('Private Key:', w.privateKey);"
+node -e "
+const { ethers } = require('ethers');
+const w = ethers.Wallet.createRandom();
+console.log('Address:    ', w.address);
+console.log('Private Key:', w.privateKey);
+"
 ```
 
-1. Save the private key to `bot/.env` as `POLYMARKET_PRIVATE_KEY=0x...`
+1. Save private key to `bot/.env` as `POLYMARKET_PRIVATE_KEY=0x...`
 2. Send USDC.e to this address on **Polygon network**
-3. The bot will auto-derive API credentials on first start
+3. API credentials are auto-derived on first start
 
 ### Option B: Existing Polymarket Wallet (Browser/Magic Link)
 
-If you use Polymarket's web UI (Magic Link login), it creates a Gnosis Safe proxy:
+Polymarket's web UI creates a Gnosis Safe proxy:
 
-1. Find your proxy address in Polymarket UI (Settings > Wallet)
+1. Find your proxy address: Polymarket UI → Settings → Wallet
 2. Set `POLYMARKET_PROXY_ADDRESS=0x...` in `.env`
-3. Set `POLYMARKET_PRIVATE_KEY=0x...` (your EOA that controls the proxy)
-4. The bot signs with EOA but executes as the proxy
-
-### API Credentials
-
-**Auto-derive (easiest):** Leave `POLYMARKET_API_KEY`, `POLYMARKET_API_SECRET`, `POLYMARKET_API_PASSPHRASE` empty. The bot calls `createOrDeriveApiCreds()` on startup.
-
-**Manual:** If you already have CLOB API credentials, set all three in `.env`.
+3. Set `POLYMARKET_PRIVATE_KEY=0x...` (the EOA controlling the proxy)
 
 ---
 
 ## Configuration
 
-Create `bot/.env` with the following variables:
+Create `bot/.env` — here are the essential variables:
 
 ### Required
 
 ```env
-# ═══ WALLET ═══
+# Wallet
 POLYMARKET_PRIVATE_KEY=0x...          # Your Polygon EOA private key
-POLYMARKET_PROXY_ADDRESS=             # Leave empty if using EOA directly
+POLYMARKET_PROXY_ADDRESS=             # Gnosis Safe address (if using web UI wallet)
 
-# ═══ BANKROLL ═══
+# Bankroll
 BANKROLL=50                           # Starting capital in USD
-DRY_RUN=true                          # Start with true! Switch to false when ready
+DRY_RUN=true                          # ALWAYS start with true!
 
-# ═══ EXECUTION ═══
-POLL_INTERVAL_MS=50                   # Bot poll frequency (ms)
-LOG_LEVEL=info                        # debug|info|warn|error
+# Execution
+POLL_INTERVAL_MS=50                   # Poll frequency (ms)
+LOG_LEVEL=info
 ```
 
 ### Risk Management
 
 ```env
-# ═══ CIRCUIT BREAKERS ═══
+# Circuit breakers — bot halts + 4hr cooldown when triggered
 MAX_DAILY_LOSS_PCT=15                 # Halt if daily loss >= 15%
 MAX_CONSECUTIVE_LOSSES=7              # Halt after 7 straight losses
-MAX_DRAWDOWN_PCT=25                   # Halt if peak drawdown >= 25%
+MAX_DRAWDOWN_PCT=30                   # Halt if peak drawdown >= 30%
 
-# ═══ BET SIZING ═══
-MAX_BET_AMOUNT_USD=2.50               # Hard cap per trade
+# Bet sizing
+MAX_BET_AMOUNT_USD=2.50               # Hard cap per trade (raise as bankroll grows)
 ```
 
 ### Strategy Toggles
 
 ```env
-# ═══ CUT-LOSS (recommended: keep enabled) ═══
+# Cut-loss (recommended: keep enabled)
 CUT_LOSS_ENABLED=true
-CUT_LOSS_MIN_HOLD_SEC=480             # Hold at least 8 min before cutting
-CUT_LOSS_MIN_TOKEN_DROP_PCT=45        # Only cut on catastrophic drops
+CUT_LOSS_MIN_HOLD_SEC=720             # Hold at least 12 min before cutting
+CUT_LOSS_MIN_TOKEN_DROP_PCT=70        # Only cut on catastrophic drops (70%)
 
-# ═══ TAKE-PROFIT (recommended: disabled) ═══
-TAKE_PROFIT_ENABLED=false             # Settlement WR 87.5% beats early exit
+# Take-profit (recommended: disabled — settlement beats early exit)
+TAKE_PROFIT_ENABLED=false
 
-# ═══ LIMIT ORDERS (passive entry at better prices) ═══
+# Limit orders — passive entry at better prices
 LIMIT_ORDER_ENABLED=true
 
-# ═══ RECOVERY BUY (re-enter after cut-loss) ═══
+# Recovery buy — re-enter after cut-loss if signal recovers
 RECOVERY_BUY_ENABLED=true
 
-# ═══ PRE-MARKET LONG (09:00-09:15 EST daily) ═══
-PREMARKET_LONG_ENABLED=false          # Enable if you want daily LONG entry
+# Pre-market LONG — daily UP entry at 09:00-09:15 EST
+PREMARKET_LONG_ENABLED=false
+PREMARKET_LONG_RISK_PCT=0.05          # 5% bankroll per trade
 ```
 
-### Optional: Notifications
+### Notifications (Optional)
 
 ```env
-# ═══ TELEGRAM ═══
+# Telegram
 TELEGRAM_BOT_TOKEN=                   # From @BotFather
 TELEGRAM_CHAT_ID=                     # Your chat ID
-TELEGRAM_NOTIFY_TRADES=true           # Notify on every trade
-
-# ═══ DISCORD ═══
-DISCORD_WEBHOOK_URL=                  # Discord webhook URL
+TELEGRAM_NOTIFY_TRADES=true
 ```
 
-### Optional: Smart Money Oracle
+### Smart Money Oracle (Optional, ~$0.50-1.00/day)
 
 ```env
-# ═══ METENGINE (costs ~$0.50-1.00/day in Solana USDC) ═══
 METENGINE_ENABLED=false
-SOLANA_PRIVATE_KEY=                   # Base58 Solana keypair
-SOLANA_RPC_URL=https://solana-rpc.publicnode.com
+SOLANA_PRIVATE_KEY=                   # Base58 Solana keypair for x402 payments
 ```
 
-### Optional: Monte Carlo Simulation
+### AI Agent (Optional, requires OpenRouter key)
 
 ```env
-MC_ENABLED=false                      # Enable GBM risk simulation
-MC_NUM_PATHS=1000                     # Simulation paths
+AI_AGENT_ENABLED=false
+OPENROUTER_API_KEY=sk-or-...
+AI_MODEL=google/gemini-2-flash        # Or any OpenRouter model
+```
+
+### Concept Drift Detection
+
+```env
+DRIFT_WINDOW=50                       # Rolling window (trades) to evaluate accuracy
+DRIFT_MIN_TRADES=30                   # Min trades before check activates
+DRIFT_WR_DROP_PP=15                   # Alert if accuracy drops 15pp from baseline
+DRIFT_AUTO_RETRAIN=false              # Set true to auto-trigger retrain on drift
 ```
 
 ---
 
 ## Running the Bot
 
-### Step 1: Dry Run (Test First!)
-
-Always start in dry-run mode to verify everything works:
+### Step 1: Dry Run First
 
 ```bash
-# Make sure DRY_RUN=true in bot/.env, then:
+# Ensure DRY_RUN=true in bot/.env, then:
 pm2 start ecosystem.config.cjs
 pm2 logs polymarket-bot
 ```
 
-Watch the logs. You should see:
+Expected output:
 ```
-CLOB client initialized (dry-run mode)
-ML models loaded: XGBoost (1200 trees) + LightGBM
-WebSocket connected: Binance, CLOB, PolyLive, Chainlink
-Poll #1: BTC $97,234 | Market: will-btc-go-up-... | Signal: UP 72% | Edge: 8.2%
+[Bot] CLOB client initialized (dry-run mode)
+[Bot] ML models loaded: XGBoost v20 + LightGBM v20
+[Bot] WebSocket streams connected: Binance · CLOB · PolyLive · Chainlink
+[Bot] Poll #1 | BTC $87,234 | UP 81% | Edge 16.5% | ENTER (DRY)
 ```
 
 ### Step 2: Go Live
 
-Once dry-run looks good:
-
 ```bash
-# Edit bot/.env
+# In bot/.env:
 DRY_RUN=false
+MAX_BET_AMOUNT_USD=2.50               # Start small
 
-# Restart
 pm2 restart polymarket-bot
 pm2 logs polymarket-bot
 ```
 
-### Common PM2 Commands
+### PM2 Commands
 
 ```bash
-pm2 start ecosystem.config.cjs    # Start bot + auto-retrain
-pm2 logs polymarket-bot            # Watch logs (Ctrl+C to exit)
-pm2 logs polymarket-bot --lines 200  # Show last 200 lines
-pm2 stop polymarket-bot            # Stop bot (graceful)
-pm2 restart polymarket-bot         # Restart bot
-pm2 monit                          # Real-time CPU/memory monitor
-pm2 status                         # Process list
-pm2 delete all                     # Remove all processes
+pm2 start ecosystem.config.cjs        # Start bot + ML retrainer
+pm2 logs polymarket-bot               # Live logs (Ctrl+C to exit)
+pm2 logs polymarket-bot --lines 200   # Last 200 lines
+pm2 stop polymarket-bot               # Graceful stop
+pm2 restart polymarket-bot            # Restart
+pm2 monit                             # CPU/memory monitor
+pm2 status                            # Process list
 ```
 
 ### Step 3: Start Dashboard
 
-In a separate terminal:
-
 ```bash
-cd frontend
+# In a separate terminal:
 npm run dev
+# Open http://localhost:3000
 ```
 
-Open `http://localhost:3000` — the dashboard connects to bot via WebSocket on port 3099.
-
----
-
-## Dashboard
-
-The React dashboard shows real-time bot state:
-
-| Panel | What It Shows |
-|-------|---------------|
-| **Bot Status** | Running/paused, dry-run indicator, poll count, bankroll, daily P&L |
-| **Positions** | Open positions with live P&L, entry price, sell button |
-| **Limit Order** | Active limit order status, target/market price, progress bar |
-| **Price Card** | BTC price (Binance + Chainlink), countdown to settlement |
-| **Prediction** | UP/DOWN probability, recommendation, score breakdown |
-| **TA Indicators** | RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, EMA, StochRSI |
-| **Polymarket** | Market prices, orderbook depth, spread |
-| **Edge** | Edge calculation, regime-aware thresholds, ML confidence |
-| **ML Engine** | XGBoost/LightGBM status, confidence, rule vs ML comparison |
-| **Bet Sizing** | Kelly-fraction sizing, risk level, bankroll display |
-| **Accuracy** | Rolling accuracy (20/50/100 trades), per-regime stats, calibration |
-
-**Dashboard Controls:**
-- **START/STOP** button: Pause/resume the bot remotely
-- **SELL** button: Manually sell any open position
-- **Refresh**: Force position refresh from CLOB API
+The dashboard connects to the bot via WebSocket on port 3099.
 
 ---
 
 ## Trading Strategies
 
-### 1. Standard Directional (Main Strategy)
+### 1. Standard Directional (Main)
 
-The bot evaluates each 15-minute BTC market:
-- **ML Ensemble** predicts UP/DOWN with confidence level
-- **Edge Engine** checks if model probability exceeds market price by enough margin
-- **Order Router** decides execution mode:
+The order router picks execution mode based on 7 rules:
 
 | Condition | Action |
 |-----------|--------|
-| ML >= 80% + price <= 62c | FOK (immediate fill) |
-| ML 65-79% + wide spread + price 50-60c | Limit order (passive, better price) |
-| ML < 65% or no edge | WAIT (skip) |
+| ML >= 85% + price <= 65¢ | FOK (immediate) |
+| ML 65–84% + price <= 62¢ + wide spread | Limit order (passive) |
+| ML < 62% or no edge | WAIT |
 
-### 2. Limit Order (Passive Entry)
+### 2. Limit Orders — Passive Entry
 
-Places GTD limit orders at 50-60c for better entry prices:
-- Auto-cancels after 7 minutes if unfilled
-- Falls back to FOK if cancelled
-- Max 2 attempts per market (anti-loop protection)
+Places GTD orders at target price (typically 55–62¢ vs. market 65–75¢):
+- Auto-cancels after 7 min if unfilled → falls back to FOK
+- Max 2 attempts per market (anti-loop)
+- At 58¢ entry: only needs 58% WR to break even vs. 72% at 72¢ FOK
 
 ### 3. Pre-Market LONG (Optional)
 
-Daily UP entry at 09:00-09:15 EST:
-- Exploits pre-NYSE volatility
-- 5% bankroll risk, max 1/day
+Daily UP entry during 09:00–09:15 EST:
+- Exploits pre-NYSE open volatility
+- 1 trade per day maximum
 - Enable with `PREMARKET_LONG_ENABLED=true`
 
 ### 4. Recovery Buy (Optional)
 
 Re-enters after cut-loss if signal stabilizes:
-- Waits 10s baseline + 30s monitoring
-- Requires ML still agrees, token rising/stable
-- Max 50% of normal bet size (anti-revenge)
+- 10s baseline + 30s monitoring period
+- Requires ML still agrees, token rising or stable
+- Reduced position size (anti-revenge sizing)
 
 ---
 
 ## Risk Management
 
-### Circuit Breakers (Auto-Halt)
+### Circuit Breakers
 
-| Trigger | Default | What Happens |
-|---------|---------|--------------|
-| Daily loss >= 15% | `MAX_DAILY_LOSS_PCT=15` | Bot halts, 4-hour cooldown |
-| Peak drawdown >= 25% | `MAX_DRAWDOWN_PCT=25` | Bot halts, 4-hour cooldown |
-| 7 consecutive losses | `MAX_CONSECUTIVE_LOSSES=7` | Bot halts, 4-hour cooldown |
-| Win rate <= 30% | Automatic | Bot halts until recovery |
+| Trigger | Default | Action |
+|---------|---------|--------|
+| Daily loss ≥ 15% | `MAX_DAILY_LOSS_PCT=15` | Halt + 4hr cooldown |
+| Peak drawdown ≥ 30% | `MAX_DRAWDOWN_PCT=30` | Halt + 4hr cooldown |
+| 7 consecutive losses | `MAX_CONSECUTIVE_LOSSES=7` | Halt + 4hr cooldown |
+| Win rate < 30% (rolling) | Automatic | Halt |
 
 ### Cut-Loss Philosophy
 
 **"Hold to settlement wins 87.5% of the time."**
 
-The bot only cuts positions in extreme scenarios:
-- Token drops >= 45% (catastrophic collapse)
-- ML flips with >= 75% confidence
-- Minimum 8-minute hold before any cut allowed
+The bot only exits early in extreme scenarios:
+- Token drops ≥ 70% (catastrophic collapse)
+- ML flips direction with ≥ 92% confidence
+- Minimum 12-minute hold before any cut
 
-This is intentional. Journal data from 145+ verified trades shows settlement WR of 87.5% vs cut-loss WR of 23.3%.
+Data from 300+ live trades shows settlement WR of 87.5% vs. cut-loss WR of 23.3%. Early selling destroys edge.
 
-### Trade Filters (15 Gates)
+### 15 Trade Filters
 
-Every trade must pass all 15 filters:
-1. ML confidence >= 62%
-2. Market price not in 45-55c zone (coin flip territory)
-3. Sufficient volatility (ATR check)
-4. Time window: 0.75-14.5 minutes to settlement
-5. Post-loss cooldown respected
-6. Max 2 trades per market
-7. Weekend liquidity check
-8. Edge ceiling (< 20%)
-9. Counter-trend momentum check
-10. Blackout hours: 16:00-23:00 ET
-11. Trending regime strictness
-12. Spread width (< 8%)
-13. ML accuracy degradation check
-14. VPIN informed flow gate
-15. Spread widening detection
+Every entry passes all 15 gates:
+
+| # | Filter | Purpose |
+|---|--------|---------|
+| 1 | ML confidence ≥ 62% | Only act on high-confidence signals |
+| 2 | Price not 45–55¢ | Avoid coin-flip zone |
+| 3 | ATR volatility check | Avoid dead markets |
+| 4 | Time window 0.75–14.5 min | Avoid too-early or too-late entries |
+| 5 | Post-loss cooldown | Prevent revenge trading |
+| 6 | Max 2 trades per market | Anti-overtrading |
+| 7 | Weekend liquidity | Reduced size on low-volume days |
+| 8 | Edge ceiling < 20% | Avoid mispriced markets |
+| 9 | Counter-trend momentum | Don't fight strong momentum |
+| 10 | Blackout hours 16:00–23:00 ET | Skip historically low-WR hours |
+| 11 | Regime strictness | Tighter thresholds in choppy markets |
+| 12 | Spread < 8% | Avoid illiquid markets |
+| 13 | ML rolling accuracy | Pause if model degrades |
+| 14 | VPIN informed flow | Block if smart money detected |
+| 15 | Spread widening | Block if sudden liquidity withdrawal |
 
 ---
 
 ## ML Model
 
-### Current: v16 (XGBoost + LightGBM Ensemble)
+### Current: v20 (XGBoost + LightGBM Ensemble)
 
 | Metric | Value |
 |--------|-------|
-| Test Accuracy | 84.07% |
-| Test AUC | 0.9248 |
-| Holdout Accuracy | 94.12% |
-| At >= 70% confidence | 98.4% WR (87.6% coverage) |
-| At >= 80% confidence | 99.3% WR (79.4% coverage) |
-| Features | 79 (54 base + 25 engineered) |
-| Training data | 45,336 samples, 180-day window, 86% real Polymarket labels |
+| Test Accuracy | 80.21% |
+| Test AUC | 0.8846 |
+| Training window | 120 days |
+| Real Polymarket labels | ~99% |
+| Training samples | 34,314 |
 | Ensemble weights | XGBoost 0.75, LightGBM 0.25 |
+| Features | 79 (54 base + 25 engineered) |
+| Calibration | Platt scaling on logits |
 
-### Retraining (Optional)
+> Lower accuracy vs. v16 (84%) reflects the current choppy BTC regime (Trump tariffs, geopolitical uncertainty). The model is current-regime aware — recency weighting applied during training.
 
-The bot includes an auto-retrain pipeline:
+### Features Used
+
+- **BTC Price:** Returns (1m/5m/15m/30m/1h/4h), Z-score, momentum
+- **Technical:** RSI, MACD, VWAP, Bollinger Bands, ATR, Heiken Ashi, EMA Cross, StochRSI
+- **Polymarket:** Token price, bid/ask spread, time to settlement, orderbook imbalance
+- **Volume:** Delta, funding rate, VPIN estimate
+- **Regime:** Choppy/trending/mean-revert classification
+
+### Retraining
+
+The bot includes a full retraining pipeline with quality gates and auto-rollback:
 
 ```bash
 cd backtest/ml_training
 
-# Update market lookup (scrape recent markets)
+# 1. Update market data
 python quickUpdateLookup.py 7
 
-# Generate training data
-node generateTrainingData.mjs --days 180 --polymarket-lookup ./polymarket_lookup.json
+# 2. Generate training data
+node generateTrainingData.mjs --days 120 --polymarket-lookup ./polymarket_lookup.json
 
-# Train with Optuna HPO
+# 3. Train with Optuna HPO (150 trials)
 python trainXGBoost_v3.py --input training_data.csv --tune --tune-trials 150
 
-# Backtest
+# 4. Backtest
 python backtestPnL.py --threshold-sweep
 
-# Deploy (copy to public/ml/)
+# 5. Deploy (if quality gates pass)
 cp output/xgboost_model.json ../../public/ml/
 cp output/lightgbm_model.json ../../public/ml/
 cp output/norm_browser.json ../../public/ml/
 ```
 
-Auto-retrain runs weekly (Sunday 3 AM UTC) via PM2 if configured.
+Or configure **auto-retrain** — runs weekly (Sunday 3 AM UTC) via PM2:
+```env
+RETRAIN_DAY_OF_WEEK=0
+RETRAIN_HOUR_UTC=3
+RETRAIN_DAYS=120
+RETRAIN_TUNE_TRIALS=100
+```
+
+### Concept Drift Detection
+
+The bot monitors model performance in real time. If live accuracy drops significantly from baseline:
+- **Telegram alert** sent immediately
+- CUSUM algorithm detects gradual drift early
+- Optional: auto-triggers retraining (`DRIFT_AUTO_RETRAIN=true`)
 
 ---
 
@@ -427,31 +444,29 @@ Auto-retrain runs weekly (Sunday 3 AM UTC) via PM2 if configured.
 
 ### Telegram Setup
 
-1. Create a bot via [@BotFather](https://t.me/botfather) on Telegram
-2. Send `/newbot`, follow the prompts, save the token
-3. Send any message to your bot, then visit:
+1. Create a bot via [@BotFather](https://t.me/botfather) → `/newbot`
+2. Get your `chat_id`:
    ```
    https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
    ```
-4. Find your `chat_id` in the response
-5. Set in `.env`:
+3. Set in `.env`:
    ```env
-   TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
+   TELEGRAM_BOT_TOKEN=123456789:ABC-...
    TELEGRAM_CHAT_ID=987654321
    TELEGRAM_NOTIFY_TRADES=true
    ```
 
-### What Gets Notified
+### Notification Events
 
-| Event | Channel |
-|-------|---------|
-| Trade placed (buy/sell) | Telegram + Discord |
-| Position filled | Telegram |
-| Cut-loss triggered | Telegram (urgent) |
-| Circuit breaker halt | Telegram + Discord (critical) |
-| Settlement result (win/loss) | Telegram |
-| Limit order filled/cancelled | Telegram |
-| Daily P&L summary | Telegram |
+| Event | Severity |
+|-------|----------|
+| Trade placed (buy/sell) | Info |
+| Limit order filled/cancelled | Info |
+| Settlement result (win/loss) | Info |
+| Daily P&L summary | Info |
+| Cut-loss triggered | Warning |
+| Circuit breaker halt | Critical |
+| Concept drift detected | Warning |
 
 ---
 
@@ -460,54 +475,35 @@ Auto-retrain runs weekly (Sunday 3 AM UTC) via PM2 if configured.
 ### Bot won't start
 
 ```bash
-# Check logs
 pm2 logs polymarket-bot --lines 50
-
-# Common issues:
-# 1. Missing .env → "POLYMARKET_PRIVATE_KEY is required"
-# 2. Missing dependencies → "Cannot find module '@polymarket/clob-client'"
-#    Fix: cd bot && npm install
-# 3. ML models missing → "Failed to load XGBoost model"
-#    Fix: Ensure public/ml/xgboost_model.json exists
 ```
+
+Common causes:
+- `POLYMARKET_PRIVATE_KEY is required` → check `bot/.env` exists and has the key
+- `Cannot find module` → run `cd bot && npm install`
+- `Failed to load XGBoost model` → ensure `public/ml/xgboost_model.json` exists
 
 ### Circuit breaker triggered
 
 ```bash
-# Check state
-cat bot/data/state.json | python -m json.tool
-
-# Reset circuit breaker (set bankroll fields to actual on-chain balance):
 pm2 stop polymarket-bot
-# Edit bot/data/state.json: set bankroll, peakBankroll, dailyStartBankroll to actual balance
+# Edit bot/data/state.json — set bankroll, peakBankroll, startOfDayBankroll to actual USDC.e balance
 pm2 restart polymarket-bot
 ```
 
-### Dashboard shows "Bot disconnected"
+### "Bot disconnected" on dashboard
 
-- Verify bot is running: `pm2 status`
-- Check port 3099 is not blocked
-- Bot broadcasts on `ws://localhost:3099`
+- Check `pm2 status` — bot must be running
+- Verify port 3099 is not blocked
+- Dashboard connects to `ws://localhost:3099`
 
 ### Bankroll mismatch
 
-The bot auto-syncs bankroll with on-chain USDC balance. If out of sync:
-
 ```bash
 pm2 stop polymarket-bot
-# Edit bot/data/state.json → set all bankroll fields to your actual USDC.e balance
+# Edit bot/data/state.json → update all bankroll fields to your actual on-chain balance
 pm2 restart polymarket-bot
 ```
-
-### "Order cancelled" errors in logs
-
-Common causes:
-- Insufficient USDC.e balance
-- Market already settled
-- Price moved too far (FOK rejected)
-- Token approval needed (auto-handled on retry)
-
-These are normal during operation. The bot retries with different strategies.
 
 ---
 
@@ -515,28 +511,57 @@ These are normal during operation. The bot retries with different strategies.
 
 ```
 frontend/
-├── src/                          # React dashboard
-│   ├── App.jsx                   # Root component, data slicing
+├── src/                          # React 19 dashboard
+│   ├── App.jsx                   # Root, per-panel useMemo data slicing
 │   ├── components/               # 12 dashboard panels
-│   ├── engines/                  # Browser-side ML + decision logic
-│   ├── indicators/               # 10 technical indicator functions
-│   ├── hooks/                    # useBotData, useCountdown, etc.
-│   └── config.js                 # Frontend configuration
-├── bot/                          # Trading bot
-│   ├── index.js                  # Entry point, startup sequence
-│   ├── .env                      # Configuration (create this!)
+│   ├── engines/                  # Browser-side ML + decision engines
+│   │   ├── Mlpredictor.js        # XGBoost tree traversal (Float64Array)
+│   │   ├── edge.js               # Phase-based edge thresholds
+│   │   ├── asymmetricBet.js      # Kelly fraction sizing
+│   │   └── regime.js             # Choppy/trending/mean-revert classifier
+│   ├── indicators/               # 10 TA functions (RSI, MACD, VWAP, ...)
+│   ├── hooks/                    # useBotData, useCountdown, useClock
+│   └── config.js                 # Frontend parameters + polyFeeRate()
+│
+├── bot/                          # Node.js trading bot (PM2-managed)
+│   ├── index.js                  # Entry point + startup sequence
 │   └── src/
-│       ├── loop.js               # Main trading loop (~2000 lines)
-│       ├── config.js             # BOT_CONFIG parsed from .env
-│       ├── statusServer.js       # WebSocket server for dashboard
-│       ├── engines/              # Signal computation, order routing, limit orders
-│       ├── trading/              # Position tracking, CLOB client, cut-loss
-│       ├── safety/               # Trade filters, circuit breakers
-│       └── monitoring/           # Telegram/Discord notifications
-├── public/ml/                    # ML model files (XGBoost + LightGBM + normalization)
+│       ├── loop.js               # Main poll loop (~2000 lines)
+│       ├── config.js             # BOT_CONFIG from .env
+│       ├── statusServer.js       # WebSocket broadcast server :3099
+│       ├── autoRetrain.js        # Weekly ML retraining orchestrator
+│       ├── engines/
+│       │   ├── signalComputation.js   # All indicators per poll
+│       │   ├── tradePipeline.js       # Order execution + Kelly sizing
+│       │   ├── orderRouter.js         # 7-rule LIMIT/FOK/WAIT decision
+│       │   ├── limitOrderManager.js   # GTD order lifecycle
+│       │   └── settlement.js          # Settlement detection + P&L
+│       ├── trading/
+│       │   ├── positionTracker.js     # Bankroll + position state
+│       │   ├── cutLoss.js             # 13-gate cut-loss evaluator
+│       │   └── recoveryBuy.js         # Re-entry after cut-loss
+│       ├── safety/
+│       │   ├── tradeFilters.js        # 15 entry filters
+│       │   └── guards.js              # Circuit breaker
+│       └── monitoring/
+│           ├── perfMonitor.js         # Rolling win rate + daily P&L
+│           ├── driftDetector.js       # CUSUM concept drift detection
+│           ├── rollbackMonitor.js     # Post-deploy WR monitor
+│           └── notifier.js            # Telegram + Discord alerts
+│
+├── public/ml/                    # Deployed ML models
+│   ├── xgboost_model.json        # XGBoost ensemble (v20)
+│   ├── lightgbm_model.json       # LightGBM ensemble (v20)
+│   └── norm_browser.json         # Feature normalization params
+│
 ├── backtest/ml_training/         # ML training pipeline
-├── ecosystem.config.cjs          # PM2 configuration
-├── vite.config.js                # Vite dev server + API proxies
+│   ├── trainXGBoost_v3.py        # Main trainer (Optuna HPO)
+│   ├── generateTrainingData.mjs  # Feature engineering
+│   ├── backtestPnL.py            # Threshold sweep backtest
+│   └── quickUpdateLookup.py      # Scrape recent Polymarket markets
+│
+├── ecosystem.config.cjs          # PM2: bot + ml-retrain processes
+├── vite.config.js                # Dev server + CORS proxies
 └── package.json
 ```
 
@@ -544,16 +569,32 @@ frontend/
 
 ## Important Notes
 
-- **Start with DRY_RUN=true** — Always test before going live
-- **Settlement wins 87.5%** — Don't panic-sell. The bot's cut-loss is conservative by design
-- **Blackout hours 16:00-23:00 ET** — Bot automatically skips low-WR hours
-- **Min entry price 50c** — Bot avoids cheap tokens (historically negative EV)
-- **Max bet $2.50** — Position sizing is capped regardless of bankroll
-- **The bot does NOT need ETH** — Polymarket uses gasless relays on Polygon
-- **Never run `node bot/index.js` directly** — Always use PM2 (handles .env loading correctly)
+- **Always start with `DRY_RUN=true`** — verify everything works before going live
+- **Never run `node bot/index.js` directly** — always use PM2 (handles `.env` loading)
+- **The bot does not need ETH** — Polymarket uses gasless relays on Polygon
+- **Settlement beats early exit** — the cut-loss is intentionally conservative by design
+- **Blackout hours 16:00–23:00 ET** — bot automatically skips historically low-WR hours
+- **Binance FAPI and Bybit are blocked in some regions** — funding rate defaults to neutral (harmless)
+
+---
+
+## Contributing
+
+Pull requests welcome. For major changes, open an issue first.
+
+When contributing:
+- No TypeScript — vanilla JavaScript/JSX with ES modules
+- No linter configured — keep style consistent with surrounding code
+- Test with `DRY_RUN=true` before submitting
+
+---
+
+## Disclaimer
+
+This software is for **educational and personal use only**. Trading prediction markets involves significant financial risk. Past performance does not guarantee future results. The authors are not responsible for any financial losses. **Trade at your own risk.**
 
 ---
 
 ## License
 
-This project is for educational and personal use. Trade at your own risk. Not financial advice.
+MIT License — see [LICENSE](LICENSE) for details.

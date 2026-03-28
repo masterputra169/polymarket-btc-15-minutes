@@ -192,8 +192,8 @@ export function evaluateCutLoss({
   // v11→v15: Tightened from (1.5min + 30%) → (1.0min + 40%).
   // Settlement WR 87.5% beats cut-loss 23.3% — only force cut in truly catastrophic scenarios.
   // At <1 min left with 40%+ drop, recovery is statistically impossible.
-  const LATE_FORCE_CUT_MIN = 0.5;   // v16: only last 30s
-  const LATE_FORCE_CUT_DROP = 70;   // v16: 70% drop required
+  const LATE_FORCE_CUT_MIN = 0.5;   // last 30s of market
+  const LATE_FORCE_CUT_DROP = 70;   // 70% drop required — catastrophic only
   const isLateForceCut = timeLeftMin != null && timeLeftMin < LATE_FORCE_CUT_MIN && dropPct >= LATE_FORCE_CUT_DROP;
 
   // ── Gate 6d: TIME-BASED PERSISTENT LOSS fast-track (Fix D) ──

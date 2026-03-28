@@ -16,6 +16,7 @@ import { getStats } from '../trading/positionTracker.js';
 import { pauseBot } from '../loop.js';
 import { notify } from './notifier.js';
 import { checkRollback } from './rollbackMonitor.js';
+import { checkDrift } from './driftDetector.js';
 
 const log = createLogger('Monitor');
 
@@ -65,6 +66,12 @@ function monitorCycle() {
     checkRollback();
   } catch (err) {
     log.warn(`Rollback check failed: ${err.message}`);
+  }
+
+  try {
+    checkDrift();
+  } catch (err) {
+    log.warn(`Drift check failed: ${err.message}`);
   }
 
   try {

@@ -28,6 +28,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createLogger } from './logger.js';
 import { notify } from './monitoring/notifier.js';
+import { resetDriftState } from './monitoring/driftDetector.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const log = createLogger('AutoRetrain');
@@ -395,9 +396,10 @@ async function runPipeline() {
 
   restartBot();
 
-  // Step 7: Deploy marker
+  // Step 7: Deploy marker + reset drift state
   log.info('Step 7/7: Writing deploy marker...');
   writeDeployMarker(newMetrics.ensemble);
+  try { resetDriftState(); } catch { /* non-fatal */ }
 
   const elapsed = Math.round((Date.now() - startTime) / 1000);
   const msg = `Retrain SUCCESS — acc: ${(newMetrics.ensemble.accuracy * 100).toFixed(1)}% AUC: ${newMetrics.ensemble.auc.toFixed(4)} (${elapsed}s)`;

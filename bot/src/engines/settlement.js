@@ -11,6 +11,7 @@
 import { createLogger } from '../logger.js';
 import { CONFIG } from '../config.js';
 import { notify } from '../monitoring/notifier.js';
+import { polyFeeRate } from '../../../src/config.js';
 
 const log = createLogger('Settlement');
 
@@ -191,9 +192,10 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
     ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
   }
 
-  // FINTECH: Round P&L to cents. Subtract 2% Polymarket fee on profit (matches positionTracker math).
-  // Without this, journal shows gross profit but bankroll gets net profit after fee.
-  const POLY_FEE_RATE = 0.02;
+  // FINTECH: Round P&L to cents. Subtract Polymarket fee on profit (matches positionTracker math).
+  // Mar-30-2026: dynamic fee 0.072×p×(1-p); falls back to 2% if entry price unavailable.
+  const POLY_FEE_RATE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
+    ? polyFeeRate(pos.price) : 0.02;
   let pnl;
   if (won) {
     const grossProfit = Math.max(0, pos.size - pos.cost);
@@ -226,9 +228,11 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
  * Settle an ARB position (guaranteed win).
  */
 function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
-  // H10: Apply 2% Polymarket fee on the ACTUAL winning leg's profit (not worst-case).
+  // H10: Apply Polymarket fee on the ACTUAL winning leg's profit (not worst-case).
   // Determine which side won using BTC price vs PTB, then use that leg's cost.
-  const POLY_FEE_RATE = 0.02;
+  // Mar-30-2026: dynamic 0.072×p×(1-p); falls back to 2% if entry price unavailable.
+  const POLY_FEE_RATE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
+    ? polyFeeRate(pos.price) : 0.02;
   let winningLegCost;
   if (pos.arbUpCost != null && pos.arbDownCost != null && btcPrice != null && ptbValue != null) {
     // UP wins if BTC >= PTB, DOWN wins otherwise
@@ -359,8 +363,10 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, oracleCondId, btcPrice, null, opts);
     log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
-    // H7: Apply 2% Polymarket fee on profit consistently (matches settleRegularPosition)
-    const POLY_FEE_RATE_STALE = 0.02;
+    // H7: Apply Polymarket fee on profit consistently (matches settleRegularPosition)
+    // Mar-30-2026: dynamic 0.072×p×(1-p); falls back to 2% if entry price unavailable.
+    const POLY_FEE_RATE_STALE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
+      ? polyFeeRate(pos.price) : 0.02;
     let stalePnl;
     if (won) {
       const grossProfit = Math.max(0, pos.size - pos.cost);

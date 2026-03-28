@@ -294,7 +294,7 @@ export async function placeLimitOrder({
   // so Kelly naturally recommends larger bets at cheap prices.
   const CLOB_MIN_SHARES = 5;
   const HALF_KELLY = 0.50;          // Conservative half-Kelly
-  const POLY_FEE = 0.25 * Math.pow(targetPrice * (1 - targetPrice), 2); // Dynamic fee
+  const POLY_FEE = 0.072 * targetPrice * (1 - targetPrice) * 0.80; // Maker fee (20% rebate, Mar-30-2026)
   const SPREAD_COST = 0.01;         // Limit orders = maker → lower spread cost
   const grossB = (1 / targetPrice) - 1;                   // Gross payoff ratio
   const netB = grossB * (1 - POLY_FEE - SPREAD_COST);     // Net after fees
@@ -306,10 +306,11 @@ export async function placeLimitOrder({
     return { placed: false, orderId: null, reason: `negative_kelly_${(rawKelly * 100).toFixed(1)}%` };
   }
 
-  // Confidence-tiered Kelly cap (same logic as tradePipeline.js)
-  const kellyCapPct = mlConfidence >= 0.85 ? 0.08
-    : mlConfidence >= 0.70 ? 0.06
-    : 0.04;
+  // Confidence-tiered Kelly cap — portfolio $100+: moderate risk sizing.
+  // HALF_KELLY (0.5) applied inside, so effective exposure = kellyCapPct × 0.5 × bankroll.
+  const kellyCapPct = mlConfidence >= 0.85 ? 0.05
+    : mlConfidence >= 0.70 ? 0.04
+    : 0.03;
 
   // Fix #5: Scale maxBet with bankroll (same as tradePipeline.js audit v5 M4)
   const fixedMaxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;

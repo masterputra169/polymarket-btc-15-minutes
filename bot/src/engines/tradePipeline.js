@@ -413,9 +413,9 @@ export async function executeDirectionalTrade({
     effectiveBetAmount = boosted;
   }
 
-  // Audit v2 C3: Confidence-tiered Kelly cap — replaces flat 3% cap that made sizing irrelevant.
-  // LOW=2%, MEDIUM=3%, HIGH=4%, VERY_HIGH=5% of bankroll.
-  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.05, HIGH: 0.05, MEDIUM: 0.04, LOW: 0.02 }; // Max 5% porto per entry
+  // Confidence-tiered Kelly cap — portfolio $100+: reduced for moderate risk.
+  // LOW=1.5%, MEDIUM=2.5%, HIGH=3.5%, VERY_HIGH=4% of bankroll.
+  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.04, HIGH: 0.035, MEDIUM: 0.025, LOW: 0.015 }; // Max 4% porto per entry
   const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
   const currentBankroll = deps.getBankroll();
   const kellyMaxBet = currentBankroll * kellyCapPct;
@@ -446,10 +446,10 @@ export async function executeDirectionalTrade({
     effectiveBetAmount = asymScaled;
   }
 
-  // Audit v5 M4: Scale max bet with bankroll — fixed $2.50 prevents Kelly-optimal sizing at higher bankrolls.
-  // Use the LARGER of: (a) configured dollar cap, (b) bankroll × tier cap percentage.
-  // At $30 bankroll: max(2.50, 30×0.07) = max(2.50, 2.10) = $2.50 (cap binds — safe)
-  // At $100 bankroll: max(2.50, 100×0.07) = max(2.50, 7.00) = $7.00 (bankroll-proportional)
+  // Scale max bet with bankroll — fixed floor prevents Kelly-optimal sizing at very small bankrolls.
+  // Use the LARGER of: (a) configured dollar floor, (b) bankroll × confidence tier %.
+  // At $30 bankroll (HIGH): max(7, 30×0.035) = max(7, 1.05) = $7 (floor binds)
+  // At $200 bankroll (HIGH): max(7, 200×0.035) = max(7, 7.00) = $7 (both equal, compounding kicks in above)
   const bankrollForCap = deps.getBankroll?.() ?? 0;
   const scaledMaxBet = Math.max(BOT_CONFIG.maxBetAmountUsd, bankrollForCap * kellyCapPct);
   if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {

@@ -34,3 +34,30 @@ backtest/ml_training/*
 !backtest/ml_training/*.mjs
 .backtest_cache/
 .backtest/
+
+# Personal notes / temp analysis scripts (root level)
+*.txt
+_*.cjs
+_*.py
+_*.mjs
+_*.json
+tmp_*.json
+PREDICTION_BOT.md
+
+# Screenshots / images (personal)
+image/
+ss/
+
+# Claude Code / agent internals
+.claude/
+.agents/
+
+# ML model backups (large binary files)
+public/ml/*.bak
+public/ml/backups/
+
+# Bot runtime data (private trade data, .env backups)
+bot/data/
+bot/fetch-trades.js
+bot/_*.cjs
+bot/_*.mjs

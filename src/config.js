@@ -7,8 +7,8 @@ export const WS_POLYMARKET_LIVE = { pingMs: 15_000, heartbeatDeadMs: 30_000 };
 export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStaleMs: 20_000 };
 
 export const BET_SIZING = {
-  KELLY_FRACTION: 0.20,           // GC5a: 0.15→0.20 — 20% Kelly, still conservative for binary options
-  MAX_BET_PCT: 0.07,              // GC5a: 0.05→0.07 — at $66: max $4.62 (was $3.30)
+  KELLY_FRACTION: 0.15,           // Reduced 0.20→0.15 — portfolio $100+: lower base fraction, ~25% smaller typical bets
+  MAX_BET_PCT: 0.05,              // Reduced 0.07→0.05 — hard 5% cap per trade at any bankroll size
   MIN_BET_PCT: 0.020,             // GC5a: 0.025→0.020 — allow smaller exploratory bets during uncertain conditions
   MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
@@ -17,7 +17,7 @@ export const BET_SIZING = {
 
 export const ARBITRAGE = {
   MIN_NET_PROFIT: 0.005,       // 0.5% minimum net profit to trigger
-  FEE_RATE: 0.02,              // Polymarket 2% fee on profit
+  FEE_RATE: 0.018,             // Dynamic approx at p≈0.5: 0.072×0.5×0.5=0.018 (Mar-30-2026). Use polyFeeRate(p) for exact.
   MAX_SPREAD: 0.08,            // raised 0.05→0.08 — whale bots (PBot1/gabagool22) operate at 45-49c/side where spread is 5-10%
   MAX_SPREAD_HIGH_PROFIT: 0.12, // allow up to 12% spread when netProfit >3% (high margin justifies wide book)
 };
@@ -56,17 +56,17 @@ export const TRADE_FILTERS = {
 };
 
 /**
- * Polymarket dynamic taker fee rate (Feb 2026 update).
- * Formula: feeRate = 0.25 × (p × (1−p))²
- * Max ~1.56% at p=0.50, decreases toward extreme prices.
- * Old flat 2% was over-conservative at our entry range (58-72c → actual 1.0-1.5%).
+ * Polymarket dynamic taker fee rate (March 30, 2026 update).
+ * Formula: feeRate = 0.072 × p × (1−p)  [exponent changed 2→1, feeRate 0.25→0.072]
+ * Max ~1.80% at p=0.50; at typical entry 60-75c → actual 1.1-1.4%.
+ * Maker (limit) orders: 20% rebate for Crypto category → effective 0.0576×p×(1-p).
+ * Old formula (pre-Mar 30): 0.25 × (p×(1−p))² — max 1.56% at p=0.50.
  * @param {number} price - token price (0-1)
- * @returns {number} fee rate as decimal (0 to ~0.0156)
+ * @returns {number} taker fee rate as decimal (0 to ~0.018)
  */
 export function polyFeeRate(price) {
   if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0;
-  const pq = price * (1 - price);
-  return 0.25 * pq * pq;
+  return 0.072 * price * (1 - price);
 }
 
 export const CONFIG = {

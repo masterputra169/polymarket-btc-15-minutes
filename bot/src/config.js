@@ -168,14 +168,14 @@ const BOT_CONFIG = {
   limitOrder: {
     enabled: process.env.LIMIT_ORDER_ENABLED === 'true',
     minElapsedMin: envNum(process.env.LIMIT_MIN_ELAPSED_MIN, 0.5, 0, 5),
-    maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 7.0, 1, 10),         // v3: 5→7 min — wider LIMIT window, data shows LIMIT 81% WR >> FOK 71%
-    maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.60, 0.40, 0.75),   // 65→60¢ — data: 60-64c bucket is +$43, 65-69c is -$8
+    maxElapsedMin: envNum(process.env.LIMIT_MAX_ELAPSED_MIN, 9.0, 1, 12),         // v4: 7→9 min — wider LIMIT window, data: LIMIT 69.4% WR >> FOK, more opportunity
+    maxEntryPrice: envNum(process.env.LIMIT_MAX_ENTRY_PRICE, 0.58, 0.40, 0.75),   // v4: 60→58¢ — data: 55-58c 73.3% WR, 59-62c drops to 60% WR
     minEntryPrice: envNum(process.env.LIMIT_MIN_ENTRY_PRICE, 0.50, 0.30, 0.60),
-    priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.60, 0.50, 0.70),   // 65→60¢ — ML≥85%: max 60c, need 60% WR (achievable)
-    priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.56, 0.45, 0.65),     // 60→56¢ — ML 70-85%: need 56% WR
-    priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.52, 0.40, 0.60),     // 55→52¢ — ML 60-70%: need 52% WR
+    priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.58, 0.50, 0.70),   // v4: 60→58¢ — even ML≥85% should not overpay; 58c needs 58% WR (easy)
+    priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.55, 0.45, 0.65),     // v4: 56→55¢ — ML 70-85%: tighter, need 55% WR
+    priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.52, 0.40, 0.60),     // 52¢ — ML 60-70%: need 52% WR (unchanged)
     minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.40, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin
-    cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 7.0, 5, 14),  // 10→7 min — earlier FOK fallback gives more room
+    cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 9.0, 5, 14),  // v4: 7→9 min — let limit orders live longer before FOK fallback
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
     expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
     minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough
