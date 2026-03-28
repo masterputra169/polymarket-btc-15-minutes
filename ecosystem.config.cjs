@@ -10,6 +10,15 @@ module.exports = {
       watch: false,
       max_memory_restart: '512M',
     },
+    {
+      name: 'frontend',
+      script: 'node_modules/vite/bin/vite.js',
+      cwd: __dirname,
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '512M',
+    },
     // ml-retrain DISABLED — retrain hanya manual via perintah user
     // {
     //   name: 'ml-retrain',

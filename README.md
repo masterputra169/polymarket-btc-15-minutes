@@ -271,21 +271,22 @@ pm2 logs polymarket-bot
 ### PM2 Commands
 
 ```bash
-pm2 start ecosystem.config.cjs        # Start bot + ML retrainer
-pm2 logs polymarket-bot               # Live logs (Ctrl+C to exit)
+pm2 start ecosystem.config.cjs        # Start bot + frontend dashboard
+pm2 logs polymarket-bot               # Bot live logs (Ctrl+C to exit)
+pm2 logs frontend                     # Frontend live logs
 pm2 logs polymarket-bot --lines 200   # Last 200 lines
-pm2 stop polymarket-bot               # Graceful stop
-pm2 restart polymarket-bot            # Restart
+pm2 stop polymarket-bot               # Graceful stop bot
+pm2 restart polymarket-bot            # Restart bot
 pm2 monit                             # CPU/memory monitor
 pm2 status                            # Process list
 ```
 
-### Step 3: Start Dashboard
+### Step 3: Open Dashboard
 
-```bash
-# In a separate terminal:
-npm run dev
-# Open http://localhost:3000
+The dashboard starts automatically with PM2 alongside the bot. Open:
+
+```
+http://localhost:3000
 ```
 
 The dashboard connects to the bot via WebSocket on port 3099.
@@ -493,9 +494,10 @@ pm2 restart polymarket-bot
 
 ### "Bot disconnected" on dashboard
 
-- Check `pm2 status` — bot must be running
+- Check `pm2 status` — both `polymarket-bot` and `frontend` must be running
 - Verify port 3099 is not blocked
 - Dashboard connects to `ws://localhost:3099`
+- If `frontend` shows `errored`: `pm2 delete frontend && pm2 start ecosystem.config.cjs --only frontend`
 
 ### Bankroll mismatch
 
@@ -560,7 +562,7 @@ frontend/
 │   ├── backtestPnL.py            # Threshold sweep backtest
 │   └── quickUpdateLookup.py      # Scrape recent Polymarket markets
 │
-├── ecosystem.config.cjs          # PM2: bot + ml-retrain processes
+├── ecosystem.config.cjs          # PM2: bot + frontend processes
 ├── vite.config.js                # Dev server + CORS proxies
 └── package.json
 ```
