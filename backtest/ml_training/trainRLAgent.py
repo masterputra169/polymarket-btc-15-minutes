@@ -335,7 +335,7 @@ def augment_samples(samples: list[tuple]) -> list[tuple]:
         extra.append((noisy, action, reward))
 
     augmented = samples + extra
-    print(f'Augmented: {len(samples)} → {len(augmented)} samples')
+    print(f'Augmented: {len(samples)} -> {len(augmented)} samples')
     return augmented
 
 
