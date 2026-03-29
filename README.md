@@ -16,6 +16,7 @@
 | Mar 28 | **Fix:** PTB (Price to Beat) mismatch on bot restart — added `schedulePtbPageUpgrade()` which retries at +15min and +30min to upgrade PTB from approximate source to exact `finalPrice` once Polymarket publishes it. |
 | Mar 28 | **Fix:** PTB consensus buffer widened 0.05% → 0.3% to restore limit order fill rate after PTB accuracy improvements. |
 | Mar 28 | **Fix:** Profit target baseline symmetry — daily baseline now resets correctly on WIB date boundary. |
+| Mar 29 | **Revert:** ML rolled back to v16 (84.07% acc, 0.9248 AUC) — v20 underperformed due to choppy BTC regime. v16's 180-day training window with 86% real Polymarket labels remains the most reliable. |
 
 ---
 
@@ -29,7 +30,7 @@ This bot automates that process — it reads BTC price data from 4 live sources,
 
 ## Key Features
 
-- **ML Ensemble (v20)** — XGBoost + LightGBM, Platt-calibrated, trained on 34K Polymarket markets
+- **ML Ensemble (v16)** — XGBoost + LightGBM, Platt-calibrated, trained on 45K Polymarket markets (86% real labels)
 - **15 Trade Filters** — ML confidence, spread gates, VPIN, session quality, blackout hours, and more
 - **Smart Order Router** — decides between FOK (instant) and Limit orders (passive, better price)
 - **Kelly Sizing** — confidence-tiered fractional Kelly with hard bankroll caps
@@ -264,7 +265,7 @@ pm2 logs polymarket-bot
 Expected output:
 ```
 [Bot] CLOB client initialized (dry-run mode)
-[Bot] ML models loaded: XGBoost v20 + LightGBM v20
+[Bot] ML models loaded: XGBoost v16 + LightGBM v16
 [Bot] WebSocket streams connected: Binance · CLOB · PolyLive · Chainlink
 [Bot] Poll #1 | BTC $87,234 | UP 81% | Edge 16.5% | ENTER (DRY)
 ```
@@ -388,20 +389,22 @@ Every entry passes all 15 gates:
 
 ## ML Model
 
-### Current: v20 (XGBoost + LightGBM Ensemble)
+### Current: v16 (XGBoost + LightGBM Ensemble)
 
 | Metric | Value |
 |--------|-------|
-| Test Accuracy | 80.21% |
-| Test AUC | 0.8846 |
-| Training window | 120 days |
-| Real Polymarket labels | ~99% |
-| Training samples | 34,314 |
+| Test Accuracy | 84.07% |
+| Test AUC | 0.9248 |
+| Holdout Accuracy | 94.12% |
+| Training window | 180 days |
+| Real Polymarket labels | 86% |
+| Training samples | 45,336 |
 | Ensemble weights | XGBoost 0.75, LightGBM 0.25 |
 | Features | 79 (54 base + 25 engineered) |
 | Calibration | Platt scaling on logits |
+| At ≥80% confidence | 99.3% WR (79.4% coverage) |
 
-> Lower accuracy vs. v16 (84%) reflects the current choppy BTC regime (Trump tariffs, geopolitical uncertainty). The model is current-regime aware — recency weighting applied during training.
+> v16 uses a 180-day training window — enough data for robust regime coverage without diluting real Polymarket labels. v20 (120d, 34K samples) was rolled back after underperforming in the current market regime.
 
 ### Features Used
 
@@ -564,8 +567,8 @@ frontend/
 │           └── notifier.js            # Telegram + Discord alerts
 │
 ├── public/ml/                    # Deployed ML models
-│   ├── xgboost_model.json        # XGBoost ensemble (v20)
-│   ├── lightgbm_model.json       # LightGBM ensemble (v20)
+│   ├── xgboost_model.json        # XGBoost ensemble (v16)
+│   ├── lightgbm_model.json       # LightGBM ensemble (v16)
 │   └── norm_browser.json         # Feature normalization params
 │
 ├── backtest/ml_training/         # ML training pipeline
