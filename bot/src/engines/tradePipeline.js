@@ -457,6 +457,39 @@ export async function executeDirectionalTrade({
     effectiveBetAmount = scaledMaxBet;
   }
 
+  // ── RL Bandit: state-based bet sizing multiplier ──
+  // Applied AFTER Kelly+session+asymmetry caps, BEFORE final dollar cap.
+  // Shadow mode: logs decision but returns null → no bet change.
+  let rlScalar = null;
+  let rlActionIdx = null;
+  if (deps.getRLScalar) {
+    try {
+      const rlResult = deps.getRLScalar({
+        mlConfidence: mlConf,
+        bestEdge: edge.bestEdge,
+        tokenPrice: betMarketPrice,
+        regime: regimeInfo?.regime,
+        session: getSessionName(),
+        rsiNow,
+        macdHist: macd?.hist,
+        spread: orderbookUp?.spread ?? null,
+        atrRatio: atr?.atrRatio ?? null,
+        delta1m,
+        timeLeftMin,
+        consecutiveLosses: deps.getConsecutiveLosses(),
+        orderbookImbalance: orderbookSignal?.imbalance ?? null,
+        recentFlips: recentFlipCount,
+      });
+      if (rlResult && Number.isFinite(rlResult.scalar)) {
+        const rlScaled = Math.round(effectiveBetAmount * rlResult.scalar * 100) / 100;
+        log.info(`RL_SCALE: $${effectiveBetAmount.toFixed(2)} × ${rlResult.scalar} = $${rlScaled.toFixed(2)} (action ${rlResult.actionIdx})`);
+        effectiveBetAmount = rlScaled;
+        rlScalar = rlResult.scalar;
+        rlActionIdx = rlResult.actionIdx;
+      }
+    } catch (_e) { /* never propagate — RL errors must not kill the trade loop */ }
+  }
+
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
   const shares = Math.floor(effectiveBetAmount / betMarketPrice);
 
@@ -519,6 +552,7 @@ export async function executeDirectionalTrade({
     expectedPrice: betMarketPrice,
     slippagePct: null,     // populated after fill for live orders
     avgSlippage: null,     // populated after fill for live orders
+    rlScalar, rlActionIdx, // RL bandit sizing decision (null if not loaded/shadow mode)
   };
 
   if (dryRun) {

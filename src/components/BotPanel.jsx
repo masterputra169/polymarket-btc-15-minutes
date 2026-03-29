@@ -79,6 +79,12 @@ function BotPanel({ connected, data }) {
   const isEnter = action === 'ENTER';
   const isPaused = data.paused === true;
 
+  // RL Agent status
+  const rl = data.rlAgent ?? null;
+  const rlLoaded = rl?.loaded === true;
+  const rlShadow = rl?.shadowMode !== false;
+  const rlScalar = rl?.currentScalar;
+
   const mlConfLabel = ml?.confidence != null
     ? ml.confidence >= ML_CONFIDENCE.HIGH ? 'HI' : ml.confidence >= ML_CONFIDENCE.MEDIUM ? 'MED' : 'LO'
     : '-';
@@ -147,6 +153,16 @@ function BotPanel({ connected, data }) {
               fontSize: '0.58rem',
             }}>
               DRY RUN
+            </span>
+          )}
+          {rlLoaded && (
+            <span className="card__badge" style={{
+              background: rlShadow ? 'rgba(100,100,255,0.1)' : 'rgba(0,230,118,0.1)',
+              color: rlShadow ? '#aaaaff' : 'var(--green-bright)',
+              border: `1px solid ${rlShadow ? 'rgba(100,100,255,0.25)' : 'rgba(0,230,118,0.2)'}`,
+              fontSize: '0.58rem',
+            }}>
+              {rlShadow ? 'RL SHADOW' : 'RL LIVE'}
             </span>
           )}
           {isPaused ? (
@@ -241,6 +257,17 @@ function BotPanel({ connected, data }) {
               <span className="data-row__label">Bet</span>
               <span className="data-row__value c-green" style={{ fontWeight: 600 }}>
                 {fmtUsd(betSizing.betAmount)}
+              </span>
+            </div>
+          )}
+          {rlLoaded && !rlShadow && rlScalar != null && (
+            <div className="data-row">
+              <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>RL</span>
+              <span className="data-row__value" style={{
+                fontWeight: 600,
+                color: rlScalar > 1 ? 'var(--green-bright)' : rlScalar < 1 ? 'var(--red-bright)' : 'var(--text-muted)',
+              }}>
+                ×{rlScalar}
               </span>
             </div>
           )}

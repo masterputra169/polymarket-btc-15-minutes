@@ -45,6 +45,9 @@ const LOG_FILE = resolve(DATA_DIR, 'retrain_log.jsonl');
 const DEPLOY_MARKER = resolve(DATA_DIR, 'last_deploy.json');
 
 const MODEL_FILES = ['xgboost_model.json', 'lightgbm_model.json', 'norm_browser.json'];
+const RL_WEIGHTS_FILE = 'rl_agent_weights.json';
+const RL_WEIGHTS_OUTPUT = resolve(OUTPUT_DIR, RL_WEIGHTS_FILE);
+const RL_WEIGHTS_DEPLOYED = resolve(ML_DIR, RL_WEIGHTS_FILE);
 
 // ── Config from env ──
 function envNum(key, def, min = -Infinity, max = Infinity) {
@@ -224,7 +227,7 @@ function qualityGate(current, fresh) {
 function backupCurrent(tag) {
   if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
 
-  for (const file of MODEL_FILES) {
+  for (const file of [...MODEL_FILES, RL_WEIGHTS_FILE]) {
     const src = resolve(ML_DIR, file);
     if (!existsSync(src)) continue;
     // Timestamped backup
@@ -245,6 +248,11 @@ function deployNew() {
     }
     copyFileSync(src, dst);
     log.info(`Deployed: ${file}`);
+  }
+  // Deploy RL weights if training succeeded
+  if (existsSync(RL_WEIGHTS_OUTPUT)) {
+    copyFileSync(RL_WEIGHTS_OUTPUT, RL_WEIGHTS_DEPLOYED);
+    log.info(`Deployed: ${RL_WEIGHTS_FILE}`);
   }
 }
 
@@ -362,6 +370,23 @@ async function runPipeline() {
     '--recency',
   ].join(' ');
   run(trainCmd, { timeout: 180 * 60 * 1000 });  // 3hr — 100 Optuna trials takes 60-120min on this machine
+
+  // Step 4b: Train RL Agent (non-blocking — failure doesn't abort ML deploy)
+  log.info('Step 4b/7: Training RL Agent...');
+  try {
+    const rlScript = resolve(TRAINING_DIR, 'trainRLAgent.py');
+    const journalFile = resolve(DATA_DIR, 'trade_journal.jsonl');
+    const rlCmd = [
+      `python "${rlScript}"`,
+      `--journal "${journalFile}"`,
+      `--output "${RL_WEIGHTS_OUTPUT}"`,
+      '--augment',
+    ].join(' ');
+    run(rlCmd, { cwd: TRAINING_DIR, timeout: 10 * 60 * 1000 });
+    log.info('  RL Agent trained');
+  } catch (err) {
+    log.warn(`  RL training failed (non-fatal, ML deploy continues): ${err.message.slice(0, 200)}`);
+  }
 
   // Step 5: Quality gate
   log.info('Step 5/7: Quality gate...');

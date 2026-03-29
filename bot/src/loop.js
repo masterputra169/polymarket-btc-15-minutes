@@ -190,6 +190,9 @@ import { getLastAnalysis } from './ai/postTradeAnalyst.js';
 import { getOptimizerStatus } from './ai/selfOptimizer.js';
 import { getOpenRouterStats } from './ai/openrouterClient.js';
 
+// RL Agent (contextual bandit bet sizing)
+import { loadRLWeights, getRLScalar, recordRLOutcome, getRLStatus, isRLLoaded } from './engines/rlAgent.js';
+
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
 
@@ -262,6 +265,12 @@ export function isPaused() { return paused; }
 // ── Position callback (injected from index.js to avoid circular imports) ──
 let _getPositionsSummary = null;
 export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
+
+// ── RL Agent — load weights at startup if enabled ──
+let _rlWeightsLoaded = false;
+if (BOT_CONFIG.rl?.enabled) {
+  _rlWeightsLoaded = loadRLWeights(BOT_CONFIG.rl.weightsPath);
+}
 
 // ── Module-level state (stays in loop.js — lifecycle/identity) ──
 let currentMarketSlug = null;
@@ -361,6 +370,12 @@ function resetMarketCache() {
 
 // ── Shared settlement actions (DRY — used by expiry, switch, stale) ──
 function makeSettlementActions() {
+  // Capture RL entry info BEFORE settlement clears the snapshot.
+  // Used in .finally() to record the outcome and close the reward loop.
+  const _rlSnap = (_rlWeightsLoaded && BOT_CONFIG.rl?.enabled && !BOT_CONFIG.rl?.shadowMode)
+    ? (() => { const s = getEntrySnapshot(); return s?.rlActionIdx != null ? { rlActionIdx: s.rlActionIdx, cost: s.cost } : null; })()
+    : null;
+
   return {
     settleTrade,
     unwindPosition,
@@ -374,7 +389,28 @@ function makeSettlementActions() {
     notifyTrade: process.env.TELEGRAM_NOTIFY_TRADES === 'true'
       ? (msg) => notify('info', msg, { key: 'trade:settle' })
       : null,
+    _rlSnap, // RL: pre-settlement snapshot for outcome recording
   };
+}
+
+/**
+ * Record RL outcome using the most recent journal entry (called from settlement .finally()).
+ * Non-fatal: wrapped in try-catch, only called when RL is active and rlActionIdx was set.
+ */
+function _recordRLOutcomeFromJournal(rlSnap) {
+  if (rlSnap?.rlActionIdx == null) return;
+  try {
+    const recent = getRecentJournal(1);
+    const lastEntry = recent?.[0];
+    if (lastEntry?.analysis?.pnl != null) {
+      recordRLOutcome({
+        pnl: lastEntry.analysis.pnl,
+        betAmount: rlSnap.cost ?? 1,
+        won: lastEntry.analysis?.outcome === 'WIN',
+        rlActionIdx: rlSnap.rlActionIdx,
+      });
+    }
+  } catch (_e) { /* non-fatal */ }
 }
 
 /**
@@ -641,6 +677,7 @@ export async function pollOnce() {
         // AbortController: market switch aborts oracle retries → instant price_fallback.
         settlementPending = true;
         settlementAbort = new AbortController();
+        const _saExpiry = makeSettlementActions();
         handleExpiry(
           { pos, currentMarketSlug, currentConditionId, priceToBeat, now },
           {
@@ -648,7 +685,7 @@ export async function pollOnce() {
             getOraclePrice: () => getPolyLivePrice() || getChainlinkWssPrice(),
             getBinancePrice,
           },
-          makeSettlementActions(),
+          _saExpiry,
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
@@ -658,6 +695,8 @@ export async function pollOnce() {
             clearLastSettlementSource();
             setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (expiry): ${e.message}`)), 60_000);
           }
+          // RL: record settlement outcome
+          _recordRLOutcomeFromJournal(_saExpiry._rlSnap);
         });
       }
       resetCutLossState();
@@ -817,6 +856,7 @@ export async function pollOnce() {
         // Non-blocking: settlement runs in background while loop continues on new market.
         settlementPending = true;
         settlementAbort = new AbortController();
+        const _saSwitch = makeSettlementActions();
         handleSwitch(
           { pos, oldSlug, currentConditionId, priceToBeat, now },
           {
@@ -824,7 +864,7 @@ export async function pollOnce() {
             getOraclePrice: () => getPolyLivePrice() || getChainlinkWssPrice(),
             getBinancePrice,
           },
-          makeSettlementActions(),
+          _saSwitch,
           { signal: settlementAbort.signal },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
@@ -834,6 +874,8 @@ export async function pollOnce() {
             clearLastSettlementSource();
             setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (switch): ${e.message}`)), 60_000);
           }
+          // RL: record settlement outcome
+          _recordRLOutcomeFromJournal(_saSwitch._rlSnap);
         });
       }
 
@@ -988,6 +1030,7 @@ export async function pollOnce() {
       // Non-blocking: stale position recovery runs in background.
       settlementPending = true;
       settlementAbort = new AbortController();
+      const _saStale = makeSettlementActions();
       handleStalePosition(
         { pos: stalePos, currentMarketSlug, now },
         {
@@ -995,7 +1038,7 @@ export async function pollOnce() {
           getOraclePrice: () => getPolyLivePrice() || getChainlinkWssPrice(),
           getBinancePrice,
         },
-        makeSettlementActions(),
+        _saStale,
         { signal: settlementAbort.signal },
       ).finally(() => {
         settlementPending = false;
@@ -1005,6 +1048,8 @@ export async function pollOnce() {
         resetTakeProfitState();
         resetRecovery(); // Cancel any pending recovery on stale position recovery
         resetLimitOrderState();
+        // RL: record settlement outcome
+        _recordRLOutcomeFromJournal(_saStale._rlSnap);
       });
     }
 
@@ -2207,6 +2252,8 @@ export async function pollOnce() {
           updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
           // MetEngine smart money gate (Feature 1+2) — null if disabled
           querySmartMoney: BOT_CONFIG.metEngine?.enabled ? querySmartMoney : null,
+          // RL Bandit sizing — null if disabled/shadow mode/weights not loaded
+          getRLScalar: (BOT_CONFIG.rl?.enabled && _rlWeightsLoaded) ? getRLScalar : null,
         });
       } catch (tradeErr) {
         log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);
@@ -2427,6 +2474,9 @@ export async function pollOnce() {
       // Daily profit target (WIB timezone)
       profitTarget: getProfitTargetStatus(),
       profitTargetPaused,
+
+      // RL Agent status
+      rlAgent: BOT_CONFIG.rl?.enabled ? getRLStatus() : { loaded: false },
     });
 
     // Periodic save

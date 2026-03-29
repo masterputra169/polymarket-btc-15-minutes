@@ -208,6 +208,22 @@ function writeDailySummary(dateStr) {
   const pnlPct = bankrollStart > 0 ? Math.round((pnl / bankrollStart) * 1000) / 10 : 0;
   const winRate = tradeCount > 0 ? Math.round((winCount / tradeCount) * 1000) / 1000 : 0;
 
+  // RL metrics from journal entries
+  let rlTotalScalar = 0;
+  let rlScalarCount = 0;
+  const rlByAction = {};
+  for (const entry of journalEntries) {
+    const rlScalar = entry.entry?.rlScalar;
+    const rlActionIdx = entry.entry?.rlActionIdx;
+    if (rlScalar != null) {
+      rlTotalScalar += rlScalar;
+      rlScalarCount++;
+    }
+    if (rlActionIdx != null) {
+      rlByAction[rlActionIdx] = (rlByAction[rlActionIdx] ?? 0) + 1;
+    }
+  }
+
   const dailyEntry = {
     date: dateStr,
     bankrollStart,
@@ -226,6 +242,8 @@ function writeDailySummary(dateStr) {
     byRegime,
     mlAccuracy: mlTotal > 0 ? Math.round((mlCorrect / mlTotal) * 100) / 100 : null,
     avgMlConfidence: mlConfCount > 0 ? Math.round((totalMlConf / mlConfCount) * 100) / 100 : null,
+    rlAvgScalar: rlScalarCount > 0 ? Math.round((rlTotalScalar / rlScalarCount) * 100) / 100 : null,
+    rlByAction: rlScalarCount > 0 ? rlByAction : null,
     _ts: Date.now(),
   };
 
@@ -253,6 +271,7 @@ function writeDailySummary(dateStr) {
   if (bestTrade) log.info(`  Best:       ${bestTrade.pnl >= 0 ? '+' : ''}$${bestTrade.pnl.toFixed(2)} (${bestTrade.slug ?? '?'})`);
   if (worstTrade) log.info(`  Worst:      ${worstTrade.pnl >= 0 ? '+' : ''}$${worstTrade.pnl.toFixed(2)} (${worstTrade.slug ?? '?'})`);
   if (dailyEntry.mlAccuracy != null) log.info(`  ML acc:     ${(dailyEntry.mlAccuracy * 100).toFixed(0)}% | Avg conf: ${((dailyEntry.avgMlConfidence ?? 0) * 100).toFixed(0)}%`);
+  if (dailyEntry.rlAvgScalar != null) log.info(`  RL scalar:  avg ×${dailyEntry.rlAvgScalar} | by action: ${JSON.stringify(dailyEntry.rlByAction)}`);
   if (regimeStr) log.info(`  Regimes:    ${regimeStr}`);
   log.info('\u2550'.repeat(50));
   log.info('');
