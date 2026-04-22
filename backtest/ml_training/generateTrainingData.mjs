@@ -1041,54 +1041,41 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   features[42] = Math.sin(hourUTC / 24 * 2 * Math.PI);
   features[43] = Math.cos(hourUTC / 24 * 2 * Math.PI);
 
-  // ═══ Polymarket features (5) — real data when available, simulation fallback ═══
-  const secsIntoMarket = polyMarket ? (candleTimeSec - slugTs) : null;
+  // ═══ Polymarket features (5) — REAL DATA ONLY (no simulation fallback) ═══
+  // Audit fix (Apr 2026): feature 44-48 previously used interpolatePrice(polyPrices, secsIntoMarket)
+  // which leaks post-hoc outcome info — price at minute 10 of a 15-min window already discounts
+  // 10 minutes of resolution. Use price at MARKET OPEN (capped at first 60s) as a stable,
+  // pre-resolution crowd signal that is genuinely tradeable at any entry time.
   const polyPrices = polyMarket?.prices;
-  const realUpPrice = (polyPrices && polyPrices.length > 0) ? interpolatePrice(polyPrices, secsIntoMarket) : null;
-
-  if (realUpPrice !== null) {
-    // ═══ REAL Polymarket data path ═══
-    // [44] market_yes_price — interpolated UP token price at observation time
-    features[44] = Math.max(0.01, Math.min(0.99, realUpPrice));
-
-    // [45] market_price_momentum — delta between current and 5-min-ago price
-    const price5minAgo = interpolatePrice(polyPrices, Math.max(0, secsIntoMarket - 300));
-    features[45] = price5minAgo !== null
-      ? Math.max(-0.1, Math.min(0.1, realUpPrice - price5minAgo))
-      : 0;
-
-    // [46] orderbook_imbalance — price-based proxy (no live orderbook in historical)
-    features[46] = Math.max(-1, Math.min(1, (realUpPrice - 0.5) * 2));
-
-    // [47] spread_pct — real spread from master data
-    features[47] = Math.max(0, Math.min(1, polyMarket.spread ?? 0));
-
-    // [48] crowd_model_divergence — |rule prob - real market price|
-    features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - realUpPrice);
-  } else {
-    // ═══ Simulation fallback (no Polymarket data for this window) ═══
-    const noise = () => (seededRandom() - 0.5) * 0.02; // ±1% jitter
-
-    // [44] market_yes_price — simulated crowd probability from price distance
-    const simMarketYes = Math.max(0.01, Math.min(0.99,
-      sigmoid(ptbDistPct * 200) + noise()));
-    features[44] = simMarketYes;
-
-    // [45] market_price_momentum — simulated from 1m delta
-    const delta1mPct = delta1m / price;
-    features[45] = Math.max(-0.1, Math.min(0.1, delta1mPct * 0.5 + noise() * 0.02));
-
-    // [46] orderbook_imbalance — simulated from buy ratio
-    const buyRatio = vd?.buyRatio ?? 0.5;
-    features[46] = Math.max(-1, Math.min(1, (buyRatio - 0.5) * 2 + noise() * 0.1));
-
-    // [47] spread_pct — simulated from ATR
-    const atrPctVal = atr ? atr.atrPct : 0.5;
-    features[47] = Math.max(0, Math.min(1, Math.min(atrPctVal * 0.6, 1) + noise() * 0.05));
-
-    // [48] crowd_model_divergence — |rule prob - simulated market yes|
-    features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - simMarketYes);
+  if (!polyPrices || polyPrices.length === 0) {
+    return null; // drop sample — simulation fallback removed (distribution mismatch hurts real perf)
   }
+
+  // Use price sampled in first 60s of market — represents pre-trade crowd sentiment
+  const openUpPrice = interpolatePrice(polyPrices, Math.min(60, polyPrices[0][0]));
+  if (openUpPrice === null) {
+    return null; // defensive: interpolate somehow failed
+  }
+
+  // [44] market_yes_price — UP token price at market open (NOT at observation time)
+  features[44] = Math.max(0.01, Math.min(0.99, openUpPrice));
+
+  // [45] market_price_momentum — early discovery: price at +60s vs price at open
+  // Captures initial crowd reaction, not mid-window drift (which leaks outcome).
+  const priceEarly = interpolatePrice(polyPrices, Math.min(120, polyPrices[polyPrices.length - 1][0]));
+  const priceOpen0 = interpolatePrice(polyPrices, 0);
+  features[45] = (priceEarly !== null && priceOpen0 !== null)
+    ? Math.max(-0.1, Math.min(0.1, priceEarly - priceOpen0))
+    : 0;
+
+  // [46] orderbook_imbalance — from open price (signed crowd conviction at entry)
+  features[46] = Math.max(-1, Math.min(1, (openUpPrice - 0.5) * 2));
+
+  // [47] spread_pct — real spread from master data
+  features[47] = Math.max(0, Math.min(1, polyMarket.spread ?? 0));
+
+  // [48] crowd_model_divergence — |rule prob - open crowd price|
+  features[48] = Math.abs(Math.max(0, Math.min(1, ruleProbUp)) - openUpPrice);
 
   // ═══ Lag features (temporal memory) — [49-51] ═══
 
@@ -1190,22 +1177,39 @@ async function main() {
   const fundingRates = await fetchFundingRates(DAYS);
 
   // Generate features
-  console.log(`\n🔧 Generating features (min-move filter: ${(MIN_MOVE_PCT*100).toFixed(3)}%)...`);
+  // Audit fix (Apr 2026): previously step=5 with PREDICTION_WINDOW=15 caused heavy correlation —
+  // 3 samples per 15-min market share identical outcome + near-identical open-price features.
+  // Now: step=1 candle scan, but we DEDUP to 1 observation per market slug (earliest candle
+  // with enough indicator lookback). Effective sample size = number of unique Polymarket markets.
+  console.log(`\n🔧 Generating features (min-move filter: ${(MIN_MOVE_PCT*100).toFixed(3)}%, dedup 1-per-slug)...`);
   const rows = [];
+  const seenSlugs = new Set(); // dedup: each market slug contributes at most one training sample
   let filteredCount = 0;
+  let dupCount = 0;
   let totalCandidates = 0;
-  const step = 5; // Sample every 5 candles (every 5 min) to reduce correlation
 
-  for (let i = MIN_LOOKBACK; i < candles1m.length - PREDICTION_WINDOW; i += step) {
+  for (let i = MIN_LOOKBACK; i < candles1m.length - PREDICTION_WINDOW; i += 1) {
     totalCandidates++;
     const result = extractFeatures(candles1m, i, candles5m, fundingRates);
-    if (result) rows.push(result);
-    else filteredCount++;
+    if (!result) {
+      filteredCount++;
+      continue;
+    }
+    // Drop duplicates: keep only the first valid observation per slug_ts
+    if (result.slugTs !== null) {
+      if (seenSlugs.has(result.slugTs)) {
+        dupCount++;
+        continue;
+      }
+      seenSlugs.add(result.slugTs);
+    }
+    rows.push(result);
 
-    if (rows.length % 5000 === 0 && rows.length > 0) {
-      process.stdout.write(`\r  ${rows.length} samples generated (${filteredCount} filtered)...`);
+    if (rows.length % 1000 === 0 && rows.length > 0) {
+      process.stdout.write(`\r  ${rows.length} samples generated (${filteredCount} filtered, ${dupCount} dedup)...`);
     }
   }
+  console.log(`\n  Deduplicated ${dupCount} redundant observations (same market, later candle)`);
 
   console.log(`\n✅ Generated ${rows.length} training samples`);
   console.log(`   Filtered ${filteredCount} ambiguous samples (move < ${(MIN_MOVE_PCT*100).toFixed(3)}%, ${(filteredCount/totalCandidates*100).toFixed(1)}% of candidates)`);
