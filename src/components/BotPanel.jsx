@@ -582,6 +582,30 @@ function BotPanel({ connected, data }) {
         </div>
       </div>
 
+      {/* RL Narrative — LLM insight on agent behavior (shows when loaded + narrative available) */}
+      {rlLoaded && data.rlAgent?.narrative && (
+        <div style={{
+          marginBottom: 8,
+          padding: '5px 10px',
+          borderRadius: 'var(--radius-sm)',
+          background: 'rgba(100,100,255,0.06)',
+          border: '1px solid rgba(100,100,255,0.18)',
+          fontSize: '0.65rem',
+          color: 'var(--text-secondary)',
+          lineHeight: 1.5,
+        }}>
+          <span style={{
+            color: '#aaaaff',
+            fontWeight: 600,
+            fontSize: '0.56rem',
+            textTransform: 'uppercase',
+            letterSpacing: '0.07em',
+            marginRight: 6,
+          }}>RL Insight</span>
+          {data.rlAgent.narrative}
+        </div>
+      )}
+
       {/* Bottom status bar — pill-shaped tags */}
       <div style={{
         display: 'flex',
@@ -724,6 +748,7 @@ export default memo(BotPanel, (prev, next) => {
     a.btcPrice === b.btcPrice &&
     a.fillTracker?.fillRate === b.fillTracker?.fillRate &&
     a.profitTarget?.profit === b.profitTarget?.profit &&
-    a.profitTarget?.targetReached === b.profitTarget?.targetReached
+    a.profitTarget?.targetReached === b.profitTarget?.targetReached &&
+    a.rlAgent?.narrative === b.rlAgent?.narrative
   );
 });

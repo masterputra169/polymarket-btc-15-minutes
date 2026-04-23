@@ -140,7 +140,7 @@ Phase-based decision with regime-adaptive thresholds:
 - **`envNum()`/`envInt()` pattern**: All bot config uses bounded parsing — never raw `parseInt(process.env.X)`.
 - **Sell lock**: `positionTracker.acquireSellLock()` prevents cut-loss/take-profit/manual-sell race conditions (45s timeout).
 - **Anti-loop protection**: `limitOrderManager.js` tracks attempts per market slug (max 2) and enforces 60s cancel cooldown.
-- **Dynamic fee**: `polyFeeRate(p) = 0.25 * (p*(1-p))^2` replaces flat 2% in edge + sizing calculations.
+- **Dynamic fee** (Mar 30, 2026): `polyFeeRate(p) = 0.072 * p * (1-p)` — Crypto category, max 1.80% at p=0.50. Maker rebate: 20% (limit orders effective ~0.0576 × p × (1−p)). `@polymarket/clob-client` v4 auto-handles `feeRateBps` in signing.
 
 ### Environment Notes
 
