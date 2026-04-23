@@ -86,6 +86,13 @@ export async function fetchPolymarketSnapshot() {
 
     if (!market) return { ok: false, reason: 'market_not_found' };
 
+    // Find the parent event to extract eventMetadata (contains priceToBeat for current market).
+    // Event slug matches market slug for Polymarket 15m BTC up/down series.
+    const parentEvent = Array.isArray(events)
+      ? events.find(e => Array.isArray(e.markets) && e.markets.some(m => m?.slug === market.slug))
+      : null;
+    const eventMetadata = parentEvent?.eventMetadata ?? null;
+
     const outcomes = Array.isArray(market.outcomes)
       ? market.outcomes
       : typeof market.outcomes === 'string'
@@ -154,6 +161,7 @@ export async function fetchPolymarketSnapshot() {
     return {
       ok: true,
       market,
+      eventMetadata,
       tokens: { upTokenId, downTokenId },
       prices: { up: upBuy ?? gammaYes, down: downBuy ?? gammaNo },
       orderbook: { up: upBookSummary, down: downBookSummary },

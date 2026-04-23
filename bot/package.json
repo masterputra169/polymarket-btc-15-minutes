@@ -9,6 +9,7 @@
     "dry-run": "DRY_RUN=true node index.js"
   },
   "dependencies": {
+    "@chainlink/data-streams-sdk": "^1.2.1",
     "@polymarket/clob-client": "^4",
     "@solana/kit": "^5.5.1",
     "@x402/core": "^2.4.0",
