@@ -61,3 +61,6 @@ bot/data/
 bot/fetch-trades.js
 bot/_*.cjs
 bot/_*.mjs
+# Research notes / screenshots (local only)
+insight polymarket/
+monte carlo/
