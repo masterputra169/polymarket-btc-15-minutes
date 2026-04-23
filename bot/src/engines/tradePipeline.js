@@ -309,6 +309,7 @@ export async function executeDirectionalTrade({
     spread: orderbookUp?.spread ?? null,
     mlAccuracy: deps.getMLAccuracy?.() ?? null,
     buyRatio: volDelta?.buyRatio ?? null,
+    ptbSource: priceToBeat?.source ?? null,
   });
 
   // Orderbook flow alignment check

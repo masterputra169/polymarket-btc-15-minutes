@@ -123,7 +123,7 @@ ${analytics.dayOfWeek.filter(d => d.trades >= 3).map(d =>
 
 ### Recent Trades Detail (last ${Math.min(recentTrades.length, 20)})
 ${dataSummary}
-
+${rlSection}
 Provide your analysis as JSON:
 {
   "recommendations": [
@@ -133,6 +133,20 @@ Provide your analysis as JSON:
   "patterns": ["pattern 1", "pattern 2"],
   "risks": ["risk 1", "risk 2"]
 }`;
+
+  // Build RL sizing context if RL data exists in recent trades
+  const rlEntries = recentTrades.filter(t => t.entry?.rlScalar != null);
+  let rlSection = '';
+  if (rlEntries.length >= 5) {
+    const scaleUp   = rlEntries.filter(t => t.entry.rlScalar > 1.0);
+    const scaleDown = rlEntries.filter(t => t.entry.rlScalar < 1.0);
+    const neutral   = rlEntries.filter(t => t.entry.rlScalar === 1.0);
+    const wrOf = (arr) => arr.length === 0 ? 'n/a' : `${Math.round(arr.filter(t => t.analysis?.outcome === 'WIN').length / arr.length * 100)}%`;
+    rlSection = `\n### RL Sizing Agent (${rlEntries.length} trades with scalar)
+Scale-up (x>1.0): ${scaleUp.length} trades, WR ${wrOf(scaleUp)}
+Scale-down (x<1.0): ${scaleDown.length} trades, WR ${wrOf(scaleDown)}
+Neutral (x1.0): ${neutral.length} trades, WR ${wrOf(neutral)}`;
+  }
 
   log.info(`Calling AI for trade analysis (${recentTrades.length} recent trades, ${analytics.patterns.totalTrades} total)...`);
 
@@ -220,7 +234,8 @@ function buildDataSummary(analytics, recentTrades) {
     const price = e.tokenPrice != null ? e.tokenPrice.toFixed(3) : '?';
     const regime = e.regime ?? '?';
     const edge = e.bestEdge != null ? `${(e.bestEdge * 100).toFixed(1)}%` : '?';
-    return `${outcome} ${side} @${price} ML:${mlConf} Edge:${edge} Hold:${hold}s PnL:$${pnl} ${regime}`;
+    const rlTag = e.entry?.rlScalar != null ? ` RL:x${e.entry.rlScalar}` : '';
+    return `${outcome} ${side} @${price} ML:${mlConf} Edge:${edge} Hold:${hold}s PnL:$${pnl} ${regime}${rlTag}`;
   }).join('\n');
 }
 

@@ -229,18 +229,18 @@ export function evaluateCutLoss({
   const gainFromEntry = entryPrice > 0 ? ((peakTokenPrice - entryPrice) / entryPrice) * 100 : 0;
   const peakDrawdown = peakTokenPrice > 0 ? ((peakTokenPrice - currentTokenPrice) / peakTokenPrice) * 100 : 0;
   // High-peak profit protection: when peak >= 85¢, tighten drawdown threshold.
-  // With BTC reversal confirmed: 20% give-back. Without BTC confirm: 40%. Normal: 50%.
-  // v15 fix: When BTC is favorable (our side winning), require BOTH highPeak AND model < 0.60.
-  // Previous bug: highPeak alone skipped model check → cut winning positions on token noise.
-  // Token prices on Polymarket 15m are noisy — 89¢→60¢ swings happen even when BTC is winning.
+  // With BTC reversal confirmed: 25% give-back. Without BTC confirm: 45%. Normal: 50%.
+  // v16 fix: NEVER bypass model check — even BTC-confirmed reversal can be transient noise.
+  // Data 2026-03-28/29: trailingModelBypass caused 5 profitable positions to be cut early
+  // (entries 0.555-0.695, pnl +$0.20..+$0.69) while ML was 86-99% confident.
+  // Settlement WR 87.5% >> trailing stop WR — model must always gate this path.
+  // BTC-confirmed reversal now only tightens threshold (25% vs 45%) but never skips model.
   const highPeak = peakTokenPrice >= PROFIT_PEAK_THRESHOLD;
   const btcConfirmsReversal = hasPtb && btcFavorable === false;
-  const effectiveTrailingDrop = (highPeak && btcConfirmsReversal) ? 20 : highPeak ? 40 : baseTrailingDrop;
-  // v15: Only bypass model check when BTC confirms reversal (unfavorable).
-  // When BTC is still favorable, always require model agreement (prob < 0.60).
-  const trailingModelBypass = highPeak && btcConfirmsReversal;
+  const effectiveTrailingDrop = (highPeak && btcConfirmsReversal) ? 25 : highPeak ? 45 : baseTrailingDrop;
+  // Always require model < 0.60 — high-confidence ML (86-99%) prevents trailing stop on winning positions.
   const isTrailingStop = gainFromEntry >= trailingActivation && peakDrawdown >= effectiveTrailingDrop
-    && (trailingModelBypass || modelProbability == null || modelProbability < 0.60);
+    && (modelProbability == null || modelProbability < 0.60);
 
   // v14: Urgency flag — crash/maxLoss/lateForceCut/timeBased need faster slippage + retry
   const isUrgent = isCrash || isMaxLoss || isLateForceCut || isTimeBased;

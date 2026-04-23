@@ -177,10 +177,10 @@ export function checkExtremeSentiment() {
 
   // Extreme fear (<15) or extreme greed (>85) can be contrarian signals
   // But for safety, we block during EXTREME conditions when our edge is uncertain
-  if (_cache.fng <= 10) {
+  if (_cache.fng <= 5) {
     return { block: true, reason: `Extreme fear (FnG=${_cache.fng}) — panic selling, unpredictable` };
   }
-  if (_cache.fng >= 90) {
+  if (_cache.fng >= 95) {
     return { block: true, reason: `Extreme greed (FnG=${_cache.fng}) — euphoria, correction risk` };
   }
 

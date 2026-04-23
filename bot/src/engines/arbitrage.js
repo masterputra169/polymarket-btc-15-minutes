@@ -7,7 +7,7 @@
  * This is "Pattern 3: Structural Exploitation" — profit from math, not prediction.
  */
 
-import { ARBITRAGE } from '../../../src/config.js';
+import { ARBITRAGE, polyFeeRate } from '../../../src/config.js';
 
 const { MIN_NET_PROFIT, FEE_RATE, MAX_SPREAD, MAX_SPREAD_HIGH_PROFIT } = ARBITRAGE;
 
@@ -44,8 +44,12 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
   const grossProfit = 1.00 - totalCost;            // guaranteed payout = $1.00
   // Fee is on winning side's profit (1.00 - askWinner), not net arb profit.
   // Use max winning profit (= 1.00 - min(askUp, askDown)) for conservative estimate.
-  const winnerProfit = grossProfit > 0 ? (1.00 - Math.min(askUp, askDown)) : 0;
-  const fees = winnerProfit > 0 ? Math.round(winnerProfit * FEE_RATE * 10000) / 10000 : 0;
+  const winnerAsk = Math.min(askUp, askDown);
+  const winnerProfit = grossProfit > 0 ? (1.00 - winnerAsk) : 0;
+  // Dynamic fee per winner price (Polymarket Crypto: 0.072 × p × (1−p)).
+  // Fallback to flat FEE_RATE if polyFeeRate returns 0 (edge case on bounds).
+  const winnerFeeRate = polyFeeRate(winnerAsk) || FEE_RATE;
+  const fees = winnerProfit > 0 ? Math.round(winnerProfit * winnerFeeRate * 10000) / 10000 : 0;
   const netProfit = grossProfit - fees;
 
   // Spread health — wide spreads mean bestAsk is unreliable.

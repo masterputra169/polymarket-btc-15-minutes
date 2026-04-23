@@ -79,8 +79,8 @@ function loadBaseline() {
     }
   } catch { /* fallback */ }
 
-  // Fallback: v20 deployed accuracy (120d hl90, Mar 2026)
-  return 0.8021;
+  // Fallback: v16 deployed accuracy (180d, 86% real labels, Mar 2026)
+  return 0.8407;
 }
 
 // ── Load recent trades with ML accuracy data from journal ──
@@ -234,7 +234,7 @@ export function checkDrift() {
   const cusumFire = cusumState.sum >= CFG.cusumThreshold;
 
   // ── Gate 3: Confidence drop ──
-  const baselineConf = 0.72; // typical avg confidence for v20 (lower accuracy → less extreme probs)
+  const baselineConf = 0.78; // typical avg confidence for v16 (84% acc → more extreme probs than v20)
   const confFire = avgConf != null && (baselineConf - avgConf) >= CFG.confDrop;
 
   // ── Build result object ──
