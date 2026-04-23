@@ -259,6 +259,36 @@ const BOT_CONFIG = {
     convictionScoreMin:      envNum(process.env.METENGINE_CONVICTION_SCORE,   90, 0, 200),      // F3: min wallet score
     convictionMinUSDC:       envNum(process.env.METENGINE_CONVICTION_USDC,    50, 0, 100000),   // F3: min USDC invested
   },
+
+  // Macro Event Guard — block trading around high-impact macro events.
+  // Source: ForexFactory weekly calendar (FaireEconomy XML mirror, no key needed).
+  // Manual overrides: bot/data/macro_events_manual.json (user-maintained).
+  // Policy: block entries within ±preEventMinutes/postEventMinutes; ML ≥95% bypass.
+  macro: {
+    enabled: process.env.MACRO_GUARD_ENABLED !== 'false',           // on by default — free data, high ROI
+    preEventMinutes: envInt(process.env.MACRO_PRE_MIN, 30, 5, 120),
+    postEventMinutes: envInt(process.env.MACRO_POST_MIN, 15, 0, 60),
+    fetchIntervalMs: envInt(process.env.MACRO_FETCH_INTERVAL_MS, 6 * 60 * 60 * 1000, 60 * 60 * 1000, 24 * 60 * 60 * 1000),
+    impactLevels: (process.env.MACRO_IMPACT_LEVELS || 'High').split(',').map(s => s.trim()).filter(Boolean),
+    currencies: (process.env.MACRO_CURRENCIES || 'USD').split(',').map(s => s.trim()).filter(Boolean),
+    eventsFile: resolve(__dirname, '..', 'data', 'macro_events.json'),
+    manualEventsFile: resolve(__dirname, '..', 'data', 'macro_events_manual.json'),
+  },
+
+  // LLM Regime Classifier — slow-loop advisor on top of algorithmic decisions.
+  // Runs ~every 5 min, classifies regime from price action + sentiment + macro context.
+  // Default: SHADOW mode (logs only, does NOT affect trading). Shadow first, A/B vs algo-only,
+  // then flip shadowMode=false to activate filter blocking on conflicting signals.
+  // LLM NEVER triggers entries. Only advisory on entries the algo already wants.
+  llmRegime: {
+    enabled: process.env.LLM_REGIME_ENABLED === 'true',
+    shadowMode: process.env.LLM_REGIME_SHADOW !== 'false',          // log-only by default
+    intervalMs: envInt(process.env.LLM_REGIME_INTERVAL_MS, 5 * 60 * 1000, 60_000, 30 * 60 * 1000),
+    maxTokens: envInt(process.env.LLM_REGIME_MAX_TOKENS, 500, 100, 2000),
+    minConfidence: envNum(process.env.LLM_REGIME_MIN_CONF, 0.70, 0.50, 0.95),   // below this = no advisory
+    blockMlBypass: envNum(process.env.LLM_REGIME_ML_BYPASS, 0.90, 0.70, 0.99),  // ML ≥ this overrides LLM block
+    logFile: resolve(__dirname, '..', 'data', 'llm_regime.jsonl'),
+  },
 };
 
 export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK };
