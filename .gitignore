@@ -64,3 +64,4 @@ bot/_*.mjs
 # Research notes / screenshots (local only)
 insight polymarket/
 monte carlo/
+.claude/settings.local.json
