@@ -21,11 +21,16 @@
  * 15. Spread widening — sudden spread increase
  * 16. Asia session hard gate
  * 17. Extreme sentiment — block during panic/euphoria (Fear & Greed API)
+ * 18. Macro event guard — block around high-impact macro events (CPI, FOMC, NFP)
+ * 19. LLM regime advisory — block when LLM regime conflicts with signal direction
  */
 
 import { TRADE_FILTERS } from '../../../src/config.js';
+import { BOT_CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.js';
+import { checkMacroEvent } from '../monitoring/macroCalendar.js';
+import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.js';
 
 const log = createLogger('Filter');
 
@@ -89,6 +94,7 @@ export function applyTradeFilters({
   spread,          // orderbook spread for bet-side token (decimal, e.g. 0.05 = 5%)
   mlAccuracy,      // ML-specific accuracy from getMLAccuracy() (0-1 or null)
   buyRatio,        // volume delta buy ratio (0-1, >0.5 = buyers dominating)
+  ptbSource,       // PTB source tier ('data_streams'|'polymarket_gamma'|'polymarket_page'|'polymarket_page_prev'|'scheduled_ws'|'chainlink_round'|'polymarket_page_approx'|'oracle'|'pending'|null)
 }) {
   const reasons = [];
 
@@ -129,6 +135,35 @@ export function applyTradeFilters({
     if (bestEdge == null || bestEdge < 0.10) {
       reasons.push(`ML dead zone: conf ${(mlConfidence * 100).toFixed(0)}% in 75-80% band, edge ${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < 10% required`);
     }
+  }
+
+  // 1c. PTB source quality gate (Option D — source-aware trading).
+  // PTB from low-quality sources may be off by $5-$500 vs Polymarket's actual resolution source.
+  // Trading on bad PTB = BTC-distance gate misfires, edge calc distorts, cut-loss wrong.
+  // Policy by source:
+  //   - data_streams / polymarket_gamma / polymarket_page / polymarket_page_prev: FULL TRUST
+  //   - scheduled_ws: TRUST (WS capture at eventStartTime, ~1-5ms drift)
+  //   - chainlink_round: DEGRADED (require ML ≥75% — on-chain Data Feeds ±15s drift)
+  //   - polymarket_page_approx / pending: DEGRADED (require ML ≥80%)
+  //   - oracle: BLOCK entries (live BTC price ≠ market-open PTB, can be off $100+)
+  if (ptbSource) {
+    const EXACT_SOURCES = ['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'];
+    const DEGRADED_SOURCES = ['chainlink_round', 'polymarket_page_approx', 'pending'];
+    const BLOCKED_SOURCES = ['oracle'];
+
+    if (BLOCKED_SOURCES.includes(ptbSource)) {
+      // Allow only if ML is very high AND edge is strong — override for clear opportunities.
+      const emergencyOk = mlAvailable && mlConfidence != null && mlConfidence >= 0.90 && highEdgeBypass;
+      if (!emergencyOk) {
+        reasons.push(`PTB source '${ptbSource}' unreliable (live BTC, not market-open snapshot) — need ML ≥90% + edge ≥15% to override`);
+      }
+    } else if (DEGRADED_SOURCES.includes(ptbSource)) {
+      const minMlForDegraded = ptbSource === 'chainlink_round' ? 0.75 : 0.80;
+      if (mlAvailable && mlConfidence != null && mlConfidence < minMlForDegraded) {
+        reasons.push(`PTB source '${ptbSource}' approximate — ML ${(mlConfidence * 100).toFixed(0)}% < ${(minMlForDegraded * 100).toFixed(0)}% required`);
+      }
+    }
+    // EXACT_SOURCES pass through — full trust.
   }
 
   // 2. Market near 50/50 (random walk — no edge)
@@ -396,6 +431,31 @@ export function applyTradeFilters({
     const mlSentimentBypass = mlConfidence != null && mlConfidence >= 0.90;
     if (!mlSentimentBypass) {
       reasons.push(`Sentiment: ${extremeSentiment.reason}`);
+    }
+  }
+
+  // 18. Macro Event Guard — block around high-impact CPI/FOMC/NFP events.
+  // Binary 15-min markets become coin flips during macro releases.
+  // Ultra-ML (≥95%) bypass only — truly exceptional signal required to trade through the event.
+  const macroEvent = checkMacroEvent();
+  if (macroEvent && macroEvent.block) {
+    const mlMacroBypass = mlConfidence != null && mlConfidence >= 0.95;
+    if (!mlMacroBypass) {
+      reasons.push(`Macro: ${macroEvent.reason}`);
+    }
+  }
+
+  // 19. LLM regime advisory — slow-loop regime classification (5-min cadence).
+  // Shadow mode returns null from checkLLMRegimeAdvisory(), so this is a no-op
+  // until LLM_REGIME_SHADOW=false. ML bypass threshold configurable (default 0.90).
+  if (signalSide) {
+    const llmAdvisory = checkLLMRegimeAdvisory(signalSide);
+    if (llmAdvisory && llmAdvisory.block) {
+      const bypass = llmAdvisory.mlBypassAbove ?? 0.90;
+      const mlLlmBypass = mlConfidence != null && mlConfidence >= bypass;
+      if (!mlLlmBypass) {
+        reasons.push(`LLM regime: ${llmAdvisory.reason}`);
+      }
     }
   }
 
