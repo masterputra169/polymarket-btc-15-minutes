@@ -63,6 +63,15 @@ import {
   fetchPolymarketPtb,
 } from './adapters/dataFetcher.js';
 
+// Chainlink Data Streams — direct access to Polymarket's resolution source.
+// Dormant without CHAINLINK_DS_API_KEY / CHAINLINK_DS_USER_SECRET env vars.
+import {
+  initDataStreams,
+  fetchDataStreamsReportAt,
+  isDataStreamsConfigured,
+  shutdownDataStreams,
+} from './adapters/chainlinkDataStreams.js';
+
 // ML (loaded from disk)
 import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds } from './adapters/mlLoader.js';
 import { resetHysteresis } from '../../src/engines/ml/state.js';
@@ -181,6 +190,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.js';
+import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.js';
 
 // Execution timing optimizer
 import { evaluateExecutionTiming, getExecutionTimingStatus, resetExecutionTiming, recordSpreadTick, recordVolumeTick } from './engines/executionTiming.js';
@@ -192,6 +202,7 @@ import { getOpenRouterStats } from './ai/openrouterClient.js';
 
 // RL Agent (contextual bandit bet sizing)
 import { loadRLWeights, getRLScalar, recordRLOutcome, getRLStatus, isRLLoaded } from './engines/rlAgent.js';
+import { getLastRLNarrative } from './ai/rlNarrative.js';
 
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.js';
@@ -291,13 +302,29 @@ function schedulePtbCapture(nextStartMs) {
   // Consumer (every-poll check below) clears it after applying.
   const delayMs = nextStartMs - Date.now();
   if (delayMs < 0 || delayMs > 20 * 60_000) return; // sanity: max 20min ahead
+
+  // Option C: two-stage timing to minimize drift.
+  // Stage 1: coarse setTimeout lands ~20ms before target (drift ~5-15ms typical).
+  // Stage 2: tight setImmediate loop (~1ms precision) until we cross target.
+  // Reduces capture drift from ~50ms → ~1-3ms → ~$0.05 miss vs ~$1 miss at high vola.
+  const COARSE_LEAD_MS = 25;
+  const coarseDelay = Math.max(0, delayMs - COARSE_LEAD_MS);
   ptbScheduleTimer = setTimeout(() => {
-    const p = getPolyLivePrice() || getChainlinkWssPrice();
-    if (p && p > 0) {
-      ptbScheduledPrice = { price: p, capturedAt: Date.now() };
-      log.info(`PTB pre-captured: $${p.toFixed(2)} (scheduled at eventStartTime)`);
-    }
-  }, delayMs);
+    ptbScheduleTimer = null;
+    const tickUntilTarget = () => {
+      if (Date.now() >= nextStartMs) {
+        const driftMs = Date.now() - nextStartMs;
+        const p = getPolyLivePrice() || getChainlinkWssPrice();
+        if (p && p > 0) {
+          ptbScheduledPrice = { price: p, capturedAt: Date.now() };
+          log.info(`PTB pre-captured: $${p.toFixed(2)} (scheduled, drift=${driftMs}ms)`);
+        }
+        return;
+      }
+      setImmediate(tickUntilTarget);
+    };
+    tickUntilTarget();
+  }, coarseDelay);
 }
 
 // ── PTB page upgrade scheduler ──
@@ -307,7 +334,7 @@ function schedulePtbCapture(nextStartMs) {
 function schedulePtbPageUpgrade(slug) {
   const attempt = (delayMs) => setTimeout(() => {
     if (priceToBeat.slug !== slug) return; // market already switched
-    if (['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) return; // already good
+    if (['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) return; // already good
     fetchPolymarketPtb(slug).then(result => {
       if (!result?.priceToBeat || priceToBeat.slug !== slug) return;
       if (['polymarket_page', 'polymarket_page_prev'].includes(result.source)) {
@@ -940,17 +967,47 @@ export async function pollOnce() {
       entryRegime = null;
 
       // ── PTB resolution (async, parallel — first to resolve wins) ──
-      // Priority: polymarket_page (exact) > scheduled_ws > chainlink_round > oracle
-      // All run async; whichever resolves first with a valid price sets PTB.
-      // Higher-priority sources overwrite lower-priority ones.
+      // Priority: data_streams (EXACT, Polymarket source)
+      //         > polymarket_gamma (EXACT, from per-poll snapshot — zero extra network)
+      //         > polymarket_page (EXACT, HTML scrape — slower)
+      //         > scheduled_ws (WS capture at eventStartTime)
+      //         > chainlink_round (on-chain Data Feeds approximation)
+      //         > oracle (live BTC price — fallback)
       const eventSlug = poly.market?.slug ?? marketSlug;
       const eventStartTime = poly.market?.eventStartTime;
 
-      // 1. Scrape PTB from Polymarket page (eventMetadata)
-      // polymarket_page / polymarket_page_prev = exact → overwrite anything
-      // polymarket_page_approx = rough estimate → only overwrite oracle/pending
+      // 0a. Gamma API eventMetadata — extracted from the snapshot we already fetched this poll.
+      // Authoritative source: same data Polymarket frontend uses for its eventMetadata.priceToBeat.
+      const gammaPtb = Number(poly.eventMetadata?.priceToBeat);
+      if (Number.isFinite(gammaPtb) && gammaPtb > 10_000 && priceToBeat.source !== 'data_streams') {
+        const prev = priceToBeat.value;
+        priceToBeat = { slug: marketSlug, value: gammaPtb, source: 'polymarket_gamma', updatedAt: Date.now() };
+        if (prev !== gammaPtb) {
+          log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${gammaPtb.toFixed(2)} (polymarket_gamma, exact)`);
+        }
+      }
+
+      // 0b. Chainlink Data Streams direct — same source Polymarket uses for resolution.
+      // Dormant if CHAINLINK_DS_API_KEY not configured (returns null, pipeline falls through).
+      if (eventStartTime && isDataStreamsConfigured()) {
+        const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
+        fetchDataStreamsReportAt(targetSec).then(result => {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.price, source: 'data_streams', updatedAt: Date.now() };
+            if (prev !== result.price) {
+              log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (data_streams, exact)`);
+            }
+          }
+        }).catch(err => log.debug(`Data Streams PTB fetch failed: ${err.message}`));
+      }
+
+      // 1. Scrape PTB from Polymarket page (eventMetadata) — HTML fallback path.
+      // polymarket_page / polymarket_page_prev = exact → only relevant if gamma didn't populate yet
+      // polymarket_page_approx = rough estimate → only overwrite oracle/pending/chainlink_round
       fetchPolymarketPtb(eventSlug).then(result => {
         if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
+          if (['data_streams', 'polymarket_gamma'].includes(priceToBeat.source)) return; // higher priority active
           const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
           const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
           if (isExact || currentIsLowPriority) {
@@ -965,12 +1022,12 @@ export async function pollOnce() {
 
       // 2. scheduled_ws capture: handled every poll (see below market-switch block) to avoid race condition
 
-      // 3. Chainlink on-chain round query (fallback)
+      // 3. Chainlink on-chain round query (fallback — Data Feeds aggregator, NOT Data Streams)
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
           if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && !['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
+              && !['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
             log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
@@ -992,8 +1049,21 @@ export async function pollOnce() {
       const startupEventStartTime = poly.market?.eventStartTime;
       log.info(`Startup PTB resolution for market: ${startupEventSlug}`);
 
+      // Startup: try Data Streams direct first (exact match with Polymarket source)
+      if (startupEventStartTime && isDataStreamsConfigured()) {
+        const targetSec = Math.floor(new Date(startupEventStartTime).getTime() / 1000);
+        fetchDataStreamsReportAt(targetSec).then(result => {
+          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
+            const prev = priceToBeat.value;
+            priceToBeat = { slug: marketSlug, value: result.price, source: 'data_streams', updatedAt: Date.now() };
+            log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (data_streams, exact)`);
+          }
+        }).catch(err => log.debug(`Startup Data Streams PTB failed: ${err.message}`));
+      }
+
       fetchPolymarketPtb(startupEventSlug).then(result => {
         if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
+          if (['data_streams', 'polymarket_gamma'].includes(priceToBeat.source)) return;
           const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
           const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
           if (isExact || currentIsLowPriority) {
@@ -1010,7 +1080,7 @@ export async function pollOnce() {
         const targetSec = Math.floor(new Date(startupEventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
           if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && !['polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
+              && !['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
             const prev = priceToBeat.value;
             priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
             log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
@@ -1134,6 +1204,34 @@ export async function pollOnce() {
 
     // Null out MC when disabled — prevents noise from GBM random walk affecting sizing/gates
     const mcResult = BOT_CONFIG.monteCarlo.enabled ? mcResultRaw : null;
+
+    // ── 5a0. LLM Regime snapshot feed (throttled — every ~50 polls, cheap storage) ──
+    // The classifier reads this snapshot on its own 5-min cadence. Calling every ~50 polls
+    // (~2.5s at 50ms POLL_MS) keeps it fresh without hot-path cost.
+    if (BOT_CONFIG.llmRegime?.enabled && pollCounter % 50 === 0) {
+      try {
+        const etHourNow = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+        const etDow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+        const delta1mPct = (lastPrice && delta1m != null) ? (delta1m / lastPrice) * 100 : null;
+        const delta3mPct = (lastPrice && delta3m != null) ? (delta3m / lastPrice) * 100 : null;
+        setLLMRegimeSnapshot({
+          btcPrice: lastPrice,
+          delta1mPct,
+          delta3mPct,
+          atrRatio: atr?.atrRatio ?? null,
+          regime: regimeInfo?.regime ?? null,
+          rsi: rsiNow,
+          macdHist: macd?.hist ?? null,
+          vwapDist,
+          emaCross: emaCross?.state ?? null,
+          session: getSessionName(),
+          etHour: etHourNow,
+          dayOfWeek: etDow,
+          consecutiveLosses: getConsecutiveLosses(),
+          recentWr: null, // filled by journalAnalytics if available — optional
+        });
+      } catch { /* non-fatal */ }
+    }
 
     // ── 5a. Smart money flow update (time-windowed CLOB flow) ──
     updateSmartFlow({
@@ -1758,6 +1856,7 @@ export async function pollOnce() {
           spread: null,                              // Skip — spreads naturally wider early
           mlAccuracy: getMLAccuracy?.() ?? null,
           buyRatio: volDelta?.buyRatio ?? null,
+          ptbSource: priceToBeat?.source ?? null,
         });
 
         if (!limFilterResult.pass) {
@@ -2475,8 +2574,10 @@ export async function pollOnce() {
       profitTarget: getProfitTargetStatus(),
       profitTargetPaused,
 
-      // RL Agent status
-      rlAgent: BOT_CONFIG.rl?.enabled ? getRLStatus() : { loaded: false },
+      // RL Agent status + LLM narrative
+      rlAgent: BOT_CONFIG.rl?.enabled
+        ? { ...getRLStatus(), narrative: getLastRLNarrative()?.summary ?? null }
+        : { loaded: false },
     });
 
     // Periodic save

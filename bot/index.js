@@ -43,6 +43,7 @@ import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbac
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.js';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.js';
 import { initClobClient, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.js';
+import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.js';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.js';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.js';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.js';
@@ -60,6 +61,11 @@ import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } fro
 import { initOpenRouter } from './src/ai/openrouterClient.js';
 import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/postTradeAnalyst.js';
 import { maybeOptimize } from './src/ai/selfOptimizer.js';
+import { loadRLNarrativeFromDisk, maybeGenerateRLNarrative } from './src/ai/rlNarrative.js';
+import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/regimeClassifier.js';
+
+// Monitoring / guards
+import { initMacroCalendar, fetchMacroEvents } from './src/monitoring/macroCalendar.js';
 
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
 const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
@@ -112,6 +118,18 @@ async function main() {
     log.info('DRY RUN mode — CLOB client not initialized');
   }
 
+  // 1b. Init Chainlink Data Streams WS (dormant if API key not configured)
+  if (isDataStreamsConfigured()) {
+    try {
+      const connected = await initDataStreams();
+      if (connected) log.info('Chainlink Data Streams: WS stream connected');
+    } catch (err) {
+      log.warn(`Chainlink Data Streams init failed (non-fatal): ${err.message}`);
+    }
+  } else {
+    log.info('Chainlink Data Streams: dormant (CHAINLINK_DS_API_KEY not set — PTB falls back to polymarket_page/chainlink_round)');
+  }
+
   // 2. Load ML model from disk
   const mlOk = loadMLModelFromDisk();
   if (!mlOk) {
@@ -157,6 +175,21 @@ async function main() {
     log.info(`AI Agent: model=${BOT_CONFIG.ai.model}, interval=${Math.round(BOT_CONFIG.ai.analyzeIntervalMs / 60_000)}min, autoOptimize=${BOT_CONFIG.ai.autoOptimize}`);
   } else {
     log.info('AI Agent: disabled (set AI_AGENT_ENABLED=true to enable)');
+  }
+
+  // 4d2. Initialize Macro Event Guard (free FF calendar, runs regardless of AI agent).
+  initMacroCalendar();
+
+  // 4d3. Initialize LLM Regime Classifier (requires AI agent + OpenRouter).
+  if (BOT_CONFIG.ai.enabled) {
+    initLLMRegime();
+  } else if (BOT_CONFIG.llmRegime?.enabled) {
+    log.warn('LLM Regime enabled but AI_AGENT_ENABLED=false — classifier will not run');
+  }
+
+  // 4e. Load RL narrative cache from disk
+  if (BOT_CONFIG.rl?.enabled) {
+    loadRLNarrativeFromDisk();
   }
 
   // 5. Start WebSocket streams (real-time data)
@@ -207,10 +240,23 @@ async function main() {
         const stats = getStats();
         await maybeAnalyze(stats.totalTrades);
         await maybeOptimize();
+        await maybeGenerateRLNarrative();
+        // LLM Regime classifier (P2) — internally throttled by intervalMs
+        if (BOT_CONFIG.llmRegime?.enabled) {
+          await maybeClassifyRegime();
+        }
       } catch (err) {
         log.debug(`AI interval error: ${err.message}`);
       }
     }, 60_000); // Check every minute (actual analysis throttled by analyzeIntervalMs)
+  }
+
+  // 6c. Macro calendar refresh interval (independent of AI agent)
+  let macroIntervalId = null;
+  if (BOT_CONFIG.macro?.enabled) {
+    macroIntervalId = setInterval(() => {
+      fetchMacroEvents().catch(err => log.debug(`Macro refresh: ${err.message}`));
+    }, Math.min(BOT_CONFIG.macro.fetchIntervalMs ?? 6 * 60 * 60 * 1000, 6 * 60 * 60 * 1000));
   }
 
   // 7. Graceful shutdown handler
@@ -222,6 +268,7 @@ async function main() {
     log.info(`\n${signal} received — shutting down gracefully...`);
     clearInterval(intervalId);
     if (aiIntervalId) clearInterval(aiIntervalId);
+    if (macroIntervalId) clearInterval(macroIntervalId);
 
     // Disconnect WebSockets
     disconnectBinanceWs();
@@ -236,6 +283,7 @@ async function main() {
     stopRedeemer();
     stopMonitor();
     stopDailySummary();
+    try { await shutdownDataStreams(); } catch { /* ignore */ }
 
     // Cancel open orders (live mode only)
     if (!BOT_CONFIG.dryRun) {
