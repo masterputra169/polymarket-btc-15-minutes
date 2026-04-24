@@ -116,7 +116,9 @@ async function fetchFreshEvents(cutoffDate) {
 
 async function fetchTickPrices(tokenId, startSec, endSec) {
   if (!tokenId) return [];
-  const url = `${CLOB_BASE}/prices-history?market=${tokenId}&startTs=${startSec}&endTs=${endSec}&fidelity=60`;
+  // fidelity=60 returns 0 entries for sparse 15-min markets (needs >=60s between consecutive ticks
+  // to surface them). fidelity=1 returns all available ticks (~1 per minute on average).
+  const url = `${CLOB_BASE}/prices-history?market=${tokenId}&startTs=${startSec}&endTs=${endSec}&fidelity=1`;
   const data = await httpGet(url);
   if (!data || !data.history) return [];
   return data.history

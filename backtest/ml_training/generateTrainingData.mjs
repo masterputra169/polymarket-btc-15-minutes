@@ -1179,11 +1179,20 @@ async function main() {
   // Generate features
   // Audit fix (Apr 2026): previously step=5 with PREDICTION_WINDOW=15 caused heavy correlation —
   // 3 samples per 15-min market share identical outcome + near-identical open-price features.
-  // Now: step=1 candle scan, but we DEDUP to 1 observation per market slug (earliest candle
-  // with enough indicator lookback). Effective sample size = number of unique Polymarket markets.
-  console.log(`\n🔧 Generating features (min-move filter: ${(MIN_MOVE_PCT*100).toFixed(3)}%, dedup 1-per-slug)...`);
+  // Now: step=1 candle scan with dedup-to-1 per market slug.
+  //
+  // V2 fix (Apr 2026): original dedup picked first valid candle per slug (ascending loop
+  // order) which pinned ALL non-Polymarket features to market-open time (minutes_left_norm
+  // mean=0.93, std=0.004). This created massive train/serve skew — live bot polls across
+  // all phases (EARLY/MID/LATE/VERY_LATE) but model saw only t=0 snapshots, causing
+  // pathological predictions (0-18% ML conf in v24 deploy).
+  //
+  // New approach: collect ALL candidates per slug, then pick ONE at random per slug using
+  // seeded RNG. Effective sample size = number of unique Polymarket markets, with features
+  // sampled across the 15-min window matching live distribution.
+  console.log(`\n🔧 Generating features (min-move filter: ${(MIN_MOVE_PCT*100).toFixed(3)}%, random-per-slug dedup)...`);
   const rows = [];
-  const seenSlugs = new Set(); // dedup: each market slug contributes at most one training sample
+  const candidatesPerSlug = new Map(); // slugTs -> [result, result, ...]
   let filteredCount = 0;
   let dupCount = 0;
   let totalCandidates = 0;
@@ -1195,21 +1204,29 @@ async function main() {
       filteredCount++;
       continue;
     }
-    // Drop duplicates: keep only the first valid observation per slug_ts
-    if (result.slugTs !== null) {
-      if (seenSlugs.has(result.slugTs)) {
-        dupCount++;
-        continue;
-      }
-      seenSlugs.add(result.slugTs);
+    // Non-Polymarket samples (simulated labels) pass through directly.
+    if (result.slugTs === null) {
+      rows.push(result);
+      continue;
     }
-    rows.push(result);
+    // Polymarket samples: collect all candidates per slug for random selection.
+    if (!candidatesPerSlug.has(result.slugTs)) {
+      candidatesPerSlug.set(result.slugTs, []);
+    }
+    candidatesPerSlug.get(result.slugTs).push(result);
 
-    if (rows.length % 1000 === 0 && rows.length > 0) {
-      process.stdout.write(`\r  ${rows.length} samples generated (${filteredCount} filtered, ${dupCount} dedup)...`);
+    if (totalCandidates % 10000 === 0) {
+      process.stdout.write(`\r  scanned ${totalCandidates} | collected ${rows.length + candidatesPerSlug.size} | slugs ${candidatesPerSlug.size}`);
     }
   }
-  console.log(`\n  Deduplicated ${dupCount} redundant observations (same market, later candle)`);
+
+  // Pick one candidate per slug at random (seeded RNG for reproducibility).
+  for (const [slugTs, list] of candidatesPerSlug) {
+    const picked = list[Math.floor(rng() * list.length)];
+    rows.push(picked);
+    dupCount += list.length - 1;
+  }
+  console.log(`\n  Collected ${candidatesPerSlug.size} unique slugs | Dropped ${dupCount} non-picked candidates`);
 
   console.log(`\n✅ Generated ${rows.length} training samples`);
   console.log(`   Filtered ${filteredCount} ambiguous samples (move < ${(MIN_MOVE_PCT*100).toFixed(3)}%, ${(filteredCount/totalCandidates*100).toFixed(1)}% of candidates)`);
