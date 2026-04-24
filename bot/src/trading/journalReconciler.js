@@ -268,8 +268,10 @@ async function reconcile() {
     const before = trades.length;
     trades = trades.filter(t => {
       const maker = (t.maker_address || '').toLowerCase();
+      const taker = (t.taker_address || '').toLowerCase();
       const owner = t.owner || '';
-      return maker === proxyAddr || owner === apiKeyId;
+      // Include trades where we are MAKER (LIMIT fills), TAKER (FOK fills), or owner (API-attributed).
+      return maker === proxyAddr || taker === proxyAddr || owner === apiKeyId;
     });
     if (trades.length < before) {
       log.info(`Wallet filter: ${before} → ${trades.length} trades (excluded ${before - trades.length} foreign trades)`);
@@ -286,6 +288,44 @@ async function reconcile() {
   }
 
   log.info(`Grouped into ${byMarket.size} market(s)`);
+
+  // BUG FIX (Apr 2026): the time-windowed getTradeHistory() only returns trades
+  // WITHIN the lookback window. If a BUY happened before the window and a SELL
+  // within the window, buildVerifiedEntry() saw only the SELL → totalCost=0,
+  // totalProceeds>0, netPnl>0 → incorrectly classified as WIN. (Root cause of
+  // 77.9% reported WR vs 59.8% real on-chain.)
+  //
+  // Fix: for each market that had activity in this window, refetch the COMPLETE
+  // per-market trade history. getTradeHistory supports market-filter.
+  const proxyAddrLower = (getProxyAddress() || '').toLowerCase();
+  const apiKeyIdLocal = process.env.POLYMARKET_API_KEY || '';
+  const isOurs = (t) => {
+    const maker = (t.maker_address || '').toLowerCase();
+    const taker = (t.taker_address || '').toLowerCase();
+    const owner = t.owner || '';
+    return maker === proxyAddrLower || taker === proxyAddrLower || owner === apiKeyIdLocal;
+  };
+  for (const [conditionId, existing] of byMarket) {
+    try {
+      const full = await getTradeHistory({ market: conditionId });
+      if (Array.isArray(full) && full.length > 0) {
+        const ours = full.filter(isOurs);
+        // Dedup by trade id (window trades + full fetch may overlap)
+        const merged = new Map();
+        for (const t of [...existing, ...ours]) {
+          if (t.id) merged.set(t.id, t);
+        }
+        const mergedArr = [...merged.values()];
+        if (mergedArr.length > existing.length) {
+          log.debug(`Market ${conditionId.slice(0, 10)}: window had ${existing.length} trades, full history has ${mergedArr.length} (added ${mergedArr.length - existing.length} pre-window trades)`);
+        }
+        byMarket.set(conditionId, mergedArr);
+      }
+    } catch (err) {
+      // Fall back to window-only trades for this market if refetch fails
+      log.debug(`Per-market refetch failed for ${conditionId.slice(0, 10)}: ${err.message}`);
+    }
+  }
 
   const localTrades = loadLocalTrades();
   // L: Dedup — load existing conditionIds to prevent duplicate entries from overlap buffer
