@@ -1,11 +1,17 @@
 /**
- * Verified trade journal — on-chain reconciliation via CLOB getTrades().
+ * Verified trade journal — on-chain reconciliation.
  *
- * Every 30 minutes, fetches real trade history from the Polymarket CLOB API,
- * groups by market, fetches market info + winner from CLOB /markets/ endpoint,
- * computes verified P&L, and cross-references with local state.json.
+ * Every 30 minutes, fetches real trade history and computes verified P&L.
  *
- * Output: bot/data/verified_journal.jsonl (append-only)
+ * PRIMARY SOURCE: Polymarket data-api (/activity endpoint)
+ *   Public, no auth, no CLOB client needed. Matches polymarketscan exactly.
+ *   Uses usdcSize field for fee-accurate P&L.
+ *
+ * FALLBACK SOURCE: CLOB getTrades()
+ *   If data-api fails (network/rate limit), falls back to legacy CLOB path.
+ *   Note: CLOB path has known limitations (see rebuildVerifiedJournal comments).
+ *
+ * Output: bot/data/verified_journal.jsonl (append-only, schema-compatible)
  */
 
 import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -16,6 +22,166 @@ import { getTradeHistory, isClientReady, getProxyAddress } from './clobClient.js
 import { adjustBankrollForReconciliation } from './positionTracker.js';
 import { invalidateSync, setReconcileCooldown } from '../engines/usdcSync.js';
 import { notify } from '../monitoring/notifier.js';
+
+const DATA_API_BASE = 'https://data-api.polymarket.com';
+const DATA_API_PAGE_SIZE = 1000;
+
+/**
+ * Fetch paginated /activity records from Polymarket data-api.
+ * Returns all activity (TRADE, REDEEM, MAKER_REBATE) for wallet since `sinceMs`.
+ * Returns null if network/API failure (caller should fall back to CLOB path).
+ */
+async function fetchDataApiActivity(walletAddr, sinceMs) {
+  const sinceSec = Math.floor(sinceMs / 1000);
+  const results = [];
+  let offset = 0;
+  while (true) {
+    const url = `${DATA_API_BASE}/activity?user=${walletAddr}&limit=${DATA_API_PAGE_SIZE}&offset=${offset}`;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { 'User-Agent': 'polymarket-bot-reconciler/2.0' },
+      });
+      clearTimeout(timeout);
+      if (!res.ok) return null;
+      const page = await res.json();
+      if (!Array.isArray(page) || page.length === 0) break;
+      // Activity returned newest-first by default; we keep scanning until we
+      // cross the `sinceSec` boundary for efficiency.
+      let crossedBoundary = false;
+      for (const a of page) {
+        const ts = Number(a.timestamp);
+        if (Number.isFinite(ts) && ts < sinceSec) { crossedBoundary = true; continue; }
+        results.push(a);
+      }
+      if (crossedBoundary || page.length < DATA_API_PAGE_SIZE) break;
+      offset += DATA_API_PAGE_SIZE;
+    } catch {
+      return null; // network/timeout → signal fallback
+    }
+  }
+  return results;
+}
+
+/**
+ * Build verified entry from data-api activity grouped for a single market.
+ * `records` is an array of {type, side, size, price, usdcSize, asset, outcomeIndex, slug, timestamp, transactionHash, title}.
+ */
+function buildDataApiEntry(conditionId, records, localTrades) {
+  const trades = records.filter(r => r.type === 'TRADE');
+  const redeems = records.filter(r => r.type === 'REDEEM');
+  const rebates = records.filter(r => r.type === 'MAKER_REBATE');
+
+  // Aggregate by asset (token_id) using usdcSize for fee-accurate P&L
+  const byAsset = new Map();
+  let slug = null;
+  let title = null;
+  let marketTime = null;
+  for (const t of [...trades, ...redeems]) {
+    if (!slug && t.slug) slug = t.slug;
+    if (!title && t.title) title = t.title;
+    if (!marketTime && t.slug) {
+      const m = /(\d{10})$/.exec(t.slug);
+      if (m) marketTime = parseInt(m[1]) * 1000;
+    }
+  }
+  for (const t of trades) {
+    const asset = t.asset || 'unknown';
+    if (!byAsset.has(asset)) byAsset.set(asset, { buyCost: 0, buySize: 0, sellProceeds: 0, sellSize: 0 });
+    const a = byAsset.get(asset);
+    const size = Number(t.size) || 0;
+    const usdc = Number(t.usdcSize);
+    const notional = Number.isFinite(usdc) && usdc > 0 ? usdc : (Number(t.price) || 0) * size;
+    if (t.side === 'BUY') { a.buyCost += notional; a.buySize += size; }
+    else if (t.side === 'SELL') { a.sellProceeds += notional; a.sellSize += size; }
+  }
+
+  let totalCost = 0, totalProceeds = 0, netPosition = 0;
+  for (const a of byAsset.values()) {
+    totalCost += a.buyCost;
+    totalProceeds += a.sellProceeds;
+    netPosition += (a.buySize - a.sellSize);
+  }
+  const totalPayout = redeems.reduce((s, r) => s + (Number(r.usdcSize) || Number(r.size) || 0), 0);
+  const totalRebate = rebates.reduce((s, r) => s + (Number(r.usdcSize) || 0), 0);
+  const netPnl = Math.round((totalProceeds + totalPayout + totalRebate - totalCost) * 100) / 100;
+
+  // Resolved if any REDEEM, or market older than 1h past start
+  const resolved = redeems.length > 0 ||
+    (marketTime && Date.now() - marketTime > 60 * 60 * 1000);
+
+  // Determine outcome label from redeemed asset's outcomeIndex
+  let outcome = null;
+  if (redeems.length > 0) {
+    const redeemedAsset = redeems[0].asset;
+    const matching = trades.find(t => t.asset === redeemedAsset);
+    const idx = Number(matching?.outcomeIndex);
+    if (idx === 0) outcome = 'Up';
+    else if (idx === 1) outcome = 'Down';
+  }
+
+  // Cross-reference with local state for discrepancy detection
+  let localMatch = false, localPnl = null, discrepancy = null;
+  if (slug) {
+    const local = findLocalTrade(localTrades, slug);
+    if (local) {
+      localMatch = true;
+      localPnl = local.localPnl;
+      if (netPnl !== null && localPnl !== null) {
+        discrepancy = Math.round((netPnl - localPnl) * 100) / 100;
+      }
+    }
+  }
+
+  return {
+    marketSlug: slug,
+    conditionId,
+    question: title,
+    marketTime,
+    trades: trades.map(t => {
+      let tokenSide = null;
+      const idx = Number(t.outcomeIndex);
+      if (idx === 0) tokenSide = 'Up';
+      else if (idx === 1) tokenSide = 'Down';
+      const usdc = Number(t.usdcSize);
+      const priceSize = (Number(t.price) || 0) * (Number(t.size) || 0);
+      const notional = Number.isFinite(usdc) && usdc > 0 ? usdc : priceSize;
+      return {
+        tradeId: t.transactionHash || null,
+        side: t.side,
+        tokenSide,
+        asset: t.asset,
+        price: Number(t.price) || 0,
+        size: Number(t.size) || 0,
+        cost: t.side === 'BUY' ? Math.round(notional * 100) / 100 : 0,
+        proceeds: t.side === 'SELL' ? Math.round(notional * 100) / 100 : 0,
+        matchTime: String(t.timestamp),
+        txHash: t.transactionHash || null,
+      };
+    }),
+    redeems: redeems.map(r => ({
+      amount: Number(r.usdcSize) || Number(r.size) || 0,
+      asset: r.asset,
+      txHash: r.transactionHash || null,
+      timestamp: r.timestamp,
+    })),
+    outcome,
+    resolved,
+    totalCost: Math.round(totalCost * 100) / 100,
+    totalProceeds: Math.round(totalProceeds * 100) / 100,
+    totalPayout: Math.round(totalPayout * 100) / 100,
+    totalRebate: Math.round(totalRebate * 100) / 100,
+    netPosition: Math.round(netPosition * 1e6) / 1e6,
+    netPnl,
+    localMatch,
+    localPnl,
+    discrepancy,
+    _fetchedAt: Date.now(),
+    _source: 'dataapi',
+  };
+}
 
 const log = createLogger('Reconciler');
 
@@ -218,12 +384,128 @@ function deriveSlugFromMarket(market, localTrades) {
 /**
  * Main reconciliation cycle.
  */
-async function reconcile() {
-  if (!isClientReady()) {
-    log.debug('CLOB client not ready — skipping reconcile');
+/**
+ * Data-api reconciliation path (PRIMARY). Consumes paginated /activity records,
+ * groups by conditionId, builds verified entries with usdcSize-based P&L, and
+ * appends to verified_journal.jsonl. Respects existing dedup logic.
+ */
+async function _reconcileFromDataApi(activity, now) {
+  if (!Array.isArray(activity) || activity.length === 0) {
+    log.info('data-api: no new activity since last reconcile');
     return;
   }
 
+  // Group by conditionId
+  const byMarket = new Map();
+  for (const a of activity) {
+    const cid = a.conditionId;
+    if (!cid) continue;
+    if (!byMarket.has(cid)) byMarket.set(cid, []);
+    byMarket.get(cid).push(a);
+  }
+
+  log.info(`data-api: ${activity.length} activity record(s) → ${byMarket.size} market(s)`);
+
+  // Load existing journal for dedup
+  const processedIds = new Set();
+  const unresolvedIds = new Set();
+  try {
+    if (existsSync(BOT_CONFIG.verifiedJournalFile)) {
+      const lines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
+      for (const line of lines) {
+        try {
+          const e = JSON.parse(line);
+          if (e.conditionId) {
+            if (e.resolved) processedIds.add(e.conditionId);
+            else unresolvedIds.add(e.conditionId);
+          }
+        } catch { /* skip malformed */ }
+      }
+    }
+  } catch (err) {
+    log.debug(`data-api: could not load existing journal: ${err.message}`);
+  }
+
+  const localTrades = loadLocalTrades();
+  let totalPnl = 0;
+  let marketCount = 0;
+  const updatedEntries = [];
+
+  // Block USDC syncs during reconciliation (120s cooldown)
+  setReconcileCooldown(120_000);
+
+  for (const [conditionId, records] of byMarket) {
+    if (processedIds.has(conditionId)) continue; // already resolved in journal
+
+    const isRecheck = unresolvedIds.has(conditionId);
+    let entry;
+    try {
+      entry = buildDataApiEntry(conditionId, records, localTrades);
+    } catch (err) {
+      log.warn(`data-api: failed to build entry for ${conditionId.slice(0, 16)}...: ${err.message}`);
+      continue;
+    }
+    if (!entry) continue;
+
+    if (isRecheck && !entry.resolved) continue; // still unresolved — skip re-write
+
+    if (isRecheck && entry.resolved) {
+      updatedEntries.push(entry);
+      log.info(`data-api: unresolved → resolved ${conditionId.slice(0, 16)}... outcome=${entry.outcome} pnl=${entry.netPnl}`);
+      if (entry.localMatch && entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10) {
+        adjustBankrollForReconciliation({ delta: entry.discrepancy, reason: `reconciler_delayed_resolution`, slug: entry.marketSlug });
+      }
+      if (entry.netPnl !== null) {
+        const pnlStr = entry.netPnl >= 0 ? `+$${entry.netPnl.toFixed(2)}` : `-$${Math.abs(entry.netPnl).toFixed(2)}`;
+        const emoji = entry.netPnl >= 0 ? '✅' : '❌';
+        notify('info', `${emoji} <b>Reconciled (delayed)</b>: ${entry.outcome ?? '?'} | P&L: <b>${pnlStr}</b>\n📊 ${entry.marketSlug?.slice(-30) ?? conditionId.slice(0, 16)}`, { key: `reconcile:${conditionId}` }).catch(e => log.debug(`Notify: ${e.message}`));
+      }
+    } else {
+      // New entry → append
+      try {
+        const dir = dirname(BOT_CONFIG.verifiedJournalFile);
+        if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+        appendFileSync(BOT_CONFIG.verifiedJournalFile, JSON.stringify(entry) + '\n');
+      } catch (err) {
+        log.warn(`data-api: append failed for ${conditionId.slice(0, 16)}...: ${err.message}`);
+        continue;
+      }
+      if (entry.resolved && entry.localMatch && entry.discrepancy !== null && Math.abs(entry.discrepancy) > 0.10) {
+        adjustBankrollForReconciliation({ delta: entry.discrepancy, reason: `reconciler_discrepancy`, slug: entry.marketSlug });
+      }
+    }
+
+    totalPnl += entry.netPnl ?? 0;
+    marketCount++;
+  }
+
+  // Replace unresolved → resolved entries in-place
+  if (updatedEntries.length > 0) {
+    try {
+      const updatedMap = new Map(updatedEntries.map(e => [e.conditionId, e]));
+      const existingLines = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8').trim().split('\n').filter(Boolean);
+      const newLines = existingLines.map(line => {
+        try {
+          const e = JSON.parse(line);
+          if (e.conditionId && updatedMap.has(e.conditionId)) {
+            return JSON.stringify(updatedMap.get(e.conditionId));
+          }
+        } catch { /* keep original on parse error */ }
+        return line;
+      });
+      writeFileSync(BOT_CONFIG.verifiedJournalFile, newLines.join('\n') + '\n');
+      log.info(`data-api: replaced ${updatedEntries.length} unresolved → resolved`);
+    } catch (err) {
+      log.warn(`data-api: failed to update unresolved entries: ${err.message}`);
+    }
+  }
+
+  if (marketCount > 0) {
+    log.info(`data-api reconciled ${marketCount} market(s), P&L: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`);
+  }
+}
+
+async function reconcile() {
   const now = Date.now();
   const intervalMs = BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000;
   // First run (no journal history): look back 48h to catch all trades
@@ -234,6 +516,25 @@ async function reconcile() {
     : now - lookbackMs;
 
   log.info(`Reconciling trades since ${new Date(afterMs).toISOString()}...`);
+
+  // ───────────── PRIMARY: data-api reconciliation ─────────────
+  const walletAddr = (getProxyAddress() || '').toLowerCase();
+  if (walletAddr) {
+    const activity = await fetchDataApiActivity(walletAddr, afterMs);
+    if (activity !== null) {
+      await _reconcileFromDataApi(activity, now);
+      lastProcessedTime = now;
+      lastReconcileMs = now;
+      return;
+    }
+    log.warn('data-api fetch failed — falling back to CLOB path');
+  }
+
+  // ───────────── FALLBACK: legacy CLOB path ─────────────
+  if (!isClientReady()) {
+    log.debug('CLOB client not ready — skipping reconcile');
+    return;
+  }
 
   let trades;
   try {
