@@ -219,8 +219,12 @@ function loadVerifiedJournal() {
     for (const line of lines) {
       try {
         const v = JSON.parse(line);
-        // Only include resolved entries with known PnL
-        if (!v.outcome || v.netPnl == null) continue;
+        // Include resolved entries with known PnL. NOTE: we do NOT require v.outcome
+        // because data-api entries cannot always infer Up/Down labels (REDEEM events
+        // have asset:"" which breaks symbolic outcome derivation). The WIN/LOSS
+        // classification below uses v.netPnl sign as the source of truth, so the
+        // symbolic outcome label is not required.
+        if (v.netPnl == null || v.resolved === false) continue;
         const firstTrade = v.trades?.[0];
         if (!firstTrade) continue;
         // Convert to trade_journal-compatible format

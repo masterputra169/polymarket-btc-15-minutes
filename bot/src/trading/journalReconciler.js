@@ -112,14 +112,21 @@ function buildDataApiEntry(conditionId, records, localTrades) {
   const resolved = redeems.length > 0 ||
     (marketTime && Date.now() - marketTime > 60 * 60 * 1000);
 
-  // Determine outcome label from redeemed asset's outcomeIndex
+  // Derive symbolic outcome (Up/Down). REDEEM records have `asset:""` so we
+  // use TRADE side (outcomeIndex) combined with netPnl sign: if the dominant
+  // BUY side has positive P&L, it won; else the opposite side won.
   let outcome = null;
-  if (redeems.length > 0) {
-    const redeemedAsset = redeems[0].asset;
-    const matching = trades.find(t => t.asset === redeemedAsset);
-    const idx = Number(matching?.outcomeIndex);
-    if (idx === 0) outcome = 'Up';
-    else if (idx === 1) outcome = 'Down';
+  if (resolved && trades.length > 0) {
+    const idxCount = { 0: 0, 1: 0 };
+    for (const t of trades) {
+      if (t.side !== 'BUY') continue;
+      const idx = Number(t.outcomeIndex);
+      if (idx === 0 || idx === 1) idxCount[idx] += Number(t.size) || 0;
+    }
+    const dominantIdx = idxCount[0] >= idxCount[1] ? 0 : 1;
+    const dominantSide = dominantIdx === 0 ? 'UP' : 'DOWN';
+    if (netPnl > 0.01) outcome = dominantSide;
+    else if (netPnl < -0.01) outcome = dominantSide === 'UP' ? 'DOWN' : 'UP';
   }
 
   // Cross-reference with local state for discrepancy detection
@@ -143,8 +150,8 @@ function buildDataApiEntry(conditionId, records, localTrades) {
     trades: trades.map(t => {
       let tokenSide = null;
       const idx = Number(t.outcomeIndex);
-      if (idx === 0) tokenSide = 'Up';
-      else if (idx === 1) tokenSide = 'Down';
+      if (idx === 0) tokenSide = 'UP';
+      else if (idx === 1) tokenSide = 'DOWN';
       const usdc = Number(t.usdcSize);
       const priceSize = (Number(t.price) || 0) * (Number(t.size) || 0);
       const notional = Number.isFinite(usdc) && usdc > 0 ? usdc : priceSize;

@@ -280,8 +280,8 @@ for (const [cid, b] of byMarket) {
       // Derive tokenSide from outcomeIndex (0 = Up, 1 = Down for binary BTC markets)
       let tokenSide = null;
       const idx = Number(t.outcomeIndex);
-      if (idx === 0) tokenSide = 'Up';
-      else if (idx === 1) tokenSide = 'Down';
+      if (idx === 0) tokenSide = 'UP';
+      else if (idx === 1) tokenSide = 'DOWN';
       const usdc = Number(t.usdcSize);
       const priceSize = (Number(t.price) || 0) * (Number(t.size) || 0);
       const trueNotional = Number.isFinite(usdc) && usdc > 0 ? usdc : priceSize;
@@ -305,14 +305,26 @@ for (const [cid, b] of byMarket) {
       timestamp: r.timestamp,
     })),
     outcome: (() => {
-      // Infer winning outcome from which asset got redeemed
-      if (b.redeems.length === 0) return null;
-      // If we have redeems, determine tokenSide of redeemed asset
-      const redeemedAsset = b.redeems[0]?.asset;
-      if (!redeemedAsset) return null;
-      const matchingTrade = b.trades.find(t => t.asset === redeemedAsset);
-      if (matchingTrade?.outcomeIndex === 0) return 'Up';
-      if (matchingTrade?.outcomeIndex === 1) return 'Down';
+      // Derive symbolic winning side (Up/Down) using multiple signals.
+      // REDEEM records have `asset:""` (empty) so we infer from TRADE side+netPnl:
+      //   - Bot bought side X (outcomeIndex 0 = Up, 1 = Down)
+      //   - If netPnl > 0 → X won → outcome = X
+      //   - If netPnl < 0 → X lost → outcome = opposite of X
+      const buys = b.trades.filter(t => t.side === 'BUY');
+      if (buys.length === 0) return null;
+      // Majority vote: most-traded side
+      const idxCount = { 0: 0, 1: 0 };
+      for (const t of buys) {
+        const idx = Number(t.outcomeIndex);
+        if (idx === 0 || idx === 1) idxCount[idx] += Number(t.size) || 0;
+      }
+      const dominantIdx = idxCount[0] >= idxCount[1] ? 0 : 1;
+      const dominantSide = dominantIdx === 0 ? 'UP' : 'DOWN';
+      if (!resolved) return null;
+      // If dominant side won (netPnl > 0) → outcome = dominantSide
+      // If dominant side lost (netPnl < 0) → outcome = opposite
+      if (netPnl > 0.01) return dominantSide;
+      if (netPnl < -0.01) return dominantSide === 'UP' ? 'DOWN' : 'UP';
       return null;
     })(),
     resolved,
