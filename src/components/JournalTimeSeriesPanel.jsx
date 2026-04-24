@@ -148,14 +148,32 @@ function OverviewTab({ data }) {
 
   return (
     <>
-      {/* Data source info */}
-      <div style={{ fontSize: '0.52rem', color: 'var(--text-dim)', marginBottom: 6, textAlign: 'right' }}>
-        {sourceStr && <span>{sourceStr}</span>}
-        {ageStr && <span style={{ marginLeft: 8 }}>Updated {ageStr}</span>}
+      {/* Data source info + polymarketscan cross-reference */}
+      <div style={{ fontSize: '0.52rem', color: 'var(--text-dim)', marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+        <a
+          href="https://polymarketscan.org/address/0x2f8b9af5a465e2bdd5f9b541c3878bc64659b472"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Verify on-chain via polymarketscan (third-party blockchain explorer)"
+          style={{
+            color: 'var(--text-dim)',
+            textDecoration: 'none',
+            padding: '2px 6px',
+            border: '1px solid var(--border-dim)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '0.52rem',
+          }}
+        >
+          🔗 Verify on polymarketscan.org ↗
+        </a>
+        <span>
+          {sourceStr && <span>{sourceStr}</span>}
+          {ageStr && <span style={{ marginLeft: 8 }}>Updated {ageStr}</span>}
+        </span>
       </div>
 
-      {/* Summary Stats */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+      {/* Summary Stats — matched to polymarketscan layout */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
         <StatBox label="Trades" value={p.totalTrades} />
         <StatBox label="Win Rate" value={`${p.overallWr}%`} color={wrColor(p.overallWr)} />
         <StatBox label="Total P&L" value={pnlStr(p.totalPnl)} color={pnlColor(p.totalPnl)} />
@@ -163,6 +181,28 @@ function OverviewTab({ data }) {
           label="Streak"
           value={streak?.count > 0 ? `${streak.count}${streak.type === 'win' ? 'W' : 'L'}` : '-'}
           color={streak?.type === 'win' ? 'var(--green-mid)' : streak?.type === 'loss' ? 'var(--red-mid)' : undefined}
+        />
+      </div>
+
+      {/* Polymarketscan-style aggregate metrics */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+        <StatBox
+          label="ROI"
+          value={p.roi != null ? `${p.roi >= 0 ? '+' : ''}${p.roi}%` : '—'}
+          color={p.roi > 0 ? 'var(--green-mid)' : p.roi < 0 ? 'var(--red-mid)' : undefined}
+        />
+        <StatBox
+          label="Volume"
+          value={p.totalVolume != null ? `$${Math.round(p.totalVolume).toLocaleString()}` : '—'}
+        />
+        <StatBox
+          label="Events"
+          value={p.totalEvents != null ? p.totalEvents.toLocaleString() : '—'}
+          sub="all on-chain"
+        />
+        <StatBox
+          label="Total Cost"
+          value={p.totalCost != null ? `$${Math.round(p.totalCost).toLocaleString()}` : '—'}
         />
       </div>
 
@@ -531,6 +571,9 @@ export default memo(JournalTimeSeriesPanel, (prev, next) => {
     a.patterns?.totalTrades === b.patterns?.totalTrades &&
     a.patterns?.totalPnl === b.patterns?.totalPnl &&
     a.patterns?.overallWr === b.patterns?.overallWr &&
+    a.patterns?.roi === b.patterns?.roi &&
+    a.patterns?.totalVolume === b.patterns?.totalVolume &&
+    a.patterns?.totalEvents === b.patterns?.totalEvents &&
     a.patterns?.currentStreak?.count === b.patterns?.currentStreak?.count &&
     a.sources?.total === b.sources?.total &&
     a.events?.length === b.events?.length &&

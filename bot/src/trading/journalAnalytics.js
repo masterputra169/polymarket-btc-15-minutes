@@ -553,6 +553,14 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
   let winCount = 0;
   let lossCount = 0;
 
+  // Polymarketscan-style aggregate metrics:
+  //   totalVolume — sum of all trade notionals (BUY cost + SELL proceeds)
+  //   totalCost   — sum of BUY costs only (for ROI denominator)
+  //   totalEvents — count of individual on-chain events (TRADE + REDEEM)
+  let totalVolume = 0;
+  let totalCost = 0;
+  let totalEvents = 0;
+
   // Streak tracking
   let longestWinStreak = 0;
   let longestLossStreak = 0;
@@ -566,7 +574,23 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
     const outcome = t.analysis?.outcome;
     const pnl = t.analysis?.pnl ?? 0;
     const hold = t.analysis?.holdDurationSec;
+    const cost = t.entry?.cost ?? 0;
     totalPnl += pnl;
+    totalCost += cost;
+
+    // Volume = gross notional traded (cost + proceeds across all sub-trades).
+    // If entry only has cost (most local trades), volume ≈ 2×cost (BUY + SELL/REDEEM on resolution).
+    // For on-chain entries with full trade list, sum each trade's notional.
+    const tradeList = t.entry?.trades;
+    if (Array.isArray(tradeList) && tradeList.length > 0) {
+      for (const tr of tradeList) {
+        totalVolume += (Number(tr.cost) || 0) + (Number(tr.proceeds) || 0);
+        totalEvents++;
+      }
+    } else if (cost > 0) {
+      totalVolume += cost * 2; // approximation: full round-trip
+      totalEvents += 2;
+    }
 
     if (isWin(outcome)) {
       totalWins++;
@@ -626,6 +650,12 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
     totalLosses,
     totalPnl: roundMoney(totalPnl),
     overallWr: roundPct((totalWins / totalTrades) * 100),
+
+    // Polymarketscan-style metrics
+    totalVolume: roundMoney(totalVolume),
+    totalCost: roundMoney(totalCost),
+    totalEvents,
+    roi: totalCost > 0 ? roundPct((totalPnl / totalCost) * 100) : 0,
 
     avgPnlWin: winCount > 0 ? roundMoney(winPnlSum / winCount) : 0,
     avgPnlLoss: lossCount > 0 ? roundMoney(lossPnlSum / lossCount) : 0,
