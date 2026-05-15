@@ -261,7 +261,7 @@ function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
 
 /**
  * Resolve BTC price + price-to-beat for settlement.
- * @returns {{ btcPrice: number, priceSource: string, ptbValue: number|null }}
+ * @returns {{ btcPrice: number, priceSource: string, ptbValue: number|null, ptbRaw: number|null }}
  */
 function resolveSettlementPrices(pos, slug, priceToBeat, getOraclePrice, getBinancePrice) {
   const oraclePrice = getOraclePrice();

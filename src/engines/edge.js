@@ -207,12 +207,18 @@ export function countAgreement(breakdown, side) {
  * @param {number|null} params.edgeDown
  * @param {number} params.modelUp
  * @param {number} params.modelDown
+ * @param {number|null} [params.effectiveUp] - effective entry price for UP (bestAsk or mid+spread)
+ * @param {number|null} [params.effectiveDown] - effective entry price for DOWN
  * @param {Object} [params.breakdown] - scoring breakdown for agreement count
  * @param {boolean} [params.multiTfConfirmed] - whether 1m+5m agree
  * @param {number|null} [params.mlConfidence] - ML model confidence (0-1)
  * @param {boolean} [params.mlAgreesWithRules] - whether ML and rules agree on direction
  * @param {Object|null} [params.smartFlowSignal] - from smartMoneyTracker { direction, strength, confidence, window }
- * @returns {{ action: string, side: string|null, confidence: string, phase: string, reason: string }}
+ * @param {Object} [params.regimeInfo] - { regime, confidence, ... }
+ * @param {string} [params.session] - trading session name
+ * @param {Object} [params.calibratedThresholds] - phase-specific thresholds from ML training
+ * @param {number} [params.dataQualityScore] - feature data quality (0-1)
+ * @returns {{ action: string, side: string|null, confidence: string, phase: string, reason: string, strength?: any, edge?: number }}
  */
 export function decide({
   remainingMinutes,

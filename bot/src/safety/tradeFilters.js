@@ -98,6 +98,21 @@ export function applyTradeFilters({
 }) {
   const reasons = [];
 
+  // Oracle Lag Sniper bypass — concept from JonathanPetersonn/oracle-lag-sniper (60.7% OOS WR).
+  // When PTB is EXACT (data_streams or polymarket_gamma) AND we have ≥5min for repricing
+  // AND BTC moved ≥0.07% AND token is cheap (≤62c), the empirical edge comes from oracle/gamma
+  // leading CLOB repricing by ~55s. Relax ML threshold (75% vs default 80%) — the price feed
+  // IS the signal. Gated by env LATE_SNIPER_ENABLED so user can A/B-test impact.
+  const lateSniperEnabled = process.env.LATE_SNIPER_ENABLED === 'true';
+  const isExactPtbForSniper = ['data_streams', 'polymarket_gamma'].includes(ptbSource);
+  const oracleLagBypass = lateSniperEnabled
+    && isExactPtbForSniper
+    && timeLeftMin != null && timeLeftMin >= 5.0
+    && marketPrice != null && marketPrice <= 0.62
+    && delta1m != null && btcPrice != null
+    && Math.abs(delta1m / btcPrice) >= 0.0007  // 0.07% BTC movement threshold
+    && mlAvailable && mlConfidence != null && mlConfidence >= 0.75;
+
   // 1. ML Confidence gate
   // During tilt protection (post-cut-loss), use the higher threshold.
   // Edge bypass (Audit v5 A+B): When edge ≥ 15%, the price-based signal is strong enough
@@ -105,8 +120,8 @@ export function applyTradeFilters({
   // Rationale: edge = modelProb - marketPrice. At 15%+ edge, ensemble strongly favors the side
   // even if ML specifically is uncertain (rule-based indicators still contribute).
   const highEdgeBypass = bestEdge != null && bestEdge >= 0.15;
-  const baseMLMin = highEdgeBypass
-    ? Math.min(TRADE_FILTERS.MIN_ML_CONFIDENCE, 0.45) // relax to 45% when edge is strong
+  const baseMLMin = (highEdgeBypass || oracleLagBypass)
+    ? Math.min(TRADE_FILTERS.MIN_ML_CONFIDENCE, 0.45) // relax to 45% when edge or oracle-lag triggers
     : TRADE_FILTERS.MIN_ML_CONFIDENCE;
   const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > baseMLMin)
     ? tiltMlConfMin
@@ -115,7 +130,8 @@ export function applyTradeFilters({
     if (mlConfidence < mlConfMin) {
       const tiltTag = tiltMlConfMin != null ? ' [tilt]' : '';
       const edgeTag = highEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥15%→relaxed]` : '';
-      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}${edgeTag}`);
+      const lagTag = oracleLagBypass ? ' [oracle-lag→relaxed]' : '';
+      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}${edgeTag}${lagTag}`);
     }
   }
 
@@ -299,14 +315,26 @@ export function applyTradeFilters({
   }
 
   // 8. Edge ceiling — configurable cap (default 15%) for ALL regimes.
-  // Quant analysis (94 trades): edge 10-15% is sweet spot,
-  // edge 15-20% has poor WR, edge 20%+ had 0-14% WR.
-  // High edge = model diverges from market = model is usually wrong.
+  // Quant analysis (94 trades): edge 10-15% is sweet spot, edge 15-20% has poor WR.
+  // CAVEAT: that journal data was collected when PTB was approximate (chainlink_round /
+  // polymarket_page) — high edge then often = measurement error, not real divergence.
+  // With EXACT PTB sources (data_streams / polymarket_gamma) high edge = real model
+  // divergence = legitimate sniper signal (per oracle-lag-sniper 60.7% OOS WR research).
   // ML ≥85% raises ceiling to 35% — v16 model trusted at high confidence.
+  const EXACT_PTB_SOURCES = ['data_streams', 'polymarket_gamma'];
+  const isExactPtb = EXACT_PTB_SOURCES.includes(ptbSource);
   const baseMaxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
-  const maxEdge = (mlConfidence != null && mlConfidence >= 0.85) ? 0.35 : baseMaxEdge;
+  let maxEdge;
+  if (isExactPtb) {
+    maxEdge = 0.50;  // exact oracle PTB — trust real divergence up to 50%
+  } else if (mlConfidence != null && mlConfidence >= 0.85) {
+    maxEdge = 0.35;  // approximate PTB but ML very confident
+  } else {
+    maxEdge = baseMaxEdge;  // approximate PTB + low ML — keep tight cap
+  }
   if (bestEdge != null && bestEdge > maxEdge) {
-    reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > ${(maxEdge * 100).toFixed(0)}% (high edge = poor WR in journal)`);
+    const note = isExactPtb ? 'extreme divergence' : 'high edge = poor WR in journal';
+    reasons.push(`Edge ceiling: ${(bestEdge * 100).toFixed(0)}% > ${(maxEdge * 100).toFixed(0)}% (${note})`);
   }
 
   // 9. Counter-trend momentum guard — don't fight strong BTC moves.

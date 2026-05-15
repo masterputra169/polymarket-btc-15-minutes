@@ -62,7 +62,7 @@ export async function scanMarkets() {
 /**
  * Discover traders active in a given market condition.
  * @param {string} conditionId
- * @returns {Array} Unique trader addresses with basic stats
+ * @returns {Promise<Array>} Unique trader addresses with basic stats
  */
 export async function discoverTraders(conditionId) {
   try {

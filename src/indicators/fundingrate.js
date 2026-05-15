@@ -78,7 +78,7 @@ async function fetchFapiWithFallback(path) {
 
 /**
  * Fetch funding rate from Bybit as fallback
- * @returns {{ rate, ratePct, extreme, sentiment, nextFundingTime } | null}
+ * @returns {Promise<{ rate: any, ratePct: any, extreme: any, sentiment: any, nextFundingTime: any, fetchedAt: any, source: any } | null>}
  */
 async function fetchBybitFundingRate() {
   try {
@@ -164,7 +164,7 @@ let firstCallDone = false;
 /**
  * Fetch current funding rate from Binance Futures.
  * First call is non-blocking (fire-and-forget) to avoid 3-6s timeout on initial load.
- * @returns {{ rate, ratePct, extreme, sentiment, nextFundingTime } | null}
+ * @returns {Promise<{ rate: any, ratePct: any, extreme: any, sentiment: any, nextFundingTime: any, fetchedAt: any, source: any } | null>}
  */
 export async function fetchFundingRate() {
   const now = Date.now();
@@ -189,7 +189,7 @@ export async function fetchFundingRate() {
 
 /**
  * Get cached funding rate without fetching.
- * @returns {Object|null}
+ * @returns {Promise<Object|null>}
  */
 export function getCachedFundingRate() {
   return cachedFunding;

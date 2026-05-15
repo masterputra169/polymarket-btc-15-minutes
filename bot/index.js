@@ -109,6 +109,39 @@ async function main() {
       log.warn(`Startup cleanup failed (non-fatal): ${err.message}`);
     }
 
+    // 1b. Auto-activate deposits — wrap proxy USDC.e into pUSD if any.
+    // Gated by AUTO_ACTIVATE_DEPOSITS env var; respects DRY_RUN. Non-fatal.
+    // Runs on STARTUP + periodically every AUTO_ACTIVATE_INTERVAL_MIN minutes
+    // (default 60 min). Prevents ghost-drawdown from settlement-returned USDC.e.
+    if (process.env.AUTO_ACTIVATE_DEPOSITS === 'true') {
+      const { autoActivateOnStartup } = await import('./src/trading/depositActivator.js');
+
+      const runActivate = async (label) => {
+        try {
+          const r = await autoActivateOnStartup();
+          if (r.executed) {
+            log.info(`Auto-activate (${label}): ${r.pusdAdded.toFixed(4)} pUSD added (${r.txs.length} txs)`);
+          } else if (r.reason && r.reason !== 'disabled') {
+            log.debug(`Auto-activate (${label}) skipped: ${r.reason}`);
+          }
+        } catch (err) {
+          log.warn(`Auto-activate (${label}) failed (non-fatal): ${err.message}`);
+        }
+      };
+
+      // Startup run
+      await runActivate('startup');
+
+      // Periodic run — default 60 min, configurable via AUTO_ACTIVATE_INTERVAL_MIN.
+      // Set to 0 to disable periodic (startup-only).
+      const intervalMin = Math.max(0, parseInt(process.env.AUTO_ACTIVATE_INTERVAL_MIN ?? '60', 10));
+      if (intervalMin > 0) {
+        const intervalMs = intervalMin * 60 * 1000;
+        log.info(`Auto-activate periodic enabled: every ${intervalMin} minutes`);
+        setInterval(() => runActivate('periodic').catch(() => {}), intervalMs);
+      }
+    }
+
     // Start verified journal reconciler (on-chain trade history)
     startReconciler();
 

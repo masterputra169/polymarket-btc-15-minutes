@@ -143,6 +143,7 @@ function parseArgs() {
   }
   if (args.days) args.days = parseInt(args.days);
   if (args['min-move']) args['min-move'] = parseFloat(args['min-move']);
+  if (args.seed) args.seed = parseInt(args.seed);
   return args;
 }
 
@@ -1128,7 +1129,7 @@ function extractFeatures(candles, idx, candles5m, fundingRates) {
   // SM features REMOVED in v13 — empirically hurt accuracy (v9 77.9% > v9a 74.4%)
   // SM data used as post-ML filter gate only (MetEngine in tradeFilters.js)
 
-  return { features, label, slugTs: polyMarket ? slugTs : null };
+  return { features, label, slugTs: polyMarket ? slugTs : null, timeKey: candleTimeSec };
 }
 
 // ═══ FEATURE NAMES (for CSV header) ═══
@@ -1168,8 +1169,11 @@ async function main() {
   // Load Polymarket lookup (real data for labels, features 44-48, minutesLeft)
   polyLookup = loadPolymarketLookup(POLYMARKET_LOOKUP_PATH);
 
-  // Seed PRNG for reproducible minutesLeft values (used as fallback)
-  seedRng(42);
+  // Seed PRNG for reproducible per-slug random picks + minutesLeft fallback.
+  // Override via --seed N for ensemble averaging / sensitivity analysis.
+  const seed = Number.isFinite(ARGS.seed) ? ARGS.seed : 42;
+  seedRng(seed);
+  console.log(`PRNG seed: ${seed}`);
 
   // Fetch data
   const candles1m = await fetchAllKlines(DAYS);
@@ -1220,13 +1224,35 @@ async function main() {
     }
   }
 
-  // Pick one candidate per slug at random (seeded RNG for reproducibility).
+  // Pick one candidate per slug at random (seeded PRNG for reproducibility).
+  // Audit fix (May 2026): was calling undefined `rng()` → ReferenceError on first
+  // Polymarket slug → all post-v16 retrains silently fell back to simulation labels.
   for (const [slugTs, list] of candidatesPerSlug) {
-    const picked = list[Math.floor(rng() * list.length)];
+    const picked = list[Math.floor(seededRandom() * list.length)];
     rows.push(picked);
     dupCount += list.length - 1;
   }
   console.log(`\n  Collected ${candidatesPerSlug.size} unique slugs | Dropped ${dupCount} non-picked candidates`);
+
+  // Audit fix (May 2026): sort globally by time so trainXGBoost temporal split
+  // (X[:split]/X[split:]) is honestly chronological. Previously sim rows were
+  // pushed inline while real rows were flushed at end → split boundary mixed
+  // simulated samples into "early" training portion + clustered real labels at end.
+  rows.sort((a, b) => {
+    const ta = a.slugTs ?? a.timeKey ?? 0;
+    const tb = b.slugTs ?? b.timeKey ?? 0;
+    return ta - tb;
+  });
+  // Sanity check: assert no duplicate slug_timestamps in real-labeled rows
+  const seenSlugs = new Set();
+  for (const r of rows) {
+    if (r.slugTs !== null) {
+      if (seenSlugs.has(r.slugTs)) {
+        throw new Error(`Duplicate slugTs ${r.slugTs} after dedup — group split would be unsafe`);
+      }
+      seenSlugs.add(r.slugTs);
+    }
+  }
 
   console.log(`\n✅ Generated ${rows.length} training samples`);
   console.log(`   Filtered ${filteredCount} ambiguous samples (move < ${(MIN_MOVE_PCT*100).toFixed(3)}%, ${(filteredCount/totalCandidates*100).toFixed(1)}% of candidates)`);

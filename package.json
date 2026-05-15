@@ -8,14 +8,19 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc -p jsconfig.json",
+    "typecheck:bot": "tsc -p jsconfig.json --listFilesOnly false 2>&1 | grep -E 'bot/' || echo 'No bot/ errors'",
+    "typecheck:frontend": "tsc -p jsconfig.json --listFilesOnly false 2>&1 | grep -E 'src/' || echo 'No src/ errors'"
   },
   "dependencies": {
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
   "devDependencies": {
+    "@types/node": "^25.7.0",
     "@vitejs/plugin-react": "^5.1.2",
+    "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "^4.0.18"
   }

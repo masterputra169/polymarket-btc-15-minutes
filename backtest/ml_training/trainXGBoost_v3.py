@@ -59,6 +59,12 @@ parser.add_argument('--session-weight', action='store_true',
 parser.add_argument('--holdout-frac', type=float, default=0.125,
                     help='Reserve final N%% of train data as holdout (not seen by Optuna/CV). '
                          'Default 0.125 = 12.5%% holdout (audit fix C3). Set to 0 to disable.')
+parser.add_argument('--strict-holdout', dest='strict_holdout', action='store_true', default=True,
+                    help='(default) Keep holdout strictly OOS: final model trains ONLY on tune subset, '
+                         'NEVER on holdout. Audit fix (May 2026) — previously final model retrained on '
+                         'X_train_full which INCLUDED holdout, making the "holdout 94.12%%" metric leak. '
+                         'Disable with --no-strict-holdout if you want the old behavior for replication.')
+parser.add_argument('--no-strict-holdout', dest='strict_holdout', action='store_false')
 # Legacy flags kept for compatibility
 parser.add_argument('--epochs', type=int, default=0)
 args = parser.parse_args()
@@ -99,6 +105,30 @@ print("[1/8] Loading data...")
 df = pd.read_csv(args.input)
 # Drop metadata columns (not features, just row identifiers from data generation)
 metadata_cols = ['slug_timestamp']
+
+# Audit fix (May 2026): assert chronological + unique slug ordering BEFORE split.
+# Catches data-generation bugs that would silently leak labels across train/test.
+if 'slug_timestamp' in df.columns:
+    slug_ts_series = pd.to_numeric(df['slug_timestamp'], errors='coerce')
+    real_mask = slug_ts_series.notna()
+    n_real = int(real_mask.sum())
+    if n_real > 0:
+        real_ts = slug_ts_series[real_mask].values
+        # 1. Uniqueness: per-slug dedup in generateTrainingData should guarantee this
+        dup_count = len(real_ts) - len(set(real_ts.tolist()))
+        if dup_count > 0:
+            raise SystemExit(
+                f"[FATAL] {dup_count} duplicate slug_timestamps detected — "
+                f"group-leakage risk across train/test split. Regenerate training data."
+            )
+        # 2. Monotonic non-decreasing: trainXGBoost X[:split] is honest only if so
+        if not np.all(np.diff(real_ts) >= 0):
+            n_inversions = int((np.diff(real_ts) < 0).sum())
+            print(f"   [WARN] slug_timestamps NOT monotonic ({n_inversions} inversions) — "
+                  f"temporal split may leak. Recommend regenerate with chronological sort.")
+        else:
+            print(f"   [OK] slug_timestamps monotonic ({n_real:,} real-labeled rows)")
+
 feature_cols_orig = [c for c in df.columns if c != 'label' and c not in metadata_cols]
 X_orig = df[feature_cols_orig].values.astype(np.float32)
 y = df['label'].values.astype(np.int32)
@@ -527,7 +557,10 @@ else:
 # excluded from Optuna/CV tuning. The model gets the most data possible.
 print(f"\n   Training final model with {best_cfg_name}...")
 if args.holdout_frac > 0:
-    print(f"   (using full training data: {len(X_train_full):,} samples, holdout was only excluded from tuning)")
+    if args.strict_holdout:
+        print(f"   (strict holdout: training on tune subset {len(X_train):,} samples; holdout {len(X_holdout):,} stays OOS)")
+    else:
+        print(f"   (non-strict: using full training data {len(X_train_full):,} samples — holdout INCLUDED in final train)")
 
 final_params = {
     'objective': 'binary:logistic',
@@ -538,16 +571,33 @@ final_params = {
     **best_cfg,
 }
 
-# Recalculate sample weights for full training set if holdout was used
-w_train_final = w_train
-if args.holdout_frac > 0 and args.recency:
-    n_full = len(X_train_full)
-    days_ago_full = np.linspace(args.days, 0, n_full)
-    w_train_final = (0.5 + 0.5 * np.exp(-days_ago_full / args.recency_halflife)).astype(np.float32)
-elif args.holdout_frac > 0:
-    w_train_final = None  # full train had no weights (tune subset was swapped)
+# Audit fix (May 2026): when --strict-holdout (default), final model trains ONLY
+# on the tune subset — holdout is never seen by the model. This keeps "holdout acc"
+# an honest OOS metric. Previously X_train_full silently included the holdout,
+# making early-stopping + threshold/phase/ensemble sweeps + final eval all touch
+# the same data → multiple-comparisons + leak.
+if args.holdout_frac > 0 and args.strict_holdout:
+    X_final_train = X_train          # already swapped to tune subset at temporal-split step
+    y_final_train = y_train
+    w_train_final = w_train           # weights computed against tune subset
+    print(f"   STRICT HOLDOUT: final model trains on tune subset only "
+          f"({len(X_final_train):,} samples); holdout stays OOS.")
+else:
+    X_final_train = X_train_full
+    y_final_train = y_train_full
+    w_train_final = w_train
+    if args.holdout_frac > 0 and args.recency:
+        # Legacy path: recompute recency weights spanning full train (incl. holdout)
+        n_full = len(X_train_full)
+        days_ago_full = np.linspace(args.days, 0, n_full)
+        w_train_final = (0.5 + 0.5 * np.exp(-days_ago_full / args.recency_halflife)).astype(np.float32)
+    elif args.holdout_frac > 0:
+        w_train_final = None  # full train had no weights (tune subset was swapped)
+    if args.holdout_frac > 0:
+        print(f"   [WARN] --no-strict-holdout: final model includes holdout — downstream "
+              f"holdout metrics will be biased upward (legacy v16 behavior).")
 
-dtrain = xgb.DMatrix(X_train_full, label=y_train_full, weight=w_train_final, feature_names=feature_cols)
+dtrain = xgb.DMatrix(X_final_train, label=y_final_train, weight=w_train_final, feature_names=feature_cols)
 if exclude_feature_names:
     # Ensure colsample_bytree < 1.0 for feature_weights to work
     if final_params.get('colsample_bytree', 1.0) >= 1.0:
@@ -586,7 +636,10 @@ if X_holdout is not None and len(X_holdout) > 0:
     y_prob_holdout = model.predict(dholdout)
     holdout_acc = accuracy_score(y_holdout, (y_prob_holdout >= 0.5).astype(int))
     holdout_auc = roc_auc_score(y_holdout, y_prob_holdout)
-    print(f"\n   === OOS HOLDOUT (Optuna/CV never saw this data) ===")
+    holdout_label = ("(OOS — strict: never seen by Optuna/CV/final-train)"
+                     if args.strict_holdout else
+                     "(LEAKED — Optuna/CV skipped but final-train INCLUDED this data; numbers are biased)")
+    print(f"\n   === HOLDOUT EVALUATION {holdout_label} ===")
     print(f"   Holdout samples: {len(X_holdout):,}")
     print(f"   Holdout acc: {holdout_acc*100:.1f}% | AUC: {holdout_auc:.4f}")
     print(f"   Test    acc: {initial_acc*100:.1f}% | AUC: {initial_auc:.4f}")
@@ -635,7 +688,10 @@ if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
     combined_fw = feature_weights.copy()
     if exclude_feature_names:
         combined_fw = np.minimum(combined_fw, pre_exclude_fw)
-    dtrain_fw = xgb.DMatrix(X_train_full, label=y_train_full, weight=w_train_final, feature_names=feature_cols)
+    # Audit fix (May 2026 P6 follow-up): use X_final_train / y_final_train (which
+    # respect strict-holdout). Previously used X_train_full unconditionally → weight
+    # dimension mismatch when strict_holdout excluded holdout from final train.
+    dtrain_fw = xgb.DMatrix(X_final_train, label=y_final_train, weight=w_train_final, feature_names=feature_cols)
     dtrain_fw.feature_weights = combined_fw
 
     # Early stop on holdout for pruned model too (audit fix M-prune)
@@ -1263,7 +1319,8 @@ if HAS_LGB:
     # Use full training data; early stop on holdout (audit fix M-early)
     print(f"   Training final LightGBM model...")
 
-    lgb_dtrain = lgb.Dataset(X_train_full, label=y_train_full, weight=w_train_final,
+    # Audit fix (May 2026 P6 follow-up): respect strict-holdout for LGB too
+    lgb_dtrain = lgb.Dataset(X_final_train, label=y_final_train, weight=w_train_final,
                              feature_name=feature_cols, free_raw_data=False)
     if X_holdout is not None and len(X_holdout) > 0:
         lgb_dval = lgb.Dataset(X_holdout, label=y_holdout,

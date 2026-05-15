@@ -90,7 +90,7 @@ function getTokenPriceSlope() {
  * @param {string|null} params.entryRegime - Market regime at time of entry
  * @param {number|null} params.btcDelta1m - BTC price change per minute ($/min)
  * @param {number|null} params.atrRatio - Current ATR / average ATR (volatility scaling)
- * @returns {{ shouldCut: boolean, reason: string, sellPrice?: number, dropPct?: number, recoveryAmount?: number, diagnostics?: Object }}
+ * @returns {{ shouldCut: boolean, reason: string, sellPrice?: number, dropPct?: number, recoveryAmount?: number, diagnostics?: Object, urgency?: string }}
  */
 export function evaluateCutLoss({
   position, currentTokenPrice, orderbook, timeLeftMin,

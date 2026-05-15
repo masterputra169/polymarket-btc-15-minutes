@@ -7,10 +7,10 @@ import { CONFIG } from '../config.js';
 
 /**
  * Fetch klines (candlestick data) from Binance.
- * @param {Object} opts
- * @param {string} opts.interval - candle interval ('1m', '5m', etc.)
- * @param {number} opts.limit - number of candles
- * @returns {Array} candles [{openTime, open, high, low, close, volume, closeTime}, ...]
+ * @param {Object} [opts]
+ * @param {string} [opts.interval] - candle interval ('1m', '5m', etc.)
+ * @param {number} [opts.limit] - number of candles
+ * @returns {Promise<Array>} candles [{openTime, open, high, low, close, volume, closeTime}, ...]
  */
 export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/klines?symbol=${CONFIG.symbol}&interval=${interval}&limit=${limit}`;
@@ -36,7 +36,7 @@ export async function fetchKlines({ interval = '1m', limit = 240 } = {}) {
 
 /**
  * Fetch last price from Binance.
- * @returns {number} last price
+ * @returns {Promise<number>} last price
  */
 export async function fetchLastPrice() {
   const url = `${CONFIG.binanceBaseUrl}/api/v3/ticker/price?symbol=${CONFIG.symbol}`;

@@ -63,7 +63,12 @@ while True:
             if up_p is not None and dn_p is not None:
                 if up_p > 0.8: outcome = 1
                 elif dn_p > 0.8: outcome = 0
+            # Audit fix (May 2026): tighten resolution threshold to >=0.95 to match
+            # incremental_scrape_v15.mjs. Previous 0.8 allowed ambiguous resolutions.
             if outcome is None: continue
+            if up_p is not None and dn_p is not None:
+                top = max(up_p, dn_p)
+                if top < 0.95: continue
             ts = slug_ts(slug)
             if not ts: continue
             markets.append({'ts': ts, 'label': outcome,
@@ -80,9 +85,25 @@ print(f"  {len(new)} new markets to add")
 for m in new:
     lookup[m['ts']] = {'label': m['label'], 'spread': 0.02, 'liquidity': m['liquidity'], 'volume': m['volume'], 'prices': []}
 
+# Audit fix (May 2026): warn loudly when new markets are priceless.
+# generateTrainingData.mjs drops samples with empty prices → these markets contribute
+# nothing to real-label training (sim fallback removed). Run fetchFreshMarkets.mjs
+# afterwards to enrich tick prices, OR accept reduced corpus for label-only retrain.
+if new:
+    pct_priceless = 100.0  # all rows added here are priceless by construction
+    print(f"\n  WARNING: {len(new)} new markets added with prices: [] (label-only).")
+    print(f"  These rows will NOT contribute to feature generation in")
+    print(f"  generateTrainingData.mjs (Polymarket features 44-47 need price history).")
+    print(f"  Run `node fetchFreshMarkets.mjs --days {DAYS} --lookup {LOOKUP_PATH}` to enrich.\n")
+
+# Atomic write: .tmp -> fsync -> rename. Prevents corruption on Ctrl-C/OOM.
 print(f"Saving updated lookup ({len(lookup):,} total)...")
-with open(LOOKUP_PATH, 'w') as f:
+tmp_path = LOOKUP_PATH + '.tmp'
+with open(tmp_path, 'w') as f:
     json.dump(lookup, f, separators=(',', ':'))
+    f.flush()
+    os.fsync(f.fileno())
+os.replace(tmp_path, LOOKUP_PATH)
 
 size = os.path.getsize(LOOKUP_PATH) / 1024 / 1024
 labels = [v['label'] for v in lookup.values()]

@@ -239,7 +239,7 @@ const NEUTRAL = Object.freeze({
  *
  * @param {string} conditionId - Market condition ID (from Polymarket)
  * @param {string} betSide - 'UP' | 'DOWN'
- * @returns {{ blocked, boost, direction, consensusStrength, insiderScore, source, reason }}
+ * @returns {Promise<{ blocked: boolean, boost: any, direction: any, consensusStrength: number, insiderScore: number, source: string, reason: string, smartVsPriceAligned?: any, contrarian?: boolean }>}
  */
 export async function querySmartMoney(conditionId, betSide) {
   if (!_cfg?.enabled) return NEUTRAL;

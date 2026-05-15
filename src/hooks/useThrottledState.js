@@ -10,7 +10,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
  *
  * @param {*} initialValue  - initial state
  * @param {number} intervalMs - flush interval (default 500ms = 2 updates/sec)
- * @returns {[value, setValue, refValue]}
+ * @returns {Array} [value, setValue, refValue]
  *   - value:    React state (triggers re-render, updated every intervalMs)
  *   - setValue: call this on every WS tick (writes to ref, NOT state)
  *   - refValue: ref with latest value (always current, no re-render)

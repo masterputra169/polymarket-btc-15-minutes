@@ -94,6 +94,22 @@ IMPORTANT:
 
 Respond ONLY with valid JSON (no markdown, no code blocks).`;
 
+  // Build RL sizing context if RL data exists in recent trades.
+  // Audit fix (2026-05-14): moved BEFORE template literal that references rlSection.
+  // Was declared at line 139 → TDZ violation when template eval'd at line 126.
+  const rlEntries = recentTrades.filter(t => t.entry?.rlScalar != null);
+  let rlSection = '';
+  if (rlEntries.length >= 5) {
+    const scaleUp   = rlEntries.filter(t => t.entry.rlScalar > 1.0);
+    const scaleDown = rlEntries.filter(t => t.entry.rlScalar < 1.0);
+    const neutral   = rlEntries.filter(t => t.entry.rlScalar === 1.0);
+    const wrOf = (arr) => arr.length === 0 ? 'n/a' : `${Math.round(arr.filter(t => t.analysis?.outcome === 'WIN').length / arr.length * 100)}%`;
+    rlSection = `\n### RL Sizing Agent (${rlEntries.length} trades with scalar)
+Scale-up (x>1.0): ${scaleUp.length} trades, WR ${wrOf(scaleUp)}
+Scale-down (x<1.0): ${scaleDown.length} trades, WR ${wrOf(scaleDown)}
+Neutral (x1.0): ${neutral.length} trades, WR ${wrOf(neutral)}`;
+  }
+
   const user = `## Current Bot Configuration
 ${configSummary}
 
@@ -134,19 +150,7 @@ Provide your analysis as JSON:
   "risks": ["risk 1", "risk 2"]
 }`;
 
-  // Build RL sizing context if RL data exists in recent trades
-  const rlEntries = recentTrades.filter(t => t.entry?.rlScalar != null);
-  let rlSection = '';
-  if (rlEntries.length >= 5) {
-    const scaleUp   = rlEntries.filter(t => t.entry.rlScalar > 1.0);
-    const scaleDown = rlEntries.filter(t => t.entry.rlScalar < 1.0);
-    const neutral   = rlEntries.filter(t => t.entry.rlScalar === 1.0);
-    const wrOf = (arr) => arr.length === 0 ? 'n/a' : `${Math.round(arr.filter(t => t.analysis?.outcome === 'WIN').length / arr.length * 100)}%`;
-    rlSection = `\n### RL Sizing Agent (${rlEntries.length} trades with scalar)
-Scale-up (x>1.0): ${scaleUp.length} trades, WR ${wrOf(scaleUp)}
-Scale-down (x<1.0): ${scaleDown.length} trades, WR ${wrOf(scaleDown)}
-Neutral (x1.0): ${neutral.length} trades, WR ${wrOf(neutral)}`;
-  }
+  // rlSection moved earlier (audit fix TDZ 2026-05-14) — duplicate removed.
 
   log.info(`Calling AI for trade analysis (${recentTrades.length} recent trades, ${analytics.patterns.totalTrades} total)...`);
 

@@ -18,7 +18,7 @@
 
 import {
   existsSync, copyFileSync, readFileSync, writeFileSync,
-  mkdirSync, readdirSync, unlinkSync,
+  mkdirSync, readdirSync, unlinkSync, renameSync,
 } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -220,13 +220,60 @@ const tag = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 backupCurrent(tag);
 pruneBackups(5);
 
-// Step 6: Deploy
-log('\nStep 6: Deploying v18 to public/ml/...');
+// Step 6: Deploy (atomic copy + post-deploy smoke test)
+// Audit fix (May 2026): previously copyFileSync wrote in-place. On Windows this
+// truncates + streams the bytes — bot reading the file concurrently (drift detector,
+// manual reload) could JSON.parse a half-written file and crash. Now:
+//   1. Copy src → dst.new
+//   2. JSON.parse dst.new to verify integrity
+//   3. Atomic rename dst.new → dst
+//   4. Cross-validate feature counts between xgboost_model.json and norm_browser.json
+log('\nStep 6: Deploying v18 to public/ml/ (atomic)...');
+const stagedFiles = [];
 for (const file of MODEL_FILES) {
   const src = resolve(OUTPUT_V18, file);
-  const dst = resolve(ML_DIR, file);
-  copyFileSync(src, dst);
-  log(`  Copied: ${file}`);
+  const stagedDst = resolve(ML_DIR, file + '.new');
+  copyFileSync(src, stagedDst);
+  // Smoke test: must be valid JSON
+  let parsed;
+  try {
+    parsed = JSON.parse(readFileSync(stagedDst, 'utf-8'));
+  } catch (e) {
+    // Rollback staged files
+    for (const sf of stagedFiles) { try { unlinkSync(sf); } catch {} }
+    try { unlinkSync(stagedDst); } catch {}
+    throw new Error(`Deploy smoke test FAILED — ${file} is not valid JSON: ${e.message}`);
+  }
+  stagedFiles.push(stagedDst);
+  log(`  Staged + JSON-validated: ${file}`);
+}
+
+// Cross-file consistency check: feature count must match between model & norm
+try {
+  const xgbStaged = JSON.parse(readFileSync(resolve(ML_DIR, 'xgboost_model.json.new'), 'utf-8'));
+  const normStaged = JSON.parse(readFileSync(resolve(ML_DIR, 'norm_browser.json.new'), 'utf-8'));
+  const xgbFeats = xgbStaged.feature_names?.length ?? xgbStaged.num_features ?? null;
+  const normFeats = normStaged.feature_names?.length ?? normStaged.num_features ?? null;
+  if (xgbFeats && normFeats && xgbFeats !== normFeats) {
+    for (const sf of stagedFiles) { try { unlinkSync(sf); } catch {} }
+    throw new Error(`Feature-count mismatch: xgb=${xgbFeats} vs norm=${normFeats}`);
+  }
+  const treeCount = xgbStaged.trees?.length ?? 0;
+  if (treeCount === 0) {
+    for (const sf of stagedFiles) { try { unlinkSync(sf); } catch {} }
+    throw new Error(`xgboost_model.json has 0 trees`);
+  }
+  log(`  Cross-check OK: features=${xgbFeats ?? '?'} trees=${treeCount}`);
+} catch (e) {
+  throw new Error(`Deploy cross-check FAILED: ${e.message}`);
+}
+
+// All checks passed — atomic rename to live names
+for (const file of MODEL_FILES) {
+  const stagedDst = resolve(ML_DIR, file + '.new');
+  const liveDst = resolve(ML_DIR, file);
+  renameSync(stagedDst, liveDst);
+  log(`  Promoted: ${file}`);
 }
 
 // Step 7: Write deploy marker

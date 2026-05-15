@@ -51,6 +51,11 @@ let uncertainFills = [];         // Track uncertain fills for manual review (sel
  *
  * @param {string} orderId
  * @param {Object} info - Order details
+ * @param {string} [info.tokenId]
+ * @param {number} [info.price]
+ * @param {number} [info.size]
+ * @param {string} [info.side]
+ * @param {boolean} [info.gtd]
  * @param {boolean} [info.confirmed] - If true, CLOB response included fill data (makingAmount/takingAmount).
  *   This is direct proof of fill — skip trade history verification entirely.
  */
@@ -82,7 +87,7 @@ export function trackOrderPlacement(orderId, { tokenId, price, size, side, confi
  * Only marks "rejected" after FILL_VERIFY_MIN_ATTEMPTS failed checks
  * over FILL_VERIFY_DEADLINE_MS. Otherwise assumes filled.
  *
- * @returns {null | Array<{ orderId, filled: boolean, cancelled?: boolean, timeToFill?: number, adverseSelection?: boolean }>}
+ * @returns {Promise<null | Array<{ orderId: any, filled: boolean, cancelled?: boolean, rejected?: boolean, uncertain?: boolean, verified?: boolean, timeToFill?: number, adverseSelection?: boolean }>>}
  */
 export async function checkPendingFill() {
   if (pendingOrders.size === 0) return null;

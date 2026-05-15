@@ -11,19 +11,19 @@ import { createLogger } from '../logger.js';
 
 const log = createLogger('Safety');
 
-/** M2: Epsilon for float comparison — prevents boundary edge cases */
+/** M2: Epsilon for float comparison -- prevents boundary edge cases */
 const EPSILON = 1e-9;
 
-// H7: Hourly trade frequency limiter — prevents death by a thousand cuts
+// H7: Hourly trade frequency limiter -- prevents death by a thousand cuts
 const MAX_TRADES_PER_HOUR = 10;
 const tradeTimestamps = []; // ring buffer of recent trade timestamps
 
 /**
- * Circuit breaker — should the bot halt trading?
+ * Circuit breaker -- should the bot halt trading?
  * @returns {{ halt: boolean, reason: string }}
  */
 export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownPct }) {
-  // Validate inputs — missing data means we can't verify safety
+  // Validate inputs -- missing data means we can't verify safety
   if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(bankroll) || !Number.isFinite(consecutiveLosses) || !Number.isFinite(drawdownPct)) {
     return { halt: true, reason: 'Circuit breaker inputs invalid (missing bankroll, PnL, loss streak, or drawdown data)' };
   }
@@ -49,7 +49,7 @@ export function shouldHalt({ dailyPnLPct, bankroll, consecutiveLosses, drawdownP
 }
 
 /**
- * Audit fix M: Emergency cut-loss check — circuit breaker re-evaluated while position is open.
+ * Audit fix M: Emergency cut-loss check -- circuit breaker re-evaluated while position is open.
  * Returns true if drawdown/daily loss exceeds thresholds, meaning caller should initiate cut-loss.
  * @returns {{ shouldCut: boolean, reason: string }}
  */
@@ -57,8 +57,8 @@ export function shouldEmergencyCut({ dailyPnLPct, drawdownPct }) {
   if (!Number.isFinite(dailyPnLPct) || !Number.isFinite(drawdownPct)) {
     return { shouldCut: false, reason: '' };
   }
-  // Audit v2 M4: 90%→75% — old 90% left only $0.67 gap from circuit breaker (one trade).
-  // 75% gives ~4% buffer ($1.69 at $45 bankroll) — enough time to actually execute the cut.
+  // Audit v2 M4: 90%→75% -- old 90% left only $0.67 gap from circuit breaker (one trade).
+  // 75% gives ~4% buffer ($1.69 at $45 bankroll) -- enough time to actually execute the cut.
   const dailyThreshold = BOT_CONFIG.maxDailyLossPct * 0.75;
   const drawdownThreshold = BOT_CONFIG.maxDrawdownPct * 0.75;
 
@@ -111,7 +111,7 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, available
     return { valid: false, reason: `Bet $${betAmount.toFixed(2)} exceeds available bankroll $${effectiveBankroll.toFixed(2)}` };
   }
 
-  // H7: Hourly trade frequency limit — prevents rapid-fire losses
+  // H7: Hourly trade frequency limit -- prevents rapid-fire losses
   const oneHourAgo = Date.now() - 3600_000;
   const recentTrades = tradeTimestamps.filter(ts => ts > oneHourAgo);
   if (recentTrades.length >= MAX_TRADES_PER_HOUR) {
@@ -123,7 +123,7 @@ export function validateTrade({ rec, betSizing, timeLeftMin, bankroll, available
 
 /**
  * H7: Record a trade timestamp for frequency tracking.
- * @param {function} [persistFn] — optional callback to persist timestamps (called with array)
+ * @param {function} [persistFn] -- optional callback to persist timestamps (called with array)
  */
 export function recordTradeTimestamp(persistFn) {
   tradeTimestamps.push(Date.now());
@@ -169,7 +169,7 @@ export function validatePrice(price) {
   if (price === null || price === undefined || !Number.isFinite(price)) {
     return { valid: false, reason: 'No market price available' };
   }
-  // H5: Tightened from 0.02-0.98 — blocks toxic 2-5c entries and 95-98c leveraged bets
+  // H5: Tightened from 0.02-0.98 -- blocks toxic 2-5c entries and 95-98c leveraged bets
   if (price < 0.05 || price > 0.95) {
     return { valid: false, reason: `Price ${price.toFixed(3)} outside safe range (0.05-0.95)` };
   }

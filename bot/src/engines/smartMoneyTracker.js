@@ -134,9 +134,9 @@ export function updateSmartFlow({ marketSlug, timeLeftMin, imbalanceDelta, flowS
  * Get smart money flow signal for current market.
  *
  * @returns {{
- *   direction: 'UP'|'DOWN'|'NEUTRAL',
- *   strength: number,       // 0-1
- *   confidence: number,     // 0-1
+ *   direction: string,
+ *   strength: number,
+ *   confidence: number,
  *   earlyFlow: number,
  *   midFlow: number,
  *   lateFlow: number,
@@ -144,6 +144,7 @@ export function updateSmartFlow({ marketSlug, timeLeftMin, imbalanceDelta, flowS
  *   window: string,
  *   sampleCount: number,
  *   agreesWithSide: function(string): boolean,
+ *   priceFlowAgrees?: boolean,
  * }}
  */
 export function getSmartFlowSignal() {
@@ -157,7 +158,8 @@ export function getSmartFlowSignal() {
     weightedFlow: 0,
     window: 'INSUFFICIENT',
     sampleCount: state.sampleCount,
-    agreesWithSide: () => true, // insufficient data = don't block
+    // Audit fix Tier-1 HIGH (2026-05-14): accept arg to match declared signature.
+    agreesWithSide: (_side) => true, // insufficient data = don't block
   };
 
   // Need minimum samples to make a call

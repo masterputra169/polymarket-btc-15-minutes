@@ -53,9 +53,11 @@ export async function fetchLastPrice() {
 /**
  * Fetch live events from Polymarket Gamma API.
  */
-async function fetchLiveEventsBySeriesId({ seriesId, limit = 20 }) {
-  const url = `${CONFIG.gammaBaseUrl}/events?series_id=${seriesId}&active=true&closed=false&limit=${limit}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+async function fetchLiveEventsBySeriesId({ seriesId, limit = 5 }) {
+  // order=endDate ascending puts the currently-live event first; default sort
+  // returned oldest expired events and Gamma timed out for limit>=10 on this series.
+  const url = `${CONFIG.gammaBaseUrl}/events?series_id=${seriesId}&active=true&closed=false&order=endDate&ascending=true&limit=${limit}`;
+  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
   if (!res.ok) throw new Error(`Gamma events error: ${res.status}`);
   const data = await res.json();
   return Array.isArray(data) ? data : [];
@@ -79,7 +81,7 @@ export async function fetchPolymarketSnapshot() {
   try {
     const events = await fetchLiveEventsBySeriesId({
       seriesId: CONFIG.polymarket.seriesId,
-      limit: 25,
+      limit: 5,
     });
     const markets = flattenEventMarkets(events);
     const market = pickLatestLiveMarket(markets);
@@ -132,8 +134,8 @@ export async function fetchPolymarketSnapshot() {
     // Bot always fetches orderbook via REST (no WebSocket)
     let upBuy = null;
     let downBuy = null;
-    let upBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null };
-    let downBookSummary = { ...upBookSummary };
+    let upBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null, error: false };
+    let downBookSummary = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: null, askLiquidity: null, error: false };
 
     if (upTokenId && downTokenId) {
       try {

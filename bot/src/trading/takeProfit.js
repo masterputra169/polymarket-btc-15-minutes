@@ -48,7 +48,7 @@ let consecutiveTpPolls = 0;
  * @param {number|null} params.btcDelta1m - BTC price change per minute ($/min)
  * @param {number|null} params.entryEnsembleProb - Ensemble prob for our side AT ENTRY time (0-1)
  * @param {number|null} params.bestEdge - Current best edge for our side (can be negative)
- * @returns {{ shouldTakeProfit: boolean, reason: string, sellPrice?: number, gainPct?: number, recoveryAmount?: number }}
+ * @returns {{ shouldTakeProfit: boolean, reason: string, sellPrice?: number, gainPct?: number, recoveryAmount?: number, weakeners?: any }}
  */
 export function evaluateTakeProfit({
   position, currentTokenPrice, orderbook, timeLeftMin,

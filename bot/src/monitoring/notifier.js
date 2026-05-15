@@ -72,7 +72,7 @@ function extractInlineButton(text) {
 /**
  * Send message via Telegram Bot API.
  * Auto-converts <a href> links to inline keyboard buttons.
- * @returns {boolean} true if sent successfully
+ * @returns {Promise<boolean>} true if sent successfully
  */
 async function sendTelegram(text) {
   // Read from process.env directly — BOT_CONFIG captures empty strings because
@@ -106,7 +106,7 @@ async function sendTelegram(text) {
 
 /**
  * Send message via Discord webhook.
- * @returns {boolean} true if sent successfully
+ * @returns {Promise<boolean>} true if sent successfully
  */
 async function sendDiscord(text) {
   const webhookUrl = BOT_CONFIG.discordWebhookUrl;

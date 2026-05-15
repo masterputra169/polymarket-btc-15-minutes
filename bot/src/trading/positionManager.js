@@ -24,7 +24,7 @@ let pollTimer = null;
 /**
  * Fetch positions from Polymarket Data API.
  * @param {string} walletAddress - Wallet address to query
- * @returns {Array} Parsed position objects
+ * @returns {Promise<Array>} Parsed position objects
  */
 export async function fetchPositions(walletAddress) {
   if (!walletAddress) return [];

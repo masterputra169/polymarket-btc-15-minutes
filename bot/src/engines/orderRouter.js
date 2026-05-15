@@ -101,5 +101,6 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
     return { route: 'LIMIT', reason: `ml${(mlConf * 100) | 0}%+window${elapsedMin.toFixed(1)}m` };
   }
 
-  return { route: 'WAIT', reason: `ml${(mlConf * 100) | 0}%_ask${bestAsk != null ? (bestAsk * 100) | 0 + '¢' : '?'}` };
+  // Audit fix Tier-1 (2026-05-15): parenthesize — `| 0 + '¢'` parsed as `| (0+'¢')` (NaN).
+  return { route: 'WAIT', reason: `ml${(mlConf * 100) | 0}%_ask${bestAsk != null ? (((bestAsk * 100) | 0) + '¢') : '?'}` };
 }

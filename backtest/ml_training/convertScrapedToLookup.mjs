@@ -17,7 +17,15 @@ import { createInterface } from 'readline';
 const DATA_DIR = './polymarket_btc15m_data';
 const MASTER_CSV = `${DATA_DIR}/01_btc15m_master.csv`;
 const PRICE_CSV = `${DATA_DIR}/price_history.csv`;
-const OUTPUT = './polymarket_lookup_v13.json';
+
+// Audit fix (May 2026): output path parameterized via --output. Previously hardcoded
+// to polymarket_lookup_v13.json which got silently overwritten on every rerun
+// regardless of pipeline version (v15, v16, v17, v22...).
+function parseArg(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`);
+  return (i >= 0 && i + 1 < process.argv.length) ? process.argv[i + 1] : fallback;
+}
+const OUTPUT = parseArg('output', './polymarket_lookup_v13.json');
 
 // ── CSV parser that handles quoted fields with commas ──
 function parseCSVLine(line) {
@@ -130,8 +138,11 @@ for await (const line of rl) {
   const marketStartSec = parseInt(slugTs);
   const secsIntoMarket = timestampUnix - marketStartSec;
 
-  // Keep prices within market window with buffer
-  if (secsIntoMarket < -60 || secsIntoMarket > 960) continue;
+  // Keep prices within market window only.
+  // Audit fix (May 2026): tightened from [-60, 960] to [0, 900]. Post-resolution
+  // ticks (>900s) can leak resolved outcome into features that interpolate near
+  // window end. Pre-market ticks (<0s) are noise from quote pinning.
+  if (secsIntoMarket < 0 || secsIntoMarket > 900) continue;
 
   lookup[slugTs].prices.push([secsIntoMarket, price]);
   matchedCount++;
@@ -156,9 +167,12 @@ for (const key of Object.keys(lookup)) {
 const avgPts = marketsWithPrices > 0 ? (totalPricePoints / marketsWithPrices).toFixed(1) : 0;
 console.log(`✅ ${marketsWithPrices}/${Object.keys(lookup).length} markets have price data (avg ${avgPts} points/market)`);
 
-// ── Step 4: Write output ──
+// ── Step 4: Write output (atomic) ──
+// Audit fix (May 2026): write .tmp + rename to prevent corruption on Ctrl-C/OOM.
 console.log(`💾 Writing ${OUTPUT}...`);
-fs.writeFileSync(OUTPUT, JSON.stringify(lookup));
+const tmpPath = OUTPUT + '.tmp';
+fs.writeFileSync(tmpPath, JSON.stringify(lookup));
+fs.renameSync(tmpPath, OUTPUT);
 const sizeMB = (fs.statSync(OUTPUT).size / 1024 / 1024).toFixed(1);
 console.log(`✅ Saved ${OUTPUT} (${sizeMB} MB, ${Object.keys(lookup).length} markets)`);
 

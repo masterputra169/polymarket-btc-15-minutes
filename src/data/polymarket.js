@@ -89,7 +89,7 @@ export function summarizeOrderBook(book, depthLevels = 5) {
   const bidLiquidity = bids.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
   const askLiquidity = asks.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
 
-  return { bestBid, bestAsk, spread, bidLiquidity, askLiquidity };
+  return { bestBid, bestAsk, spread, bidLiquidity, askLiquidity, error: false };
 }
 
 /**

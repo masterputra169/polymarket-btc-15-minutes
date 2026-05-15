@@ -51,6 +51,7 @@ export function resetMarketUpHistory() {
  * @param {number} params.candleWindowMinutes - Candle window config
  * @param {Function} params.getMLPrediction - ML prediction function
  * @param {number|null} params.fundingRate - Funding rate (null if blocked)
+ * @param {Object|null} [params.smartFlowSignal] - Smart-money flow signal {direction, strength, ...} or null
  * @param {number|null} params.oraclePrice - Live Chainlink price (PolyLive WS → same source as resolution)
  * @returns {Object} All computed signal data
  */

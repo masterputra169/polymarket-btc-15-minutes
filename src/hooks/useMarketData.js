@@ -22,6 +22,9 @@ import { computeAllIndicators } from './computeIndicators.js';
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
+/**
+ * @param {{ clobWs?: any }} [opts]
+ */
 export function useMarketData({ clobWs } = {}) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);

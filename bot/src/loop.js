@@ -254,6 +254,7 @@ import {
 import { reconcileNow } from './trading/journalReconciler.js';
 import { triggerRedeem } from './trading/redeemer.js';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.js';
+import { captureForShadow } from './monitoring/shadowCapture.js';
 import { executeArbitrage, executeDirectionalTrade } from './engines/tradePipeline.js';
 import {
   checkPreMarketEntry,
@@ -453,6 +454,14 @@ export async function pollOnce() {
   const _pollStart = performance.now();
 
   try {
+    // Audit fix (2026-05-14): forward-declare in OUTER try-block scope so limit-fill
+    // async handlers (~lines 2063, 2097) and canonical assignment (~line 2189) all
+    // share the same binding. Previously declared with `let` at canonical site → TDZ.
+    let alreadyHasPosition = false;
+    // Audit fix (2026-05-14 Tier-1): timeLeftMin forward-declare. Phantom-fill-on-market-
+    // switch handler at line ~939 references timeLeftMin BEFORE canonical const at ~line 1146.
+    // Same TDZ pattern. Default null; real value assigned downstream.
+    let timeLeftMin = null;
     // H4 audit fix: applyPendingSync inside try block — if it throws, polling guard still releases in finally
     applyPendingSync(getBankroll, setBankroll);
     pollCounter++;
@@ -1138,7 +1147,9 @@ export async function pollOnce() {
     const feedbackStats = getAccuracyStats();
     const settlementMs = poly.market?.endDate ? new Date(poly.market.endDate).getTime() : null;
     const settlementLeftMin = settlementMs ? (settlementMs - Date.now()) / 60_000 : null;
-    const timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
+    // timeLeftMin forward-declared at try-block start (audit fix Tier-1 2026-05-14).
+    // Reassign here as the canonical value.
+    timeLeftMin = settlementLeftMin ?? timing.remainingMinutes;
 
     // Market transition guard
     const inTransition = marketTransitionMs > 0 && (now - marketTransitionMs) < MARKET_TRANSITION_GRACE_MS;
@@ -1204,6 +1215,24 @@ export async function pollOnce() {
 
     // Null out MC when disabled — prevents noise from GBM random walk affecting sizing/gates
     const mcResult = BOT_CONFIG.monteCarlo.enabled ? mcResultRaw : null;
+
+    // ── Shadow capture (v19 validation, 2026-05-14) ──
+    // Writes featureBuf + v16 prediction to JSONL so offline v19 replay can
+    // compute apples-to-apples comparison. Zero-cost when SHADOW_CAPTURE!=true.
+    {
+      const _phase = (timeLeftMin == null) ? 'UNKNOWN'
+        : timeLeftMin > 10 ? 'EARLY'
+        : timeLeftMin > 5 ? 'MID'
+        : timeLeftMin > 2 ? 'LATE' : 'VERY_LATE';
+      captureForShadow({
+        marketSlug, slugTs: poly?.slugTs ?? null, timeLeftMin,
+        // Audit fix Tier-1 HIGH (2026-05-14): pass .value, not whole {slug, value, updatedAt}.
+        phase: _phase, lastPrice, priceToBeat: priceToBeat?.value ?? null,
+        mlResult, regime: regimeInfo?.regime ?? null, session,
+        ruleProbUp: scored?.adjustedUp ?? null,
+        decision: null, // populated below if a trade executes; kept null for snapshot-only
+      });
+    }
 
     // ── 5a0. LLM Regime snapshot feed (throttled — every ~50 polls, cheap storage) ──
     // The classifier reads this snapshot on its own 5-min cadence. Calling every ~50 polls
@@ -1698,8 +1727,10 @@ export async function pollOnce() {
         if (rcvSize >= 1 && rcvPrice > 0 && rcvPrice < 0.99) {
           log.info(`RECOVERY BUY: ${rcvSide} ${rcvSize} shares @ $${rcvPrice.toFixed(3)} ($${(rcvSize * rcvPrice).toFixed(2)})`);
           try {
+            // Audit fix Tier-1 HIGH (2026-05-14): add orderId + actualCost to all recordTrade calls.
+            const rcvCost = Math.round(rcvSize * rcvPrice * 100) / 100;
             if (BOT_CONFIG.dryRun) {
-              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug });
+              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: null, actualCost: rcvCost });
               confirmFill();
               captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
               entryRegime = regimeInfo?.regime ?? null;
@@ -1707,8 +1738,9 @@ export async function pollOnce() {
             } else {
               const rcvResult = await placeBuyOrder({ tokenId: rcvTokenId, price: rcvPrice, size: rcvSize });
               const rcvOrderId = rcvResult?.orderId ?? null;
-              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: rcvOrderId });
-              trackOrderPlacement(rcvOrderId);
+              recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: rcvOrderId, actualCost: rcvCost });
+              // Audit fix Tier-1 HIGH (2026-05-14): trackOrderPlacement requires 2 args (orderId + metadata).
+              if (rcvOrderId) trackOrderPlacement(rcvOrderId, { tokenId: rcvTokenId, price: rcvPrice, size: rcvSize, side: rcvSide, confirmed: false });
               captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
               entryRegime = regimeInfo?.regime ?? null;
               if (!BOT_CONFIG.dryRun && rcvTokenId) {
@@ -2159,7 +2191,9 @@ export async function pollOnce() {
     if (profitTargetPaused) {
       log.debug('Profit target reached — skipping trade entry this poll (position management still active)');
     }
-    let alreadyHasPosition = hasOpenPosition(marketSlug);
+    // alreadyHasPosition forward-declared at try-block start (audit fix 2026-05-14, TDZ).
+    // OR-merge: preserve true from limit-fill paths above; otherwise check current state.
+    alreadyHasPosition = alreadyHasPosition || hasOpenPosition(marketSlug);
     const hasPending = hasPendingOrder();
 
     const notifyTradeFn = process.env.TELEGRAM_NOTIFY_TRADES === 'true'
@@ -2216,7 +2250,8 @@ export async function pollOnce() {
             );
 
             if (BOT_CONFIG.dryRun) {
-              recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmPrice, size: pmShares, marketSlug });
+              // Audit fix Tier-1 HIGH (2026-05-14): add orderId + actualCost.
+              recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmPrice, size: pmShares, marketSlug, orderId: null, actualCost: pmOrderCost });
               confirmFill();
               captureEntrySnapshot({ side: 'UP', tokenPrice: pmPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmOrderCost, size: pmShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
               entryRegime = regimeInfo?.regime ?? null;
@@ -2256,7 +2291,8 @@ export async function pollOnce() {
 
                 setPendingCost(0);
                 if (pmOrderId) trackOrderPlacement(pmOrderId, { tokenId: pmTokenId, price: limitPrice, size: pmLimitShares, side: 'UP', confirmed: false, gtd: true });
-                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId });
+                // Audit fix Tier-1 HIGH (2026-05-14): add actualCost.
+                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId, actualCost: pmLimitCost });
                 entryRegime = regimeInfo?.regime ?? null;
                 captureEntrySnapshot({ side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
                 onPreMarketEntry(limitPrice, marketSlug);

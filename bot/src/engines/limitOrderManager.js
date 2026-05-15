@@ -151,6 +151,8 @@ function detectSignalFlip({ side, mlSide, mlConfidence, ensembleProb, btcPrice, 
  * @param {boolean} params.isHalted - Circuit breaker active
  * @param {string} params.marketSlug - Current market slug
  * @param {number} params.elapsedMin - Minutes since market opened
+ * @param {number|null} [params.btcDelta1m] - BTC 1-minute price delta ($)
+ * @param {number|null} [params.spread] - Orderbook spread (decimal, e.g. 0.02 = 2%)
  * @returns {{ shouldPlace: boolean, side: string|null, targetPrice: number|null, reason: string }}
  */
 export function evaluateLimitEntry({
@@ -386,6 +388,7 @@ export async function placeLimitOrder({
       cancelReason: null,
       lastCheckAt: 0,
       evalCount: 0,
+      nullCheckCount: 0,  // Audit fix Tier-1 HIGH (2026-05-15): initialize to match state shape
     };
 
     log.info(

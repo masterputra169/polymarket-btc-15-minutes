@@ -6,6 +6,9 @@ import { ensureLoaded, markDirty, MAX_HISTORY, clearPersistTimer } from './state
 import * as S from './state.js';
 import { extractSignalSnapshot, updateSignalPerf } from './signalPerf.js';
 
+/**
+ * @param {{ side: any, modelProb: any, marketPrice: any, btcPrice: any, priceToBeat: any, marketSlug: any, regime: any, mlConfidence: any, mlSide?: any, breakdown: any }} p
+ */
 export function recordPrediction({ side, modelProb, marketPrice, btcPrice, priceToBeat, marketSlug, regime, mlConfidence, mlSide, breakdown }) {
   ensureLoaded();
 

@@ -31,7 +31,7 @@
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import { createLogger } from '../logger.js';
 import { notify } from './notifier.js';
 import { BOT_CONFIG } from '../config.js';
@@ -171,11 +171,17 @@ function triggerRetrain(reason) {
   log.info('Triggering auto-retrain due to concept drift...');
   try {
     const retrainScript = resolve(__dirname, '..', 'autoRetrain.js');
-    execSync(
-      `node --env-file="${resolve(ROOT, 'bot', '.env')}" "${retrainScript}" --force`,
-      { cwd: ROOT, timeout: 0, detached: true, stdio: 'ignore' }
+    // Audit fix (2026-05-14 Tier-1): use spawn() with detached, NOT execSync.
+    // execSync ignores `detached` option and blocks until completion. spawn()
+    // with detached:true + unref() lets retrain run as background process so
+    // bot continues trading without waiting hours for retrain to finish.
+    const child = spawn(
+      'node',
+      [`--env-file=${resolve(ROOT, 'bot', '.env')}`, retrainScript, '--force'],
+      { cwd: ROOT, detached: true, stdio: 'ignore' }
     );
-    log.info('Auto-retrain process spawned');
+    child.unref();  // Allow parent to exit independently
+    log.info(`Auto-retrain process spawned (pid=${child.pid})`);
     return true;
   } catch (err) {
     log.error(`Failed to spawn retrain: ${err.message}`);

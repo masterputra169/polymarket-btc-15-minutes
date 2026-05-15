@@ -371,7 +371,7 @@ function roundMoney(v) { return Math.round(v * 100) / 100; }
 
 function computeHourly(trades) {
   const buckets = Array.from({ length: 24 }, (_, h) => ({
-    hour: h, trades: 0, wins: 0, losses: 0, pnl: 0,
+    hour: h, trades: 0, wins: 0, losses: 0, pnl: 0, wr: 0,
   }));
 
   for (const t of trades) {
@@ -418,7 +418,7 @@ function computeSessions(trades) {
 }
 
 function computeDayOfWeek(trades) {
-  const buckets = DOW_NAMES.map(d => ({ day: d, trades: 0, wins: 0, losses: 0, pnl: 0 }));
+  const buckets = DOW_NAMES.map(d => ({ day: d, trades: 0, wins: 0, losses: 0, pnl: 0, wr: 0 }));
 
   for (const t of trades) {
     const ts = t.entry?.enteredAt ?? t._ts;

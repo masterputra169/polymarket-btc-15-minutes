@@ -35,7 +35,7 @@ const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
 const CHAINSTACK_WSS = 'wss://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
 const CHAINSTACK_HTTP = CHAINSTACK_WSS.replace(/^wss:\/\//, 'https://');
 
-// Single authoritative endpoint — no round-robin needed with dedicated node
+// Single authoritative endpoint -- no round-robin needed with dedicated node
 const RPC_ENDPOINTS = [CHAINSTACK_HTTP];
 let rpcIndex = 0;
 
@@ -56,8 +56,8 @@ let intervalId = null;
 let provider = null;
 let signer = null;
 let redeemedSet = new Set(); // conditionIds already redeemed
-let pendingQueue = []; // [{ conditionId, addedAt }] — self-tracked positions awaiting redeem
-const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours — expire stale entries
+let pendingQueue = []; // [{ conditionId, addedAt }] -- self-tracked positions awaiting redeem
+const PENDING_MAX_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours -- expire stale entries
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -108,13 +108,13 @@ async function rpcCall(method, params) {
 
 /**
  * Create ethers provider + signer. Uses a single JsonRpcProvider for tx
- * submission (rare — only on actual redeem). All read calls go through
+ * submission (rare -- only on actual redeem). All read calls go through
  * rpcCall() with round-robin retry across all endpoints.
  *
  * We avoid FallbackProvider because it probes all endpoints at startup
  * and retries every 1s on rate-limited nodes, spamming the console.
  */
-/** Polygon mainnet — used as staticNetwork to skip auto-detect probes. */
+/** Polygon mainnet -- used as staticNetwork to skip auto-detect probes. */
 const POLYGON_NETWORK = new ethers.Network('matic', 137);
 
 function initProvider() {
@@ -169,21 +169,21 @@ async function sendTxWithFallback(buildTx) {
       allZeroBalance = false;
 
       // If we already submitted a tx on a previous RPC, don't re-submit
-      // (the tx may be pending on-chain — re-sending risks nonce conflicts)
+      // (the tx may be pending on-chain -- re-sending risks nonce conflicts)
       if (txSubmitted) {
-        log.debug(`Tx already submitted — skipping ${host} to avoid double-submit`);
+        log.debug(`Tx already submitted -- skipping ${host} to avoid double-submit`);
         continue;
       }
 
       const tx = await buildTx(s);
-      txSubmitted = true; // Mark as submitted BEFORE wait() — tx is now on-chain
+      txSubmitted = true; // Mark as submitted BEFORE wait() -- tx is now on-chain
       const receipt = await tx.wait();
       return receipt.hash;
     } catch (err) {
       lastErr = err;
       log.debug(`Tx via ${host} failed: ${err.message}`);
       if (txSubmitted) {
-        // Tx was submitted but wait() failed — don't retry on another RPC
+        // Tx was submitted but wait() failed -- don't retry on another RPC
         throw new Error(`Tx submitted but confirmation failed: ${err.message}`);
       }
       await sleep(1500);
@@ -191,7 +191,7 @@ async function sendTxWithFallback(buildTx) {
   }
 
   if (allZeroBalance) {
-    throw new Error('All RPCs report 0 MATIC — stale data or wallet needs MATIC top-up');
+    throw new Error('All RPCs report 0 MATIC -- stale data or wallet needs MATIC top-up');
   }
   throw lastErr ?? new Error('All RPC endpoints failed for tx');
 }
@@ -206,7 +206,7 @@ async function checkMaticBalance() {
     const result = await rpcCall('eth_getBalance', [signer.address, 'latest']);
     const matic = Number(ethers.formatEther(BigInt(result)));
     if (matic < MIN_MATIC_FOR_TX) {
-      log.warn(`Low MATIC balance: ${matic.toFixed(4)} MATIC (need >${MIN_MATIC_FOR_TX}) — redemption txs may fail`);
+      log.warn(`Low MATIC balance: ${matic.toFixed(4)} MATIC (need >${MIN_MATIC_FOR_TX}) -- redemption txs may fail`);
     } else {
       log.debug(`MATIC balance: ${matic.toFixed(4)}`);
     }
@@ -229,7 +229,7 @@ async function findRedeemablePositions() {
   const proxyAddr = process.env.POLYMARKET_PROXY_ADDRESS;
   const holder = proxyAddr || getWalletAddress();
   if (!holder) {
-    log.warn('No wallet address available — cannot query positions');
+    log.warn('No wallet address available -- cannot query positions');
     return [];
   }
 
@@ -323,7 +323,7 @@ async function findRedeemablePositions() {
           // Handle boolean or string "true" for winner field
           const winnerToken = tokens.find(t => t.winner === true || t.winner === 'true' || t.winner === 1);
           if (winnerToken) {
-            log.info(`${short}... resolved via CLOB — winner: ${winnerToken.outcome}`);
+            log.info(`${short}... resolved via CLOB -- winner: ${winnerToken.outcome}`);
             redeemable.push({ conditionId: pos.conditionId, winner: winnerToken.outcome, question: market.question ?? '' });
             resolved = true;
           } else {
@@ -358,7 +358,7 @@ async function findRedeemablePositions() {
             log.debug(`${short}... resolved but no winner outcome (Gamma)`);
             continue;
           }
-          log.info(`${short}... resolved via Gamma — winner: ${winnerOutcome}`);
+          log.info(`${short}... resolved via Gamma -- winner: ${winnerOutcome}`);
           redeemable.push({ conditionId: pos.conditionId, winner: winnerOutcome, question: gm.question ?? gm.title ?? '' });
         }
       }
@@ -386,10 +386,41 @@ export function addPendingRedeem(conditionId) {
 }
 
 /**
+ * Sync from positionTracker's state.pendingRedeems (state.json) into local queue.
+ * positionTracker pushes there on every winning settleTrade. This bridges the gap
+ * so redeemer auto-redeems wins without manual UI clicks.
+ */
+function syncFromPositionTracker() {
+  try {
+    const stateFile = BOT_CONFIG.stateFile;
+    if (!stateFile || !existsSync(stateFile)) return;
+    const raw = JSON.parse(readFileSync(stateFile, 'utf-8'));
+    const tracked = Array.isArray(raw?.pendingRedeems) ? raw.pendingRedeems : [];
+    let added = 0;
+    for (const entry of tracked) {
+      const cid = entry?.conditionId;
+      if (!cid || redeemedSet.has(cid)) continue;
+      if (pendingQueue.some(p => p.conditionId === cid)) continue;
+      pendingQueue.push({ conditionId: cid, addedAt: entry.settledAt ?? Date.now() });
+      added++;
+    }
+    if (added > 0) {
+      log.info(`Synced ${added} pending redeem(s) from positionTracker state`);
+      savePersistence();
+    }
+  } catch (err) {
+    log.debug(`syncFromPositionTracker failed: ${err.message}`);
+  }
+}
+
+/**
  * Check self-tracked pending queue for redeemable positions.
  * Parallel to findRedeemablePositions() but uses our own queue instead of Data API.
  */
 async function findSelfTrackedRedeemable() {
+  // Bridge: pull positionTracker's state.pendingRedeems → our queue first
+  syncFromPositionTracker();
+
   // Expire old entries
   const now = Date.now();
   const before = pendingQueue.length;
@@ -420,7 +451,7 @@ async function findSelfTrackedRedeemable() {
           const tokens = Array.isArray(market.tokens) ? market.tokens : [];
           const winnerToken = tokens.find(t => t.winner === true || t.winner === 'true' || t.winner === 1);
           if (winnerToken) {
-            log.info(`Self-tracked ${short}... resolved via CLOB — winner: ${winnerToken.outcome}`);
+            log.info(`Self-tracked ${short}... resolved via CLOB -- winner: ${winnerToken.outcome}`);
             redeemable.push({ conditionId: entry.conditionId, winner: winnerToken.outcome, question: market.question ?? '' });
             resolved = true;
           }
@@ -445,7 +476,7 @@ async function findSelfTrackedRedeemable() {
           if (isResolved) {
             const winnerOutcome = gm.resolvedOutcome ?? gm.winner_outcome ?? gm.winnerOutcome ?? '';
             if (winnerOutcome) {
-              log.info(`Self-tracked ${short}... resolved via Gamma — winner: ${winnerOutcome}`);
+              log.info(`Self-tracked ${short}... resolved via Gamma -- winner: ${winnerOutcome}`);
               redeemable.push({ conditionId: entry.conditionId, winner: winnerOutcome, question: gm.question ?? gm.title ?? '' });
               resolved = true;
             }
@@ -521,7 +552,7 @@ async function hasRedeemableBalance(conditionId, holder) {
 async function redeemDirect(conditionId) {
   return sendTxWithFallback(async (s) => {
     const ctf = new ethers.Contract(CTF_ADDRESS, CTF_ABI, s);
-    // Explicit gasLimit skips eth_estimateGas — avoids inflated estimates on free RPCs
+    // Explicit gasLimit skips eth_estimateGas -- avoids inflated estimates on free RPCs
     return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS, { gasLimit: 500_000n });
   });
 }
@@ -582,14 +613,14 @@ async function redeemViaSafe(conditionId, safeAddr) {
     nonce,
   };
 
-  // Sign with EOA (sole owner) — signing is local, no RPC needed
+  // Sign with EOA (sole owner) -- signing is local, no RPC needed
   const pk = process.env.POLYMARKET_PRIVATE_KEY;
   const sigWallet = new ethers.Wallet(pk);
   const sig = await sigWallet.signTypedData(domain, types, value);
 
   return sendTxWithFallback(async (s) => {
     const safe = new ethers.Contract(safeAddr, SAFE_ABI, s);
-    // Explicit gasLimit skips eth_estimateGas — avoids inflated estimates on free RPCs
+    // Explicit gasLimit skips eth_estimateGas -- avoids inflated estimates on free RPCs
     return safe.execTransaction(
       CTF_ADDRESS,
       0, // value
@@ -654,7 +685,7 @@ function savePersistence() {
     const dir = dirname(filePath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-    // Prune to last 500 entries — prevents unbounded growth over months
+    // Prune to last 500 entries -- prevents unbounded growth over months
     const arr = [...redeemedSet];
     if (arr.length > 500) {
       redeemedSet = new Set(arr.slice(-500));
@@ -669,7 +700,7 @@ function savePersistence() {
     try {
       renameSync(tmpPath, filePath);
     } catch (renameErr) {
-      log.debug(`Rename failed (${renameErr.message}) — direct write`);
+      log.debug(`Rename failed (${renameErr.message}) -- direct write`);
       writeFileSync(filePath, data);
     }
   } catch (err) {
@@ -682,14 +713,14 @@ function savePersistence() {
 let redeemCycleRunning = false;
 
 async function redeemCycle() {
-  if (redeemCycleRunning) { log.debug('Redeem cycle already running — skipping'); return; }
+  if (redeemCycleRunning) { log.debug('Redeem cycle already running -- skipping'); return; }
   redeemCycleRunning = true;
   try {
   log.info('Starting redemption cycle...');
 
   const maticBal = await checkMaticBalance();
   if (maticBal >= 0 && maticBal < MIN_MATIC_FOR_TX) {
-    log.warn(`Skipping redemption — MATIC balance ${maticBal.toFixed(4)} too low (need >${MIN_MATIC_FOR_TX})`);
+    log.warn(`Skipping redemption -- MATIC balance ${maticBal.toFixed(4)} too low (need >${MIN_MATIC_FOR_TX})`);
     return;
   }
 
@@ -716,7 +747,7 @@ async function redeemCycle() {
   const holder = proxyAddr || getWalletAddress();
 
   // ── Batch balance check (all in parallel) ──
-  log.info(`Found ${redeemable.length} redeemable position(s) — checking on-chain balances in parallel...`);
+  log.info(`Found ${redeemable.length} redeemable position(s) -- checking on-chain balances in parallel...`);
 
   const balanceResults = await Promise.allSettled(
     redeemable.map(pos =>
@@ -732,7 +763,7 @@ async function redeemCycle() {
       if (r.value.has) {
         toRedeem.push(r.value.pos);
       } else {
-        log.debug(`No on-chain balance for ${r.value.pos.conditionId.slice(0, 16)}... — already redeemed`);
+        log.debug(`No on-chain balance for ${r.value.pos.conditionId.slice(0, 16)}... -- already redeemed`);
         redeemedSet.add(r.value.pos.conditionId);
         // Remove from pending queue (zero balance = already redeemed)
         pendingQueue = pendingQueue.filter(p => p.conditionId !== r.value.pos.conditionId);
@@ -750,7 +781,7 @@ async function redeemCycle() {
     return;
   }
 
-  // ── Sequential tx submission (nonce safety — same wallet) ──
+  // ── Sequential tx submission (nonce safety -- same wallet) ──
   log.info(`Submitting ${toRedeem.length} redemption tx(s)...`);
 
   let redeemed = 0;
@@ -787,7 +818,7 @@ async function redeemCycle() {
     try {
       const { queueUsdcSyncAfterRedeem } = await import('../engines/usdcSync.js');
       if (queueUsdcSyncAfterRedeem) queueUsdcSyncAfterRedeem();
-    } catch { /* usdcSync not available — sync will happen on next 30s cycle */ }
+    } catch { /* usdcSync not available -- sync will happen on next 30s cycle */ }
   }
 
   log.info(`Redemption cycle complete: ${redeemed} redeemed, ${failed} failed out of ${toRedeem.length} positions`);
@@ -803,17 +834,17 @@ let pendingTriggerTimer = null;
  * Called from loop.js after market settlement so tokens are redeemed
  * as soon as the oracle resolves, instead of waiting for the periodic interval.
  *
- * @param {number} [delayMs=45000] — delay to allow oracle propagation (default 45s)
+ * @param {number} [delayMs=45000] -- delay to allow oracle propagation (default 45s)
  */
 export function triggerRedeem(delayMs = 45_000, conditionId = null) {
   if (!signer) return; // redeemer not initialized
   if (conditionId) addPendingRedeem(conditionId); // Track immediately
   // Deduplicate: don't stack multiple triggers
   if (pendingTriggerTimer) {
-    log.debug('Redeem trigger already pending — skipping duplicate');
+    log.debug('Redeem trigger already pending -- skipping duplicate');
     return;
   }
-  log.info(`Redeem triggered — will run in ${Math.round(delayMs / 1000)}s (post-settlement)`);
+  log.info(`Redeem triggered -- will run in ${Math.round(delayMs / 1000)}s (post-settlement)`);
   pendingTriggerTimer = setTimeout(() => {
     pendingTriggerTimer = null;
     redeemCycle().catch(err => log.warn(`Post-settlement redeem failed: ${err.message}`));

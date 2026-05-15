@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@chainlink/data-streams-sdk": "^1.2.1",
-    "@polymarket/clob-client": "^4",
+    "@polymarket/clob-client-v2": "^1.0.0",
     "@solana/kit": "^5.5.1",
     "@x402/core": "^2.4.0",
     "@x402/svm": "^2.4.0",

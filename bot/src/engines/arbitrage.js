@@ -20,7 +20,8 @@ const { MIN_NET_PROFIT, FEE_RATE, MAX_SPREAD, MAX_SPREAD_HIGH_PROFIT } = ARBITRA
  * @param {number|null} params.marketUp      - YES mid/last price (fallback)
  * @param {number|null} params.marketDown    - NO mid/last price (fallback)
  * @returns {{ found: boolean, totalCost: number, grossProfit: number, netProfit: number,
- *             profitPct: number, askUp: number, askDown: number, spreadHealthy: boolean }}
+ *             profitPct: number, askUp: number, askDown: number, spreadHealthy: boolean,
+ *             reason?: string }}
  */
 export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDown }) {
   const noArb = {

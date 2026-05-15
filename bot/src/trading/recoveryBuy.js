@@ -82,6 +82,8 @@ export function onCutLoss({ side, tokenId, conditionId, marketSlug }) {
  * @param {boolean} params.isHalted - Whether circuit breaker is active
  * @param {number} params.bankroll - Available bankroll
  * @param {string} params.marketSlug - Current market slug
+ * @param {Object|null} [params.smartFlowSignal] - Smart-money flow signal (audit fix C3)
+ * @param {Object|null} [params.edge] - Edge engine result for recovery side
  * @returns {{ shouldBuy: boolean, side?: string, tokenId?: string, conditionId?: string, reason: string, sizePct?: number }}
  */
 export function tick({

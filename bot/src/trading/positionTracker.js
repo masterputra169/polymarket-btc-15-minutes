@@ -529,6 +529,7 @@ export function settleTradeEarlyExit(recoveredUsdc) {
  * @param {number} params.shares - Number of arb pairs
  * @param {string} params.marketSlug - Market identifier
  * @param {string|null} params.orderId - Order ID from first leg
+ * @param {string|null} [params.conditionId] - Oracle condition ID
  */
 export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId, conditionId }) {
   // NaN guard — reject invalid arb costs before they corrupt bankroll
@@ -988,6 +989,8 @@ export function _resetForTest(overrides = {}) {
     cutLossCount: overrides.cutLossCount ?? 0,
     marketTradeCounts: overrides.marketTradeCounts ?? {},   // H8 FIX: was missing, caused test isolation failures
     lastLossTimestamp: overrides.lastLossTimestamp ?? 0,    // H8 FIX: was missing, loss cooldown leaked between tests
+    tradeTimestamps: overrides.tradeTimestamps ?? [],       // Audit fix Tier-1 (2026-05-15): match canonical state shape
+    pendingRedeems: overrides.pendingRedeems ?? [],
   };
   sellingInProgress = false;
   sellLockSource = '';

@@ -6,6 +6,7 @@ export default defineConfig({
     include: [
       'src/**/__tests__/**/*.test.js',
       'bot/**/__tests__/**/*.test.js',
+      'bot/tests/**/*.test.js',
     ],
   },
 });

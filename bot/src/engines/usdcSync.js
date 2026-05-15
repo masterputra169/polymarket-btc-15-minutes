@@ -164,7 +164,7 @@ export function queueUsdcSyncAfterRedeem() {
  * @param {Function} fetchBalance - async () => { balance, allowance, fetchedAt } | null
  * @param {Function} getBankroll
  * @param {Function} setBankroll
- * @returns {{ ok, action?, prev?, onChain?, drift?, error? }}
+ * @returns {Promise<{ ok: boolean, action?: string, prev?: number, onChain?: number, drift?: number, error?: string, balance?: number, local?: number }>}
  */
 export async function forceUsdcSync(fetchBalance, getBankroll, setBankroll) {
   let result;

@@ -4,38 +4,29 @@
  */
 
 import { ethers } from 'ethers';
-import { ClobClient } from '@polymarket/clob-client';
+import { ClobClient, OrderType, Side, SignatureTypeV2, Chain } from '@polymarket/clob-client-v2';
 import { createLogger } from '../logger.js';
 import { CONFIG } from '../config.js';
 
 const log = createLogger('CLOB');
 
-const POLYGON_CHAIN_ID = 137;
-
-// SignatureType enum from @polymarket/order-utils
-// 0 = EOA (sign with EOA wallet directly — no proxy)
-// 1 = POLY_PROXY (for email/Magic wallet logins — Polymarket's internal proxy)
-// 2 = POLY_GNOSIS_SAFE (for browser wallets — Gnosis Safe proxy created by Polymarket)
-const SIGNATURE_TYPE_EOA = 0;
-const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = 2;
+// V2 SignatureType enum (same numeric values as V1):
+// 0 = EOA, 1 = POLY_PROXY, 2 = POLY_GNOSIS_SAFE, 3 = POLY_1271
+const SIGNATURE_TYPE_EOA = SignatureTypeV2.EOA;
+const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = SignatureTypeV2.POLY_GNOSIS_SAFE;
 
 let client = null;
 let wallet = null;
 
 /**
- * Validate CLOB API response. The @polymarket/clob-client library swallows
- * HTTP errors and returns { error: "..." } instead of throwing. This function
- * detects error responses and throws so callers (loop.js) don't record
- * phantom trades for orders that never went through.
+ * Defense-in-depth response check.
+ * V2 SDK with throwOnError: true natively throws on HTTP errors and { error: "..." } responses,
+ * so the manual error check is redundant. We still guard `success: false` because matching-engine
+ * rejections may come back as HTTP 200 with { success: false, errorMsg } and the SDK won't throw.
  */
 function validateOrderResponse(result, action) {
   if (!result || typeof result !== 'object') {
     throw new Error(`${action}: empty response from CLOB API`);
-  }
-  if (result.error) {
-    const status = result.status ? ` (HTTP ${result.status})` : '';
-    const msg = typeof result.error === 'string' ? result.error : JSON.stringify(result.error);
-    throw new Error(`${action}: CLOB API error${status}: ${msg}`);
   }
   if (result.success === false) {
     throw new Error(`${action}: order rejected: ${result.errorMsg || 'unknown reason'}`);
@@ -64,7 +55,9 @@ export async function initClobClient() {
 
   // Ethers v6 compatibility shim: @polymarket/clob-client expects ethers v5's
   // _signTypedData(), but ethers v6 renamed it to signTypedData() (no underscore).
+  // @ts-ignore — intentional v5 compat shim; _signTypedData not in ethers v6 types
   if (!wallet._signTypedData && wallet.signTypedData) {
+    // @ts-ignore — see above
     wallet._signTypedData = wallet.signTypedData.bind(wallet);
   }
 
@@ -87,38 +80,37 @@ export async function initClobClient() {
     log.info('No proxy address set — using EOA signing');
   }
 
+  // V2 client options shared across all init paths:
+  // - useServerTime: prevents clock drift order rejection (sync timestamp with server)
+  // - throwOnError: native error throws replace manual validateOrderResponse for HTTP errors
+  // - retryOnError: NOT enabled — risky for trading (could double-place on timeout)
+  const sharedOpts = {
+    host: CONFIG.clobBaseUrl,
+    chain: Chain.POLYGON,
+    signer: wallet,
+    signatureType: sigType,
+    funderAddress: funder,
+    useServerTime: true,
+    throwOnError: true,
+  };
+
+  // @ts-ignore — @polymarket/clob-client-v2 ClobClientOptions type defs are
+  // stricter than actual runtime API (works in prod; SDK .d.ts mismatch).
   if (apiKey && apiSecret && apiPassphrase) {
-    // Use provided API credentials
-    client = new ClobClient(
-      CONFIG.clobBaseUrl,
-      POLYGON_CHAIN_ID,
-      wallet,
-      { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-      sigType,   // signatureType (5th param)
-      funder,    // funderAddress (6th param) — proxy wallet
-    );
-    log.info('CLOB client initialized with provided API credentials');
+    // @ts-ignore — see above
+    client = new ClobClient({
+      ...sharedOpts,
+      creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+    });
+    log.info('CLOB client (v2) initialized with provided API credentials');
   } else {
-    // Derive API credentials from wallet signature
-    client = new ClobClient(
-      CONFIG.clobBaseUrl,
-      POLYGON_CHAIN_ID,
-      wallet,
-      undefined,
-      sigType,
-      funder,
-    );
-    log.info('Deriving API credentials from wallet...');
-    const creds = await client.createOrDeriveApiCreds();
-    client = new ClobClient(
-      CONFIG.clobBaseUrl,
-      POLYGON_CHAIN_ID,
-      wallet,
-      creds,
-      sigType,
-      funder,
-    );
-    log.info('CLOB client initialized with derived API credentials');
+    // @ts-ignore — see above
+    const bootstrap = new ClobClient(sharedOpts);
+    log.info('Deriving API credentials from wallet (V2)...');
+    const creds = await bootstrap.createOrDeriveApiKey();
+    // @ts-ignore — see above
+    client = new ClobClient({ ...sharedOpts, creds });
+    log.info('CLOB client (v2) initialized with derived API credentials');
   }
 
   // Ensure USDC allowance is set (gasless via Polymarket relay).
@@ -126,6 +118,7 @@ export async function initClobClient() {
   // Non-fatal: log warning and continue if it fails.
   try {
     await Promise.race([
+      // @ts-ignore — SDK AssetType enum strict; 'COLLATERAL' valid at runtime
       client.updateBalanceAllowance({ asset_type: 'COLLATERAL' }),
       new Promise((_, reject) => setTimeout(() => reject(new Error('startup collateral approval timeout')), 10_000)),
     ]);
@@ -143,7 +136,7 @@ export async function initClobClient() {
  * @param {string} params.tokenId - The outcome token ID to buy
  * @param {number} params.price - Limit price (0-1)
  * @param {number} params.size - Number of shares (dollar amount / price)
- * @returns {Object} Order result from CLOB
+ * @returns {Promise<Object>} Order result from CLOB
  */
 export async function placeBuyOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
@@ -152,16 +145,17 @@ export async function placeBuyOrder({ tokenId, price, size }) {
   // FOK (Fill-or-Kill): entire order fills immediately or is cancelled.
   // GTC was unsafe — partial fills leave remainder open + loop.js records full size.
   // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
+  // V2: FOK BUY uses createAndPostMarketOrder. amount is dollars to spend (size * price).
+  const amount = size * price;
   const result = await Promise.race([
-    client.createAndPostOrder(
-      { tokenID: tokenId, price, side: 'BUY', size },
-      undefined, // options
-      'FOK',     // orderType (3rd param) — fill-or-kill to prevent untracked partial fills
+    client.createAndPostMarketOrder(
+      { tokenID: tokenId, price, side: Side.BUY, amount, orderType: OrderType.FOK },
+      undefined,
+      OrderType.FOK,
     ),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostOrder BUY timeout (15s)')), 15000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostMarketOrder BUY timeout (15s)')), 15000)),
   ]);
 
-  // Validate — CLOB client swallows HTTP errors, returning { error: "..." }
   validateOrderResponse(result, 'BUY');
 
   const orderId = extractOrderId(result);
@@ -178,7 +172,7 @@ export async function placeBuyOrder({ tokenId, price, size }) {
  * @param {number} params.price - Limit price (0-1)
  * @param {number} params.size - Number of shares
  * @param {number} params.expiration - Unix timestamp (seconds) when order auto-cancels
- * @returns {Object} Order result from CLOB
+ * @returns {Promise<Object>} Order result from CLOB
  */
 export async function placeLimitBuyOrder({ tokenId, price, size, expiration }) {
   if (!client) throw new Error('CLOB client not initialized');
@@ -187,9 +181,9 @@ export async function placeLimitBuyOrder({ tokenId, price, size, expiration }) {
 
   const result = await Promise.race([
     client.createAndPostOrder(
-      { tokenID: tokenId, price, side: 'BUY', size, expiration },
+      { tokenID: tokenId, price, side: Side.BUY, size, expiration },
       undefined,
-      'GTD',   // Good-Til-Date — auto-cancels at expiration
+      OrderType.GTD,
     ),
     new Promise((_, rej) => setTimeout(() => rej(new Error('GTD BUY timeout (15s)')), 15000)),
   ]);
@@ -204,7 +198,7 @@ export async function placeLimitBuyOrder({ tokenId, price, size, expiration }) {
  * Look up an order by ID among open orders.
  * Returns the order object if found, null if not found (likely filled or expired).
  * @param {string} orderId - Order ID to look up
- * @returns {Object|null}
+ * @returns {Promise<Object|null>}
  */
 export async function getOrderById(orderId) {
   if (!client) throw new Error('CLOB client not initialized');
@@ -222,7 +216,7 @@ export async function getOrderById(orderId) {
  * More reliable than getOpenOrders() for fill detection — reflects matching engine state.
  * Returns the order object with status field, or null if not found/error.
  * @param {string} orderId
- * @returns {Object|null} order with status: 'LIVE'|'MATCHED'|'CANCELLED'|'DELAYED' etc.
+ * @returns {Promise<Object|null>} order with status: 'LIVE'|'MATCHED'|'CANCELLED'|'DELAYED' etc.
  */
 export async function getOrderStatus(orderId) {
   if (!client) return null;
@@ -294,20 +288,21 @@ export async function getOpenOrders() {
  * @param {string} params.tokenId - The outcome token ID to sell
  * @param {number} params.price - Limit price (0-1)
  * @param {number} params.size - Number of shares to sell
- * @returns {Object} Order result from CLOB
+ * @returns {Promise<Object>} Order result from CLOB
  */
 export async function placeSellOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
   // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
+  // V2: FOK SELL uses createAndPostMarketOrder. amount = shares to sell (not dollars).
   const result = await Promise.race([
-    client.createAndPostOrder(
-      { tokenID: tokenId, price, side: 'SELL', size },
-      undefined, // options
-      'FOK',     // orderType (3rd param) — fill-or-kill for sells
+    client.createAndPostMarketOrder(
+      { tokenID: tokenId, price, side: Side.SELL, amount: size, orderType: OrderType.FOK },
+      undefined,
+      OrderType.FOK,
     ),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostOrder SELL timeout (15s)')), 15000)),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('createAndPostMarketOrder SELL timeout (15s)')), 15000)),
   ]);
 
   validateOrderResponse(result, 'SELL');
@@ -323,7 +318,7 @@ export async function placeSellOrder({ tokenId, price, size }) {
  * Uses the CLOB client's getBalanceAllowance() which returns the actual
  * on-chain collateral (USDC.e) available for trading.
  *
- * @returns {{ balance: number, allowance: number } | null}
+ * @returns {Promise<{ balance: number, allowance: number } | null>}
  */
 let balanceCache = null;
 let balanceLastFetchMs = 0;

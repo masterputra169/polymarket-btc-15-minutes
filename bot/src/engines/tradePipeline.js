@@ -77,6 +77,8 @@ function parseClobAmount(value, fallback = null) {
  * @param {Object} params.rec - Decision recommendation
  * @param {Object} params.priceToBeat - { slug, value }
  * @param {number} params.lastPrice - Current BTC price
+ * @param {Object|null} [params.orderbookUp] - Orderbook for UP token { bestAsk, askLiquidity, ... }
+ * @param {Object|null} [params.orderbookDown] - Orderbook for DOWN token
  * @param {boolean} params.dryRun - Whether in dry-run mode
  * @param {Object} deps - Dependencies (functions)
  */
@@ -235,7 +237,7 @@ export async function executeArbitrage({
  *
  * @param {Object} params - Signal data
  * @param {Object} deps - Dependencies (functions)
- * @returns {boolean} Whether trade was executed
+ * @returns {Promise<boolean>} Whether trade was executed
  */
 export async function executeDirectionalTrade({
   rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
@@ -492,12 +494,35 @@ export async function executeDirectionalTrade({
   }
 
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
-  const shares = Math.floor(effectiveBetAmount / betMarketPrice);
+  let shares = Math.floor(effectiveBetAmount / betMarketPrice);
 
   // H9: Guard against 0 shares (e.g. betAmount < marketPrice)
   if (shares <= 0) {
     log.info(`Trade skipped: 0 shares (betAmount=$${betSizing.betAmount.toFixed(2)} / price=$${betMarketPrice.toFixed(3)})`);
     return false;
+  }
+
+  // FOK confidence-tier size floor (user request 2026-05-14):
+  //   LOW=3, MEDIUM=5, HIGH=6, VERY_HIGH=7.
+  // Kelly often returns 2 shares for FOK — bump up to match confidence level
+  // since v19 ML triggers FOK at higher confidence than LIMIT.
+  // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
+  const FOK_MIN_BY_CONF = {
+    LOW:       parseInt(process.env.FOK_MIN_SHARES_LOW       ?? '3', 10),
+    MEDIUM:    parseInt(process.env.FOK_MIN_SHARES_MEDIUM    ?? '5', 10),
+    HIGH:      parseInt(process.env.FOK_MIN_SHARES_HIGH      ?? '6', 10),
+    VERY_HIGH: parseInt(process.env.FOK_MIN_SHARES_VERY_HIGH ?? '7', 10),
+  };
+  const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
+  if (shares < minShares) {
+    const minCost = minShares * betMarketPrice;
+    const bankrollCap = (deps.getBankroll?.() ?? 0) * 0.15;
+    if (minCost <= bankrollCap || bankrollCap <= 0) {
+      log.info(`FOK confidence-tier bump: ${shares}→${minShares} shares (conf=${rec.confidence}, cost=$${minCost.toFixed(2)} ≤ 15%×bankroll=$${bankrollCap.toFixed(2)})`);
+      shares = minShares;
+    } else {
+      log.info(`FOK confidence-tier bump SKIPPED: ${minShares}×$${betMarketPrice.toFixed(3)}=$${minCost.toFixed(2)} > 15%×bankroll=$${bankrollCap.toFixed(2)} — keep ${shares}`);
+    }
   }
 
   // Flow alignment info for logging

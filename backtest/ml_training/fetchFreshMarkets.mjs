@@ -69,11 +69,13 @@ async function fetchFreshEvents(cutoffDate) {
         const downPrice = downIdx >= 0 ? Number(prices[downIdx]) : null;
 
         let outcome = null;
+        // Audit fix (May 2026): tighten resolution threshold to >=0.95 to match
+        // incremental_scrape_v15.mjs. Previous 0.8 admitted ambiguous resolutions.
         if (upPrice !== null && downPrice !== null) {
-          if (upPrice > 0.8) outcome = 'UP';
-          else if (downPrice > 0.8) outcome = 'DOWN';
+          if (upPrice >= 0.95) outcome = 'UP';
+          else if (downPrice >= 0.95) outcome = 'DOWN';
         }
-        if (!outcome) continue;  // Skip unresolved
+        if (!outcome) continue;  // Skip unresolved or ambiguous
 
         // Extract slug_ts
         const slug = m.slug || '';
@@ -142,8 +144,18 @@ async function main() {
 
   // Fetch new events
   const freshMarkets = await fetchFreshEvents(cutoffDate);
-  const newMarkets = freshMarkets.filter(m => !(m.slugTs in lookup));
-  console.log(`  ${newMarkets.length} new (not in lookup)`);
+  // Audit fix (May 2026): include markets that exist in lookup but have empty prices
+  // (added label-only by quickUpdateLookup.py). Previously these were skipped here,
+  // leaving the corpus with priceless rows that generateTrainingData drops silently.
+  const newMarkets = freshMarkets.filter(m => {
+    const existing = lookup[m.slugTs];
+    if (!existing) return true;                              // brand new
+    if (!existing.prices || existing.prices.length === 0) return true;  // needs enrichment
+    return false;
+  });
+  const trulyNew = freshMarkets.filter(m => !(m.slugTs in lookup)).length;
+  const reEnrich = newMarkets.length - trulyNew;
+  console.log(`  ${newMarkets.length} to fetch (${trulyNew} new, ${reEnrich} re-enrich priceless)`);
 
   if (newMarkets.length === 0) {
     console.log('\nNothing to add. Lookup is up to date!');
@@ -176,9 +188,12 @@ async function main() {
     console.log('');
   }
 
-  // Save updated lookup
+  // Save updated lookup (atomic write — audit fix May 2026)
+  // Write to .tmp then rename so Ctrl-C/OOM cannot corrupt the 4 MB corpus.
   console.log(`\nSaving updated lookup...`);
-  fs.writeFileSync(LOOKUP_PATH, JSON.stringify(lookup, null, 0));
+  const tmpPath = LOOKUP_PATH + '.tmp';
+  fs.writeFileSync(tmpPath, JSON.stringify(lookup, null, 0));
+  fs.renameSync(tmpPath, LOOKUP_PATH);
   const sizeMb = (fs.statSync(LOOKUP_PATH).size / 1024 / 1024).toFixed(1);
 
   const total = Object.keys(lookup).length;

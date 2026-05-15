@@ -1,4 +1,4 @@
-import { ClobClient } from "@polymarket/clob-client";
+import { ClobClient, Chain } from "@polymarket/clob-client-v2";
 import { Wallet } from "ethers";
 import dotenv from "dotenv";
 
@@ -31,14 +31,15 @@ if (proxyAddress) {
   console.log("No proxy address set - using EOA signing");
 }
 
-const clobClient = new ClobClient(
-  POLYMARKET_HOST,
-  CHAIN_ID,
-  wallet,
-  undefined,  // creds (will be derived)
-  sigType,    // signatureType
-  funder,     // funderAddress
-);
+const clobClient = new ClobClient({
+  host: POLYMARKET_HOST,
+  chain: Chain.POLYGON,
+  signer: wallet,
+  signatureType: sigType,
+  funderAddress: funder,
+  useServerTime: true,
+  throwOnError: true,
+});
 
 console.log("\nDeriving API credentials...");
 const creds = await clobClient.deriveApiKey();

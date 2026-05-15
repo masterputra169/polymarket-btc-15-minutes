@@ -14,7 +14,7 @@
  */
 
 import { ethers } from 'ethers';
-import { ClobClient } from '@polymarket/clob-client';
+import { ClobClient, Chain } from '@polymarket/clob-client-v2';
 import dotenv from 'dotenv';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, resolve } from 'path';
@@ -62,11 +62,16 @@ function createClient() {
   const sigType = proxyAddress ? 2 : 0;
   const funder = proxyAddress || undefined;
 
-  const client = new ClobClient(
-    CLOB_HOST, CHAIN_ID, wallet,
-    { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-    sigType, funder,
-  );
+  const client = new ClobClient({
+    host: CLOB_HOST,
+    chain: Chain.POLYGON,
+    signer: wallet,
+    creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+    signatureType: sigType,
+    funderAddress: funder,
+    useServerTime: true,
+    throwOnError: true,
+  });
 
   log(`Wallet: ${wallet.address}${proxyAddress ? ` (proxy: ${proxyAddress})` : ''}`);
   return client;

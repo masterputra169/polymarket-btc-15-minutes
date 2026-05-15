@@ -93,6 +93,24 @@ function riskLevel(pct) {
   return 'AGGRESSIVE';
 }
 
+/**
+ * Kelly-based bet sizing with confidence/regime/asymmetry multipliers.
+ * @param {Object} params
+ * @param {string} params.action
+ * @param {string} params.side
+ * @param {number} params.ensembleProb
+ * @param {number} params.marketPrice
+ * @param {number} params.edge
+ * @param {string} params.confidence
+ * @param {Object} params.regimeInfo
+ * @param {Object} params.feedbackStats
+ * @param {Object|null} params.ml
+ * @param {number} params.bankroll
+ * @param {Object} [params.executionContext]
+ * @param {Object} [params.smartFlowSignal]
+ * @param {Object} [params.entryTimingScore]
+ * @param {Object} [params.mcResult]
+ */
 export function computeBetSizing({
   action, side, ensembleProb, marketPrice, edge,
   confidence, regimeInfo, feedbackStats, ml, bankroll,
