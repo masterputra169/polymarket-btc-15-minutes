@@ -153,33 +153,25 @@ export function applyTradeFilters({
     }
   }
 
-  // 1c. PTB source quality gate (Option D — source-aware trading).
-  // PTB from low-quality sources may be off by $5-$500 vs Polymarket's actual resolution source.
-  // Trading on bad PTB = BTC-distance gate misfires, edge calc distorts, cut-loss wrong.
-  // Policy by source:
-  //   - data_streams / polymarket_gamma / polymarket_page / polymarket_page_prev: FULL TRUST
-  //   - scheduled_ws: TRUST (WS capture at eventStartTime, ~1-5ms drift)
-  //   - chainlink_round: DEGRADED (require ML ≥75% — on-chain Data Feeds ±15s drift)
-  //   - polymarket_page_approx / pending: DEGRADED (require ML ≥80%)
-  //   - oracle: BLOCK entries (live BTC price ≠ market-open PTB, can be off $100+)
-  if (ptbSource) {
-    const EXACT_SOURCES = ['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'];
-    const DEGRADED_SOURCES = ['chainlink_round', 'polymarket_page_approx', 'pending'];
-    const BLOCKED_SOURCES = ['oracle'];
-
-    if (BLOCKED_SOURCES.includes(ptbSource)) {
-      // Allow only if ML is very high AND edge is strong — override for clear opportunities.
-      const emergencyOk = mlAvailable && mlConfidence != null && mlConfidence >= 0.90 && highEdgeBypass;
-      if (!emergencyOk) {
-        reasons.push(`PTB source '${ptbSource}' unreliable (live BTC, not market-open snapshot) — need ML ≥90% + edge ≥15% to override`);
-      }
-    } else if (DEGRADED_SOURCES.includes(ptbSource)) {
-      const minMlForDegraded = ptbSource === 'chainlink_round' ? 0.75 : 0.80;
-      if (mlAvailable && mlConfidence != null && mlConfidence < minMlForDegraded) {
-        reasons.push(`PTB source '${ptbSource}' approximate — ML ${(mlConfidence * 100).toFixed(0)}% < ${(minMlForDegraded * 100).toFixed(0)}% required`);
-      }
-    }
-    // EXACT_SOURCES pass through — full trust.
+  // 1c. PTB source quality gate (Lapis 0 safety — hardened 2026-05-16).
+  //
+  // ROOT CAUSE (proven): Polymarket removed eventMetadata.priceToBeat from the
+  // Gamma API → polymarket_gamma / polymarket_page / polymarket_page_prev all
+  // silently died → PTB collapsed to chainlink_round (on-chain Data Feeds,
+  // ±8-15s from eventStartTime = $75-225 error at BTC ~$79k). The old gate only
+  // *degraded* chainlink_round (require ML≥75%), so the bot kept trading on a
+  // PTB that was $75-225 wrong → BTC-distance gate misfired, edge calc skewed,
+  // wrong UP/DOWN side → systematic losses.
+  //
+  // Without an EXACT market-open PTB the bot cannot know which side wins —
+  // that is gambling, not trading. Strict allowlist: trade ONLY on an exact
+  // source. No ML/edge override (any override is how money leaked before).
+  // Re-widening this list is a money-losing regression — see
+  // tradeFilters.ptbSource.test.js.
+  const EXACT_PTB_TRUST = ['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'];
+  if (!EXACT_PTB_TRUST.includes(ptbSource)) {
+    const label = ptbSource ? `'${ptbSource}' not exact` : 'unknown/missing';
+    reasons.push(`PTB source ${label} — entry BLOCKED (Lapis0 safety: Polymarket gamma removed 2026-05-16; need exact scheduled_ws/data_streams PTB)`);
   }
 
   // 2. Market near 50/50 (random walk — no edge)
@@ -321,6 +313,10 @@ export function applyTradeFilters({
   // With EXACT PTB sources (data_streams / polymarket_gamma) high edge = real model
   // divergence = legitimate sniper signal (per oracle-lag-sniper 60.7% OOS WR research).
   // ML ≥85% raises ceiling to 35% — v16 model trusted at high confidence.
+  // NOTE: this list is INTENTIONALLY NARROWER than filter 1c's EXACT_PTB_TRUST.
+  // 1c gates whether to trade AT ALL (any exact source is safe). This gates only
+  // the edge-ceiling relaxation, which is research-backed (oracle-lag-sniper)
+  // ONLY for data_streams/polymarket_gamma. Do NOT sync the two lists.
   const EXACT_PTB_SOURCES = ['data_streams', 'polymarket_gamma'];
   const isExactPtb = EXACT_PTB_SOURCES.includes(ptbSource);
   const baseMaxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
