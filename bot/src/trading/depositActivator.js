@@ -27,6 +27,7 @@
 import { ethers } from 'ethers';
 import { createLogger } from '../logger.js';
 import { notify } from '../monitoring/notifier.js';
+import { gasFeeOverrides } from './gasConfig.js';
 
 const log = createLogger('Activator');
 
@@ -108,7 +109,7 @@ async function execSafeTx({ provider, signer, safeAddr, label, targetAddr, callD
     0n, 0n, 0n,                            // safeTxGas, baseGas, gasPrice
     ethers.ZeroAddress, ethers.ZeroAddress, // gasToken, refundReceiver
     sig,
-    { gasLimit },
+    { gasLimit, ...gasFeeOverrides() },
   );
   log.info(`${label}: tx submitted ${tx.hash}`);
   const receipt = await tx.wait(1);

@@ -19,6 +19,7 @@ import { ethers } from 'ethers';
 import { BOT_CONFIG, CONFIG } from '../config.js';
 import { createLogger } from '../logger.js';
 import { getWalletAddress } from './clobClient.js';
+import { gasFeeOverrides } from './gasConfig.js';
 import { clearPendingRedeem } from './positionTracker.js';
 
 const log = createLogger('Redeemer');
@@ -553,7 +554,7 @@ async function redeemDirect(conditionId) {
   return sendTxWithFallback(async (s) => {
     const ctf = new ethers.Contract(CTF_ADDRESS, CTF_ABI, s);
     // Explicit gasLimit skips eth_estimateGas -- avoids inflated estimates on free RPCs
-    return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS, { gasLimit: 500_000n });
+    return ctf.redeemPositions(USDC_E, PARENT_COLLECTION_ID, conditionId, INDEX_SETS, { gasLimit: 500_000n, ...gasFeeOverrides() });
   });
 }
 
@@ -632,7 +633,7 @@ async function redeemViaSafe(conditionId, safeAddr) {
       gasToken,
       refundReceiver,
       sig,
-      { gasLimit: 500_000n },
+      { gasLimit: 500_000n, ...gasFeeOverrides() },
     );
   });
 }
