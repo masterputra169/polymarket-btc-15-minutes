@@ -1,0 +1,153 @@
+import { CONFIG } from '../config.ts';
+
+/**
+ * Chainlink BTC/USD price via Polygon HTTP RPC (browser-compatible).
+ * FIX: Increased cache duration, reduced timeout, better throttling.
+ */
+
+const RPC_TIMEOUT_MS = 3000;
+
+// ABI function selectors
+const DECIMALS_SELECTOR = '0x313ce567';
+const LATEST_ROUND_DATA_SELECTOR = '0xfeaf968c';
+
+export interface ChainlinkBtcUsdResult {
+  price: number | null;
+  updatedAt: number | null;
+  source: string;
+}
+
+interface DecodedRoundData {
+  answer: number;
+  updatedAt: number;
+}
+
+let cachedDecimals: number | null = null;
+let cachedResult: ChainlinkBtcUsdResult = { price: null, updatedAt: null, source: 'chainlink_rpc' };
+let cachedFetchedAtMs = 0;
+let fetchInProgress = false; // ═══ FIX: prevent concurrent fetches ═══
+
+function getMinFetchInterval(): number {
+  return CONFIG.chainlink?.rpcCacheMs ?? 30_000; // default 30s cache
+}
+
+function getRpcUrls(): readonly string[] {
+  return CONFIG.chainlink?.polygonRpcUrls ?? [];
+}
+
+function getAggregator(): string {
+  return CONFIG.chainlink?.btcUsdAggregator ?? '';
+}
+
+async function jsonRpcCall(rpcUrl: string, to: string, data: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(rpcUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'eth_call',
+        params: [{ to, data }, 'latest'],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) throw new Error(`rpc_http_${res.status}`);
+
+    const json: any = await res.json();
+    if (json.error) throw new Error(`rpc_error_${json.error.code}`);
+
+    return json.result;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function decodeUint8(hex: string): number {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  return parseInt(clean, 16);
+}
+
+function decodeLatestRoundData(hex: string): DecodedRoundData | null {
+  const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
+  if (clean.length < 320) return null;
+
+  const answerHex = clean.slice(64, 128);
+  const updatedAtHex = clean.slice(192, 256);
+
+  let answer = BigInt('0x' + answerHex);
+  const TWO_255 = 1n << 255n;
+  const TWO_256 = 1n << 256n;
+  if (answer >= TWO_255) answer = answer - TWO_256;
+
+  const updatedAt = Number(BigInt('0x' + updatedAtHex));
+
+  return { answer: Number(answer), updatedAt };
+}
+
+export async function fetchChainlinkBtcUsd(): Promise<ChainlinkBtcUsdResult> {
+  const rpcs = getRpcUrls();
+  const aggregator = getAggregator();
+
+  if (!rpcs.length || !aggregator) {
+    return { price: null, updatedAt: null, source: 'chainlink_rpc_no_config' };
+  }
+
+  const now = Date.now();
+  const minInterval = getMinFetchInterval();
+
+  // ═══ FIX: Return cached if still fresh (cooldown applies even when price is null) ═══
+  if (cachedFetchedAtMs && now - cachedFetchedAtMs < minInterval) {
+    return cachedResult;
+  }
+
+  // ═══ FIX: Prevent concurrent fetches ═══
+  if (fetchInProgress) {
+    return cachedResult;
+  }
+
+  fetchInProgress = true;
+  cachedFetchedAtMs = now; // Set BEFORE fetch so failures also respect cooldown
+  const lockTimer = setTimeout(() => { fetchInProgress = false; }, 10_000);
+
+  try {
+    // Only try first RPC (we reduced to 1 in config)
+    const rpc = rpcs[0];
+    if (!rpc) return cachedResult;
+
+    try {
+      if (cachedDecimals === null) {
+        const decResult = await jsonRpcCall(rpc, aggregator, DECIMALS_SELECTOR);
+        cachedDecimals = decodeUint8(decResult);
+      }
+
+      const roundResult = await jsonRpcCall(rpc, aggregator, LATEST_ROUND_DATA_SELECTOR);
+      const decoded = decodeLatestRoundData(roundResult);
+
+      if (!decoded) {
+        cachedDecimals = null;
+        return cachedResult;
+      }
+
+      const scale = 10 ** cachedDecimals;
+      const price = decoded.answer / scale;
+
+      cachedResult = {
+        price,
+        updatedAt: decoded.updatedAt * 1000,
+        source: 'chainlink_rpc',
+      };
+      return cachedResult;
+    } catch {
+      cachedDecimals = null;
+      return cachedResult;
+    }
+  } finally {
+    clearTimeout(lockTimer);
+    fetchInProgress = false;
+  }
+}

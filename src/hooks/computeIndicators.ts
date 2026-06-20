@@ -1,0 +1,225 @@
+/**
+ * Pure function that computes all technical indicators from candle data.
+ * Extracted from useMarketData.js to reduce its size.
+ */
+
+import { CONFIG } from '../config.ts';
+import { sma, slopeLast } from '../indicators/math.ts';
+import { computeVwapSeries, countVwapCrosses } from '../indicators/vwap.ts';
+import { computeRsi, computeRsiSeries } from '../indicators/rsi.ts';
+import { computeMacd } from '../indicators/macd.ts';
+import { computeHeikenAshi, countConsecutive } from '../indicators/heikenAshi.ts';
+import { computeBollingerBands } from '../indicators/bollinger.ts';
+import { computeATR } from '../indicators/atr.ts';
+import { computeVolumeDelta } from '../indicators/volumedelta.ts';
+import { computeEmaCrossover } from '../indicators/emacross.ts';
+import { computeStochRsi } from '../indicators/stochrsi.ts';
+import { detectRegime, computeAutocorrelation } from '../engines/regime.ts';
+import { computeMultiTfConfirmation } from '../engines/multitf.ts';
+import { getVolatilityProfile, computeRealizedVol } from '../engines/volatility.ts';
+import type { AtrResult } from '../indicators/atr.ts';
+import type { BollingerBandsResult } from '../indicators/bollinger.ts';
+import type { EmaCrossoverResult } from '../indicators/emacross.ts';
+import type { ConsecutiveHeikenAshiResult } from '../indicators/heikenAshi.ts';
+import type { MacdResult } from '../indicators/macd.ts';
+import type { StochRsiResult } from '../indicators/stochrsi.ts';
+import type { VolumeDeltaResult } from '../indicators/volumedelta.ts';
+
+export interface MarketCandle {
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  takerBuyVolume?: number | null;
+}
+
+export interface ComputeAllIndicatorsParams {
+  candles: MarketCandle[];
+  klines5m: MarketCandle[];
+  lastPrice: number;
+}
+
+export interface AllIndicatorsResult {
+  closes: number[];
+  vwapSeries: Array<number | null>;
+  vwapNow: number | null;
+  vwapSlope: number | null;
+  vwapDist: number | null;
+  rsiNow: number | null;
+  rsiSlope: number | null;
+  macd: MacdResult | null;
+  consec: ConsecutiveHeikenAshiResult;
+  vwapCrossCount: number | null;
+  bb: BollingerBandsResult | null;
+  atr: AtrResult | null;
+  volDelta: VolumeDeltaResult | null;
+  emaCross: EmaCrossoverResult | null;
+  stochRsi: StochRsiResult | null;
+  volumeRecent: number;
+  volumeAvg: number;
+  failedVwapReclaim: boolean;
+  regimeInfo: any;
+  lastClose: number | null;
+  delta1m: number | null;
+  delta3m: number | null;
+  volProfile: any;
+  realizedVol: any;
+  multiTfConfirm: any;
+  momentum5CandleSlope: number;
+  volatilityChangeRatio: number;
+  priceConsistency: number;
+}
+
+/**
+ * Compute all technical indicators from candle data.
+ *
+ * @param {Object} params
+ * @param {Array} params.candles - 1m candles
+ * @param {Array} params.klines5m - 5m candles
+ * @param {number} params.lastPrice - Current BTC price
+ * @returns {Object} All indicator results
+ */
+export function computeAllIndicators({
+  candles,
+  klines5m,
+  lastPrice,
+}: ComputeAllIndicatorsParams): AllIndicatorsResult {
+  const cLen = candles.length;
+  const closes: number[] = new Array(cLen);
+  for (let i = 0; i < cLen; i++) closes[i] = candles[i].close;
+
+  const c5Len = klines5m.length;
+  const closes5m: number[] = new Array(c5Len);
+  for (let i = 0; i < c5Len; i++) closes5m[i] = klines5m[i].close;
+
+  // VWAP
+  const vwapSeries = computeVwapSeries(candles, CONFIG.vwapLookbackCandles);
+  const vwapNow = vwapSeries[vwapSeries.length - 1] ?? null;
+  const lookback = CONFIG.vwapSlopeLookbackMinutes;
+  const vwapPast = vwapSeries.length >= lookback ? vwapSeries[vwapSeries.length - lookback] ?? null : null;
+  const vwapSlope =
+    vwapNow != null && vwapPast != null
+      ? (vwapNow - vwapPast) / lookback
+      : null;
+  const vwapDist = vwapNow ? (lastPrice - vwapNow) / vwapNow : null;
+
+  // RSI — use series last value (Wilder-smoothed) to match training data computation.
+  // computeRsi() only uses last period+1 closes (no smoothing), causing train-serve skew.
+  const rsiSeries = computeRsiSeries(closes, CONFIG.rsiPeriod);
+  const rsiNow = rsiSeries.length > 0 ? rsiSeries[rsiSeries.length - 1] : computeRsi(closes, CONFIG.rsiPeriod);
+  const rsiSlope = slopeLast(rsiSeries, 3);
+
+  // MACD
+  const macd = computeMacd(closes, CONFIG.macdFast, CONFIG.macdSlow, CONFIG.macdSignal);
+
+  // Heiken Ashi
+  const ha = computeHeikenAshi(candles);
+  const consec = countConsecutive(ha);
+
+  // VWAP crosses
+  const vwapCrossCount = countVwapCrosses(closes, vwapSeries, 20);
+
+  // Bollinger Bands + ATR
+  const bb = computeBollingerBands(closes, 20, 2);
+  const atr = computeATR(candles, 14);
+
+  // Volume Delta
+  const volDelta = computeVolumeDelta(candles, 10, 20);
+
+  // EMA Crossover
+  const emaCross = computeEmaCrossover(closes, 8, 21);
+
+  // Stochastic RSI
+  const stochRsi = computeStochRsi(closes, 14, 14, 3, 3);
+
+  // Volume
+  let volumeRecent = 0;
+  const volRecentStart = Math.max(0, cLen - 20);
+  for (let i = volRecentStart; i < cLen; i++) volumeRecent += candles[i].volume;
+
+  let volumeTotal120 = 0;
+  const volAvgStart = Math.max(0, cLen - 120);
+  for (let i = volAvgStart; i < cLen; i++) volumeTotal120 += candles[i].volume;
+  const volWindow = cLen - volAvgStart;
+  const numWindows = volWindow / 20;
+  const volumeAvg = numWindows > 0 ? volumeTotal120 / numWindows : volumeRecent;
+
+  // Failed VWAP reclaim
+  const failedVwapReclaim =
+    vwapNow !== null && vwapSeries.length >= 3
+      ? closes[cLen - 1] < vwapNow &&
+        closes[cLen - 2] > vwapSeries[vwapSeries.length - 2]
+      : false;
+
+  // ACF — v3: price return autocorrelation for regime confirmation
+  const acf = computeAutocorrelation(closes);
+
+  // Regime — H4: pass ATR ratio + volume ratio to reduce "moderate" dead zone
+  // v3: pass ACF for momentum/mean-reversion/random-walk confirmation
+  const regimeInfo = detectRegime({
+    price: lastPrice, vwap: vwapNow, vwapSlope, vwapCrossCount,
+    volumeRecent, volumeAvg,
+    atrRatio: atr?.atrRatio ?? null,
+    acf,
+  });
+
+  // Deltas
+  const lastClose = closes[cLen - 1] ?? null;
+  const close1mAgo = cLen >= 2 ? closes[cLen - 2] : null;
+  const close3mAgo = cLen >= 4 ? closes[cLen - 4] : null;
+  const delta1m = lastClose !== null && close1mAgo !== null ? lastClose - close1mAgo : null;
+  const delta3m = lastClose !== null && close3mAgo !== null ? lastClose - close3mAgo : null;
+
+  // Volatility
+  const volProfile = getVolatilityProfile();
+  const realizedVol = computeRealizedVol(closes, 15);
+
+  // Multi-TF
+  const delta5m = c5Len >= 2 ? closes5m[c5Len - 1] - closes5m[c5Len - 2] : null;
+  const ha5m = computeHeikenAshi(klines5m);
+  const consec5m = countConsecutive(ha5m);
+  const rsi5m = computeRsi(closes5m, 8);
+
+  const multiTfConfirm = computeMultiTfConfirmation({
+    delta1m, delta3m, delta5m,
+    ha1mColor: consec.color, ha5mColor: consec5m.color,
+    rsi1m: rsiNow, rsi5m,
+  });
+
+  // Lag features (temporal memory for ML)
+  const momentum5CandleSlope = cLen >= 6
+    ? (closes[cLen - 1] - closes[cLen - 6]) / (5 * (lastPrice || closes[cLen - 1] || 1)) : 0;
+
+  let volatilityChangeRatio = 1;
+  if (cLen >= 21) {
+    const r5: number[] = [];
+    const r20: number[] = [];
+    for (let k = cLen - 5; k < cLen; k++) r5.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    for (let k = cLen - 20; k < cLen; k++) r20.push((closes[k] - closes[k - 1]) / closes[k - 1]);
+    const std = (arr: number[]) => { const mu = arr.reduce((a, b) => a + b, 0) / arr.length; return Math.sqrt(arr.reduce((s, v) => s + (v - mu) ** 2, 0) / arr.length); };
+    const s5 = std(r5), s20 = std(r20);
+    volatilityChangeRatio = s20 > 1e-10 ? s5 / s20 : 1;
+  }
+
+  let priceConsistency = 0.5;
+  if (cLen >= 11 && delta1m != null && delta1m !== 0) {
+    const dir = delta1m > 0 ? 1 : -1;
+    let same = 0;
+    for (let k = cLen - 10; k < cLen; k++) {
+      const d = closes[k] > closes[k - 1] ? 1 : closes[k] < closes[k - 1] ? -1 : 0;
+      if (d === dir) same++;
+    }
+    priceConsistency = same / 10;
+  }
+
+  return {
+    closes, vwapSeries, vwapNow, vwapSlope, vwapDist,
+    rsiNow, rsiSlope, macd, consec, vwapCrossCount,
+    bb, atr, volDelta, emaCross, stochRsi,
+    volumeRecent, volumeAvg, failedVwapReclaim,
+    regimeInfo, lastClose, delta1m, delta3m,
+    volProfile, realizedVol, multiTfConfirm,
+    momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
+  };
+}

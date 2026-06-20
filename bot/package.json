@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "description": "Automated BTC 15-minute Polymarket trading bot",
-  "main": "index.js",
+  "main": "index.ts",
   "scripts": {
-    "start": "node index.js",
-    "dry-run": "DRY_RUN=true node index.js"
+    "start": "node index.ts",
+    "dry-run": "node -e \"process.env.DRY_RUN='true'; import('./index.ts')\""
   },
   "dependencies": {
     "@chainlink/data-streams-sdk": "^1.2.1",

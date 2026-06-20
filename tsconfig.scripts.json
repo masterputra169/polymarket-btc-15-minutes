@@ -1,0 +1,27 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "isolatedModules": false,
+    "noCheck": false,
+    "jsx": "preserve",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"]
+  },
+  "include": [
+    "*.cts",
+    "*.mts",
+    "backtest/**/*.mts",
+    "public/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "bot/node_modules",
+    "**/node_modules/**",
+    "dist",
+    "backtest/ml_training/output*/**",
+    "public/ml/backups/**",
+    "bot/data/**"
+  ]
+}

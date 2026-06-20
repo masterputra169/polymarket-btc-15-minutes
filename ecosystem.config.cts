@@ -1,0 +1,36 @@
+module.exports = {
+  apps: [
+    {
+      name: 'polymarket-bot',
+      script: 'bot/index.ts',
+      interpreter: 'node',
+      cwd: __dirname,
+      node_args: '--env-file=./bot/.env',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '512M',
+    },
+    {
+      name: 'frontend',
+      script: 'npm',
+      args: 'run dev',
+      cwd: __dirname,
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      max_memory_restart: '512M',
+    },
+    // ml-retrain DISABLED — retrain hanya manual via perintah user
+    // {
+    //   name: 'ml-retrain',
+    //   script: 'bot/src/autoRetrain.ts',
+    //   cwd: __dirname,
+    //   node_args: '--env-file=./bot/.env',
+    //   instances: 1,
+    //   autorestart: true,
+    //   watch: false,
+    //   max_memory_restart: '1G',
+    // },
+  ],
+};

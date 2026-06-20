@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noCheck": false,
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": [
+    "bot/src/logger.ts",
+    "bot/src/trading/gasConfig.ts",
+    "bot/src/adapters/chainlinkDataStreams.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "bot/node_modules",
+    "**/node_modules/**"
+  ]
+}

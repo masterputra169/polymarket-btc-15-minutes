@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noCheck": false,
+    "lib": ["ES2022"],
+    "types": ["node", "vitest"]
+  },
+  "include": [
+    "bot/**/*.ts",
+    "bot/**/*.mts",
+    "bot/**/*.cts"
+  ],
+  "exclude": [
+    "node_modules",
+    "bot/node_modules",
+    "**/node_modules/**",
+    "bot/data/**",
+    "bot/scripts/v19_shadow_replay.mts"
+  ]
+}
