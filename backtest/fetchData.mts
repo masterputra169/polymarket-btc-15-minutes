@@ -4,9 +4,9 @@
  * Fetches historical BTC 1m candles from Binance public API.
  * Tries multiple endpoints in case one is blocked.
  * 
- * Usage: node backtest/fetchData.mjs [days]
- * Example: node backtest/fetchData.mjs 7    → fetch last 7 days
- *          node backtest/fetchData.mjs 30   → fetch last 30 days
+ * Usage: node backtest/fetchData.mts [days]
+ * Example: node backtest/fetchData.mts 7    → fetch last 7 days
+ *          node backtest/fetchData.mts 30   → fetch last 30 days
  */
 
 import fs from 'fs';
@@ -220,7 +220,7 @@ async function main() {
   console.log(`   1m candles: ${candles1m.length}`);
   console.log(`   5m candles: ${candles5m.length}`);
   console.log(`   File size: ${(fs.statSync(filepath).size / 1024 / 1024).toFixed(1)} MB`);
-  console.log(`\n🚀 Next step: node backtest/runBacktest.mjs ${filepath}`);
+  console.log(`\n🚀 Next step: node backtest/runBacktest.mts ${filepath}`);
 }
 
 main().catch(err => {

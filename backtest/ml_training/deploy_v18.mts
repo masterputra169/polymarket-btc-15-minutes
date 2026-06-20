@@ -1,10 +1,10 @@
 /**
- * deploy_v18.mjs — Manual deploy script for ML v18
+ * deploy_v18.mts — Manual deploy script for ML v18
  *
  * Usage:
- *   node deploy_v18.mjs           # quality gate + deploy + PM2 restart
- *   node deploy_v18.mjs --dry-run # gate check only, no copy
- *   node deploy_v18.mjs --force   # skip quality gate, deploy anyway
+ *   node deploy_v18.mts           # quality gate + deploy + PM2 restart
+ *   node deploy_v18.mts --dry-run # gate check only, no copy
+ *   node deploy_v18.mts --force   # skip quality gate, deploy anyway
  *
  * What it does:
  *   1. Verify output_v18/ has all 3 model files

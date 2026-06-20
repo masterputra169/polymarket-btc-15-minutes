@@ -47,7 +47,7 @@ let _classifying = false;
 let _stats = { calls: 0, errors: 0, advisoriesIssued: 0, lastLatencyMs: 0 };
 
 /**
- * Called from index.js on startup. Restores last classification from disk.
+ * Called from index.ts on startup. Restores last classification from disk.
  */
 export function initLLMRegime() {
   if (!BOT_CONFIG.llmRegime?.enabled) {
@@ -82,7 +82,7 @@ export function setContextSnapshot(snap) {
 }
 
 /**
- * Called from index.js AI interval. Internally throttled — skip if recent.
+ * Called from index.ts AI interval. Internally throttled — skip if recent.
  */
 export async function maybeClassify() {
   if (!BOT_CONFIG.llmRegime?.enabled) return;

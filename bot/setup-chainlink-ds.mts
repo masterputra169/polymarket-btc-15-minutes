@@ -7,9 +7,9 @@
  *   --validate    → test API key yang sudah dipaste, lalu update .env otomatis
  *
  * Usage:
- *   node setup-chainlink-ds.mjs --guide
- *   node setup-chainlink-ds.mjs --validate
- *   node setup-chainlink-ds.mjs                 # default: --guide
+ *   node setup-chainlink-ds.mts --guide
+ *   node setup-chainlink-ds.mts --validate
+ *   node setup-chainlink-ds.mts                 # default: --guide
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
@@ -71,7 +71,7 @@ function showGuide() {
 
   console.log(`
 Bot Anda sudah memiliki kode integrasi Chainlink Data Streams (di
-${c('cyan', 'bot/src/adapters/chainlinkDataStreams.js')}). Yang dibutuhkan
+${c('cyan', 'bot/src/adapters/chainlinkDataStreams.ts')}). Yang dibutuhkan
 hanya 2 environment variable: ${c('bold', 'CHAINLINK_DS_API_KEY')} dan
 ${c('bold', 'CHAINLINK_DS_USER_SECRET')}.
 
@@ -105,7 +105,7 @@ oracle-lead vs CLOB repricing.
 
   step(5, 'Validate + install ke bot');
   info('Setelah dapat keys, jalankan:');
-  info('  ' + c('green', 'node setup-chainlink-ds.mjs --validate'));
+  info('  ' + c('green', 'node setup-chainlink-ds.mts --validate'));
   info('Skrip akan:');
   info('  1. Tanya Anda paste API key + User secret');
   info('  2. Test koneksi ke Chainlink Data Streams API');
@@ -125,7 +125,7 @@ oracle-lead vs CLOB repricing.
   console.log(`  Docs:         ${c('blue', 'https://docs.chain.link/data-streams')}`);
   console.log(`  Polymarket:   ${c('blue', 'https://docs.polymarket.com')}`);
   console.log('');
-  console.log('Setelah dapat keys → ' + c('green', 'node setup-chainlink-ds.mjs --validate'));
+  console.log('Setelah dapat keys → ' + c('green', 'node setup-chainlink-ds.mts --validate'));
   console.log('');
 }
 
@@ -203,7 +203,7 @@ function updateEnvFile(apiKey, userSecret) {
   } else if (/^CHAINLINK_DS_API_KEY=/m.test(content)) {
     content = content.replace(/^CHAINLINK_DS_API_KEY=.*$/m, apiKeyLine);
   } else {
-    content += `\n# Chainlink Data Streams (added by setup-chainlink-ds.mjs)\n${apiKeyLine}\n`;
+    content += `\n# Chainlink Data Streams (added by setup-chainlink-ds.mts)\n${apiKeyLine}\n`;
   }
 
   if (/^# *CHAINLINK_DS_USER_SECRET=/m.test(content)) {
@@ -318,7 +318,7 @@ if (mode === '--guide' || mode === '-g') {
 } else {
   console.log('Unknown mode: ' + mode);
   console.log('Usage:');
-  console.log('  node setup-chainlink-ds.mjs --guide      # walkthrough pendaftaran');
-  console.log('  node setup-chainlink-ds.mjs --validate   # validate keys + install ke .env');
+  console.log('  node setup-chainlink-ds.mts --guide      # walkthrough pendaftaran');
+  console.log('  node setup-chainlink-ds.mts --validate   # validate keys + install ke .env');
   process.exit(1);
 }

@@ -39,7 +39,7 @@ export function getLastAnalysis() {
 
 /**
  * Run trade analysis if enough time has elapsed.
- * Called from bot index.js on interval. Non-blocking.
+ * Called from bot index.ts on interval. Non-blocking.
  */
 export async function maybeAnalyze(totalTrades) {
   if (_analyzing) return;

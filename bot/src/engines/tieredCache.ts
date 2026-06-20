@@ -5,7 +5,7 @@
  * Tier 2 (every 10s):   5m klines
  * Tier 3 (every 30s):   Polymarket market discovery, Chainlink RPC
  *
- * Extracted from loop.js lines 233-251, 496-506.
+ * Extracted from loop.ts lines 233-251, 496-506.
  */
 
 // ── Intervals ──

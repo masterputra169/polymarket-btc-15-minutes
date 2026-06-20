@@ -31,7 +31,7 @@ let urlIdx = 0;
 let intentionalClose = false;
 let _rpcId = 1;
 
-// Public state — read by loop.js
+// Public state — read by loop.ts
 let _price = null;
 let _prevPrice = null;
 let _connected = false;

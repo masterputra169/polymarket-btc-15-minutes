@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--fresh', default='polymarket_history_fresh.csv',
-                    help='Freshly fetched market history CSV from fetchPolymarketHistory.mjs')
+                    help='Freshly fetched market history CSV from fetchPolymarketHistory.mts')
 parser.add_argument('--lookup', default='polymarket_lookup.json',
                     help='Existing polymarket_lookup.json to update')
 parser.add_argument('--days', type=int, default=7,
@@ -223,7 +223,7 @@ def main():
   With tick px:   {with_prices:,} ({with_prices/len(existing)*100:.1f}%)
   File size:      {size_mb:.1f} MB
 
-Next step: node generateTrainingData.mjs --days 540 --polymarket-lookup ./polymarket_lookup.json
+Next step: node generateTrainingData.mts --days 540 --polymarket-lookup ./polymarket_lookup.json
 ============================================
 """)
 

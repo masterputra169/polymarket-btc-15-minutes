@@ -11,8 +11,8 @@
  *   - Observation-mode window status
  *
  * Usage:
- *   node bot/scripts/v19_status.mjs
- *   node bot/scripts/v19_status.mjs --json
+ *   node bot/scripts/v19_status.mts
+ *   node bot/scripts/v19_status.mts --json
  *
  * Created 2026-05-14.
  */
@@ -244,9 +244,9 @@ if (snapshot.errors.length === 0) console.log('  🟢 None');
 else for (const e of snapshot.errors) console.log(`  ${e.slice(0, 160)}`);
 
 header('Quick Actions');
-console.log(`  Performance:  node bot/scripts/v19_performance_report.mjs`);
-console.log(`  Tuning list:  node bot/scripts/tune_v19_config.mjs --list`);
-console.log(`  Balances:     node bot/scripts/check_balances.mjs`);
+console.log(`  Performance:  node bot/scripts/v19_performance_report.mts`);
+console.log(`  Tuning list:  node bot/scripts/tune_v19_config.mts --list`);
+console.log(`  Balances:     node bot/scripts/check_balances.mts`);
 console.log(`  Logs live:    pm2 logs polymarket-bot --lines 20`);
 console.log(`  Stop bot:     pm2 stop polymarket-bot`);
 console.log();

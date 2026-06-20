@@ -82,7 +82,7 @@ echo   STEP 1/3: Generate Training Data
 echo ================================================
 echo.
 
-node "%SCRIPT_DIR%generateTrainingData.mjs" --days %DAYS% --min-move %MIN_MOVE% --output "%DATA_FILE%" %PROXY_ARG%
+node "%SCRIPT_DIR%generateTrainingData.mts" --days %DAYS% --min-move %MIN_MOVE% --output "%DATA_FILE%" %PROXY_ARG%
 
 if not exist "%DATA_FILE%" (
     echo ERROR: Training data generation failed

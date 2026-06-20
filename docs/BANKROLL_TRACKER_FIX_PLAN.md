@@ -109,7 +109,7 @@ if (balanceCache) {
 ```bash
 # 1. Apply diff to clobClient.js
 # 2. Syntax check
-node --check bot/src/trading/clobClient.js
+node --check bot/src/trading/clobClient.ts
 # 3. TypeScript check
 npm run typecheck
 # 4. Restart bot

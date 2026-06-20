@@ -5,7 +5,7 @@
  * Writes daily summaries to bot/data/daily_pnl.jsonl for long-term analysis.
  * Can auto-pause the bot if win rate drops below critical threshold.
  *
- * Lifecycle: startMonitor() / stopMonitor() — called from index.js.
+ * Lifecycle: startMonitor() / stopMonitor() — called from index.ts.
  */
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';

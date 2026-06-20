@@ -7,7 +7,7 @@
 #   ./runTraining.sh [--days 30] [--tune] [--deploy]
 #
 # Requirements:
-#   - Node.js 18+ (for data generation)
+#   - Node.js 25+ (for native TypeScript data generation)
 #   - Python 3.8+ with: xgboost, pandas, numpy, scikit-learn
 #   - Optional: optuna (for --tune Bayesian hyperparameter optimization)
 #
@@ -57,7 +57,7 @@ echo ""
 
 # ═══ Check dependencies ═══
 echo "🔍 Checking dependencies..."
-command -v node >/dev/null 2>&1 || { echo "❌ Node.js not found. Install Node.js 18+"; exit 1; }
+command -v node >/dev/null 2>&1 || { echo "❌ Node.js not found. Install Node.js 25+"; exit 1; }
 command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || { echo "❌ Python not found"; exit 1; }
 
 PYTHON=$(command -v python3 || command -v python)
@@ -103,7 +103,7 @@ echo ""
 
 DATA_FILE="$SCRIPT_DIR/training_data.csv"
 
-node "$SCRIPT_DIR/generateTrainingData.mjs" --days $DAYS --min-move $MIN_MOVE --output "$DATA_FILE" $POLY_FLAG
+node "$SCRIPT_DIR/generateTrainingData.mts" --days $DAYS --min-move $MIN_MOVE --output "$DATA_FILE" $POLY_FLAG
 
 if [ ! -f "$DATA_FILE" ]; then
   echo "❌ Training data generation failed"

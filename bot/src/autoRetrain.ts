@@ -2,15 +2,15 @@
  * Auto-Retrain ML Pipeline — weekly retrain, quality gate, auto-deploy, rollback.
  *
  * Modes:
- *   - Scheduler: `node bot/src/autoRetrain.js` (long-running, sleeps until RETRAIN_DAY/HOUR)
- *   - Manual:    `node bot/src/autoRetrain.js --force` (immediate retrain + deploy)
- *   - Dry-run:   `node bot/src/autoRetrain.js --force --dry-run` (train + gate, no deploy)
- *   - Rollback:  `node bot/src/autoRetrain.js --rollback` (restore last backup)
+ *   - Scheduler: `node bot/src/autoRetrain.ts` (long-running, sleeps until RETRAIN_DAY/HOUR)
+ *   - Manual:    `node bot/src/autoRetrain.ts --force` (immediate retrain + deploy)
+ *   - Dry-run:   `node bot/src/autoRetrain.ts --force --dry-run` (train + gate, no deploy)
+ *   - Rollback:  `node bot/src/autoRetrain.ts --rollback` (restore last backup)
  *
  * Pipeline:
  *   1. Read current model metrics (baseline)
  *   2. python quickUpdateLookup.py 7 (refresh market lookup)
- *   3. node generateTrainingData.mjs --days N (fresh CSV)
+ *   3. node generateTrainingData.mts --days N (fresh CSV)
  *   4. python trainXGBoost_v3.py --tune --tune-trials N (train XGB + LGB)
  *   5. Quality gate (absolute + relative checks)
  *   6. Backup current → deploy new → PM2 restart bot
@@ -78,10 +78,10 @@ if (HELP) {
 Auto-Retrain ML Pipeline
 
 Usage:
-  node bot/src/autoRetrain.js                 Scheduler (long-running, weekly)
-  node bot/src/autoRetrain.js --force         Immediate retrain + deploy
-  node bot/src/autoRetrain.js --force --dry-run  Train + gate check, no deploy
-  node bot/src/autoRetrain.js --rollback      Restore last backup
+  node bot/src/autoRetrain.ts                 Scheduler (long-running, weekly)
+  node bot/src/autoRetrain.ts --force         Immediate retrain + deploy
+  node bot/src/autoRetrain.ts --force --dry-run  Train + gate check, no deploy
+  node bot/src/autoRetrain.ts --rollback      Restore last backup
 
 Env vars (in bot/.env):
   RETRAIN_DAY_OF_WEEK=0   RETRAIN_HOUR_UTC=3    RETRAIN_DAYS=540
@@ -356,7 +356,7 @@ async function runPipeline() {
   log.info('Step 3/7: Generating training data...');
   const polyLookup = resolve(TRAINING_DIR, 'polymarket_lookup.json');
   const polyFlag = existsSync(polyLookup) ? `--polymarket-lookup "${polyLookup}"` : '';
-  run(`node "${resolve(TRAINING_DIR, 'generateTrainingData.mjs')}" --days ${CFG.days} ${polyFlag}`.trim(), { timeout: 10 * 60 * 1000 });
+  run(`node "${resolve(TRAINING_DIR, 'generateTrainingData.mts')}" --days ${CFG.days} ${polyFlag}`.trim(), { timeout: 10 * 60 * 1000 });
 
   // Step 4: Train
   log.info('Step 4/7: Training models (XGB + LGB)...');

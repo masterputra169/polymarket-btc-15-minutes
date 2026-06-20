@@ -15,7 +15,7 @@
  *
  * Actions on detection:
  *   - Always: log.warn + Telegram/Discord notification
- *   - If DRIFT_AUTO_RETRAIN=true: spawn autoRetrain.js --force
+ *   - If DRIFT_AUTO_RETRAIN=true: spawn autoRetrain.ts --force
  *   - Enforce cooldown (default 7 days) between retrain triggers
  *
  * Config (bot/.env):
@@ -170,7 +170,7 @@ function triggerRetrain(reason) {
 
   log.info('Triggering auto-retrain due to concept drift...');
   try {
-    const retrainScript = resolve(__dirname, '..', 'autoRetrain.js');
+    const retrainScript = resolve(__dirname, '..', 'autoRetrain.ts');
     // Audit fix (2026-05-14 Tier-1): use spawn() with detached, NOT execSync.
     // execSync ignores `detached` option and blocks until completion. spawn()
     // with detached:true + unref() lets retrain run as background process so

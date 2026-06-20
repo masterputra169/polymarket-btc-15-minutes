@@ -282,7 +282,7 @@ console.log(`
 ╚════════════════════════════════════════════════════════╝
 
 Next steps:
-  1. node convertScrapedToLookup.mjs  (update lookup JSON)
-  2. node generateTrainingData.mjs --days 600 --polymarket-lookup ./polymarket_lookup_v15.json
+  1. node convertScrapedToLookup.mts  (update lookup JSON)
+  2. node generateTrainingData.mts --days 600 --polymarket-lookup ./polymarket_lookup_v15.json
   3. python trainXGBoost_v3.py --input training_data.csv --output-dir ./output_v15 --tune --tune-trials 150 --holdout-frac 0.125 --recency
 `);

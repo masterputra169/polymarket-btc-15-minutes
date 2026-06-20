@@ -1,7 +1,7 @@
 /**
  * Polymarket LiveData WebSocket stream for Node.js bot.
  * Real-time Chainlink BTC/USD price via Polymarket's LiveData feed.
- * Ported from usePolymarketChainlinkStream.js — same protocol, no React.
+ * Ported from usePolymarketChainlinkStream.ts — same protocol, no React.
  */
 
 import { WebSocket } from 'ws';
@@ -25,7 +25,7 @@ let lastMsgMs = 0;
 let intentionalClose = false; // H4: Prevent zombie reconnect on shutdown
 let _parseErrors = 0;
 
-// Public state — read by loop.js
+// Public state — read by loop.ts
 let _price = null;
 let _prevPrice = null;
 let _connected = false;

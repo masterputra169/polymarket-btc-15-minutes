@@ -41,16 +41,16 @@ SHADOW_CAPTURE=false
 
 ### ❌ DO NOT (next 24 hours)
 - Restart bot (`pm2 restart polymarket-bot` forbidden)
-- Apply config tuning (`tune_v19_config.mjs --apply` forbidden)
+- Apply config tuning (`tune_v19_config.mts --apply` forbidden)
 - Modify any code in `bot/src/`
 - Modify `.env`
 - Manually edit `state.json`
 - Touch model files in `public/ml/`
 
 ### ✅ ALLOWED
-- Read trade journal (`v19_performance_report.mjs`)
+- Read trade journal (`v19_performance_report.mts`)
 - Read logs (`pm2 logs --nostream`)
-- Inspect on-chain balances (`check_balances.mjs`)
+- Inspect on-chain balances (`check_balances.mts`)
 - Update memory/docs
 - Diagnose issues by reading (no writes)
 

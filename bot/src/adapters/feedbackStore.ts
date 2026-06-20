@@ -6,7 +6,7 @@
  * Key insight: calling setCache() before any feedback function ensures
  * ensureLoaded() in state.js short-circuits (cache !== null), so localStorage
  * is never read. The schedulePersist() timer will try localStorage.setItem()
- * but our polyfill (installed in index.js) makes it a no-op.
+ * but our polyfill (installed in index.ts) makes it a no-op.
  * We handle actual persistence ourselves via saveFeedbackToDisk().
  */
 

@@ -28,18 +28,21 @@ __pycache__/
 venv/
 
 backtest/*
+!backtest/*.mts
 !backtest/ml_training/
 backtest/ml_training/*
 !backtest/ml_training/*.py
-!backtest/ml_training/*.mjs
+!backtest/ml_training/*.mts
 .backtest_cache/
 .backtest/
 
 # Personal notes / temp analysis scripts (root level)
 *.txt
 _*.cjs
+_*.cts
 _*.py
 _*.mjs
+_*.mts
 _*.json
 tmp_*.json
 PREDICTION_BOT.md
@@ -55,12 +58,16 @@ ss/
 # ML model backups (large binary files)
 public/ml/*.bak
 public/ml/backups/
+public/ml/v16_locked/
+public/ml_v19_staging/
 
 # Bot runtime data (private trade data, .env backups)
 bot/data/
-bot/fetch-trades.js
+bot/fetch-trades.ts
 bot/_*.cjs
+bot/_*.cts
 bot/_*.mjs
+bot/_*.mts
 # Research notes / screenshots (local only)
 insight polymarket/
 monte carlo/

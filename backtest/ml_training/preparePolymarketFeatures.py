@@ -3,7 +3,7 @@
 === Phase 0: Prepare Polymarket Features ===
 
 Pre-processes real Polymarket historical data into a compact JSON lookup
-that generateTrainingData.mjs consumes for:
+that generateTrainingData.mts consumes for:
   - Real market labels (resolved UP/DOWN)
   - Real minutesLeft computation
   - Real features 44-48 (market_yes_price, momentum, spread, etc.)

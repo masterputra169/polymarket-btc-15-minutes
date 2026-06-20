@@ -44,7 +44,7 @@ export function computeVolumeDelta(
   const len = candles.length;
   const lastCandle = candles[len - 1];
   if (lastCandle.takerBuyVolume === undefined || lastCandle.takerBuyVolume === null) {
-    return null; // Data not available — binance.js needs to parse field [9]
+    return null; // Data not available — binance.ts needs to parse field [9]
   }
 
   // Recent buy ratio (last `recentLookback` candles)

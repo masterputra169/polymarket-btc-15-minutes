@@ -53,7 +53,7 @@ export function getLastRLNarrative() {
 
 /**
  * Generate RL narrative if enough time has elapsed and data is available.
- * Called from index.js AI interval. Non-blocking.
+ * Called from index.ts AI interval. Non-blocking.
  */
 export async function maybeGenerateRLNarrative() {
   if (_generating) return;

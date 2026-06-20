@@ -12,10 +12,10 @@ trade entry berdasarkan observed performance vs shadow expectations.
 
 | Command | Fungsi |
 |---|---|
-| `node bot/scripts/v19_performance_report.mjs` | Lihat stats per phase/entry-type/ML-band |
-| `node bot/scripts/tune_v19_config.mjs --list` | Lihat preset tuning yang tersedia |
-| `node bot/scripts/tune_v19_config.mjs --apply <name>` | Apply preset (safety-gated) |
-| `node bot/scripts/tune_v19_config.mjs --rollback` | Restore .env terakhir |
+| `node bot/scripts/v19_performance_report.mts` | Lihat stats per phase/entry-type/ML-band |
+| `node bot/scripts/tune_v19_config.mts --list` | Lihat preset tuning yang tersedia |
+| `node bot/scripts/tune_v19_config.mts --apply <name>` | Apply preset (safety-gated) |
+| `node bot/scripts/tune_v19_config.mts --rollback` | Restore .env terakhir |
 
 ---
 
@@ -111,7 +111,7 @@ Restore via `--rollback`.
 ### Dry-run
 Setiap preset bisa di-preview dengan `--dry-run`:
 ```bash
-node bot/scripts/tune_v19_config.mjs --apply tier-balanced --dry-run
+node bot/scripts/tune_v19_config.mts --apply tier-balanced --dry-run
 ```
 
 ---
@@ -120,7 +120,7 @@ node bot/scripts/tune_v19_config.mjs --apply tier-balanced --dry-run
 
 ### Step 1 — Baseline (recommended setiap +6h)
 ```bash
-node bot/scripts/v19_performance_report.mjs
+node bot/scripts/v19_performance_report.mts
 ```
 
 Output akan show:
@@ -136,10 +136,10 @@ Apply decision tree di atas. Kalau ragu, **prefer not tuning** (Hippocratic prin
 ### Step 3 — Apply (kalau perlu)
 ```bash
 # Preview first
-node bot/scripts/tune_v19_config.mjs --apply tier-balanced --dry-run
+node bot/scripts/tune_v19_config.mts --apply tier-balanced --dry-run
 
 # Apply
-node bot/scripts/tune_v19_config.mjs --apply tier-balanced
+node bot/scripts/tune_v19_config.mts --apply tier-balanced
 
 # Restart bot
 pm2 restart polymarket-bot
@@ -150,7 +150,7 @@ Wait 24-48h, run report lagi. Compare WR before vs after.
 
 Kalau WR turun >5pp dari baseline:
 ```bash
-node bot/scripts/tune_v19_config.mjs --rollback
+node bot/scripts/tune_v19_config.mts --rollback
 pm2 restart polymarket-bot
 ```
 
@@ -187,7 +187,7 @@ Variables yang di-controlled tuning script:
 
 ### Bot losing money rapidly
 1. `pm2 stop polymarket-bot` — immediate halt
-2. `node bot/scripts/v19_performance_report.mjs` — diagnose
+2. `node bot/scripts/v19_performance_report.mts` — diagnose
 3. Kalau model issue: apply rollback preset + copy v16 files + restart
 4. Kalau config issue: `--rollback` previous .env + restart
 

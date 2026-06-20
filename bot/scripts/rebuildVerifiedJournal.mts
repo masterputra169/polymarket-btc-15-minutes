@@ -29,7 +29,7 @@
  * 6. Writes to verified_journal.v2.jsonl (safe — doesn't touch original)
  *
  * USAGE:
- *   node bot/scripts/rebuildVerifiedJournal.mjs [--days 180]
+ *   node bot/scripts/rebuildVerifiedJournal.mts [--days 180]
  *                                               [--output verified_journal.v2.jsonl]
  *                                               [--dry-run]
  *                                               [--limit 0]     (max markets to process)
@@ -62,13 +62,13 @@ type MarketInfo = {
   resolved: boolean;
 };
 
-// Load env BEFORE module imports (same pattern as bot/index.js)
+// Load env BEFORE module imports (same pattern as bot/index.ts)
 import { config as dotenvConfig } from 'dotenv';
 const __file = fileURLToPath(import.meta.url);
 const __dir = dirname(__file);
 dotenvConfig({ path: resolve(__dir, '..', '.env') });
 
-// Polyfills (matches bot/index.js)
+// Polyfills (matches bot/index.ts)
 if (typeof globalThis.localStorage === 'undefined') {
   const storage = new Map<string, string>();
   globalThis.localStorage = {

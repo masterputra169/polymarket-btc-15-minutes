@@ -101,7 +101,7 @@ Every ~50ms the bot:
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Node.js | >= 20 | Tested on 25.1.0 |
+| Node.js | >= 25 | Tested on 25.1.0; required for native `.ts/.mts/.cts` execution |
 | Python | >= 3.10 | ML retraining only (3.13.0 tested) |
 | PM2 | Latest | `npm install -g pm2` |
 
@@ -258,7 +258,7 @@ DRIFT_AUTO_RETRAIN=false              # Set true to auto-trigger retrain on drif
 
 ```bash
 # Ensure DRY_RUN=true in bot/.env, then:
-pm2 start ecosystem.config.cjs
+pm2 start ecosystem.config.cts
 pm2 logs polymarket-bot
 ```
 
@@ -284,7 +284,7 @@ pm2 logs polymarket-bot
 ### PM2 Commands
 
 ```bash
-pm2 start ecosystem.config.cjs        # Start bot + frontend dashboard
+pm2 start ecosystem.config.cts        # Start bot + frontend dashboard
 pm2 logs polymarket-bot               # Bot live logs (Ctrl+C to exit)
 pm2 logs frontend                     # Frontend live logs
 pm2 logs polymarket-bot --lines 200   # Last 200 lines
@@ -425,7 +425,7 @@ cd backtest/ml_training
 python quickUpdateLookup.py 7
 
 # 2. Generate training data
-node generateTrainingData.mjs --days 120 --polymarket-lookup ./polymarket_lookup.json
+node generateTrainingData.mts --days 120 --polymarket-lookup ./polymarket_lookup.json
 
 # 3. Train with Optuna HPO (150 trials)
 python trainXGBoost_v3.py --input training_data.csv --tune --tune-trials 150
@@ -512,7 +512,7 @@ pm2 restart polymarket-bot
 - Check `pm2 status` — both `polymarket-bot` and `frontend` must be running
 - Verify port 3099 is not blocked
 - Dashboard connects to `ws://localhost:3099`
-- If `frontend` shows `errored`: `pm2 delete frontend && pm2 start ecosystem.config.cjs --only frontend`
+- If `frontend` shows `errored`: `pm2 delete frontend && pm2 start ecosystem.config.cts --only frontend`
 
 ### Bankroll mismatch
 
@@ -529,42 +529,42 @@ pm2 restart polymarket-bot
 ```
 frontend/
 ├── src/                          # React 19 dashboard
-│   ├── App.jsx                   # Root, per-panel useMemo data slicing
+│   ├── App.tsx                   # Root, per-panel useMemo data slicing
 │   ├── components/               # 12 dashboard panels
 │   ├── engines/                  # Browser-side ML + decision engines
-│   │   ├── Mlpredictor.js        # XGBoost tree traversal (Float64Array)
-│   │   ├── edge.js               # Phase-based edge thresholds
-│   │   ├── asymmetricBet.js      # Kelly fraction sizing
-│   │   └── regime.js             # Choppy/trending/mean-revert classifier
+│   │   ├── Mlpredictor.ts        # XGBoost tree traversal (Float64Array)
+│   │   ├── edge.ts               # Phase-based edge thresholds
+│   │   ├── asymmetricBet.ts      # Kelly fraction sizing
+│   │   └── regime.ts             # Choppy/trending/mean-revert classifier
 │   ├── indicators/               # 10 TA functions (RSI, MACD, VWAP, ...)
 │   ├── hooks/                    # useBotData, useCountdown, useClock
-│   └── config.js                 # Frontend parameters + polyFeeRate()
+│   └── config.ts                 # Frontend parameters + polyFeeRate()
 │
 ├── bot/                          # Node.js trading bot (PM2-managed)
-│   ├── index.js                  # Entry point + startup sequence
+│   ├── index.ts                  # Entry point + startup sequence
 │   └── src/
-│       ├── loop.js               # Main poll loop (~2000 lines)
-│       ├── config.js             # BOT_CONFIG from .env
-│       ├── statusServer.js       # WebSocket broadcast server :3099
-│       ├── autoRetrain.js        # Weekly ML retraining orchestrator
+│       ├── loop.ts               # Main poll loop (~2000 lines)
+│       ├── config.ts             # BOT_CONFIG from .env
+│       ├── statusServer.ts       # WebSocket broadcast server :3099
+│       ├── autoRetrain.ts        # Weekly ML retraining orchestrator
 │       ├── engines/
-│       │   ├── signalComputation.js   # All indicators per poll
-│       │   ├── tradePipeline.js       # Order execution + Kelly sizing
-│       │   ├── orderRouter.js         # 7-rule LIMIT/FOK/WAIT decision
-│       │   ├── limitOrderManager.js   # GTD order lifecycle
-│       │   └── settlement.js          # Settlement detection + P&L
+│       │   ├── signalComputation.ts   # All indicators per poll
+│       │   ├── tradePipeline.ts       # Order execution + Kelly sizing
+│       │   ├── orderRouter.ts         # 7-rule LIMIT/FOK/WAIT decision
+│       │   ├── limitOrderManager.ts   # GTD order lifecycle
+│       │   └── settlement.ts          # Settlement detection + P&L
 │       ├── trading/
-│       │   ├── positionTracker.js     # Bankroll + position state
-│       │   ├── cutLoss.js             # 13-gate cut-loss evaluator
-│       │   └── recoveryBuy.js         # Re-entry after cut-loss
+│       │   ├── positionTracker.ts     # Bankroll + position state
+│       │   ├── cutLoss.ts             # 13-gate cut-loss evaluator
+│       │   └── recoveryBuy.ts         # Re-entry after cut-loss
 │       ├── safety/
-│       │   ├── tradeFilters.js        # 15 entry filters
-│       │   └── guards.js              # Circuit breaker
+│       │   ├── tradeFilters.ts        # 15 entry filters
+│       │   └── guards.ts              # Circuit breaker
 │       └── monitoring/
-│           ├── perfMonitor.js         # Rolling win rate + daily P&L
-│           ├── driftDetector.js       # CUSUM concept drift detection
-│           ├── rollbackMonitor.js     # Post-deploy WR monitor
-│           └── notifier.js            # Telegram + Discord alerts
+│           ├── perfMonitor.ts         # Rolling win rate + daily P&L
+│           ├── driftDetector.ts       # CUSUM concept drift detection
+│           ├── rollbackMonitor.ts     # Post-deploy WR monitor
+│           └── notifier.ts            # Telegram + Discord alerts
 │
 ├── public/ml/                    # Deployed ML models
 │   ├── xgboost_model.json        # XGBoost ensemble (v16)
@@ -573,12 +573,12 @@ frontend/
 │
 ├── backtest/ml_training/         # ML training pipeline
 │   ├── trainXGBoost_v3.py        # Main trainer (Optuna HPO)
-│   ├── generateTrainingData.mjs  # Feature engineering
+│   ├── generateTrainingData.mts  # Feature engineering
 │   ├── backtestPnL.py            # Threshold sweep backtest
 │   └── quickUpdateLookup.py      # Scrape recent Polymarket markets
 │
-├── ecosystem.config.cjs          # PM2: bot + frontend processes
-├── vite.config.js                # Dev server + CORS proxies
+├── ecosystem.config.cts          # PM2: bot + frontend processes
+├── vite.config.ts                # Dev server + CORS proxies
 └── package.json
 ```
 
@@ -587,7 +587,7 @@ frontend/
 ## Important Notes
 
 - **Always start with `DRY_RUN=true`** — verify everything works before going live
-- **Never run `node bot/index.js` directly** — always use PM2 (handles `.env` loading)
+- **Never run `node bot/index.ts` directly** — always use PM2 (handles `.env` loading)
 - **The bot does not need ETH** — Polymarket uses gasless relays on Polygon
 - **Settlement beats early exit** — the cut-loss is intentionally conservative by design
 - **Blackout hours 16:00–23:00 ET** — bot automatically skips historically low-WR hours

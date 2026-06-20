@@ -6,9 +6,9 @@
  * clean verified_journal.jsonl.
  *
  * Usage:
- *   node bot/freshFetchJournal.js                   # Full rebuild
- *   node bot/freshFetchJournal.js --days 7           # Last 7 days only
- *   node bot/freshFetchJournal.js --dry-run           # Preview without writing
+ *   node bot/freshFetchJournal.ts                   # Full rebuild
+ *   node bot/freshFetchJournal.ts --days 7           # Last 7 days only
+ *   node bot/freshFetchJournal.ts --dry-run           # Preview without writing
  *
  * Requires .env with POLYMARKET_PRIVATE_KEY, API_KEY, API_SECRET, API_PASSPHRASE
  */

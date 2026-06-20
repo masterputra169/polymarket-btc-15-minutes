@@ -20,7 +20,7 @@
  * already filters by wallet address.
  *
  * USAGE:
- *   node bot/scripts/onchainJournalAudit.mjs [--output verified_journal.onchain.jsonl]
+ *   node bot/scripts/onchainJournalAudit.mts [--output verified_journal.onchain.jsonl]
  *                                             [--merge]
  *                                             [--compare]
  *

@@ -83,7 +83,7 @@ export async function sendDailySummary() {
 
 /**
  * Schedule daily summary to fire at midnight ET every day.
- * Called once from index.js on startup.
+ * Called once from index.ts on startup.
  */
 export function scheduleDailySummary() {
   function msUntilMidnightET() {
@@ -125,7 +125,7 @@ export function stopDailySummary() {
 
 /**
  * RC1 Fix: Load entry snapshot from disk if it exists (survives bot restarts).
- * Called at startup (index.js) and lazily from writeJournalEntry.
+ * Called at startup (index.ts) and lazily from writeJournalEntry.
  */
 export function loadEntrySnapshotFromDisk() {
   try {

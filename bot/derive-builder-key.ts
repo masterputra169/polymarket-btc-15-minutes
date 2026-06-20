@@ -5,7 +5,7 @@
  * rewards/programs in the future. Run ONCE and save the output to .env.
  *
  * Usage:
- *   cd bot && node --env-file=./.env derive-builder-key.js
+ *   cd bot && node --env-file=./.env derive-builder-key.ts
  *
  * After running, copy the printed values to bot/.env:
  *   POLYMARKET_BUILDER_KEY=...
@@ -32,7 +32,7 @@ const apiSecret = process.env.POLYMARKET_API_SECRET;
 const apiPassphrase = process.env.POLYMARKET_API_PASSPHRASE;
 if (!apiKey || !apiSecret || !apiPassphrase) {
   console.error("ERROR: Existing API credentials required (POLYMARKET_API_KEY/SECRET/PASSPHRASE).");
-  console.error("Run derive-credentials.js first to obtain L2 creds.");
+  console.error("Run derive-credentials.ts first to obtain L2 creds.");
   process.exit(1);
 }
 
@@ -71,7 +71,7 @@ try {
   console.log(JSON.stringify(builderKey, null, 2));
   console.log("=".repeat(60));
   console.log("\nNote: Bot does NOT auto-use this yet. To attach builderCode to");
-  console.log("orders, edit clobClient.js placeBuyOrder/placeLimitBuyOrder and pass");
+  console.log("orders, edit clobClient.ts placeBuyOrder/placeLimitBuyOrder and pass");
   console.log("`builderCode` in the userOrder object.");
 } catch (err) {
   console.error("\n✗ Failed:", err.message);

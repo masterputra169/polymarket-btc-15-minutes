@@ -1,6 +1,6 @@
 /**
  * Pure function that computes all technical indicators from candle data.
- * Extracted from useMarketData.js to reduce its size.
+ * Extracted from useMarketData.ts to reduce its size.
  */
 
 import { CONFIG } from '../config.ts';

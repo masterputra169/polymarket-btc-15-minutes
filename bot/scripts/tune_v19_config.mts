@@ -3,10 +3,10 @@
  * v19 Config Tuning — preset-based env adjustment with safety guards.
  *
  * Usage:
- *   node bot/scripts/tune_v19_config.mjs --list                # show presets
- *   node bot/scripts/tune_v19_config.mjs --apply conservative  # current default
- *   node bot/scripts/tune_v19_config.mjs --apply tier-balanced --force  # bypass guards
- *   node bot/scripts/tune_v19_config.mjs --rollback            # restore previous .env
+ *   node bot/scripts/tune_v19_config.mts --list                # show presets
+ *   node bot/scripts/tune_v19_config.mts --apply conservative  # current default
+ *   node bot/scripts/tune_v19_config.mts --apply tier-balanced --force  # bypass guards
+ *   node bot/scripts/tune_v19_config.mts --rollback            # restore previous .env
  *
  * Safety:
  *   - Backs up .env to .env.backup-<timestamp> before any change
@@ -194,8 +194,8 @@ if (args.list || (!args.apply && !args.rollback)) {
     console.log();
   }
   console.log('Usage:');
-  console.log('  node bot/scripts/tune_v19_config.mjs --apply <preset> [--force] [--dry-run]');
-  console.log('  node bot/scripts/tune_v19_config.mjs --rollback           # restore latest backup');
+  console.log('  node bot/scripts/tune_v19_config.mts --apply <preset> [--force] [--dry-run]');
+  console.log('  node bot/scripts/tune_v19_config.mts --rollback           # restore latest backup');
   process.exit(0);
 }
 
@@ -273,4 +273,4 @@ console.log(`Updated: ${ENV_PATH}`);
 if (preset.extraNote) console.log(`\nNOTE: ${preset.extraNote}`);
 
 console.log(`\nNext: restart bot to apply — pm2 restart polymarket-bot`);
-console.log(`Rollback: node bot/scripts/tune_v19_config.mjs --rollback`);
+console.log(`Rollback: node bot/scripts/tune_v19_config.mts --rollback`);

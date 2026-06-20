@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Automated BTC 15-minute Polymarket trading bot",
   "main": "index.ts",
+  "engines": {
+    "node": ">=25.0.0"
+  },
   "scripts": {
     "start": "node index.ts",
     "dry-run": "node -e \"process.env.DRY_RUN='true'; import('./index.ts')\""

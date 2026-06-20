@@ -64,7 +64,7 @@ function BotPanel({ connected, data }) {
           </span>
         </div>
         <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-          Bot not running. Start with: cd bot && node index.js
+          Bot not running. Start with: cd bot && node index.ts
         </div>
       </div>
     );

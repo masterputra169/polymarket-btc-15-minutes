@@ -76,7 +76,7 @@ function extractInlineButton(text) {
  */
 async function sendTelegram(text) {
   // Read from process.env directly — BOT_CONFIG captures empty strings because
-  // ES module imports are hoisted before dotenvConfig() runs in index.js body.
+  // ES module imports are hoisted before dotenvConfig() runs in index.ts body.
   const token = process.env.TELEGRAM_BOT_TOKEN || '';
   const chatId = process.env.TELEGRAM_CHAT_ID || '';
   if (!token || !chatId) return false;

@@ -8,7 +8,7 @@
  * Output: polymarket_history.csv with one row per resolved market (~96/day)
  *
  * Usage:
- *   node fetchPolymarketHistory.mjs [--output polymarket_history.csv] [--limit 5000]
+ *   node fetchPolymarketHistory.mts [--output polymarket_history.csv] [--limit 5000]
  *
  * Note: Gamma API returns one price per market (settlement/final price),
  *       not tick-level data. This is still valuable for replacing simulated

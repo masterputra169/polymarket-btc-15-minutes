@@ -9,8 +9,8 @@
  * Apples-to-apples: same features, different model.
  *
  * Usage:
- *   node bot/scripts/v19_shadow_replay.mjs
- *   node bot/scripts/v19_shadow_replay.mjs --capture path/to/feature_capture.jsonl --output ...
+ *   node bot/scripts/v19_shadow_replay.mts
+ *   node bot/scripts/v19_shadow_replay.mts --capture path/to/feature_capture.jsonl --output ...
  *
  * Created 2026-05-14 for v19 validation. See docs/V19_VALIDATION_PLAN.md.
  */
@@ -241,7 +241,7 @@ async function main() {
   console.log(`  v16 HC:     ${v16HighConf} (${(v16HighConf/count*100).toFixed(1)}%)`);
   console.log(`  v19 HC:     ${v19HighConf} (${(v19HighConf/count*100).toFixed(1)}%)`);
   console.log(`\nOutput: ${OUTPUT_PATH}`);
-  console.log(`Next: node bot/scripts/compare_v16_vs_v19.mjs`);
+  console.log(`Next: node bot/scripts/compare_v16_vs_v19.mts`);
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

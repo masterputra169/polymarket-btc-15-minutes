@@ -1,8 +1,8 @@
 /**
  * Standalone runner for deposit activator.
  *
- *   node bot/scripts/activate_now.mjs --dry-run    (preview only)
- *   node bot/scripts/activate_now.mjs              (execute)
+ *   node bot/scripts/activate_now.mts --dry-run    (preview only)
+ *   node bot/scripts/activate_now.mts              (execute)
  */
 import dotenv from 'dotenv';
 import path from 'path';

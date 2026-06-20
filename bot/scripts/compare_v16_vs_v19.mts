@@ -7,7 +7,7 @@
  * rate, hit rate (when high-conf), and decision overlap statistics.
  *
  * Usage:
- *   node bot/scripts/compare_v16_vs_v19.mjs
+ *   node bot/scripts/compare_v16_vs_v19.mts
  *
  * Created 2026-05-14 for v19 validation.
  */

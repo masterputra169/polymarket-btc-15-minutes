@@ -294,7 +294,7 @@ export function pauseBot(source = 'dashboard') { paused = true; log.info(`Bot PA
 export function resumeBot(source = 'dashboard') { paused = false; log.info(`Bot RESUMED (${source})`); }
 export function isPaused() { return paused; }
 
-// ── Position callback (injected from index.js to avoid circular imports) ──
+// ── Position callback (injected from index.ts to avoid circular imports) ──
 let _getPositionsSummary: null | ((position?: unknown) => unknown) = null;
 export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
 

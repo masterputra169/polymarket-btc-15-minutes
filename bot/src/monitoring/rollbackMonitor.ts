@@ -4,7 +4,7 @@
  * Called from perfMonitor.js every 15 min. Checks if a recently-deployed model
  * has degraded live win rate beyond threshold, and auto-rollbacks if so.
  *
- * Reads: bot/data/last_deploy.json (written by autoRetrain.js)
+ * Reads: bot/data/last_deploy.json (written by autoRetrain.ts)
  * Uses:  positionTracker stats for live WR, autoRetrain for rollback
  */
 

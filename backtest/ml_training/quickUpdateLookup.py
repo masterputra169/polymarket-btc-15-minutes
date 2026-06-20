@@ -86,15 +86,15 @@ for m in new:
     lookup[m['ts']] = {'label': m['label'], 'spread': 0.02, 'liquidity': m['liquidity'], 'volume': m['volume'], 'prices': []}
 
 # Audit fix (May 2026): warn loudly when new markets are priceless.
-# generateTrainingData.mjs drops samples with empty prices → these markets contribute
+# generateTrainingData.mts drops samples with empty prices → these markets contribute
 # nothing to real-label training (sim fallback removed). Run fetchFreshMarkets.mjs
 # afterwards to enrich tick prices, OR accept reduced corpus for label-only retrain.
 if new:
     pct_priceless = 100.0  # all rows added here are priceless by construction
     print(f"\n  WARNING: {len(new)} new markets added with prices: [] (label-only).")
     print(f"  These rows will NOT contribute to feature generation in")
-    print(f"  generateTrainingData.mjs (Polymarket features 44-47 need price history).")
-    print(f"  Run `node fetchFreshMarkets.mjs --days {DAYS} --lookup {LOOKUP_PATH}` to enrich.\n")
+    print(f"  generateTrainingData.mts (Polymarket features 44-47 need price history).")
+    print(f"  Run `node fetchFreshMarkets.mts --days {DAYS} --lookup {LOOKUP_PATH}` to enrich.\n")
 
 # Atomic write: .tmp -> fsync -> rename. Prevents corruption on Ctrl-C/OOM.
 print(f"Saving updated lookup ({len(lookup):,} total)...")

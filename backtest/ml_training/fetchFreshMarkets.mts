@@ -3,7 +3,7 @@
  * Fetch fresh Polymarket BTC 15m markets (last N days) + CLOB tick prices
  * and merge into polymarket_lookup.json.
  *
- * Usage: node fetchFreshMarkets.mjs [--days 7] [--lookup polymarket_lookup.json] [--no-prices]
+ * Usage: node fetchFreshMarkets.mts [--days 7] [--lookup polymarket_lookup.json] [--no-prices]
  */
 
 import fs from 'fs';
@@ -225,7 +225,7 @@ async function main() {
   File size:      ${sizeMb} MB
 
 Next:
-  node generateTrainingData.mjs --days 540 --polymarket-lookup ./polymarket_lookup.json
+  node generateTrainingData.mts --days 540 --polymarket-lookup ./polymarket_lookup.json
 ============================================
 `);
 }

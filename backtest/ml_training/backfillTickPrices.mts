@@ -14,7 +14,7 @@
  *   4. Writes back to lookup with checkpointing every 500 markets.
  *
  * Usage:
- *   node backfillTickPrices.mjs [--lookup polymarket_lookup.json]
+ *   node backfillTickPrices.mts [--lookup polymarket_lookup.json]
  *                               [--concurrency 5]
  *                               [--limit 0]           (max markets to process, 0 = all)
  *                               [--checkpoint 500]    (save lookup every N markets)

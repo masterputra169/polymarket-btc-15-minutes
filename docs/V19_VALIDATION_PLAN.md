@@ -85,7 +85,7 @@ backtest/ml_training/
 
 ## Compare After Validation Window
 
-Run: `node bot/scripts/compare_v16_vs_v19.mjs` (created next phase)
+Run: `node bot/scripts/compare_v16_vs_v19.mts` (created next phase)
 
 Output expected:
 ```
@@ -178,7 +178,7 @@ Kalau v19 lebih jelek di shadow:
 4. Tetap pakai v16
 
 Kalau v19 lebih bagus:
-1. Pakai `deploy_v18.mjs --output-dir output_v19 --version v19`
+1. Pakai `deploy_v18.mts --output-dir output_v19 --version v19`
    (atomic copy + smoke test sudah ready)
 2. Backup v16 ke `public/ml/backups/v16_pre_v19/`
 3. PM2 restart

@@ -2,7 +2,7 @@
  * Signal performance persistence adapter for Node.js bot.
  * Replaces localStorage with JSON file persistence.
  *
- * Similar pattern to feedbackStore.js — inject data into shared signalPerf
+ * Similar pattern to feedbackStore.ts — inject data into shared signalPerf
  * module so localStorage is never accessed.
  */
 

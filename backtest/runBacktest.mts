@@ -5,8 +5,8 @@
  * Tests every 15-minute window and tracks accuracy.
  *
  * Usage:
- *   1. First fetch data: node backtest/fetchData.mjs 7
- *   2. Then run backtest: node backtest/runBacktest.mjs backtest/data/btc_7d_2026-02-06.json
+ *   1. First fetch data: node backtest/fetchData.mts 7
+ *   2. Then run backtest: node backtest/runBacktest.mts backtest/data/btc_7d_2026-02-06.json
  *
  * What it does:
  *   - Splits 1m candles into 15-minute windows
@@ -34,7 +34,7 @@ import { scoreDirection, applyTimeAwareness } from '../src/engines/probability.t
 import { computeEdge, decide } from '../src/engines/edge.ts';
 import { getVolatilityProfile } from '../src/engines/volatility.ts';
 import { computeMultiTfConfirmation } from '../src/engines/multitf.ts';
-// Note: feedback.js uses localStorage (browser-only), skip in backtest
+// Note: feedback.ts uses localStorage (browser-only), skip in backtest
 
 type CountStats = { total: number; correct: number };
 type BacktestPrediction = Record<string, any> & {
@@ -60,7 +60,7 @@ type BacktestResults = {
   predictions: BacktestPrediction[];
 };
 
-// ═══ Config (mirror from src/config.js) ═══
+// ═══ Config (mirror from src/config.ts) ═══
 const CONFIG = {
   vwapLookbackCandles: 60,
   rsiPeriod: 8,
@@ -151,7 +151,7 @@ function simulatePrediction(allCandles1m, candles5m, window, minutesLeft) {
   const priceToBeat = window.openPrice;
 
   // ═══ Compute indicators ═══
-  // VWAP — use computeVwapSeries to match useMarketData.js approach
+  // VWAP — use computeVwapSeries to match useMarketData.ts approach
   const vwapSeries = computeVwapSeries(availableCandles, CONFIG.vwapLookbackCandles);
   const vwapNow = vwapSeries.length > 0 ? vwapSeries[vwapSeries.length - 1] : null;
   const vwapSlope = vwapSeries.length >= 5 ? slopeLast(vwapSeries, 5) : null;
@@ -300,7 +300,7 @@ function simulatePrediction(allCandles1m, candles5m, window, minutesLeft) {
     session: getSession(window.startTime),
     rec: rec.action,
     recSide: rec.side,
-    recConfidence: rec.confidence, // NEW: VERY_HIGH/HIGH/MEDIUM/LOW from edge.js v2
+    recConfidence: rec.confidence, // NEW: VERY_HIGH/HIGH/MEDIUM/LOW from edge.ts v2
     recPhase: rec.phase,
     recReason: rec.reason,
     edgeUp: edge.edgeUp,
@@ -314,8 +314,8 @@ function simulatePrediction(allCandles1m, candles5m, window, minutesLeft) {
 async function main() {
   const dataFile = process.argv[2];
   if (!dataFile) {
-    console.error('Usage: node backtest/runBacktest.mjs <data-file.json>');
-    console.error('Example: node backtest/runBacktest.mjs backtest/data/btc_7d_2026-02-06.json');
+    console.error('Usage: node backtest/runBacktest.mts <data-file.json>');
+    console.error('Example: node backtest/runBacktest.mts backtest/data/btc_7d_2026-02-06.json');
     process.exit(1);
   }
 
@@ -467,7 +467,7 @@ async function main() {
   }
 
   console.log('╠──────────────────────────────────────────────────────╣');
-  console.log('║  BY ENTER QUALITY (edge.js confidence):');
+  console.log('║  BY ENTER QUALITY (edge.ts confidence):');
   const rcOrder = ['VERY_HIGH', 'HIGH', 'MEDIUM', 'LOW', 'NONE'];
   for (const level of rcOrder) {
     const data = results.byRecConfidence[level];

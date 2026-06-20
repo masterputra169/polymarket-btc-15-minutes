@@ -10,10 +10,10 @@
  * Output: training_data.csv with 54 feature columns + label column
  *
  * Usage:
- *   node generateTrainingData.mjs [--days 30] [--interval 1m] [--output training_data.csv]
+ *   node generateTrainingData.mts [--days 30] [--interval 1m] [--output training_data.csv]
  *
  * Requirements:
- *   - Node.js 18+
+ *   - Node.js 25+
  *   - Internet connection (Binance API)
  */
 

@@ -11,9 +11,9 @@
  * distinguish signal from noise at small sample sizes.
  *
  * Usage:
- *   node bot/scripts/v19_performance_report.mjs
- *   node bot/scripts/v19_performance_report.mjs --since-ms 1778737618575
- *   node bot/scripts/v19_performance_report.mjs --json (machine-readable)
+ *   node bot/scripts/v19_performance_report.mts
+ *   node bot/scripts/v19_performance_report.mts --since-ms 1778737618575
+ *   node bot/scripts/v19_performance_report.mts --json (machine-readable)
  *
  * Created 2026-05-14.
  */

@@ -60,7 +60,7 @@ let _removeTracker = null;
 let _simulateTrader = null;
 
 /**
- * Register pause/resume callbacks from loop.js (called by index.js).
+ * Register pause/resume callbacks from loop.ts (called by index.ts).
  */
 export function registerBotControl(pauseFn, resumeFn, resetEntryRegimeFn) {
   _pauseBot = pauseFn;

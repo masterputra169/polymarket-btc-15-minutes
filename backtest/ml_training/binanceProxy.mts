@@ -8,7 +8,7 @@
  * No external dependencies - uses Node.js built-in modules only.
  *
  * Usage:
- *   node binanceProxy.mjs [--port 3456]
+ *   node binanceProxy.mts [--port 3456]
  *
  * Then run training with:
  *   runTraining.bat --days 365 --tune --deploy --proxy http://localhost:3456

@@ -42,7 +42,7 @@ let _optimizing = false;
 
 /**
  * Attempt to apply AI recommendations if auto-optimize is enabled.
- * Called periodically from bot index.js.
+ * Called periodically from bot index.ts.
  */
 export async function maybeOptimize() {
   if (_optimizing) return;
