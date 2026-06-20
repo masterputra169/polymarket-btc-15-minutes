@@ -1065,6 +1065,7 @@ export function getLastLossTimestamp() { return state.lastLossTimestamp || 0; }
 /** FINTECH: Set loss timestamp (called from tradeFilters). */
 export function setLastLossTimestamp(ts) {
   state.lastLossTimestamp = Number.isFinite(ts) ? ts : 0;
+  saveState();
 }
 
 /** H7: Get persisted market trade counts. */
@@ -1073,6 +1074,7 @@ export function getMarketTradeCounts() { return state.marketTradeCounts ?? {}; }
 /** H7: Set persisted market trade counts (from tradeFilters). */
 export function setMarketTradeCounts(counts) {
   state.marketTradeCounts = (counts && typeof counts === 'object') ? counts : {};
+  saveState();
 }
 
 /** M2 audit fix: Get persisted trade timestamps for hourly limit. */
@@ -1081,6 +1083,7 @@ export function getTradeTimestamps() { return Array.isArray(state.tradeTimestamp
 /** M2 audit fix: Set persisted trade timestamps (from guards). */
 export function setTradeTimestamps(timestamps) {
   state.tradeTimestamps = Array.isArray(timestamps) ? timestamps : [];
+  saveState();
 }
 
 /**

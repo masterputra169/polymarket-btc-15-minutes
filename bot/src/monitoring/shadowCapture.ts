@@ -1,6 +1,6 @@
 /**
  * Shadow Capture — writes featureBuf + v16 ML output per poll to a JSONL
- * file so an offline replay (scripts/v19_shadow_replay.mjs) can run v19
+ * file so an offline replay (scripts/v19_shadow_replay.mts) can run v19
  * inference on the EXACT same inputs the bot saw.
  *
  * Zero-impact on trading decisions. Only writes when SHADOW_CAPTURE=true.

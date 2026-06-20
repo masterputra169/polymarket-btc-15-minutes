@@ -29,7 +29,7 @@ console.log(`Shadow:  ${SHADOW_PATH}`);
 console.log(`Lookup:  ${LOOKUP_PATH}`);
 
 if (!fs.existsSync(SHADOW_PATH)) {
-  console.error(`\n[FATAL] Shadow journal missing — run v19_shadow_replay.mjs first.`);
+  console.error(`\n[FATAL] Shadow journal missing — run v19_shadow_replay.mts first.`);
   process.exit(1);
 }
 if (!fs.existsSync(LOOKUP_PATH)) {

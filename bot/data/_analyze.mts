@@ -12,9 +12,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const state = JSON.parse(readFileSync(resolve(__dirname, 'state.json'), 'utf-8'));
 
 const trades = state.trades || [];
+type PairedTrade = {
+  side: string;
+  entryPrice: number;
+  size: number;
+  cost: number;
+  marketSlug: string;
+  entryTime: number;
+  exitTime: number;
+  outcome: string;
+  pnl: number;
+  payout: number;
+  bankrollAfter: number;
+  holdSec: number;
+  won: boolean;
+};
+type OutcomeStats = { count: number; pnl: number; holdSecs: number[]; costs: number[] };
+type SideStats = { count: number; wins: number; losses: number; cuts: number; pnl: number };
 
 // ── Pair ENTER → EXIT (SETTLE/CUT_LOSS/UNWIND/PARTIAL_CUT) ──
-const paired = [];
+const paired: PairedTrade[] = [];
 let currentEntry = null;
 
 for (const t of trades) {
@@ -55,7 +72,7 @@ if (paired.length > 0) {
 console.log('');
 
 // ── Outcomes ──
-const byOutcome = {};
+const byOutcome: Record<string, OutcomeStats> = {};
 let totalPnl = 0;
 for (const t of paired) {
   if (!byOutcome[t.outcome]) byOutcome[t.outcome] = { count: 0, pnl: 0, holdSecs: [], costs: [] };
@@ -68,11 +85,12 @@ for (const t of paired) {
 
 console.log('── OUTCOMES ──');
 for (const [o, d] of Object.entries(byOutcome)) {
-  const avgPnl = (d.pnl / d.count).toFixed(2);
+  const avgPnlValue = d.pnl / d.count;
+  const avgPnl = avgPnlValue.toFixed(2);
   const avgCost = (d.costs.reduce((a, b) => a + b, 0) / d.costs.length).toFixed(2);
   const avgHold = d.holdSecs.length > 0 ? Math.round(d.holdSecs.reduce((a, b) => a + b, 0) / d.holdSecs.length) : 0;
   const avgMin = (avgHold / 60).toFixed(1);
-  console.log(`  ${o.padEnd(10)} ${String(d.count).padStart(3)} trades | P&L: ${d.pnl >= 0 ? '+' : ''}$${d.pnl.toFixed(2).padStart(7)} (avg ${avgPnl >= 0 ? '+' : ''}$${avgPnl}) | cost: $${avgCost} | hold: ${avgMin}min`);
+  console.log(`  ${o.padEnd(10)} ${String(d.count).padStart(3)} trades | P&L: ${d.pnl >= 0 ? '+' : ''}$${d.pnl.toFixed(2).padStart(7)} (avg ${avgPnlValue >= 0 ? '+' : ''}$${avgPnl}) | cost: $${avgCost} | hold: ${avgMin}min`);
 }
 console.log(`  ${'TOTAL'.padEnd(10)} ${String(paired.length).padStart(3)} trades | P&L: ${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`);
 console.log('');
@@ -106,7 +124,7 @@ if (cuts > 0) {
 
 // ── Side Analysis ──
 console.log('── BY SIDE ──');
-const bySide = {};
+const bySide: Record<string, SideStats> = {};
 for (const t of paired) {
   if (!bySide[t.side]) bySide[t.side] = { count: 0, wins: 0, losses: 0, cuts: 0, pnl: 0 };
   bySide[t.side].count++;

@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
+# Track app lockfiles for reproducible installs; keep nested ad-hoc locks ignored.
 package-lock.json
+!package-lock.json
+!bot/package-lock.json
 
 # Build output
 dist/

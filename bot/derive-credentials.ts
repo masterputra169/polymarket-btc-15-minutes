@@ -1,4 +1,4 @@
-import { ClobClient, Chain } from "@polymarket/clob-client-v2";
+import { ClobClient, Chain, SignatureType } from "@polymarket/clob-client";
 import { Wallet } from "ethers";
 import dotenv from "dotenv";
 
@@ -6,10 +6,6 @@ dotenv.config();
 
 const POLYMARKET_HOST = "https://clob.polymarket.com";
 const CHAIN_ID = 137;
-
-// SignatureType: 0 = EOA, 1 = POLY_PROXY
-const SIGNATURE_TYPE_EOA = 0;
-const SIGNATURE_TYPE_POLY_PROXY = 1;
 
 const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
 type WalletCompat = Wallet & { _signTypedData?: Wallet['signTypedData'] };
@@ -21,26 +17,32 @@ if (!wallet._signTypedData && wallet.signTypedData) {
 }
 
 const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS;
-const sigType = proxyAddress ? SIGNATURE_TYPE_POLY_PROXY : SIGNATURE_TYPE_EOA;
+const sigType = proxyAddress ? SignatureType.POLY_GNOSIS_SAFE : SignatureType.EOA;
 const funder = proxyAddress || undefined;
 
 console.log("Wallet Address:", wallet.address);
 if (proxyAddress) {
   console.log("Proxy Address:", proxyAddress);
-  console.log("SignatureType: POLY_PROXY (1)");
+  console.log("SignatureType: POLY_GNOSIS_SAFE (2)");
 } else {
   console.log("No proxy address set - using EOA signing");
 }
 
-const clobClient = new ClobClient({
-  host: POLYMARKET_HOST,
-  chain: Chain.POLYGON,
-  signer: wallet as any,
-  signatureType: sigType,
-  funderAddress: funder,
-  useServerTime: true,
-  throwOnError: true,
-});
+const clobClient = new ClobClient(
+  POLYMARKET_HOST,
+  Chain.POLYGON,
+  wallet as any,
+  undefined,
+  sigType,
+  funder,
+  undefined,
+  true,
+  undefined,
+  undefined,
+  false,
+  undefined,
+  true,
+);
 
 console.log("\nDeriving API credentials...");
 const creds = await clobClient.deriveApiKey();

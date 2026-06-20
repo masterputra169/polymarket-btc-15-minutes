@@ -4,7 +4,7 @@
  */
 
 import { ethers } from 'ethers';
-import { ClobClient, OrderType, Side, SignatureTypeV2, Chain } from '@polymarket/clob-client-v2';
+import { ClobClient, OrderType, Side, SignatureType, Chain } from '@polymarket/clob-client';
 import { createLogger } from '../logger.ts';
 import { CONFIG } from '../config.ts';
 
@@ -17,17 +17,17 @@ type TradeHistoryOptions = {
   before?: number;
 };
 
-// V2 SignatureType enum (same numeric values as V1):
+// SignatureType enum:
 // 0 = EOA, 1 = POLY_PROXY, 2 = POLY_GNOSIS_SAFE, 3 = POLY_1271
-const SIGNATURE_TYPE_EOA = SignatureTypeV2.EOA;
-const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = SignatureTypeV2.POLY_GNOSIS_SAFE;
+const SIGNATURE_TYPE_EOA = SignatureType.EOA;
+const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = SignatureType.POLY_GNOSIS_SAFE;
 
 let client = null;
 let wallet = null;
 
 /**
  * Defense-in-depth response check.
- * V2 SDK with throwOnError: true natively throws on HTTP errors and { error: "..." } responses,
+ * CLOB SDK with throwOnError: true natively throws on HTTP errors and { error: "..." } responses,
  * so the manual error check is redundant. We still guard `success: false` because matching-engine
  * rejections may come back as HTTP 200 with { success: false, errorMsg } and the SDK won't throw.
  */
@@ -87,37 +87,31 @@ export async function initClobClient() {
     log.info('No proxy address set — using EOA signing');
   }
 
-  // V2 client options shared across all init paths:
-  // - useServerTime: prevents clock drift order rejection (sync timestamp with server)
-  // - throwOnError: native error throws replace manual validateOrderResponse for HTTP errors
-  // - retryOnError: NOT enabled — risky for trading (could double-place on timeout)
-  const sharedOpts = {
-    host: CONFIG.clobBaseUrl,
-    chain: Chain.POLYGON,
-    signer: wallet,
-    signatureType: sigType,
-    funderAddress: funder,
-    useServerTime: true,
-    throwOnError: true,
-  };
+  const buildClient = (creds = undefined) => new ClobClient(
+    CONFIG.clobBaseUrl,
+    Chain.POLYGON,
+    wallet as any,
+    creds,
+    sigType,
+    funder,
+    undefined,
+    true,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    true,
+  );
 
-  // @ts-ignore — @polymarket/clob-client-v2 ClobClientOptions type defs are
-  // stricter than actual runtime API (works in prod; SDK .d.ts mismatch).
   if (apiKey && apiSecret && apiPassphrase) {
-    // @ts-ignore — see above
-    client = new ClobClient({
-      ...sharedOpts,
-      creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-    });
-    log.info('CLOB client (v2) initialized with provided API credentials');
+    client = buildClient({ key: apiKey, secret: apiSecret, passphrase: apiPassphrase });
+    log.info('CLOB client initialized with provided API credentials');
   } else {
-    // @ts-ignore — see above
-    const bootstrap = new ClobClient(sharedOpts);
-    log.info('Deriving API credentials from wallet (V2)...');
+    const bootstrap = buildClient();
+    log.info('Deriving API credentials from wallet...');
     const creds = await bootstrap.createOrDeriveApiKey();
-    // @ts-ignore — see above
-    client = new ClobClient({ ...sharedOpts, creds });
-    log.info('CLOB client (v2) initialized with derived API credentials');
+    client = buildClient(creds);
+    log.info('CLOB client initialized with derived API credentials');
   }
 
   // Ensure USDC allowance is set (gasless via Polymarket relay).
@@ -152,7 +146,7 @@ export async function placeBuyOrder({ tokenId, price, size }) {
   // FOK (Fill-or-Kill): entire order fills immediately or is cancelled.
   // GTC was unsafe — partial fills leave remainder open + loop.js records full size.
   // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
-  // V2: FOK BUY uses createAndPostMarketOrder. amount is dollars to spend (size * price).
+  // FOK BUY uses createAndPostMarketOrder. amount is dollars to spend (size * price).
   const amount = size * price;
   const result = await Promise.race([
     client.createAndPostMarketOrder(
@@ -302,7 +296,7 @@ export async function placeSellOrder({ tokenId, price, size }) {
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
   // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API
-  // V2: FOK SELL uses createAndPostMarketOrder. amount = shares to sell (not dollars).
+  // FOK SELL uses createAndPostMarketOrder. amount = shares to sell (not dollars).
   const result = await Promise.race([
     client.createAndPostMarketOrder(
       { tokenID: tokenId, price, side: Side.SELL, amount: size, orderType: OrderType.FOK },

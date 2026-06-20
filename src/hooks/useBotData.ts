@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  *
  * Replaces useMarketData + 4 WebSocket hooks. The bot does ALL
  * fetching, computation, ML inference, etc. This hook just:
- *   1. Connects to bot status WS on localhost:3099
+ *   1. Connects to the bot status WebSocket
  *   2. Receives raw JSON strings (NO parse on every message)
  *   3. Parses + flushes to React state on interval (1/sec)
  *   4. Tracks prevPrice for Binance tick animation
@@ -15,12 +15,44 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * only JSON.parse'd on flush. Cuts object allocation by ~50%.
  */
 
-const BOT_WS_URL = `ws://${window.location.hostname}:3099`;  // dynamic: works from phone + localhost
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const STALE_TIMEOUT_MS = 15_000;
 const FLUSH_MS = 500; // Parse + flush to React 2x/sec
 const BACKOFF_PAUSE_AFTER = 5; // After N failures, stop auto-reconnect (only retry on tab focus)
+
+function getBotStatusToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get('botStatusToken') || params.get('botToken') || params.get('statusToken');
+    if (tokenFromUrl) {
+      localStorage.setItem('botStatusToken', tokenFromUrl);
+      return tokenFromUrl;
+    }
+    const tokenFromStorage = localStorage.getItem('botStatusToken');
+    if (tokenFromStorage) return tokenFromStorage;
+  } catch (_e) { /* ignore storage/query failures */ }
+
+  return (
+    import.meta.env.VITE_BOT_STATUS_TOKEN ||
+    import.meta.env.VITE_BOT_CONTROL_TOKEN ||
+    ''
+  ).trim();
+}
+
+function buildBotWsUrl() {
+  const baseUrl = import.meta.env.VITE_BOT_WS_URL || `ws://${window.location.hostname}:3099`;
+  const token = getBotStatusToken();
+  if (!token) return baseUrl;
+
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set('token', token);
+    return url.toString();
+  } catch (_e) {
+    return baseUrl;
+  }
+}
 
 export function useBotData() {
   const [connected, setConnected] = useState(false);
@@ -106,7 +138,7 @@ export function useBotData() {
     if (wsRef.current && wsRef.current.readyState <= 1) return;
 
     try {
-      const ws = new WebSocket(BOT_WS_URL);
+      const ws = new WebSocket(buildBotWsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

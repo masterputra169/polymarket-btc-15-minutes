@@ -2352,7 +2352,10 @@ export async function pollOnce() {
           // Without this, deps.placeSellOrder?.() always returns undefined and
           // unwindSucceeded stays false → one-legged ARB silently falls back to directional.
           placeSellOrder: ({ tokenId, price, size }) => closePosition(tokenId, size, price),
-          recordArbTrade, recordTradeForMarket, recordTrade, trackOrderPlacement,
+          recordArbTrade,
+          recordTradeForMarket: (slug) => { recordTradeForMarket(slug); setMarketTradeCounts(exportMarketTradeCounts()); },
+          recordTrade,
+          trackOrderPlacement,
           captureEntrySnapshot,
           recordTradeTimestamp: () => { recordTradeTimestamp(() => setTradeTimestamps(exportTradeTimestamps())); },
           setEntryRegime: (r) => { entryRegime = r; },
@@ -2398,7 +2401,7 @@ export async function pollOnce() {
           placeBuyOrder,
           recordTrade,
           trackOrderPlacement,
-          recordTradeForMarket,
+          recordTradeForMarket: (slug) => { recordTradeForMarket(slug); setMarketTradeCounts(exportMarketTradeCounts()); },
           captureEntrySnapshot,
           recordPrediction,
           recordTradeTimestamp: () => { recordTradeTimestamp(() => setTradeTimestamps(exportTradeTimestamps())); },

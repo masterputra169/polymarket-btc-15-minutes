@@ -9,12 +9,20 @@ import { dirname, join } from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dir = dirname(__filename);
+type JournalEntry = {
+  _ts?: number;
+  analysis: Record<string, any>;
+  entry: Record<string, any>;
+  exit?: Record<string, any>;
+};
+type BucketStats = { trades: number; pnl: number; cost: number; wins: number };
+type HourStats = { trades: number; pnl: number; wins: number };
 
 // ─── Load Data ───────────────────────────────────────────────────────
 const raw = readFileSync(join(__dir, 'trade_journal.jsonl'), 'utf-8')
   .split('\n')
   .filter(l => l.trim())
-  .map(l => JSON.parse(l));
+  .map(l => JSON.parse(l)) as JournalEntry[];
 
 const all = raw;
 const real = all.filter(t => t.analysis.outcome !== 'DRY_RUN');
@@ -263,7 +271,7 @@ console.log(`  Total capital deployed:     ${fmtUsd(totalCost)}`);
 
 // Edge by regime
 console.log('\n  Edge by Regime:');
-const regimes = {};
+const regimes: Record<string, BucketStats> = {};
 for (const t of settled) {
   const r = t.entry.regime || 'unknown';
   if (!regimes[r]) regimes[r] = { trades: 0, pnl: 0, cost: 0, wins: 0 };
@@ -311,7 +319,7 @@ for (const [b, d] of Object.entries(mlBuckets)) {
 
 // Edge by session
 console.log('\n  Edge by Session:');
-const sessions = {};
+const sessions: Record<string, BucketStats> = {};
 for (const t of settled) {
   const s = t.entry.session || 'unknown';
   if (!sessions[s]) sessions[s] = { trades: 0, pnl: 0, cost: 0, wins: 0 };
@@ -332,7 +340,7 @@ for (const [s, d] of Object.entries(sessions).sort((a, b) => b[1].trades - a[1].
 
 // Edge by side
 console.log('\n  Edge by Side:');
-const sides = {};
+const sides: Record<string, BucketStats> = {};
 for (const t of settled) {
   const s = t.entry.side;
   if (!sides[s]) sides[s] = { trades: 0, pnl: 0, cost: 0, wins: 0 };
@@ -462,7 +470,7 @@ console.log('  6. TIME ANALYSIS');
 console.log('━'.repeat(80));
 
 // P&L by hour of day (UTC)
-const hourStats = {};
+const hourStats: Record<number, HourStats> = {};
 for (let h = 0; h < 24; h++) hourStats[h] = { trades: 0, pnl: 0, wins: 0 };
 for (const t of settled) {
   const h = new Date(t.entry.enteredAt).getUTCHours();
@@ -611,7 +619,7 @@ for (const [b, d] of Object.entries(edgeBuckets)) {
 
 // Phase analysis
 console.log('\n  Edge by Entry Phase:');
-const phases = {};
+const phases: Record<string, BucketStats> = {};
 for (const t of settled) {
   const ph = t.entry.phase || 'unknown';
   if (!phases[ph]) phases[ph] = { trades: 0, pnl: 0, cost: 0, wins: 0 };

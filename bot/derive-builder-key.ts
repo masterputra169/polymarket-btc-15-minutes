@@ -1,5 +1,5 @@
 /**
- * One-time script: create builder API key for Polymarket V2.
+ * One-time script: create builder API key for Polymarket.
  *
  * Builder keys enable tracking of order attribution and may unlock builder-specific
  * rewards/programs in the future. Run ONCE and save the output to .env.
@@ -16,7 +16,7 @@
  * additive for builder rewards tracking.
  */
 
-import { ClobClient, Chain } from "@polymarket/clob-client-v2";
+import { ClobClient, Chain, SignatureType } from "@polymarket/clob-client";
 import { Wallet } from "ethers";
 
 const POLYMARKET_HOST = "https://clob.polymarket.com";
@@ -44,22 +44,27 @@ if (!wallet._signTypedData && wallet.signTypedData) {
 }
 
 const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS;
-const sigType = proxyAddress ? 2 : 0;  // POLY_GNOSIS_SAFE or EOA
+const sigType = proxyAddress ? SignatureType.POLY_GNOSIS_SAFE : SignatureType.EOA;
 const funder = proxyAddress || undefined;
 
 console.log("Wallet:", wallet.address);
 if (proxyAddress) console.log("Proxy:", proxyAddress);
 
-const client = new ClobClient({
-  host: POLYMARKET_HOST,
-  chain: Chain.POLYGON,
-  signer: wallet as any,
-  creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-  signatureType: sigType,
-  funderAddress: funder,
-  useServerTime: true,
-  throwOnError: true,
-});
+const client = new ClobClient(
+  POLYMARKET_HOST,
+  Chain.POLYGON,
+  wallet as any,
+  { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+  sigType,
+  funder,
+  undefined,
+  true,
+  undefined,
+  undefined,
+  false,
+  undefined,
+  true,
+);
 
 console.log("\nRequesting builder API key...");
 try {

@@ -9,11 +9,43 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * Writes to ref + throttled state flush (same pattern as useBinanceStream).
  */
 
-const BOT_WS_URL = `ws://${window.location.hostname}:3099`;  // dynamic: works from phone + localhost
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 10_000;
 const STALE_TIMEOUT_MS = 15_000;
 const THROTTLE_MS = 500;
+
+function getBotStatusToken() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tokenFromUrl = params.get('botStatusToken') || params.get('botToken') || params.get('statusToken');
+    if (tokenFromUrl) {
+      localStorage.setItem('botStatusToken', tokenFromUrl);
+      return tokenFromUrl;
+    }
+    const tokenFromStorage = localStorage.getItem('botStatusToken');
+    if (tokenFromStorage) return tokenFromStorage;
+  } catch (_e) { /* ignore storage/query failures */ }
+
+  return (
+    import.meta.env.VITE_BOT_STATUS_TOKEN ||
+    import.meta.env.VITE_BOT_CONTROL_TOKEN ||
+    ''
+  ).trim();
+}
+
+function buildBotWsUrl() {
+  const baseUrl = import.meta.env.VITE_BOT_WS_URL || `ws://${window.location.hostname}:3099`;
+  const token = getBotStatusToken();
+  if (!token) return baseUrl;
+
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set('token', token);
+    return url.toString();
+  } catch (_e) {
+    return baseUrl;
+  }
+}
 
 export function useBotStream() {
   const [connected, setConnected] = useState(false);
@@ -51,7 +83,7 @@ export function useBotStream() {
     if (wsRef.current && wsRef.current.readyState <= 1) return;
 
     try {
-      const ws = new WebSocket(BOT_WS_URL);
+      const ws = new WebSocket(buildBotWsUrl());
       wsRef.current = ws;
 
       ws.onopen = () => {

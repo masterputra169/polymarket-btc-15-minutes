@@ -13,6 +13,8 @@
     "*.cts",
     "*.mts",
     "backtest/**/*.mts",
+    "bot/data/_analyze.mts",
+    "bot/data/_quant.mts",
     "public/**/*.ts"
   ],
   "exclude": [
@@ -21,7 +23,6 @@
     "**/node_modules/**",
     "dist",
     "backtest/ml_training/output*/**",
-    "public/ml/backups/**",
-    "bot/data/**"
+    "public/ml/backups/**"
   ]
 }

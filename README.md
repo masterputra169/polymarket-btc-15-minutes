@@ -181,6 +181,11 @@ DRY_RUN=true                          # ALWAYS start with true!
 # Execution
 POLL_INTERVAL_MS=50                   # Poll frequency (ms)
 LOG_LEVEL=info
+
+# Dashboard status WebSocket
+STATUS_BIND_HOST=127.0.0.1            # Safe default: local machine only
+STATUS_PORT=3099
+# STATUS_AUTH_TOKEN=change-me          # Required if you expose STATUS_BIND_HOST=0.0.0.0
 ```
 
 ### Risk Management
@@ -299,10 +304,12 @@ pm2 status                            # Process list
 The dashboard starts automatically with PM2 alongside the bot. Open:
 
 ```
-http://localhost:3000
+http://localhost:3010
 ```
 
-The dashboard connects to the bot via WebSocket on port 3099.
+The dashboard connects to the bot via WebSocket on port 3099. By default the bot binds this port to `127.0.0.1`.
+
+For LAN/mobile dashboard access, set `STATUS_BIND_HOST=0.0.0.0` and `STATUS_AUTH_TOKEN=<random-long-token>` in `bot/.env`, restart PM2 with `--update-env`, then open the dashboard with `?botStatusToken=<same-token>` once. The frontend stores that token in browser localStorage for later reconnects.
 
 ---
 
@@ -510,8 +517,8 @@ pm2 restart polymarket-bot
 ### "Bot disconnected" on dashboard
 
 - Check `pm2 status` — both `polymarket-bot` and `frontend` must be running
-- Verify port 3099 is not blocked
-- Dashboard connects to `ws://localhost:3099`
+- Verify port 3099 is not blocked on the machine running the bot
+- Dashboard connects to `ws://localhost:3099` by default; for LAN access use `STATUS_BIND_HOST=0.0.0.0` plus `STATUS_AUTH_TOKEN`
 - If `frontend` shows `errored`: `pm2 delete frontend && pm2 start ecosystem.config.cts --only frontend`
 
 ### Bankroll mismatch

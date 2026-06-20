@@ -3,6 +3,7 @@
  * Sends bot state snapshots to connected dashboard clients.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
@@ -24,7 +25,6 @@ function parseClobAmount(raw, fallback) {
     return v;
 }
 
-const STATUS_PORT = parseInt(process.env.STATUS_PORT || '3099', 10);
 const HEARTBEAT_MS = 15_000;             // W4: 30s→15s — faster zombie detection for trading bot
 const SET_BANKROLL_COOLDOWN_MS = 5_000;  // rate limit: 1 setBankroll per 5s
 const BOT_CONTROL_COOLDOWN_MS = 2_000;   // rate limit: 1 pause/resume per 2s
@@ -58,6 +58,46 @@ let _getDiscoveredTraders = null;
 let _addTracker = null;
 let _removeTracker = null;
 let _simulateTrader = null;
+
+function getStatusConfig() {
+  const port = parseInt(process.env.STATUS_PORT || '3099', 10);
+  const bindHost = (process.env.STATUS_BIND_HOST || process.env.STATUS_HOST || '127.0.0.1').trim();
+  const authToken = (
+    process.env.STATUS_AUTH_TOKEN ||
+    process.env.STATUS_CONTROL_TOKEN ||
+    process.env.BOT_STATUS_TOKEN ||
+    ''
+  ).trim();
+  return {
+    port,
+    bindHost,
+    authToken,
+    authRequired: authToken.length > 0,
+  };
+}
+
+function isLocalBindHost(host) {
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
+}
+
+function tokenMatches(candidate) {
+  const { authToken, authRequired } = getStatusConfig();
+  if (!authRequired || !candidate) return false;
+  const expected = Buffer.from(authToken);
+  const actual = Buffer.from(String(candidate));
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function requestToken(req) {
+  try {
+    const { bindHost, port } = getStatusConfig();
+    const host = req?.headers?.host || `${bindHost}:${port}`;
+    const url = new URL(req?.url || '/', `ws://${host}`);
+    return url.searchParams.get('token') || '';
+  } catch (_e) {
+    return '';
+  }
+}
 
 /**
  * Register pause/resume callbacks from loop.ts (called by index.ts).
@@ -100,21 +140,31 @@ export function registerTraderDiscovery({ scan, getTracked, getDiscovered, addTr
  */
 export function startStatusServer() {
   if (wss) return;
+  const { port, bindHost, authRequired } = getStatusConfig();
 
   // W5: Catch port-in-use and other startup errors
   try {
-    wss = new WebSocketServer({ port: STATUS_PORT, maxPayload: 16384 });
+    wss = new WebSocketServer({ host: bindHost, port, maxPayload: 16384 });
   } catch (err) {
-    log.error(`Failed to create WS server on :${STATUS_PORT}: ${err.message}`);
+    log.error(`Failed to create WS server on ${bindHost}:${port}: ${err.message}`);
     wss = null;
     return;
   }
 
   wss.on('listening', () => {
-    log.info(`Status server listening on :${STATUS_PORT}`);
+    log.info(`Status server listening on ${bindHost}:${port}${authRequired ? ' (auth required)' : ''}`);
+    if (!authRequired && !isLocalBindHost(bindHost)) {
+      log.warn('Status server is reachable off-host without STATUS_AUTH_TOKEN. Set STATUS_AUTH_TOKEN or bind to 127.0.0.1.');
+    }
   });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    if (getStatusConfig().authRequired && !tokenMatches(requestToken(req))) {
+      log.warn(`Rejected unauthorized status WS connection from ${req?.socket?.remoteAddress || 'unknown'}`);
+      try { ws.close(1008, 'unauthorized'); } catch (_e) { /* */ }
+      return;
+    }
+
     ws.isAlive = true;
 
     ws.on('pong', () => { ws.isAlive = true; });
@@ -299,7 +349,7 @@ export function startStatusServer() {
   wss.on('error', (err) => {
     log.error(`Status server error: ${err.message}`);
     if (err.code === 'EADDRINUSE') {
-      log.error(`Port ${STATUS_PORT} already in use — stopping status server`);
+      log.error(`Port ${port} already in use — stopping status server`);
       if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
       wss.close();
       wss = null;
