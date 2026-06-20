@@ -1,0 +1,5 @@
+# Exclude data/config JSON from GitHub Linguist language statistics.
+# This keeps the repository language bar focused on source code.
+*.json linguist-detectable=false
+*.jsonl linguist-detectable=false
+*.bak linguist-detectable=false
