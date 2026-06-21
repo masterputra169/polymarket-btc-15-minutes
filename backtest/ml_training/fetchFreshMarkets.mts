@@ -157,6 +157,19 @@ async function main() {
 
   // Fetch new events
   const freshMarkets = await fetchFreshEvents(cutoffDate);
+  const existingTimestamps = Object.keys(lookup)
+    .map((k) => Number(k))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  const latestExisting = existingTimestamps.length ? Math.max(...existingTimestamps) : 0;
+  const staleDays = latestExisting ? (Date.now() / 1000 - latestExisting) / 86400 : Infinity;
+  if (freshMarkets.length === 0 && staleDays > 3) {
+    const latestIso = latestExisting ? new Date(latestExisting * 1000).toISOString() : 'none';
+    throw new Error(
+      `Gamma returned 0 fresh BTC markets while lookup is stale ` +
+      `(latest=${latestIso}, age=${staleDays.toFixed(1)}d). ` +
+      `Check SERIES_ID=${SERIES_ID}, slug format, or Polymarket API/network access.`
+    );
+  }
   // Audit fix (May 2026): include markets that exist in lookup but have empty prices
   // (added label-only by quickUpdateLookup.py). Previously these were skipped here,
   // leaving the corpus with priceless rows that generateTrainingData drops silently.

@@ -4,6 +4,7 @@ Quick update polymarket_lookup.json with fresh markets (last N days).
 Labels only — no tick prices (fast).
 """
 import json, urllib.request, urllib.error, time, sys, re, os
+from datetime import datetime, timezone
 
 DAYS = int(sys.argv[1]) if len(sys.argv) > 1 else 6
 LOOKUP_PATH = './polymarket_lookup.json'
@@ -14,15 +15,17 @@ cutoff = __import__('datetime').datetime.now(__import__('datetime').timezone.utc
 cutoff_str = cutoff.strftime('%Y-%m-%d')
 
 def get(url, retries=3):
+    last_error = None
     for a in range(retries):
         try:
             req = urllib.request.Request(url, headers={'User-Agent': 'BTC-ML/1.0'})
             with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read())
         except Exception as e:
-            if a == retries-1: return None
+            last_error = e
+            if a == retries-1:
+                raise RuntimeError(f"fetch failed after {retries} attempts: {url} ({last_error})")
             time.sleep(1)
-    return None
 
 def slug_ts(slug):
     m = re.search(r'(\d{9,10})$', slug)
@@ -41,7 +44,11 @@ markets = []
 offset = 0
 while True:
     url = f"{GAMMA}/events?series_id={SERIES_ID}&closed=true&start_date_min={cutoff_str}&limit=100&offset={offset}"
-    events = get(url)
+    try:
+        events = get(url)
+    except RuntimeError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(2)
     if not events or not isinstance(events, list) or len(events) == 0:
         break
     for ev in events:
@@ -81,6 +88,17 @@ while True:
 
 new = [m for m in markets if m['ts'] not in lookup]
 print(f"  {len(new)} new markets to add")
+
+latest_ts = max((int(k) for k in lookup.keys() if str(k).isdigit()), default=0)
+stale_sec = int(datetime.now(timezone.utc).timestamp()) - latest_ts if latest_ts else None
+if not markets and latest_ts and stale_sec is not None and stale_sec > 3 * 86400:
+    latest_iso = datetime.fromtimestamp(latest_ts, timezone.utc).isoformat()
+    print(
+        f"ERROR: Gamma returned no markets, but lookup latest market is stale: {latest_iso} "
+        f"({stale_sec / 86400:.1f} days ago). Check SERIES_ID={SERIES_ID} or network/API access.",
+        file=sys.stderr,
+    )
+    sys.exit(3)
 
 for m in new:
     lookup[m['ts']] = {'label': m['label'], 'spread': 0.02, 'liquidity': m['liquidity'], 'volume': m['volume'], 'prices': []}

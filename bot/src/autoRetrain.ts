@@ -59,6 +59,10 @@ const CFG = {
   dayOfWeek:      envNum('RETRAIN_DAY_OF_WEEK', 0, 0, 6),       // 0=Sunday
   hourUtc:        envNum('RETRAIN_HOUR_UTC', 3, 0, 23),          // 3 AM UTC
   days:           envNum('RETRAIN_DAYS', 540, 30, 1500),
+  enrichDays:     envNum('RETRAIN_ENRICH_DAYS', 60, 1, 1500),    // recent Polymarket tick-price refresh window
+  fetchPrices:    process.env.RETRAIN_FETCH_PRICES !== 'false',
+  requireFreshData: process.env.RETRAIN_REQUIRE_FRESH_DATA !== 'false',
+  maxLookupStaleDays: envNum('RETRAIN_LOOKUP_MAX_STALE_DAYS', 7, 1, 180),
   tuneTrials:     envNum('RETRAIN_TUNE_TRIALS', 100, 10, 500),
   minAccuracy:    envNum('RETRAIN_MIN_ACCURACY', 0.70, 0.50, 0.99),
   minAuc:         envNum('RETRAIN_MIN_AUC', 0.80, 0.50, 0.99),
@@ -85,6 +89,8 @@ Usage:
 
 Env vars (in bot/.env):
   RETRAIN_DAY_OF_WEEK=0   RETRAIN_HOUR_UTC=3    RETRAIN_DAYS=540
+  RETRAIN_ENRICH_DAYS=60  RETRAIN_FETCH_PRICES=true
+  RETRAIN_REQUIRE_FRESH_DATA=true  RETRAIN_LOOKUP_MAX_STALE_DAYS=7
   RETRAIN_TUNE_TRIALS=100  RETRAIN_MIN_ACCURACY=0.70  RETRAIN_MIN_AUC=0.80
   RETRAIN_MAX_ACC_DROP=0.02  RETRAIN_MAX_AUC_DROP=0.01
 `);
@@ -323,6 +329,49 @@ function run(cmd, opts: { cwd?: string; timeout?: number } = {}) {
   return output;
 }
 
+function assertFreshLookup(path) {
+  if (!CFG.requireFreshData) return;
+  if (!existsSync(path)) throw new Error(`Polymarket lookup missing: ${path}`);
+
+  const raw = JSON.parse(readFileSync(path, 'utf-8'));
+  const rows = Object.entries(raw)
+    .map(([ts, entry]: [string, any]) => ({
+      ts: Number(ts),
+      prices: Array.isArray(entry?.prices) ? entry.prices.length : 0,
+    }))
+    .filter((x) => Number.isFinite(x.ts) && x.ts > 0);
+
+  if (rows.length === 0) throw new Error('Polymarket lookup has no timestamped markets');
+  const latest = Math.max(...rows.map((x) => x.ts));
+
+  const priced = rows.filter((x) => x.prices > 0);
+  if (priced.length === 0) throw new Error('Polymarket lookup has no tick-price-enriched markets');
+  const latestPriced = Math.max(...priced.map((x) => x.ts));
+
+  const nowSec = Math.floor(Date.now() / 1000);
+  const latestAgeDays = (nowSec - latest) / 86400;
+  const pricedAgeDays = (nowSec - latestPriced) / 86400;
+
+  log.info(
+    `  Lookup freshness: latest=${new Date(latest * 1000).toISOString()} ` +
+    `(${latestAgeDays.toFixed(1)}d), latest_with_prices=${new Date(latestPriced * 1000).toISOString()} ` +
+    `(${pricedAgeDays.toFixed(1)}d), priced=${priced.length}/${rows.length}`
+  );
+
+  if (latestAgeDays > CFG.maxLookupStaleDays) {
+    throw new Error(
+      `Polymarket lookup stale: latest market is ${latestAgeDays.toFixed(1)}d old ` +
+      `(max ${CFG.maxLookupStaleDays}d).`
+    );
+  }
+  if (CFG.fetchPrices && pricedAgeDays > CFG.maxLookupStaleDays) {
+    throw new Error(
+      `Polymarket lookup tick prices stale: latest priced market is ${pricedAgeDays.toFixed(1)}d old ` +
+      `(max ${CFG.maxLookupStaleDays}d).`
+    );
+  }
+}
+
 // ── Main Pipeline ──
 async function runPipeline() {
   const startTime = Date.now();
@@ -345,18 +394,38 @@ async function runPipeline() {
 
   // Step 2: Refresh Polymarket lookup
   log.info('Step 2/7: Refreshing Polymarket lookup...');
+  const polyLookup = resolve(TRAINING_DIR, 'polymarket_lookup.json');
   try {
-    run('python quickUpdateLookup.py 7');
-    log.info('  Lookup updated');
+    run(`python quickUpdateLookup.py ${CFG.enrichDays}`);
+    log.info('  Lookup labels updated');
   } catch (err) {
-    log.warn(`  Lookup update failed (non-fatal): ${err.message.slice(0, 200)}`);
+    const msg = `Lookup update failed: ${err.message.slice(0, 200)}`;
+    if (CFG.requireFreshData) throw new Error(msg);
+    log.warn(`${msg} (non-fatal because RETRAIN_REQUIRE_FRESH_DATA=false)`);
   }
+
+  // Step 2b: Enrich recent label-only rows with CLOB tick prices.
+  // quickUpdateLookup.py intentionally adds labels fast, but generateTrainingData
+  // drops Polymarket rows without price history. This makes the recent regime
+  // absent from retraining unless we enrich the prices before data generation.
+  try {
+    const noPricesFlag = CFG.fetchPrices ? '' : ' --no-prices';
+    run(`node "${resolve(TRAINING_DIR, 'fetchFreshMarkets.mts')}" --days ${CFG.enrichDays} --lookup "${polyLookup}"${noPricesFlag}`, {
+      timeout: 45 * 60 * 1000,
+    });
+    log.info('  Lookup tick prices enriched');
+  } catch (err) {
+    const msg = `Tick-price enrichment failed: ${err.message.slice(0, 200)}`;
+    if (CFG.requireFreshData) throw new Error(msg);
+    log.warn(`${msg} (non-fatal because RETRAIN_REQUIRE_FRESH_DATA=false)`);
+  }
+
+  assertFreshLookup(polyLookup);
 
   // Step 3: Generate training data
   log.info('Step 3/7: Generating training data...');
-  const polyLookup = resolve(TRAINING_DIR, 'polymarket_lookup.json');
   const polyFlag = existsSync(polyLookup) ? `--polymarket-lookup "${polyLookup}"` : '';
-  run(`node "${resolve(TRAINING_DIR, 'generateTrainingData.mts')}" --days ${CFG.days} ${polyFlag}`.trim(), { timeout: 10 * 60 * 1000 });
+  run(`node "${resolve(TRAINING_DIR, 'generateTrainingData.mts')}" --days ${CFG.days} ${polyFlag}`.trim(), { timeout: 30 * 60 * 1000 });
 
   // Step 4: Train
   log.info('Step 4/7: Training models (XGB + LGB)...');
@@ -382,7 +451,7 @@ async function runPipeline() {
       `--output "${RL_WEIGHTS_OUTPUT}"`,
       '--augment',
     ].join(' ');
-    run(rlCmd, { cwd: TRAINING_DIR, timeout: 10 * 60 * 1000 });
+    run(rlCmd, { cwd: TRAINING_DIR, timeout: 30 * 60 * 1000 });
     log.info('  RL Agent trained');
   } catch (err) {
     log.warn(`  RL training failed (non-fatal, ML deploy continues): ${err.message.slice(0, 200)}`);
@@ -487,16 +556,18 @@ async function main() {
 
   if (FORCE) {
     if (!acquireLock()) process.exit(1);
+    let ok = true;
     try {
       await runPipeline();
     } catch (err) {
+      ok = false;
       log.error(`Pipeline failed: ${err.message}`);
       await notify('critical', `Retrain FAILED: ${err.message.slice(0, 200)}`, { key: 'retrain' });
       logEntry({ run: new Date().toISOString(), outcome: 'ERROR', error: err.message.slice(0, 500) });
     } finally {
       releaseLock();
     }
-    process.exit(0);
+    process.exit(ok ? 0 : 1);
   }
 
   // Default: scheduler mode

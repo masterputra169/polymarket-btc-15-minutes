@@ -428,8 +428,9 @@ The bot includes a full retraining pipeline with quality gates and auto-rollback
 ```bash
 cd backtest/ml_training
 
-# 1. Update market data
-python quickUpdateLookup.py 7
+# 1. Update market data + enrich CLOB tick prices
+python quickUpdateLookup.py 60
+node fetchFreshMarkets.mts --days 60 --lookup ./polymarket_lookup.json
 
 # 2. Generate training data
 node generateTrainingData.mts --days 120 --polymarket-lookup ./polymarket_lookup.json
@@ -451,8 +452,14 @@ Or configure **auto-retrain** — runs weekly (Sunday 3 AM UTC) via PM2:
 RETRAIN_DAY_OF_WEEK=0
 RETRAIN_HOUR_UTC=3
 RETRAIN_DAYS=120
+RETRAIN_ENRICH_DAYS=60
+RETRAIN_FETCH_PRICES=true
+RETRAIN_REQUIRE_FRESH_DATA=true
+RETRAIN_LOOKUP_MAX_STALE_DAYS=7
 RETRAIN_TUNE_TRIALS=100
 ```
+
+With `RETRAIN_REQUIRE_FRESH_DATA=true`, retraining fails closed if Polymarket/Gamma/CLOB data cannot be refreshed or if the latest tick-price-enriched market is stale. This prevents deploying a model retrained on old market regimes.
 
 ### Concept Drift Detection
 
