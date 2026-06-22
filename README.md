@@ -452,6 +452,12 @@ cp output/norm_browser.json ../../public/ml/
 node fetchFreshMarkets.mts --days 60 --lookup ./polymarket_lookup.json --series-ids 10192 --search "Bitcoin Up or Down,BTC Up or Down"
 ```
 
+If local DNS resolves Polymarket domains to an ISP filtering host, the fetcher uses DNS-over-HTTPS automatically for Polymarket market-data requests:
+
+```bash
+node fetchFreshMarkets.mts --days 60 --lookup ./polymarket_lookup.json --dns-mode auto
+```
+
 Or configure **auto-retrain** — runs weekly (Sunday 3 AM UTC) via PM2:
 ```env
 RETRAIN_DAY_OF_WEEK=0

@@ -6,9 +6,11 @@
  * Usage: node fetchFreshMarkets.mts [--days 7] [--lookup polymarket_lookup.json] [--no-prices]
  *        [--series-ids 10192] [--search "Bitcoin Up or Down,BTC Up or Down"]
  *        [--slug-prefixes "btc-updown-15m,btc-up-or-down-15m"] [--http-timeout-ms 20000]
+ *        [--dns-mode auto|system|doh] [--dry-run] [--sample-price-check]
  */
 
 import fs from 'fs';
+import https from 'https';
 
 type CliArgs = Record<string, string | boolean | undefined>;
 type LookupEntry = Record<string, any> & { label?: number; prices?: unknown[] };
@@ -47,6 +49,7 @@ const SLUG_PREFIXES = String(
   .map((s) => s.trim())
   .filter(Boolean);
 const MAX_ALL_EVENT_PAGES = ARGS['max-all-pages'] ? parseInt(String(ARGS['max-all-pages']), 10) : 20;
+const MAX_KEYSET_PAGES = ARGS['max-keyset-pages'] ? parseInt(String(ARGS['max-keyset-pages']), 10) : 0;
 const MAX_SLUG_SWEEP = ARGS['max-slug-sweep'] ? parseInt(String(ARGS['max-slug-sweep']), 10) : 5000;
 const SLUG_SWEEP_DELAY_MS = ARGS['slug-sweep-delay-ms'] ? parseInt(String(ARGS['slug-sweep-delay-ms']), 10) : 80;
 const HTTP_TIMEOUT_MS_RAW = ARGS['http-timeout-ms']
@@ -55,6 +58,10 @@ const HTTP_TIMEOUT_MS_RAW = ARGS['http-timeout-ms']
 const HTTP_TIMEOUT_MS = Number.isFinite(HTTP_TIMEOUT_MS_RAW) && HTTP_TIMEOUT_MS_RAW > 0
   ? HTTP_TIMEOUT_MS_RAW
   : 20_000;
+const DNS_MODE = String(ARGS['dns-mode'] ?? process.env.POLYMARKET_DNS_MODE ?? 'auto').toLowerCase();
+const DOH_ENDPOINT = String(ARGS['doh-endpoint'] ?? process.env.POLYMARKET_DOH_ENDPOINT ?? 'https://cloudflare-dns.com/dns-query');
+const DRY_RUN = 'dry-run' in ARGS;
+const SAMPLE_PRICE_CHECK = 'sample-price-check' in ARGS;
 const NO_SLUG_SWEEP = 'no-slug-sweep' in ARGS;
 
 function parseArgs(): CliArgs {
@@ -74,15 +81,111 @@ function parseArgs(): CliArgs {
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 type HttpResult<T> = { data: T | null; error: string | null };
+type JsonHttpResponse<T> = { status: number; data: T };
+type DohCacheEntry = { addresses: string[]; expiresAt: number };
+
+const dohCache = new Map<string, DohCacheEntry>();
+
+function shouldUseDoh(url: string): boolean {
+  if (DNS_MODE === 'system') return false;
+  if (DNS_MODE === 'doh') return true;
+  try {
+    return new URL(url).hostname.endsWith('polymarket.com');
+  } catch {
+    return false;
+  }
+}
+
+async function resolveDohA(hostname: string): Promise<string[]> {
+  const cached = dohCache.get(hostname);
+  if (cached && cached.expiresAt > Date.now()) return cached.addresses;
+
+  const endpoint = new URL(DOH_ENDPOINT);
+  endpoint.searchParams.set('name', hostname);
+  endpoint.searchParams.set('type', 'A');
+  const resp = await fetch(endpoint.toString(), {
+    headers: { accept: 'application/dns-json' },
+    signal: AbortSignal.timeout(Math.min(HTTP_TIMEOUT_MS, 10_000)),
+  });
+  if (!resp.ok) throw new Error(`DoH HTTP ${resp.status}`);
+
+  const payload = await resp.json() as { Answer?: Array<{ type: number; data: string; TTL?: number }> };
+  const answers = (payload.Answer || []).filter((a) => a.type === 1 && /^\d+\.\d+\.\d+\.\d+$/.test(a.data));
+  const addresses = answers.map((a) => a.data);
+  if (addresses.length === 0) throw new Error(`DoH returned no A records for ${hostname}`);
+
+  const minTtl = Math.max(5, Math.min(...answers.map((a) => Number(a.TTL) || 60)));
+  dohCache.set(hostname, { addresses, expiresAt: Date.now() + minTtl * 1000 });
+  return addresses;
+}
+
+function dohLookup(hostname: string, options: unknown, callback: (...args: any[]) => void) {
+  resolveDohA(hostname)
+    .then((addresses) => {
+      if ((options as { all?: boolean })?.all) {
+        callback(null, addresses.map((address) => ({ address, family: 4 })));
+        return;
+      }
+      callback(null, addresses[0], 4);
+    })
+    .catch((err) => callback(err));
+}
+
+function httpsGetJson<T = unknown>(url: string, timeoutMs: number, useDoh: boolean): Promise<JsonHttpResponse<T>> {
+  return new Promise((resolvePromise, reject) => {
+    const target = new URL(url);
+    const req = https.request({
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port || 443,
+      path: `${target.pathname}${target.search}`,
+      method: 'GET',
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'PolymarketBTC15mAssistant/1.0',
+      },
+      lookup: useDoh ? dohLookup : undefined,
+      timeout: timeoutMs,
+    }, (res) => {
+      const chunks: string[] = [];
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const body = chunks.join('');
+        try {
+          const data = body.length > 0 ? JSON.parse(body) as T : null as T;
+          resolvePromise({ status: res.statusCode || 0, data });
+        } catch {
+          reject(new Error(`Invalid JSON response (HTTP ${res.statusCode || 0})`));
+        }
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy(new Error('The operation was aborted due to timeout'));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function requestJson<T = unknown>(url: string, timeoutMs: number): Promise<JsonHttpResponse<T>> {
+  if (shouldUseDoh(url)) {
+    return httpsGetJson<T>(url, timeoutMs, true);
+  }
+
+  const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  return { status: resp.status, data: await resp.json() as T };
+}
 
 async function httpGetResult<T = unknown>(url, retries = 3, timeoutMs = HTTP_TIMEOUT_MS): Promise<HttpResult<T>> {
   let lastError = 'unknown error';
   for (let a = 1; a <= retries; a++) {
     try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+      const resp = await requestJson<T>(url, timeoutMs);
       if (resp.status === 429) { await sleep(5000); continue; }
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return { data: await resp.json() as T, error: null };
+      if (resp.status < 200 || resp.status >= 300) throw new Error(`HTTP ${resp.status}`);
+      return { data: resp.data, error: null };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       if (a === retries) return { data: null, error: lastError };
@@ -116,6 +219,12 @@ function normalizeEvents(payload: unknown): any[] {
     if (obj.slug || obj.id || obj.ticker) return [obj];
   }
   return [];
+}
+
+function getNextCursor(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const cursor = (payload as Record<string, any>).next_cursor;
+  return typeof cursor === 'string' && cursor.length > 0 ? cursor : null;
 }
 
 function extractSlugTs(slug: unknown): string | null {
@@ -237,6 +346,7 @@ type PagedEventsResult = {
   successfulPages: number;
   failed: boolean;
   error: string | null;
+  truncated?: boolean;
 };
 
 async function fetchPagedEvents(
@@ -270,6 +380,49 @@ async function fetchPagedEvents(
     successfulPages,
     failed: successfulPages === 0 && Boolean(lastError),
     error: lastError,
+  };
+}
+
+async function fetchKeysetEvents(
+  source: string,
+  baseUrl: string,
+  maxPages = MAX_KEYSET_PAGES,
+): Promise<PagedEventsResult> {
+  const events: any[] = [];
+  let successfulPages = 0;
+  let lastError: string | null = null;
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+
+  for (let page = 0; page < maxPages; page++) {
+    const url = cursor ? `${baseUrl}&cursor=${encodeURIComponent(cursor)}` : baseUrl;
+    const result = await httpGetResult<unknown>(url);
+    if (result.data === null) {
+      lastError = result.error || 'empty response';
+      console.warn(`  ${source}: keyset page ${page + 1} failed (${lastError})`);
+      break;
+    }
+
+    const pageEvents = normalizeEvents(result.data);
+    successfulPages++;
+    events.push(...pageEvents);
+    cursor = getNextCursor(result.data);
+    if (cursor && seenCursors.has(cursor)) {
+      lastError = 'keyset cursor repeated';
+      console.warn(`  ${source}: ${lastError} after page ${page + 1}`);
+      break;
+    }
+    if (!cursor || pageEvents.length === 0) break;
+    seenCursors.add(cursor);
+    await sleep(300);
+  }
+
+  return {
+    events,
+    successfulPages,
+    failed: successfulPages === 0 && Boolean(lastError),
+    error: lastError,
+    truncated: Boolean(lastError) && events.length > 0,
   };
 }
 
@@ -327,46 +480,69 @@ async function fetchFreshEvents(cutoffDate: string, lookup: Record<string, Looku
   console.log(`Fetching events since ${cutoffDate}...`);
 
   for (const seriesId of SERIES_IDS) {
-    const result = await fetchPagedEvents(
-      `series_id=${seriesId}`,
-      (offset, limit) => `${GAMMA_BASE}/events?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+    let result = await fetchKeysetEvents(
+      `series_id=${seriesId} keyset`,
+      `${GAMMA_BASE}/events/keyset?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=100`,
     );
+    if (result.failed || result.truncated || result.events.length === 0) {
+      result = await fetchPagedEvents(
+        `series_id=${seriesId}`,
+        (offset, limit) => `${GAMMA_BASE}/events?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+      );
+    }
     if (result.successfulPages > 0) successfulStrategies++;
     if (result.failed) failures.push(`series_id=${seriesId}: ${result.error}`);
     addMarketsFromEvents(result.events, marketMap, `series_id=${seriesId}`);
   }
 
-  for (const term of SEARCH_TERMS) {
-    const encoded = encodeURIComponent(term);
-    const result = await fetchPagedEvents(
-      `search=${term}`,
-      (offset, limit) => `${GAMMA_BASE}/events?search=${encoded}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+  if (marketMap.size === 0) {
+    for (const term of SEARCH_TERMS) {
+      const encoded = encodeURIComponent(term);
+      const result = await fetchPagedEvents(
+        `search=${term}`,
+        (offset, limit) => `${GAMMA_BASE}/events?search=${encoded}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+      );
+      if (result.successfulPages > 0) successfulStrategies++;
+      if (result.failed) failures.push(`search=${term}: ${result.error}`);
+      addMarketsFromEvents(result.events, marketMap, `search=${term}`);
+    }
+
+    const recent = await fetchPagedEvents(
+      'recent closed events',
+      (offset, limit) => `${GAMMA_BASE}/events?closed=true&start_date_min=${cutoffDate}&order=endDate&ascending=false&limit=${limit}&offset=${offset}`,
+      MAX_ALL_EVENT_PAGES,
     );
-    if (result.successfulPages > 0) successfulStrategies++;
-    if (result.failed) failures.push(`search=${term}: ${result.error}`);
-    addMarketsFromEvents(result.events, marketMap, `search=${term}`);
+    if (recent.successfulPages > 0) successfulStrategies++;
+    if (recent.failed) failures.push(`recent closed events: ${recent.error}`);
+    addMarketsFromEvents(recent.events, marketMap, 'recent closed events');
+  } else {
+    console.log('  search/recent fallback: skipped (series discovery returned markets)');
   }
 
-  const recent = await fetchPagedEvents(
-    'recent closed events',
-    (offset, limit) => `${GAMMA_BASE}/events?closed=true&start_date_min=${cutoffDate}&order=endDate&ascending=false&limit=${limit}&offset=${offset}`,
-    MAX_ALL_EVENT_PAGES,
-  );
-  if (recent.successfulPages > 0) successfulStrategies++;
-  if (recent.failed) failures.push(`recent closed events: ${recent.error}`);
-  addMarketsFromEvents(recent.events, marketMap, 'recent closed events');
-
-  if (marketMap.size === 0 && !NO_SLUG_SWEEP) {
+  if (!NO_SLUG_SWEEP) {
     const lookupTimes = Object.keys(lookup)
       .map((k) => Number(k))
       .filter((n) => Number.isFinite(n) && n > 0);
     const latestLookup = lookupTimes.length ? Math.max(...lookupTimes) : 0;
+    const latestPricedLookup = lookupTimes
+      .filter((ts) => {
+        const entry = lookup[String(ts)];
+        return Array.isArray(entry?.prices) && entry.prices.length > 0;
+      })
+      .reduce((maxTs, ts) => Math.max(maxTs, ts), 0);
+    const latestDiscovered = Array.from(marketMap.values())
+      .reduce((maxTs, market) => Math.max(maxTs, market.startSec), 0);
     const cutoffSec = Math.floor(new Date(`${cutoffDate}T00:00:00.000Z`).getTime() / 1000);
-    const startSec = Math.max(cutoffSec, latestLookup ? latestLookup + 900 : cutoffSec);
+    const latestCovered = Math.max(latestDiscovered, NO_PRICES ? latestLookup : latestPricedLookup || latestLookup);
+    const startSec = Math.max(cutoffSec, latestCovered ? latestCovered + 900 : cutoffSec);
     const endSec = Math.floor((Date.now() / 1000) / 900) * 900;
-    const sweep = await fetchSlugSweep(startSec, endSec, marketMap);
-    if (sweep.successfulRequests > 0) successfulStrategies++;
-    if (sweep.failed) failures.push(`slug sweep: ${sweep.error}`);
+    if (startSec <= endSec) {
+      const sweep = await fetchSlugSweep(startSec, endSec, marketMap);
+      if (sweep.successfulRequests > 0) successfulStrategies++;
+      if (sweep.failed) failures.push(`slug sweep: ${sweep.error}`);
+    } else {
+      console.log('  slug sweep: skipped (no timestamp gap)');
+    }
   }
 
   if (successfulStrategies === 0 && failures.length > 0) {
@@ -395,6 +571,8 @@ async function main() {
   console.log(`\n=== Fetch Fresh Polymarket Markets ===`);
   console.log(`Period:  last ${DAYS} days (since ${cutoffDate})`);
   console.log(`Lookup:  ${LOOKUP_PATH}`);
+  console.log(`DNS:     ${DNS_MODE}`);
+  if (DRY_RUN) console.log('Mode:    dry-run (lookup will not be modified)');
 
   // Load existing lookup
   let lookup: Record<string, LookupEntry> = {};
@@ -434,6 +612,20 @@ async function main() {
 
   if (newMarkets.length === 0) {
     console.log('\nNothing to add. Lookup is up to date!');
+    return;
+  }
+
+  if (DRY_RUN) {
+    if (!NO_PRICES && SAMPLE_PRICE_CHECK) {
+      const sample = newMarkets.find((m) => m.upTokenId);
+      if (sample) {
+        const tickPrices = await fetchTickPrices(sample.upTokenId, sample.startSec, sample.startSec + 900);
+        console.log(`  Sample CLOB price check: ${tickPrices.length} ticks for ${sample.slug}`);
+      } else {
+        console.log('  Sample CLOB price check skipped: no UP token id in discovered markets');
+      }
+    }
+    console.log('\nDry-run complete. Lookup was not modified.');
     return;
   }
 
