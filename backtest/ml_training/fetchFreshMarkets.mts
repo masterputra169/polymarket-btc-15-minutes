@@ -4,6 +4,8 @@
  * and merge into polymarket_lookup.json.
  *
  * Usage: node fetchFreshMarkets.mts [--days 7] [--lookup polymarket_lookup.json] [--no-prices]
+ *        [--series-ids 10192] [--search "Bitcoin Up or Down,BTC Up or Down"]
+ *        [--slug-prefixes "btc-updown-15m,btc-up-or-down-15m"] [--http-timeout-ms 20000]
  */
 
 import fs from 'fs';
@@ -28,6 +30,32 @@ const NO_PRICES = 'no-prices' in ARGS;
 const GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const CLOB_BASE = 'https://clob.polymarket.com';
 const SERIES_ID = '10192';
+const SERIES_IDS = String(ARGS['series-ids'] ?? process.env.POLYMARKET_SERIES_IDS ?? SERIES_ID)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const SEARCH_TERMS = String(
+  ARGS.search ?? process.env.POLYMARKET_BTC_SEARCH_TERMS ?? 'Bitcoin Up or Down,BTC Up or Down,btc-updown-15m'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const SLUG_PREFIXES = String(
+  ARGS['slug-prefixes'] ?? process.env.POLYMARKET_BTC_SLUG_PREFIXES ?? 'btc-updown-15m,btc-up-or-down-15m'
+)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const MAX_ALL_EVENT_PAGES = ARGS['max-all-pages'] ? parseInt(String(ARGS['max-all-pages']), 10) : 20;
+const MAX_SLUG_SWEEP = ARGS['max-slug-sweep'] ? parseInt(String(ARGS['max-slug-sweep']), 10) : 5000;
+const SLUG_SWEEP_DELAY_MS = ARGS['slug-sweep-delay-ms'] ? parseInt(String(ARGS['slug-sweep-delay-ms']), 10) : 80;
+const HTTP_TIMEOUT_MS_RAW = ARGS['http-timeout-ms']
+  ? parseInt(String(ARGS['http-timeout-ms']), 10)
+  : parseInt(process.env.POLYMARKET_HTTP_TIMEOUT_MS || '20000', 10);
+const HTTP_TIMEOUT_MS = Number.isFinite(HTTP_TIMEOUT_MS_RAW) && HTTP_TIMEOUT_MS_RAW > 0
+  ? HTTP_TIMEOUT_MS_RAW
+  : 20_000;
+const NO_SLUG_SWEEP = 'no-slug-sweep' in ARGS;
 
 function parseArgs(): CliArgs {
   const args: CliArgs = {};
@@ -36,6 +64,8 @@ function parseArgs(): CliArgs {
     const key = process.argv[i].replace('--', '');
     if (i + 1 < process.argv.length && !process.argv[i + 1].startsWith('--')) {
       args[key] = process.argv[i + 1]; i++;
+    } else {
+      args[key] = true;
     }
   }
   return args;
@@ -43,89 +73,308 @@ function parseArgs(): CliArgs {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function httpGet<T = unknown>(url, retries = 3): Promise<T | null> {
+type HttpResult<T> = { data: T | null; error: string | null };
+
+async function httpGetResult<T = unknown>(url, retries = 3, timeoutMs = HTTP_TIMEOUT_MS): Promise<HttpResult<T>> {
+  let lastError = 'unknown error';
   for (let a = 1; a <= retries; a++) {
     try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(20000) });
+      const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
       if (resp.status === 429) { await sleep(5000); continue; }
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      return await resp.json() as T;
+      return { data: await resp.json() as T, error: null };
     } catch (err) {
-      if (a === retries) return null;
+      lastError = err instanceof Error ? err.message : String(err);
+      if (a === retries) return { data: null, error: lastError };
       await sleep(1500 * a);
     }
   }
-  return null;
+  return { data: null, error: lastError };
 }
 
-async function fetchFreshEvents(cutoffDate) {
-  const markets: FreshMarket[] = [];
-  let offset = 0;
-  const PAGE = 100;
+async function httpGet<T = unknown>(url, retries = 3): Promise<T | null> {
+  const result = await httpGetResult<T>(url, retries);
+  return result.data;
+}
 
-  console.log(`Fetching events since ${cutoffDate}...`);
-  while (true) {
-    const url = `${GAMMA_BASE}/events?series_id=${SERIES_ID}&closed=true&start_date_min=${cutoffDate}&limit=${PAGE}&offset=${offset}`;
-    const events = await httpGet<any[]>(url);
-    if (!Array.isArray(events) || events.length === 0) break;
+function safeParseArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
-    for (const ev of events) {
-      const evMarkets = Array.isArray(ev.markets) ? ev.markets : [];
-      for (const m of evMarkets) {
-        // Parse resolution
-        const safeParse = (v) => { try { return JSON.parse(v); } catch { return []; } };
-        const outcomes = Array.isArray(m.outcomes) ? m.outcomes : safeParse(m.outcomes || '[]');
-        const prices = Array.isArray(m.outcomePrices) ? m.outcomePrices : safeParse(m.outcomePrices || '[]');
-        const upIdx = outcomes.findIndex(o => String(o).toLowerCase() === 'up');
-        const downIdx = outcomes.findIndex(o => String(o).toLowerCase() === 'down');
-        const upPrice = upIdx >= 0 ? Number(prices[upIdx]) : null;
-        const downPrice = downIdx >= 0 ? Number(prices[downIdx]) : null;
+function normalizeEvents(payload: unknown): any[] {
+  if (Array.isArray(payload)) return payload;
+  if (payload && typeof payload === 'object') {
+    const obj = payload as Record<string, any>;
+    if (Array.isArray(obj.events)) return obj.events;
+    if (obj.slug || obj.id || obj.ticker) return [obj];
+  }
+  return [];
+}
 
-        let outcome = null;
-        // Audit fix (May 2026): tighten resolution threshold to >=0.95 to match
-        // incremental_scrape_v15.mjs. Previous 0.8 admitted ambiguous resolutions.
-        if (upPrice !== null && downPrice !== null) {
-          if (upPrice >= 0.95) outcome = 'UP';
-          else if (downPrice >= 0.95) outcome = 'DOWN';
-        }
-        if (!outcome) continue;  // Skip unresolved or ambiguous
+function extractSlugTs(slug: unknown): string | null {
+  const match = String(slug ?? '').match(/(\d{9,10})$/);
+  if (!match) return null;
+  const ts = Number(match[1]);
+  return ts > 1700000000 && ts < 2000000000 ? String(ts) : null;
+}
 
-        // Extract slug_ts
-        const slug = m.slug || '';
-        const match = slug.match(/(\d{9,10})$/);
-        if (!match) continue;
-        const slugTs = parseInt(match[1]);
-        if (slugTs < 1700000000) continue;
+function isBtc15mSlug(slug: unknown): boolean {
+  return /^btc-(?:updown|up-or-down)-15m-\d{9,10}$/i.test(String(slug ?? ''));
+}
 
-        // Get YES/UP token ID
-        const clobTokenIds = m.clobTokenIds || [];
-        let upTokenId = null;
-        for (let i = 0; i < outcomes.length; i++) {
-          if (String(outcomes[i]).toLowerCase() === 'up' && i < clobTokenIds.length) {
-            upTokenId = clobTokenIds[i];
-            break;
-          }
-        }
-        if (!upTokenId && clobTokenIds.length > 0) upTokenId = clobTokenIds[0];
+function isBtc15mMarket(ev: Record<string, any>, m: Record<string, any>): boolean {
+  const slug = String(m.slug || ev.slug || '');
+  if (isBtc15mSlug(slug)) return true;
 
-        markets.push({
-          slug,
-          slugTs: String(slugTs),
-          label: outcome === 'UP' ? 1 : 0,
-          volume: Number(m.volume) || 0,
-          liquidity: Number(m.liquidityNum || m.liquidity) || 0,
-          upTokenId,
-          startSec: slugTs,
-        });
+  const text = [
+    m.question, m.title, m.description,
+    ev.title, ev.slug, ev.ticker, ev.description,
+  ].filter(Boolean).join(' ').toLowerCase();
+  const hasBitcoin = text.includes('bitcoin') || /\bbtc\b/.test(text);
+  const hasUpDown = text.includes('up or down') ||
+    text.includes('updown') ||
+    /\bup\b.*\bdown\b/.test(text) ||
+    /\bdown\b.*\bup\b/.test(text);
+  const has15m = text.includes('15m') ||
+    text.includes('15 min') ||
+    text.includes('15-minute') ||
+    text.includes('15 minute');
+  return hasBitcoin && hasUpDown && has15m;
+}
+
+function extractFreshMarket(ev: Record<string, any>, m: Record<string, any>): FreshMarket | null {
+  if (!isBtc15mMarket(ev, m)) return null;
+
+  const slug = String(m.slug || ev.slug || '');
+  const slugTs = extractSlugTs(slug);
+  if (!slugTs) return null;
+
+  const outcomes = safeParseArray(m.outcomes);
+  const prices = safeParseArray(m.outcomePrices);
+  const upIdx = outcomes.findIndex(o => String(o).toLowerCase() === 'up');
+  const downIdx = outcomes.findIndex(o => String(o).toLowerCase() === 'down');
+  const upPrice = upIdx >= 0 ? Number(prices[upIdx]) : null;
+  const downPrice = downIdx >= 0 ? Number(prices[downIdx]) : null;
+
+  let outcome: 'UP' | 'DOWN' | null = null;
+  // Audit fix (May 2026): tighten resolution threshold to >=0.95 to match
+  // incremental_scrape_v15.mjs. Previous 0.8 admitted ambiguous resolutions.
+  if (upPrice !== null && downPrice !== null) {
+    if (upPrice >= 0.95) outcome = 'UP';
+    else if (downPrice >= 0.95) outcome = 'DOWN';
+  }
+  if (!outcome) return null;
+
+  const clobTokenIds = safeParseArray(m.clobTokenIds);
+  let upTokenId: string | null = null;
+  for (let i = 0; i < outcomes.length; i++) {
+    if (String(outcomes[i]).toLowerCase() === 'up' && i < clobTokenIds.length) {
+      upTokenId = String(clobTokenIds[i]);
+      break;
+    }
+  }
+  if (!upTokenId && clobTokenIds.length > 0) upTokenId = String(clobTokenIds[0]);
+
+  return {
+    slug,
+    slugTs,
+    label: outcome === 'UP' ? 1 : 0,
+    volume: Number(m.volume) || Number(ev.volume) || 0,
+    liquidity: Number(m.liquidityNum || m.liquidity || ev.liquidityNum || ev.liquidity) || 0,
+    upTokenId,
+    startSec: Number(slugTs),
+  };
+}
+
+function addMarketsFromEvents(
+  events: any[],
+  marketMap: Map<string, FreshMarket>,
+  source: string,
+  verbose = true,
+): number {
+  let inspected = 0;
+  let matched = 0;
+  let added = 0;
+
+  for (const ev of events) {
+    const eventObj = ev as Record<string, any>;
+    const evMarkets = Array.isArray(eventObj.markets) && eventObj.markets.length > 0
+      ? eventObj.markets
+      : [eventObj];
+
+    for (const rawMarket of evMarkets) {
+      const marketObj = rawMarket as Record<string, any>;
+      inspected++;
+      if (!isBtc15mMarket(eventObj, marketObj)) continue;
+      matched++;
+
+      const fresh = extractFreshMarket(eventObj, marketObj);
+      if (!fresh) continue;
+
+      const previous = marketMap.get(fresh.slugTs);
+      if (!previous || fresh.volume > previous.volume || (!previous.upTokenId && fresh.upTokenId)) {
+        marketMap.set(fresh.slugTs, fresh);
       }
+      added++;
+    }
+  }
+
+  if (verbose) {
+    console.log(`  ${source}: ${added} resolved (${matched} matched / ${inspected} inspected)`);
+  }
+  return added;
+}
+
+type PagedEventsResult = {
+  events: any[];
+  successfulPages: number;
+  failed: boolean;
+  error: string | null;
+};
+
+async function fetchPagedEvents(
+  source: string,
+  buildUrl: (offset: number, limit: number) => string,
+  maxPages = 100,
+): Promise<PagedEventsResult> {
+  const PAGE = 100;
+  const events: any[] = [];
+  let successfulPages = 0;
+  let lastError: string | null = null;
+
+  for (let page = 0; page < maxPages; page++) {
+    const offset = page * PAGE;
+    const result = await httpGetResult<unknown>(buildUrl(offset, PAGE));
+    if (result.data === null) {
+      lastError = result.error || 'empty response';
+      console.warn(`  ${source}: page ${page + 1} failed (${lastError})`);
+      break;
     }
 
-    process.stdout.write(`\r  ${markets.length} markets... (offset ${offset})`);
-    if (events.length < PAGE) break;
-    offset += PAGE;
+    const pageEvents = normalizeEvents(result.data);
+    successfulPages++;
+    events.push(...pageEvents);
+    if (pageEvents.length < PAGE) break;
     await sleep(300);
   }
-  console.log(`\n  ${markets.length} resolved markets found`);
+
+  return {
+    events,
+    successfulPages,
+    failed: successfulPages === 0 && Boolean(lastError),
+    error: lastError,
+  };
+}
+
+async function fetchSlugSweep(
+  startSec: number,
+  endSec: number,
+  marketMap: Map<string, FreshMarket>,
+): Promise<{ successfulRequests: number; failed: boolean; error: string | null }> {
+  if (NO_SLUG_SWEEP || SLUG_PREFIXES.length === 0 || startSec > endSec) {
+    return { successfulRequests: 0, failed: false, error: null };
+  }
+
+  let successfulRequests = 0;
+  let consecutiveFailures = 0;
+  let added = 0;
+  let slots = 0;
+  let lastError: string | null = null;
+  let ts = Math.ceil(startSec / 900) * 900;
+
+  console.log(`  slug sweep: ${SLUG_PREFIXES.join(', ')} from ${new Date(ts * 1000).toISOString()}...`);
+  while (ts <= endSec && slots < MAX_SLUG_SWEEP) {
+    for (const prefix of SLUG_PREFIXES) {
+      const slug = `${prefix}-${ts}`;
+      const url = `${GAMMA_BASE}/events?slug=${encodeURIComponent(slug)}&closed=true&limit=10`;
+      const result = await httpGetResult<unknown>(url, 1, 8000);
+
+      if (result.data === null) {
+        consecutiveFailures++;
+        lastError = result.error || 'empty response';
+        if (consecutiveFailures >= 3) {
+          console.warn(`  slug sweep: aborted after ${consecutiveFailures} consecutive failures (${lastError})`);
+          return { successfulRequests, failed: successfulRequests === 0, error: lastError };
+        }
+        continue;
+      }
+
+      successfulRequests++;
+      consecutiveFailures = 0;
+      added += addMarketsFromEvents(normalizeEvents(result.data), marketMap, 'slug sweep', false);
+      await sleep(SLUG_SWEEP_DELAY_MS);
+    }
+    slots++;
+    ts += 900;
+  }
+
+  console.log(`  slug sweep: ${added} resolved across ${successfulRequests} successful requests`);
+  return { successfulRequests, failed: successfulRequests === 0 && Boolean(lastError), error: lastError };
+}
+
+async function fetchFreshEvents(cutoffDate: string, lookup: Record<string, LookupEntry>) {
+  const marketMap = new Map<string, FreshMarket>();
+  let successfulStrategies = 0;
+  const failures: string[] = [];
+
+  console.log(`Fetching events since ${cutoffDate}...`);
+
+  for (const seriesId of SERIES_IDS) {
+    const result = await fetchPagedEvents(
+      `series_id=${seriesId}`,
+      (offset, limit) => `${GAMMA_BASE}/events?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+    );
+    if (result.successfulPages > 0) successfulStrategies++;
+    if (result.failed) failures.push(`series_id=${seriesId}: ${result.error}`);
+    addMarketsFromEvents(result.events, marketMap, `series_id=${seriesId}`);
+  }
+
+  for (const term of SEARCH_TERMS) {
+    const encoded = encodeURIComponent(term);
+    const result = await fetchPagedEvents(
+      `search=${term}`,
+      (offset, limit) => `${GAMMA_BASE}/events?search=${encoded}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+    );
+    if (result.successfulPages > 0) successfulStrategies++;
+    if (result.failed) failures.push(`search=${term}: ${result.error}`);
+    addMarketsFromEvents(result.events, marketMap, `search=${term}`);
+  }
+
+  const recent = await fetchPagedEvents(
+    'recent closed events',
+    (offset, limit) => `${GAMMA_BASE}/events?closed=true&start_date_min=${cutoffDate}&order=endDate&ascending=false&limit=${limit}&offset=${offset}`,
+    MAX_ALL_EVENT_PAGES,
+  );
+  if (recent.successfulPages > 0) successfulStrategies++;
+  if (recent.failed) failures.push(`recent closed events: ${recent.error}`);
+  addMarketsFromEvents(recent.events, marketMap, 'recent closed events');
+
+  if (marketMap.size === 0 && !NO_SLUG_SWEEP) {
+    const lookupTimes = Object.keys(lookup)
+      .map((k) => Number(k))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    const latestLookup = lookupTimes.length ? Math.max(...lookupTimes) : 0;
+    const cutoffSec = Math.floor(new Date(`${cutoffDate}T00:00:00.000Z`).getTime() / 1000);
+    const startSec = Math.max(cutoffSec, latestLookup ? latestLookup + 900 : cutoffSec);
+    const endSec = Math.floor((Date.now() / 1000) / 900) * 900;
+    const sweep = await fetchSlugSweep(startSec, endSec, marketMap);
+    if (sweep.successfulRequests > 0) successfulStrategies++;
+    if (sweep.failed) failures.push(`slug sweep: ${sweep.error}`);
+  }
+
+  if (successfulStrategies === 0 && failures.length > 0) {
+    throw new Error(`All Polymarket discovery strategies failed: ${failures.join('; ')}`);
+  }
+
+  const markets = Array.from(marketMap.values()).sort((a, b) => a.startSec - b.startSec);
+  console.log(`  ${markets.length} resolved markets found`);
   return markets;
 }
 
@@ -156,7 +405,7 @@ async function main() {
   }
 
   // Fetch new events
-  const freshMarkets = await fetchFreshEvents(cutoffDate);
+  const freshMarkets = await fetchFreshEvents(cutoffDate, lookup);
   const existingTimestamps = Object.keys(lookup)
     .map((k) => Number(k))
     .filter((n) => Number.isFinite(n) && n > 0);
@@ -167,7 +416,7 @@ async function main() {
     throw new Error(
       `Gamma returned 0 fresh BTC markets while lookup is stale ` +
       `(latest=${latestIso}, age=${staleDays.toFixed(1)}d). ` +
-      `Check SERIES_ID=${SERIES_ID}, slug format, or Polymarket API/network access.`
+      `Check Polymarket Gamma/CLOB network access, series ids, search terms, or slug prefixes.`
     );
   }
   // Audit fix (May 2026): include markets that exist in lookup but have empty prices

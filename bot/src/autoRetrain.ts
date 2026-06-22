@@ -9,7 +9,7 @@
  *
  * Pipeline:
  *   1. Read current model metrics (baseline)
- *   2. python quickUpdateLookup.py 7 (refresh market lookup)
+ *   2. node fetchFreshMarkets.mts (discover fresh markets + enrich CLOB tick prices)
  *   3. node generateTrainingData.mts --days N (fresh CSV)
  *   4. python trainXGBoost_v3.py --tune --tune-trials N (train XGB + LGB)
  *   5. Quality gate (absolute + relative checks)
@@ -392,30 +392,17 @@ async function runPipeline() {
     log.info('  No current model metrics (first deploy)');
   }
 
-  // Step 2: Refresh Polymarket lookup
-  log.info('Step 2/7: Refreshing Polymarket lookup...');
+  // Step 2: Refresh Polymarket lookup and recent CLOB tick prices.
+  log.info('Step 2/7: Refreshing Polymarket lookup + tick prices...');
   const polyLookup = resolve(TRAINING_DIR, 'polymarket_lookup.json');
-  try {
-    run(`python quickUpdateLookup.py ${CFG.enrichDays}`);
-    log.info('  Lookup labels updated');
-  } catch (err) {
-    const msg = `Lookup update failed: ${err.message.slice(0, 200)}`;
-    if (CFG.requireFreshData) throw new Error(msg);
-    log.warn(`${msg} (non-fatal because RETRAIN_REQUIRE_FRESH_DATA=false)`);
-  }
-
-  // Step 2b: Enrich recent label-only rows with CLOB tick prices.
-  // quickUpdateLookup.py intentionally adds labels fast, but generateTrainingData
-  // drops Polymarket rows without price history. This makes the recent regime
-  // absent from retraining unless we enrich the prices before data generation.
   try {
     const noPricesFlag = CFG.fetchPrices ? '' : ' --no-prices';
     run(`node "${resolve(TRAINING_DIR, 'fetchFreshMarkets.mts')}" --days ${CFG.enrichDays} --lookup "${polyLookup}"${noPricesFlag}`, {
       timeout: 45 * 60 * 1000,
     });
-    log.info('  Lookup tick prices enriched');
+    log.info('  Lookup labels and tick prices refreshed');
   } catch (err) {
-    const msg = `Tick-price enrichment failed: ${err.message.slice(0, 200)}`;
+    const msg = `Polymarket data refresh failed: ${err.message.slice(0, 200)}`;
     if (CFG.requireFreshData) throw new Error(msg);
     log.warn(`${msg} (non-fatal because RETRAIN_REQUIRE_FRESH_DATA=false)`);
   }

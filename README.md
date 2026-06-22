@@ -429,7 +429,6 @@ The bot includes a full retraining pipeline with quality gates and auto-rollback
 cd backtest/ml_training
 
 # 1. Update market data + enrich CLOB tick prices
-python quickUpdateLookup.py 60
 node fetchFreshMarkets.mts --days 60 --lookup ./polymarket_lookup.json
 
 # 2. Generate training data
@@ -445,6 +444,12 @@ python backtestPnL.py --threshold-sweep
 cp output/xgboost_model.json ../../public/ml/
 cp output/lightgbm_model.json ../../public/ml/
 cp output/norm_browser.json ../../public/ml/
+```
+
+`fetchFreshMarkets.mts` uses multiple Polymarket Gamma discovery strategies: configured `series_id`, search terms, recent closed events, and a timestamp slug sweep fallback. Optional overrides:
+
+```bash
+node fetchFreshMarkets.mts --days 60 --lookup ./polymarket_lookup.json --series-ids 10192 --search "Bitcoin Up or Down,BTC Up or Down"
 ```
 
 Or configure **auto-retrain** — runs weekly (Sunday 3 AM UTC) via PM2:
