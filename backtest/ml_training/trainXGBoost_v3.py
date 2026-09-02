@@ -259,6 +259,8 @@ print(f"   Train: {len(X_train):,} | Test: {len(X_test):,}")
 # This data is NOT seen by Optuna or walk-forward CV
 X_holdout, y_holdout, w_holdout = None, None, None
 holdout_start_idx = None
+holdout_acc = None
+holdout_auc = None
 if args.holdout_frac > 0:
     holdout_boundary = int(len(X_train) * (1 - args.holdout_frac))
     holdout_start_idx = holdout_boundary
@@ -350,8 +352,115 @@ for rn, rc in regime_counts.items():
 # ================================================
 
 import xgboost as xgb
-from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, f1_score, precision_score, recall_score, confusion_matrix
+from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, f1_score, precision_score, recall_score, confusion_matrix, brier_score_loss
 from sklearn.linear_model import LogisticRegression
+
+def safe_round(value: float | int | None, digits: int = 4) -> float | None:
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(v):
+        return None
+    return round(v, digits)
+
+def calibration_summary(y_true: np.ndarray, y_prob: np.ndarray, bins: int = 10) -> dict[str, object]:
+    """Expected calibration error for probability-of-UP predictions."""
+    y_true = np.asarray(y_true)
+    y_prob = np.asarray(y_prob)
+    nan_mask = np.isnan(y_prob)
+    if np.any(nan_mask):
+        print(f"   [WARN] calibration_summary: dropping {int(nan_mask.sum())} NaN probabilities")
+        y_true = y_true[~nan_mask]
+        y_prob = y_prob[~nan_mask]
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    total = max(1, len(y_prob))
+    rows = []
+    ece = 0.0
+    mce = 0.0
+
+    for i in range(bins):
+        lo = float(edges[i])
+        hi = float(edges[i + 1])
+        if i == bins - 1:
+            mask = (y_prob >= lo) & (y_prob <= hi)
+        else:
+            mask = (y_prob >= lo) & (y_prob < hi)
+
+        count = int(mask.sum())
+        if count == 0:
+            rows.append({
+                'min_prob': round(lo, 2),
+                'max_prob': round(hi, 2),
+                'count': 0,
+                'coverage_pct': 0.0,
+                'avg_predicted': None,
+                'observed_rate': None,
+                'gap': None,
+            })
+            continue
+
+        avg_pred = float(y_prob[mask].mean())
+        observed = float(y_true[mask].mean())
+        gap = abs(avg_pred - observed)
+        ece += (count / total) * gap
+        mce = max(mce, gap)
+        rows.append({
+            'min_prob': round(lo, 2),
+            'max_prob': round(hi, 2),
+            'count': count,
+            'coverage_pct': round(count / total * 100, 2),
+            'avg_predicted': round(avg_pred, 4),
+            'observed_rate': round(observed, 4),
+            'gap': round(gap, 4),
+        })
+
+    return {
+        'ece': float(ece),
+        'mce': float(mce),
+        'bins': rows,
+    }
+
+def confidence_bucket_summary(y_true: np.ndarray, y_prob: np.ndarray) -> list[dict[str, object]]:
+    """Accuracy broken down by prediction-confidence bucket.
+
+    Confidence is max(p, 1-p) of the probability-of-UP prediction, bucketed
+    into [0.50, 0.55), ..., [0.80, 0.90), [0.90, 1.00] (upper bucket inclusive).
+    Returns one dict per bucket with: min_confidence, max_confidence, count,
+    coverage_pct, and accuracy (None when the bucket is empty).
+    """
+    y_true = np.asarray(y_true)
+    y_prob = np.asarray(y_prob)
+    nan_mask = np.isnan(y_prob)
+    if np.any(nan_mask):
+        print(f"   [WARN] confidence_bucket_summary: dropping {int(nan_mask.sum())} NaN probabilities")
+        y_true = y_true[~nan_mask]
+        y_prob = y_prob[~nan_mask]
+    y_pred = y_prob >= 0.5
+    confidence = np.maximum(y_prob, 1 - y_prob)
+    total = max(1, len(y_prob))
+    buckets = [(0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70),
+               (0.70, 0.75), (0.75, 0.80), (0.80, 0.90), (0.90, 1.01)]
+    rows = []
+
+    for lo, hi in buckets:
+        if hi >= 1.0:
+            mask = (confidence >= lo) & (confidence <= 1.0)
+        else:
+            mask = (confidence >= lo) & (confidence < hi)
+        count = int(mask.sum())
+        acc = accuracy_score(y_true[mask], y_pred[mask]) if count > 0 else None
+        rows.append({
+            'min_confidence': round(lo, 2),
+            'max_confidence': round(min(hi, 1.0), 2),
+            'count': count,
+            'coverage_pct': round(count / total * 100, 2),
+            'accuracy': safe_round(acc),
+        })
+
+    return rows
 
 NUM_BOOST_ROUND = 1200
 EARLY_STOPPING = 80
@@ -661,6 +770,8 @@ sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
 # Identify low-importance features
 PRUNE_THRESHOLD = 0.005  # features with <0.5% of total gain
 pruned_features = []
+pruned_model_kept = False  # True only when the soft-pruned retrain replaces `model`
+combined_fw = None         # pre-exclude + soft-pruning feature weights (set on retrain)
 feature_weights = np.ones(len(feature_cols), dtype=np.float32)
 
 for i, feat in enumerate(feature_cols):
@@ -734,6 +845,7 @@ if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
     if pruned_auc >= initial_eval_auc - 0.002:  # allow tiny regression for simpler model
         print(f"   [OK]Using pruned model (AUC diff: {(pruned_auc-initial_eval_auc)*100:+.2f}%)")
         model = model_pruned
+        pruned_model_kept = True
         y_prob = model_pruned.predict(dtest)  # always keep test predictions for final eval
     else:
         print(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})")
@@ -746,10 +858,14 @@ else:
 # ================================================
 print("\n[7/8] Platt calibration (on raw logits — audit fix C4)...")
 
-# Get out-of-fold predictions AND raw margins for calibration fitting
+# Get out-of-fold predictions AND raw margins for calibration fitting.
+# Use the SAME feature weighting the final model was trained with: soft-pruning
+# weights (combined_fw) when the pruned retrain was kept, otherwise the
+# pre-exclude weights (if any). Keeps cv_test_*_gap apples-to-apples.
+cv_feat_weights = combined_fw if pruned_model_kept else (pre_exclude_fw if exclude_feature_names else None)
 cv_auc_final, cv_acc_final, oof_preds, oof_margins, oof_labels = walk_forward_cv(
     X_train, y_train, best_cfg, w_train, return_preds=True,
-    feat_weights=pre_exclude_fw if exclude_feature_names else None
+    feat_weights=cv_feat_weights
 )
 print(f"   CV AUC: {cv_auc_final:.4f} | CV acc: {cv_acc_final*100:.1f}%")
 print(f"   Out-of-fold predictions: {len(oof_preds)} samples")
@@ -759,6 +875,7 @@ print(f"   Out-of-fold margins: {len(oof_margins)} samples")
 # This is the correct way: sigmoid(A*logit + B) gives properly calibrated probs
 platt_a, platt_b = 1.0, 0.0  # defaults (identity)
 platt_on_logits = True  # flag for browser inference
+eval_label = 'test'  # where calibration was evaluated (overwritten below when holdout is used)
 
 if len(oof_margins) > 100:
     lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
@@ -803,6 +920,23 @@ else:
     print(f"   [WARN] Not enough OOF margins ({len(oof_margins)}), skipping calibration")
     y_prob_final = y_prob
 
+# --- Final holdout metrics (post-pruning, post-calibration) ---
+# holdout_acc/holdout_auc above were measured on the INITIAL model, before feature
+# pruning could swap `model` (section 6) and before Platt calibration moved the
+# decision boundary (section 7). Recompute against the FINAL model artifact with
+# the FINAL Platt transform (identity A=1, B=0 when calibration was skipped or
+# disabled) so the exported holdout metrics and the test/holdout deploy-gate gaps
+# compare the same artifact on both sides.
+final_holdout_acc = None
+final_holdout_auc = None
+if X_holdout is not None and len(X_holdout) > 0:
+    final_margin_ho = model.predict(dholdout, output_margin=True)
+    final_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * final_margin_ho + platt_b)))
+    final_holdout_acc = float(accuracy_score(y_holdout, (final_prob_ho >= 0.5).astype(int)))
+    final_holdout_auc = float(roc_auc_score(y_holdout, final_prob_ho))
+    print(f"   Final holdout (final model + final Platt): "
+          f"acc={final_holdout_acc*100:.1f}% | AUC={final_holdout_auc:.4f}")
+
 # ================================================
 # 8. EVALUATE + EXPORT
 # ================================================
@@ -816,6 +950,13 @@ recall = recall_score(y_test, y_pred, zero_division=0)
 f1 = f1_score(y_test, y_pred, zero_division=0)
 auc = roc_auc_score(y_test, y_prob_final)
 ll = log_loss(y_test, y_prob_final)
+brier = brier_score_loss(y_test, y_prob_final)
+calibration = calibration_summary(y_test, y_prob_final)
+cv_test_acc_gap = float(accuracy - cv_acc_final)
+cv_test_auc_gap = float(auc - cv_auc_final)
+test_holdout_acc_gap = float(accuracy - final_holdout_acc) if final_holdout_acc is not None else None
+test_holdout_auc_gap = float(auc - final_holdout_auc) if final_holdout_auc is not None else None
+confidence_buckets = confidence_bucket_summary(y_test, y_prob_final)
 
 print(f"""
    ====================================
@@ -825,8 +966,14 @@ print(f"""
    F1:         {f1:.4f}
    AUC-ROC:    {auc:.4f}
    Log Loss:   {ll:.4f}
+   Brier:      {brier:.4f}
+   Cal ECE:    {calibration['ece']:.4f}
    ====================================
 """)
+
+print(f"   CV/Test gap: acc {cv_test_acc_gap*100:+.2f}pp | AUC {cv_test_auc_gap*10000:+.0f}bp")
+if test_holdout_acc_gap is not None:
+    print(f"   Test/Holdout gap: acc {test_holdout_acc_gap*100:+.2f}pp | AUC {test_holdout_auc_gap*10000:+.0f}bp")
 
 cm = confusion_matrix(y_test, y_pred)
 print(f"   Confusion Matrix:")
@@ -1057,16 +1204,40 @@ browser_model = {
     'phase_thresholds': calibrated_phase_thresholds,
     'params': {k: str(v) for k, v in final_params.items()},
     'training_method': 'optuna' if USE_OPTUNA else 'grid_search',
+    'validation': {
+        'split': 'temporal',
+        'test_size': args.test_size,
+        'holdout_frac': args.holdout_frac if args.holdout_frac > 0 else None,
+        'strict_holdout': bool(args.strict_holdout),
+        'threshold_source': sweep_name,
+        'calibration_eval_source': eval_label,
+        'test_samples': int(len(y_test)),
+        'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
+    },
     'metrics': {
         'accuracy': round(accuracy, 4),
         'auc': round(auc, 4),
         'f1': round(f1, 4),
         'logloss': round(ll, 4),
+        'brier': round(brier, 4),
+        'calibration_ece': safe_round(calibration['ece']),
+        'calibration_mce': safe_round(calibration['mce']),
         'high_conf_accuracy': round(hc_acc, 4),
         'high_conf_ratio': round(hc_ratio, 2),
+        'high_conf_count': hc_count,
         'high_conf_threshold': best_threshold,
         'cv_auc': round(cv_auc_final, 4),
         'cv_acc': round(cv_acc_final, 4),
+        'cv_test_acc_gap': safe_round(cv_test_acc_gap),
+        'cv_test_auc_gap': safe_round(cv_test_auc_gap),
+        'holdout_accuracy': safe_round(final_holdout_acc),
+        'holdout_auc': safe_round(final_holdout_auc),
+        'test_holdout_acc_gap': safe_round(test_holdout_acc_gap),
+        'test_holdout_auc_gap': safe_round(test_holdout_auc_gap),
+        'test_samples': int(len(y_test)),
+        'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
+        'confidence_buckets': confidence_buckets,
+        'calibration_bins': calibration['bins'],
     },
     'trees': best_trees,
 }
@@ -1137,6 +1308,8 @@ report = [
     f"Method: {'Optuna (' + str(args.tune_trials) + ' trials)' if USE_OPTUNA else 'Grid search (8 configs)'}",
     f"Winner: {best_cfg_name}",
     f"Accuracy: {accuracy*100:.2f}% | AUC: {auc:.4f}",
+    f"Calibration: Brier={brier:.4f} | ECE={calibration['ece']:.4f} | MCE={calibration['mce']:.4f}",
+    f"Overfit gaps: test-CV acc={cv_test_acc_gap*100:+.2f}pp | test-holdout acc={(test_holdout_acc_gap*100 if test_holdout_acc_gap is not None else 0):+.2f}pp",
     f"High-conf: {hc_acc*100:.1f}% ({hc_count:,} signals, {hc_ratio:.1f}%)",
     f"Threshold: {best_threshold:.3f} | Trees: {len(best_trees)}",
     f"Features: {len(feature_cols)} ({len(feature_cols_orig)} base + {len(new_names)} engineered)",
@@ -1373,6 +1546,16 @@ if HAS_LGB:
             print(f"   LGB Platt (on logits): A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
             print(f"   LGB calibrated: acc={lgb_cal_acc*100:.1f}% | AUC={lgb_cal_auc:.4f}")
 
+    # Exported Brier/calibration must reflect the probabilities inference uses:
+    # apply the FINAL Platt transform (identity when calibration was skipped or
+    # disabled — sigmoid(raw margin) then equals the raw probability) to the raw
+    # test margins before scoring.
+    lgb_y_margin_final = lgb_model_final.predict(X_test, raw_score=True)
+    lgb_y_prob_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_final + lgb_platt_b)))
+    lgb_brier = brier_score_loss(y_test, lgb_y_prob_cal)
+    lgb_calibration = calibration_summary(y_test, lgb_y_prob_cal)
+    print(f"   LGB calibrated (exported): Brier={lgb_brier:.4f} | ECE={lgb_calibration['ece']:.4f}")
+
     # --- Ensemble Weight Optimization (on holdout — audit fix H5) ---
     # Sweep ensemble weights on holdout to prevent test leakage
     if X_holdout is not None and len(X_holdout) > 0:
@@ -1417,12 +1600,15 @@ if HAS_LGB:
     ens_prob_final = ens_weight_xgb * xgb_cal_probs + ens_weight_lgb * lgb_cal_probs
     ens_acc = accuracy_score(y_test, (ens_prob_final >= 0.5).astype(int))
     ens_auc_final = roc_auc_score(y_test, ens_prob_final)
+    ens_logloss = log_loss(y_test, ens_prob_final)
+    ens_brier = brier_score_loss(y_test, ens_prob_final)
+    ens_calibration = calibration_summary(y_test, ens_prob_final)
 
     print(f"\n   === Ensemble Results (weights from {sweep_label}) ===")
     print(f"   XGB weight: {ens_weight_xgb} | LGB weight: {ens_weight_lgb}")
     print(f"   XGB only:   acc={accuracy*100:.1f}% | AUC={auc:.4f}")
     print(f"   LGB only:   acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f}")
-    print(f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f}")
+    print(f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f} | ECE={ens_calibration['ece']:.4f}")
 
     # --- Export LightGBM model ---
     print(f"\n   Exporting LightGBM model...")
@@ -1447,6 +1633,13 @@ if HAS_LGB:
         'metrics': {
             'accuracy': round(lgb_acc, 4),
             'auc': round(lgb_auc, 4),
+            'brier': round(lgb_brier, 4),
+            'calibration_ece': safe_round(lgb_calibration['ece']),
+            'calibration_mce': safe_round(lgb_calibration['mce']),
+            'cv_auc': safe_round(lgb_cv_auc),
+            'cv_acc': safe_round(lgb_cv_acc),
+            'cv_test_acc_gap': safe_round(lgb_acc - lgb_cv_acc),
+            'cv_test_auc_gap': safe_round(lgb_auc - lgb_cv_auc),
         },
         'ensemble_weights': {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
         'tree_info': sliced_tree_info,
@@ -1460,6 +1653,18 @@ if HAS_LGB:
 
     # --- Update norm_browser.json with ensemble info ---
     norm['ensemble_weights'] = {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb}
+    norm['ensemble_metrics'] = {
+        'accuracy': round(ens_acc, 4),
+        'auc': round(ens_auc_final, 4),
+        'logloss': round(ens_logloss, 4),
+        'brier': round(ens_brier, 4),
+        'calibration_ece': safe_round(ens_calibration['ece']),
+        'calibration_mce': safe_round(ens_calibration['mce']),
+        'weight_source': sweep_label,
+        'test_samples': int(len(y_test)),
+        'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
+        'strict_holdout': bool(args.strict_holdout),
+    }
     norm['lgb_platt_a'] = lgb_platt_a
     norm['lgb_platt_b'] = lgb_platt_b
     norm['lgb_platt_on_logits'] = lgb_platt_on_logits
