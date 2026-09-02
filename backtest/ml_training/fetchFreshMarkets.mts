@@ -6,6 +6,7 @@
  * Usage: node fetchFreshMarkets.mts [--days 7] [--lookup polymarket_lookup.json] [--no-prices]
  *        [--series-ids 10192] [--search "Bitcoin Up or Down,BTC Up or Down"]
  *        [--slug-prefixes "btc-updown-15m,btc-up-or-down-15m"] [--http-timeout-ms 20000]
+ *        [--price-concurrency 6] [--price-delay-ms 50]
  *        [--dns-mode auto|system|doh] [--dry-run] [--sample-price-check]
  */
 
@@ -52,6 +53,20 @@ const MAX_ALL_EVENT_PAGES = ARGS['max-all-pages'] ? parseInt(String(ARGS['max-al
 const MAX_KEYSET_PAGES = ARGS['max-keyset-pages'] ? parseInt(String(ARGS['max-keyset-pages']), 10) : 0;
 const MAX_SLUG_SWEEP = ARGS['max-slug-sweep'] ? parseInt(String(ARGS['max-slug-sweep']), 10) : 5000;
 const SLUG_SWEEP_DELAY_MS = ARGS['slug-sweep-delay-ms'] ? parseInt(String(ARGS['slug-sweep-delay-ms']), 10) : 80;
+// Price enrichment ran sequentially with a 200ms sleep per market, which made
+// --days 60 (~5,760 markets) exceed autoRetrain's 45-min budget. Bounded workers
+// keep the CLOB request rate polite (~17 rps at 6 workers) while cutting the
+// wall-clock to minutes.
+const PRICE_CONCURRENCY_RAW = ARGS['price-concurrency']
+  ? parseInt(String(ARGS['price-concurrency']), 10)
+  : parseInt(process.env.POLYMARKET_PRICE_CONCURRENCY || '6', 10);
+const PRICE_CONCURRENCY = Number.isFinite(PRICE_CONCURRENCY_RAW)
+  ? Math.min(16, Math.max(1, PRICE_CONCURRENCY_RAW))
+  : 6;
+const PRICE_DELAY_MS_RAW = ARGS['price-delay-ms']
+  ? parseInt(String(ARGS['price-delay-ms']), 10)
+  : parseInt(process.env.POLYMARKET_PRICE_DELAY_MS || '50', 10);
+const PRICE_DELAY_MS = Number.isFinite(PRICE_DELAY_MS_RAW) && PRICE_DELAY_MS_RAW >= 0 ? PRICE_DELAY_MS_RAW : 50;
 const HTTP_TIMEOUT_MS_RAW = ARGS['http-timeout-ms']
   ? parseInt(String(ARGS['http-timeout-ms']), 10)
   : parseInt(process.env.POLYMARKET_HTTP_TIMEOUT_MS || '20000', 10);
@@ -638,20 +653,31 @@ async function main() {
       lookup[m.slugTs] = { label: m.label, spread: 0.02, liquidity: m.liquidity, volume: m.volume, prices: [] };
     }
   } else {
-    console.log(`\nFetching CLOB tick prices for ${newMarkets.length} markets...`);
-    for (let i = 0; i < newMarkets.length; i++) {
-      const m = newMarkets[i];
-      const tickPrices = await fetchTickPrices(m.upTokenId, m.startSec, m.startSec + 900);
-      if (tickPrices.length > 0) withPrices++;
-      else noPrices++;
+    console.log(`\nFetching CLOB tick prices for ${newMarkets.length} markets (concurrency ${PRICE_CONCURRENCY})...`);
+    let done = 0;
+    let cursor = 0;
+    const worker = async () => {
+      while (true) {
+        const idx = cursor;
+        cursor += 1;
+        if (idx >= newMarkets.length) return;
+        const m = newMarkets[idx];
+        const tickPrices = await fetchTickPrices(m.upTokenId, m.startSec, m.startSec + 900);
+        if (tickPrices.length > 0) withPrices++;
+        else noPrices++;
 
-      lookup[m.slugTs] = { label: m.label, spread: 0.02, liquidity: m.liquidity, volume: m.volume, prices: tickPrices };
+        lookup[m.slugTs] = { label: m.label, spread: 0.02, liquidity: m.liquidity, volume: m.volume, prices: tickPrices };
 
-      if ((i + 1) % 20 === 0 || i === newMarkets.length - 1) {
-        process.stdout.write(`\r  ${i+1}/${newMarkets.length} — ${withPrices} with prices, ${noPrices} without`);
+        done += 1;
+        if (done % 20 === 0 || done === newMarkets.length) {
+          process.stdout.write(`\r  ${done}/${newMarkets.length} — ${withPrices} with prices, ${noPrices} without`);
+        }
+        if (PRICE_DELAY_MS > 0) await sleep(PRICE_DELAY_MS);
       }
-      await sleep(200);
-    }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(PRICE_CONCURRENCY, newMarkets.length) }, () => worker())
+    );
     console.log('');
   }
 
