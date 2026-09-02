@@ -65,9 +65,15 @@ parser.add_argument('--strict-holdout', dest='strict_holdout', action='store_tru
                          'X_train_full which INCLUDED holdout, making the "holdout 94.12%%" metric leak. '
                          'Disable with --no-strict-holdout if you want the old behavior for replication.')
 parser.add_argument('--no-strict-holdout', dest='strict_holdout', action='store_false')
+parser.add_argument('--cv-embargo', type=int, default=16,
+                    help='Rows skipped after every temporal boundary (CV folds, test, holdout) so '
+                         'validation rows whose feature lookbacks overlap the training window are '
+                         'excluded (ML4T embargo). 16 rows = 4h of 15-min markets. 0 disables.')
 # Legacy flags kept for compatibility
 parser.add_argument('--epochs', type=int, default=0)
 args = parser.parse_args()
+
+CV_EMBARGO = max(0, args.cv_embargo)
 
 os.makedirs(args.output_dir, exist_ok=True)
 np.random.seed(args.seed)
@@ -251,9 +257,11 @@ if exclude_feature_names:
 # ================================================
 print("[3/8] Temporal split...")
 split = int(len(X) * (1 - args.test_size))
-X_train, X_test = X[:split], X[split:]
-y_train, y_test = y[:split], y[split:]
-print(f"   Train: {len(X_train):,} | Test: {len(X_test):,}")
+# Embargo: drop the first CV_EMBARGO test rows — their feature lookbacks overlap
+# the training window, so keeping them inflates test metrics.
+X_train, X_test = X[:split], X[split + CV_EMBARGO:]
+y_train, y_test = y[:split], y[split + CV_EMBARGO:]
+print(f"   Train: {len(X_train):,} | Test: {len(X_test):,} (embargo {CV_EMBARGO} rows)")
 
 # OOS holdout: reserve final portion of training data for true out-of-sample evaluation
 # This data is NOT seen by Optuna or walk-forward CV
@@ -263,9 +271,9 @@ holdout_acc = None
 holdout_auc = None
 if args.holdout_frac > 0:
     holdout_boundary = int(len(X_train) * (1 - args.holdout_frac))
-    holdout_start_idx = holdout_boundary
-    X_holdout = X_train[holdout_boundary:]
-    y_holdout = y_train[holdout_boundary:]
+    holdout_start_idx = holdout_boundary + CV_EMBARGO
+    X_holdout = X_train[holdout_boundary + CV_EMBARGO:]
+    y_holdout = y_train[holdout_boundary + CV_EMBARGO:]
     X_tune = X_train[:holdout_boundary]
     y_tune = y_train[:holdout_boundary]
     print(f"   OOS HOLDOUT: {len(X_holdout):,} samples reserved (not used for tuning)")
@@ -467,18 +475,24 @@ EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
 # --- Walk-Forward CV ---
-def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False, feat_weights=None):
+def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False, feat_weights=None,
+                    return_importances=False):
     """Walk-forward CV: train on folds 1..k, validate on fold k+1.
     Optionally returns out-of-fold predictions AND raw margins for calibration.
-    feat_weights: optional per-feature weight array (0=exclude from splits)."""
+    feat_weights: optional per-feature weight array (0=exclude from splits).
+    return_importances: also return per-fold gain importance dicts (for
+    stability-filtered pruning)."""
     fold_size = len(X_tr) // (n_folds + 2)
     aucs, accs = [], []
     oof_preds, oof_margins, oof_labels = [], [], []
+    fold_importances = []
 
     for fold in range(n_folds):
         tr_end = fold_size * (fold + 2)
-        val_start = tr_end
-        val_end = len(X_tr) if fold == n_folds - 1 else val_start + fold_size
+        # Embargo: first val rows share feature lookback with the train tail;
+        # skipping them keeps the CV score (Optuna's objective) honest.
+        val_start = tr_end + CV_EMBARGO
+        val_end = len(X_tr) if fold == n_folds - 1 else tr_end + fold_size
         if val_end <= val_start:
             continue
 
@@ -539,11 +553,18 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
             oof_margins.extend(y_margin_f.tolist())
             oof_labels.extend(y_f_val.tolist())
 
+        if return_importances:
+            fold_importances.append(model_f.get_score(importance_type='gain'))
+
     mean_auc = np.mean(aucs) if aucs else 0
     mean_acc = np.mean(accs) if accs else 0
 
+    if return_preds and return_importances:
+        return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels), fold_importances
     if return_preds:
         return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels)
+    if return_importances:
+        return mean_auc, mean_acc, fold_importances
     return mean_auc, mean_acc
 
 
@@ -774,15 +795,37 @@ pruned_model_kept = False  # True only when the soft-pruned retrain replaces `mo
 combined_fw = None         # pre-exclude + soft-pruning feature weights (set on retrain)
 feature_weights = np.ones(len(feature_cols), dtype=np.float32)
 
+# Stability filter (ML4T ch8/11): single-model gain is noisy, so a feature is
+# only pruned when it is ALSO below threshold in every walk-forward fold.
+# Prevents pruning on noise and feature churn between retrains.
+print("   Computing per-fold importances for stability check...")
+_, _, fold_importances = walk_forward_cv(
+    X_train, y_train, best_cfg, w_train, return_importances=True,
+    feat_weights=pre_exclude_fw if exclude_feature_names else None
+)
+fold_fracs: dict[str, list[float]] = {feat: [] for feat in feature_cols}
+for imp in fold_importances:
+    fold_total = sum(imp.values())
+    for feat in feature_cols:
+        fold_fracs[feat].append((imp.get(feat, 0.0) / fold_total) if fold_total > 0 else 0.0)
+
+rescued_by_stability = []
 for i, feat in enumerate(feature_cols):
     gain = importance.get(feat, 0)
     frac = gain / total_gain if total_gain > 0 else 0
     if frac < PRUNE_THRESHOLD:
-        feature_weights[i] = 0.0  # effectively exclude from splits
-        pruned_features.append(feat)
+        fracs = fold_fracs.get(feat) or [0.0]
+        if all(f < PRUNE_THRESHOLD for f in fracs):
+            feature_weights[i] = 0.0  # effectively exclude from splits
+            pruned_features.append(feat)
+        else:
+            rescued_by_stability.append(feat)
 
 print(f"   Total features: {len(feature_cols)}")
-print(f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain): {len(pruned_features)}")
+print(f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain in final model AND all {len(fold_importances)} folds): {len(pruned_features)}")
+if rescued_by_stability:
+    print(f"   Rescued by fold stability (weak in final model, strong in >=1 fold): {len(rescued_by_stability)}"
+          f" — {', '.join(rescued_by_stability[:10])}{'...' if len(rescued_by_stability) > 10 else ''}")
 if pruned_features:
     print(f"   Pruned list: {', '.join(pruned_features[:15])}{'...' if len(pruned_features) > 15 else ''}")
 
@@ -1376,8 +1419,10 @@ if HAS_LGB:
 
         for fold in range(n_folds):
             tr_end = fold_size * (fold + 2)
-            val_start = tr_end
-            val_end = len(X_tr) if fold == n_folds - 1 else val_start + fold_size
+            # Same embargo as the XGBoost CV — keeps the two ensembles' CV honest
+            # and comparable.
+            val_start = tr_end + CV_EMBARGO
+            val_end = len(X_tr) if fold == n_folds - 1 else tr_end + fold_size
             if val_end <= val_start:
                 continue
 
