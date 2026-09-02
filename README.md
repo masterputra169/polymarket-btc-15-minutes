@@ -3,7 +3,9 @@
 > Automated trading bot for Polymarket's BTC 15-minute binary prediction markets.
 > Combines XGBoost/LightGBM ML ensemble, 10 technical indicators, smart order routing, and real-time risk management.
 
-**Stack:** React 19 + Vite 7 (dashboard) · Node.js + PM2 (bot) · XGBoost + LightGBM (ML) · Polymarket CLOB API
+**Stack:** React 19 + Vite 7 (dashboard) · Node.js + PM2/Docker (bot) · PostgreSQL/Redis optional runtime services · XGBoost + LightGBM (ML) · Polymarket CLOB API
+
+Docker Compose deployment: see [docs/DOCKER_STACK.md](docs/DOCKER_STACK.md).
 
 ---
 

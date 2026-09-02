@@ -1,0 +1,59 @@
+# Dependency folders
+node_modules
+bot/node_modules
+**/node_modules
+
+# Build output
+dist
+build
+
+# Local secrets and runtime env
+.env
+.env.*
+!.env.docker.example
+bot/.env
+bot/.env.*
+!bot/.env.example
+
+# Runtime/private bot data
+bot/data
+logs
+*.log
+backups
+
+# Heavy research/backtest artifacts are not needed in runtime images
+backtest
+docs
+math
+public/ml/backups
+public/ml/v16_locked
+public/ml_v19_staging
+insight polymarket
+monte carlo
+
+# Local caches and generated analysis
+.backtest_cache
+.backtest
+__pycache__
+*.pyc
+venv
+
+# Agent/editor metadata
+.git
+.claude
+.agents
+.cursor
+.vscode
+.idea
+
+# Local media/personal notes
+image
+ss
+*.txt
+_*.cjs
+_*.cts
+_*.mjs
+_*.mts
+_*.py
+_*.json
+tmp_*.json

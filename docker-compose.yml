@@ -1,0 +1,189 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: polymarket-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: polymarket
+      POSTGRES_USER: polymarket
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set - see .env.docker.example}
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polymarket -d polymarket"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    networks:
+      - polymarket_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: polymarket-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    mem_limit: 128m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - CHOWN
+    networks:
+      - polymarket_net
+
+  postgres-backup:
+    image: postgres:17-alpine
+    container_name: polymarket-postgres-backup
+    profiles:
+      - backup
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set - see .env.docker.example}
+      POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+      POSTGRES_BACKUP_INTERVAL_SEC: ${POSTGRES_BACKUP_INTERVAL_SEC:-86400}
+      TZ: ${TZ:-Asia/Jakarta}
+    volumes:
+      - ./backups/postgres:/backups
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        umask 077
+        while true; do
+          ts=$$(date +%Y%m%d_%H%M%S)
+          pg_dump -h postgres -U polymarket -d polymarket -Fc -f "/backups/polymarket_$${ts}.dump"
+          find /backups -type f -name 'polymarket_*.dump' -mtime +$${POSTGRES_BACKUP_RETENTION_DAYS} -delete
+          sleep "$${POSTGRES_BACKUP_INTERVAL_SEC}"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    networks:
+      - polymarket_net
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: polymarket-bot
+    restart: unless-stopped
+    env_file:
+      - ./bot/.env
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Jakarta}
+      STATUS_BIND_HOST: 0.0.0.0
+      STATUS_PORT: 3099
+      REPORT_BIND_HOST: 0.0.0.0
+      REPORT_PORT: 3101
+      STATUS_AUTH_TOKEN: ${STATUS_AUTH_TOKEN:?STATUS_AUTH_TOKEN must be set - see .env.docker.example}
+      REPORT_AUTH_TOKEN: ${REPORT_AUTH_TOKEN:?REPORT_AUTH_TOKEN must be set - see .env.docker.example}
+      DATABASE_URL: postgresql://polymarket:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set - see .env.docker.example}@postgres:5432/polymarket
+      REDIS_URL: redis://redis:6379
+      RUNTIME_INTEGRATIONS_ENABLED: ${RUNTIME_INTEGRATIONS_ENABLED:-true}
+      POLYMARKET_DOH_ENABLED: ${POLYMARKET_DOH_ENABLED:-true}
+      POLYMARKET_DOH_URL: ${POLYMARKET_DOH_URL:-https://cloudflare-dns.com/dns-query}
+      RETRAIN_MIN_ACCURACY: ${RETRAIN_MIN_ACCURACY:-0.70}
+      RETRAIN_MIN_AUC: ${RETRAIN_MIN_AUC:-0.80}
+      RETRAIN_MIN_HIGH_CONF_ACCURACY: ${RETRAIN_MIN_HIGH_CONF_ACCURACY:-0.78}
+      RETRAIN_MIN_HIGH_CONF_COVERAGE: ${RETRAIN_MIN_HIGH_CONF_COVERAGE:-5}
+      RETRAIN_MAX_HIGH_CONF_COVERAGE: ${RETRAIN_MAX_HIGH_CONF_COVERAGE:-98}
+      RETRAIN_MAX_CALIBRATION_ECE: ${RETRAIN_MAX_CALIBRATION_ECE:-0.08}
+      RETRAIN_MAX_CV_TEST_ACC_GAP: ${RETRAIN_MAX_CV_TEST_ACC_GAP:-0.04}
+      RETRAIN_MAX_TEST_HOLDOUT_ACC_GAP: ${RETRAIN_MAX_TEST_HOLDOUT_ACC_GAP:-0.08}
+      RETRAIN_REQUIRE_STRICT_HOLDOUT: ${RETRAIN_REQUIRE_STRICT_HOLDOUT:-true}
+    volumes:
+      - ./bot/data:/app/bot/data
+      - ./public/ml:/app/public/ml
+    expose:
+      - "3099"
+      - "3101"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    mem_limit: 768m
+    cpus: 1.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - polymarket_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_BOT_WS_URL: /ws
+        # Baked into the served JS bundle at build time so the dashboard can
+        # authenticate to the bot WebSocket. See docs/DOCKER_STACK.md.
+        VITE_BOT_STATUS_TOKEN: ${STATUS_AUTH_TOKEN:?STATUS_AUTH_TOKEN must be set - see .env.docker.example}
+    container_name: polymarket-frontend
+    restart: unless-stopped
+    ports:
+      # Loopback-only by default. Set FRONTEND_BIND=0.0.0.0 to expose on the LAN.
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-3010}:80"
+    depends_on:
+      - bot
+    mem_limit: 128m
+    cpus: 0.5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+    networks:
+      - polymarket_net
+
+networks:
+  polymarket_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
