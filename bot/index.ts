@@ -53,6 +53,8 @@ import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.ts';
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime } from './src/loop.ts';
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.ts';
+import { initRuntimeIntegrations, recordRuntimeEvent, shutdownRuntimeIntegrations } from './src/services/runtimeIntegrations.ts';
+import { startReportServer, stopReportServer } from './src/services/reportServer.ts';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.ts';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.ts';
 import { startReconciler, stopReconciler } from './src/trading/journalReconciler.ts';
@@ -86,6 +88,8 @@ log.info(`Max daily loss: ${BOT_CONFIG.maxDailyLossPct}%`);
 log.info(`Max consecutive losses: ${BOT_CONFIG.maxConsecutiveLosses}`);
 
 async function main() {
+  startReportServer();
+
   // 1. Init CLOB client (only if live trading)
   if (!BOT_CONFIG.dryRun) {
     try {
@@ -153,6 +157,18 @@ async function main() {
   } else {
     log.info('DRY RUN mode — CLOB client not initialized');
   }
+
+  // 1c. Postgres/Redis mirrors — AFTER orphan-order cleanup (connect retries can
+  // take ~40s and must not widen the window where a stale resting order fills
+  // untracked). Non-blocking: mirror functions no-op until connections are ready.
+  void initRuntimeIntegrations()
+    .then(() => recordRuntimeEvent('bot_startup', {
+      dryRun: BOT_CONFIG.dryRun,
+      pollMs: POLL_MS,
+      statusPort: process.env.STATUS_PORT || '3099',
+      reportPort: process.env.REPORT_PORT || '3101',
+    }))
+    .catch(err => log.warn(`Runtime integrations init failed (non-fatal): ${err.message}`));
 
   // 1b. Init Chainlink Data Streams WS (dormant if API key not configured)
   if (isDataStreamsConfigured()) {
@@ -314,6 +330,7 @@ async function main() {
 
     // Stop status server + position polling + reconciler + redeemer + monitor + daily summary
     stopStatusServer();
+    await stopReportServer();
     stopPositionPolling();
     stopReconciler();
     stopRedeemer();
@@ -343,6 +360,16 @@ async function main() {
     log.info(`Daily P&L: ${finalStats.dailyPnL >= 0 ? '+' : ''}$${finalStats.dailyPnL.toFixed(2)} (${finalStats.dailyPnLPct.toFixed(1)}%)`);
     log.info(`Trades: ${finalStats.totalTrades} (${finalStats.wins}W/${finalStats.losses}L = ${(finalStats.winRate * 100).toFixed(0)}%)`);
     log.info('State saved. Goodbye.');
+
+    await recordRuntimeEvent('bot_session_summary', {
+      bankroll: finalStats.bankroll,
+      dailyPnL: finalStats.dailyPnL,
+      totalTrades: finalStats.totalTrades,
+      wins: finalStats.wins,
+      losses: finalStats.losses,
+      winRate: finalStats.winRate,
+    });
+    await shutdownRuntimeIntegrations();
 
     process.exit(0);
   }

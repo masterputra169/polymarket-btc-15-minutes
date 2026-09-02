@@ -9,7 +9,10 @@
   },
   "scripts": {
     "start": "node index.ts",
-    "dry-run": "node -e \"process.env.DRY_RUN='true'; import('./index.ts')\""
+    "dry-run": "node -e \"process.env.DRY_RUN='true'; import('./index.ts')\"",
+    "pg:backfill": "node scripts/backfillPostgres.mts",
+    "pg:report": "node scripts/postgresReport.mts",
+    "ml:audit": "node scripts/mlQualityAudit.mts --dir ../public/ml"
   },
   "dependencies": {
     "@chainlink/data-streams-sdk": "^1.2.1",
@@ -19,6 +22,8 @@
     "@x402/svm": "^2.4.0",
     "dotenv": "^16.6.1",
     "ethers": "^6.17.0",
+    "pg": "^8.22.0",
+    "redis": "^6.0.1",
     "viem": "^2.53.1",
     "ws": "^8.21.0"
   },

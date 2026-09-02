@@ -12,6 +12,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { polyFeeRate } from '../../../src/config.ts';
 import { createLogger } from '../logger.ts';
+import { mirrorStateSnapshot } from '../services/runtimeIntegrations.ts';
 
 const log = createLogger('Position');
 
@@ -246,6 +247,7 @@ export function saveState() {
       writeFileSync(BOT_CONFIG.stateFile, data);
     }
     log.debug('State saved to disk');
+    void mirrorStateSnapshot(state, 'runtime_state');
   } catch (err) {
     log.warn(`Could not save state: ${err.message}`);
   }

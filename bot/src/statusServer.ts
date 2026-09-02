@@ -15,6 +15,8 @@ import { recordLoss } from './safety/tradeFilters.ts';
 import { forceUsdcSync } from './engines/usdcSync.ts';
 import { maybeAnalyze, getLastAnalysis } from './ai/postTradeAnalyst.ts';
 import { maybeOptimize, getOptimizerStatus } from './ai/selfOptimizer.ts';
+import { cacheStatusSnapshot } from './services/runtimeIntegrations.ts';
+import { isLocalBindHost } from './utils/net.ts';
 
 const log = createLogger('StatusWS');
 
@@ -74,10 +76,6 @@ function getStatusConfig() {
     authToken,
     authRequired: authToken.length > 0,
   };
-}
-
-function isLocalBindHost(host) {
-  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
 }
 
 function tokenMatches(candidate) {
@@ -141,6 +139,19 @@ export function registerTraderDiscovery({ scan, getTracked, getDiscovered, addTr
 export function startStatusServer() {
   if (wss) return;
   const { port, bindHost, authRequired } = getStatusConfig();
+
+  // Fail closed: an off-host bind without a token exposes bankroll control
+  // (setBankroll, sellPosition, forceSettle) to the network. Loopback binds
+  // without a token keep working unchanged (local PM2 dev flow).
+  if (!authRequired && !isLocalBindHost(bindHost)) {
+    if (process.env.ALLOW_UNAUTHENTICATED_STATUS === 'true') {
+      log.warn('SECURITY: status server bound to non-loopback host WITHOUT auth token — explicitly allowed via ALLOW_UNAUTHENTICATED_STATUS=true. Anyone who can reach this port can control the bot.');
+    } else {
+      throw new Error(
+        `Status server refuses to bind ${bindHost}:${port} without auth: set STATUS_AUTH_TOKEN, bind to 127.0.0.1, or set ALLOW_UNAUTHENTICATED_STATUS=true to override.`
+      );
+    }
+  }
 
   // W5: Catch port-in-use and other startup errors
   try {
@@ -384,6 +395,10 @@ export function broadcast(stateObj) {
   const now = Date.now();
   if (now - lastBroadcastMs < BROADCAST_THROTTLE_MS) return;
   lastBroadcastMs = now;
+
+  // Redis mirror rides the same throttle — a SET every ~500ms poll tick was
+  // pure churn for a cache with a 120s TTL
+  void cacheStatusSnapshot(stateObj);
 
   for (const ws of wss.clients) {
     if (ws.readyState === 1) { // WebSocket.OPEN

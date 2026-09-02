@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkS
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
+import { mirrorSignalPerfSnapshot } from '../services/runtimeIntegrations.ts';
 
 import {
   injectStore,
@@ -70,6 +71,7 @@ export function saveSignalPerfToDisk() {
       writeFileSync(BOT_CONFIG.signalPerfFile, data);
       try { unlinkSync(tmpPath); } catch { /* */ }
     }
+    void mirrorSignalPerfSnapshot(snapshot, 'runtime_signal_perf');
     log.debug('Saved signal perf data to disk');
   } catch (err) {
     log.warn(`Could not save signal perf file: ${err.message}`);

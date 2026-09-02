@@ -12,6 +12,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
+import { mirrorTradeJournalRecord } from '../services/runtimeIntegrations.ts';
 import { getBankroll } from './positionTracker.ts';
 
 const log = createLogger('Journal');
@@ -208,6 +209,8 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
   } catch (err) {
     log.warn(`Journal write failed: ${err.message}`);
   }
+
+  mirrorTradeJournalRecord(record).catch(e => log.debug(`PostgreSQL journal mirror skipped: ${e.message}`));
 
   // Update cache
   if (recentCache === null) recentCache = [];

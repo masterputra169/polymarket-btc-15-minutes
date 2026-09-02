@@ -12,6 +12,7 @@ import {
   summarizeOrderBook,
 } from '../../../src/data/polymarket.ts';
 import { createLogger } from '../logger.ts';
+import { fetchJsonWithPolymarketDoh, fetchTextWithPolymarketDoh } from '../services/polymarketHttp.ts';
 
 const log = createLogger('Data');
 
@@ -80,9 +81,7 @@ async function fetchLiveEventsBySeriesId({ seriesId, limit = 5 }) {
   // order=endDate ascending puts the currently-live event first; default sort
   // returned oldest expired events and Gamma timed out for limit>=10 on this series.
   const url = `${CONFIG.gammaBaseUrl}/events?series_id=${seriesId}&active=true&closed=false&order=endDate&ascending=true&limit=${limit}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-  if (!res.ok) throw new Error(`Gamma events error: ${res.status}`);
-  const data = await res.json();
+  const data = await fetchJsonWithPolymarketDoh(url, { timeoutMs: 12_000, label: 'Gamma events' });
   return Array.isArray(data) ? data : [];
 }
 
@@ -91,9 +90,7 @@ async function fetchLiveEventsBySeriesId({ seriesId, limit = 5 }) {
  */
 async function fetchOrderBook({ tokenId }) {
   const url = `${CONFIG.clobBaseUrl}/book?token_id=${tokenId}`;
-  const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
-  if (!res.ok) throw new Error(`CLOB book error: ${res.status}`);
-  return await res.json();
+  return await fetchJsonWithPolymarketDoh(url, { timeoutMs: 5_000, label: 'CLOB book' });
 }
 
 /**
@@ -379,12 +376,11 @@ export async function fetchPolymarketPtb(slug) {
   }
 
   try {
-    const res = await fetch(`https://polymarket.com/event/${slug}`, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(10_000),
+    const html = await fetchTextWithPolymarketDoh(`https://polymarket.com/event/${slug}`, {
+      timeoutMs: 10_000,
+      headers: { Accept: 'text/html,application/xhtml+xml' },
+      label: 'Polymarket PTB page',
     });
-    if (!res.ok) return null;
-    const html = await res.text();
 
     const scriptMatch = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
     if (!scriptMatch) return null;

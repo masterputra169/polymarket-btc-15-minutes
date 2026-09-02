@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { createLogger } from '../logger.ts';
 import { BOT_CONFIG } from '../config.ts';
+import { mirrorPositionsSnapshot } from '../services/runtimeIntegrations.ts';
 import { placeSellOrder, getWalletAddress, getConditionalTokenBalance, updateConditionalApproval } from './clobClient.ts';
 
 const log = createLogger('Positions');
@@ -316,19 +317,18 @@ function savePositions() {
     mkdirSync(dirname(filePath), { recursive: true });
     // M5: Atomic write — write to temp then rename to prevent corruption on crash
     const tmpPath = filePath + '.tmp';
-    writeFileSync(tmpPath, JSON.stringify({
+    const snapshot = {
       lastUpdate: lastFetchMs,
       positions: cachedPositions,
-    }, null, 2));
+    };
+    writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2));
     try {
       renameSync(tmpPath, filePath);
     } catch (renameErr) {
       log.debug(`Rename failed (${renameErr.message}) — direct write`);
-      writeFileSync(filePath, JSON.stringify({
-        lastUpdate: lastFetchMs,
-        positions: cachedPositions,
-      }, null, 2));
+      writeFileSync(filePath, JSON.stringify(snapshot, null, 2));
     }
+    void mirrorPositionsSnapshot(snapshot, 'runtime_positions');
   } catch (err) {
     log.warn(`Failed to save positions: ${err.message}`);
   }

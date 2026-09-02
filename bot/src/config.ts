@@ -4,6 +4,7 @@
  */
 
 import { CONFIG as SHARED_CONFIG, BET_SIZING, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK } from '../../src/config.ts';
+import { envNum, envInt } from './utils/env.ts';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
@@ -17,16 +18,8 @@ const CONFIG = {
   clobBaseUrl: 'https://clob.polymarket.com',
 };
 
-/** Parse a number from env with min/max bounds. Returns default if invalid or out of range. */
-function envNum(envVal, defaultVal, min = -Infinity, max = Infinity) {
-  if (envVal == null) return defaultVal;
-  const n = Number(envVal);
-  if (!Number.isFinite(n) || n < min || n > max) return defaultVal;
-  return n;
-}
-function envInt(envVal, defaultVal, min = 0, max = Infinity) {
-  return Math.round(envNum(envVal, defaultVal, min, max));
-}
+// envNum/envInt now live in ./utils/env.ts (shared with services + scripts).
+// Re-exported below so existing consumers keep importing from config.
 
 const BOT_CONFIG = {
   dryRun: process.env.DRY_RUN !== 'false',
@@ -293,4 +286,4 @@ const BOT_CONFIG = {
   },
 };
 
-export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK };
+export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK, envNum, envInt };

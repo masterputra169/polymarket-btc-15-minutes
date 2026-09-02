@@ -66,8 +66,15 @@ const CFG = {
   tuneTrials:     envNum('RETRAIN_TUNE_TRIALS', 100, 10, 500),
   minAccuracy:    envNum('RETRAIN_MIN_ACCURACY', 0.70, 0.50, 0.99),
   minAuc:         envNum('RETRAIN_MIN_AUC', 0.80, 0.50, 0.99),
+  minHighConfAccuracy: envNum('RETRAIN_MIN_HIGH_CONF_ACCURACY', 0.78, 0.50, 0.99),
+  minHighConfCoverage: envNum('RETRAIN_MIN_HIGH_CONF_COVERAGE', 5, 0, 100),
+  maxHighConfCoverage: envNum('RETRAIN_MAX_HIGH_CONF_COVERAGE', 98, 1, 100),
+  maxCalibrationEce: envNum('RETRAIN_MAX_CALIBRATION_ECE', 0.08, 0, 0.50),
+  maxCvTestAccGap: envNum('RETRAIN_MAX_CV_TEST_ACC_GAP', 0.04, 0, 0.30),
+  maxTestHoldoutAccGap: envNum('RETRAIN_MAX_TEST_HOLDOUT_ACC_GAP', 0.08, 0, 0.50),
   maxAccDrop:     envNum('RETRAIN_MAX_ACC_DROP', 0.02, 0, 0.20),
   maxAucDrop:     envNum('RETRAIN_MAX_AUC_DROP', 0.01, 0, 0.10),
+  requireStrictHoldout: process.env.RETRAIN_REQUIRE_STRICT_HOLDOUT !== 'false',
 };
 
 // ── CLI args ──
@@ -132,7 +139,7 @@ function readCurrentMetrics() {
     if (!existsSync(p)) continue;
     try {
       const d = JSON.parse(readFileSync(p, 'utf-8'));
-      result[key] = d.metrics || null;
+      result[key] = d.metrics ? { ...d.metrics, validation: d.validation } : null;
     } catch { /* skip */ }
   }
 
@@ -140,11 +147,12 @@ function readCurrentMetrics() {
   if (result.xgb && result.lgb) {
     const normPath = resolve(ML_DIR, 'norm_browser.json');
     let w = { xgb: 0.45, lgb: 0.55 };
+    let norm = null;
     try {
-      const norm = JSON.parse(readFileSync(normPath, 'utf-8'));
+      norm = JSON.parse(readFileSync(normPath, 'utf-8'));
       if (norm.ensemble_weights) w = norm.ensemble_weights;
     } catch { /* use defaults */ }
-    result.ensemble = {
+    result.ensemble = norm?.ensemble_metrics || {
       accuracy: w.xgb * result.xgb.accuracy + w.lgb * result.lgb.accuracy,
       auc: w.xgb * result.xgb.auc + w.lgb * result.lgb.auc,
     };
@@ -168,18 +176,19 @@ function readMetricsFrom(dir) {
     if (!existsSync(p)) continue;
     try {
       const d = JSON.parse(readFileSync(p, 'utf-8'));
-      result[key] = d.metrics || null;
+      result[key] = d.metrics ? { ...d.metrics, validation: d.validation } : null;
     } catch { /* skip */ }
   }
 
   if (result.xgb && result.lgb) {
     const normPath = resolve(dir, 'norm_browser.json');
     let w = { xgb: 0.45, lgb: 0.55 };
+    let norm = null;
     try {
-      const norm = JSON.parse(readFileSync(normPath, 'utf-8'));
+      norm = JSON.parse(readFileSync(normPath, 'utf-8'));
       if (norm.ensemble_weights) w = norm.ensemble_weights;
     } catch { /* defaults */ }
-    result.ensemble = {
+    result.ensemble = norm?.ensemble_metrics || {
       accuracy: w.xgb * result.xgb.accuracy + w.lgb * result.lgb.accuracy,
       auc: w.xgb * result.xgb.auc + w.lgb * result.lgb.auc,
     };
@@ -191,9 +200,19 @@ function readMetricsFrom(dir) {
 }
 
 // ── Quality Gate ──
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function pctDetail(value, threshold, op = '>=') {
+  if (!isFiniteNumber(value)) return 'missing';
+  return `${(value * 100).toFixed(2)}% ${op} ${(threshold * 100).toFixed(2)}%`;
+}
+
 function qualityGate(current, fresh) {
   const checks = [];
   const ens = fresh.ensemble;
+  const audit = fresh.xgb || {};
   if (!ens) return { pass: false, checks: [{ name: 'no_metrics', pass: false, detail: 'No ensemble metrics in trained model' }] };
 
   // Absolute floors
@@ -207,6 +226,48 @@ function qualityGate(current, fresh) {
     pass: ens.auc >= CFG.minAuc,
     detail: `${ens.auc.toFixed(4)} >= ${CFG.minAuc.toFixed(2)}`,
   });
+  checks.push({
+    name: 'high_conf_accuracy',
+    pass: isFiniteNumber(audit.high_conf_accuracy) && audit.high_conf_accuracy >= CFG.minHighConfAccuracy,
+    detail: pctDetail(audit.high_conf_accuracy, CFG.minHighConfAccuracy),
+  });
+  checks.push({
+    name: 'high_conf_coverage',
+    pass: isFiniteNumber(audit.high_conf_ratio)
+      && audit.high_conf_ratio >= CFG.minHighConfCoverage
+      && audit.high_conf_ratio <= CFG.maxHighConfCoverage,
+    detail: isFiniteNumber(audit.high_conf_ratio)
+      ? `${audit.high_conf_ratio.toFixed(2)}% between ${CFG.minHighConfCoverage.toFixed(0)}%-${CFG.maxHighConfCoverage.toFixed(0)}%`
+      : 'missing',
+  });
+  checks.push({
+    name: 'calibration_ece',
+    pass: isFiniteNumber(audit.calibration_ece) && audit.calibration_ece <= CFG.maxCalibrationEce,
+    detail: isFiniteNumber(audit.calibration_ece)
+      ? `${audit.calibration_ece.toFixed(4)} <= ${CFG.maxCalibrationEce.toFixed(4)}`
+      : 'missing',
+  });
+  checks.push({
+    name: 'cv_test_acc_gap',
+    pass: isFiniteNumber(audit.cv_test_acc_gap) && audit.cv_test_acc_gap <= CFG.maxCvTestAccGap,
+    detail: isFiniteNumber(audit.cv_test_acc_gap)
+      ? `${(audit.cv_test_acc_gap * 100).toFixed(2)}pp <= ${(CFG.maxCvTestAccGap * 100).toFixed(2)}pp`
+      : 'missing',
+  });
+  checks.push({
+    name: 'test_holdout_acc_gap',
+    pass: isFiniteNumber(audit.test_holdout_acc_gap) && audit.test_holdout_acc_gap <= CFG.maxTestHoldoutAccGap,
+    detail: isFiniteNumber(audit.test_holdout_acc_gap)
+      ? `${(audit.test_holdout_acc_gap * 100).toFixed(2)}pp <= ${(CFG.maxTestHoldoutAccGap * 100).toFixed(2)}pp`
+      : 'missing',
+  });
+  if (CFG.requireStrictHoldout) {
+    checks.push({
+      name: 'strict_holdout',
+      pass: audit.validation?.strict_holdout === true,
+      detail: audit.validation?.strict_holdout === true ? 'enabled' : 'missing/disabled',
+    });
+  }
 
   // Relative checks (vs current deployed model)
   if (current.ensemble) {
