@@ -26,6 +26,8 @@ import argparse, json, os, sys, warnings
 import numpy as np
 import pandas as pd
 
+from mltrain.features import engineer_features
+
 warnings.filterwarnings('ignore')
 
 # --- Optional: Optuna ---
@@ -163,83 +165,9 @@ spw = dn / max(up, 1)
 # ================================================
 print("[2/8] Engineering 25 features...")
 
-fi = {name: i for i, name in enumerate(feature_cols_orig)}
-def col(name): return X_orig[:, fi[name]] if name in fi else np.zeros(len(X_orig))
-
-delta_1m = col('delta_1m_pct')
-delta_3m = col('delta_3m_pct')
-rsi = col('rsi_norm')
-rsi_slope = col('rsi_slope')
-vwap_dist = col('vwap_dist')
-vwap_slope = col('vwap_slope')
-macd_line = col('macd_line')
-macd_hist = col('macd_hist')
-vol_ratio = col('vol_ratio_norm')
-multi_tf = col('multi_tf_agreement')
-bb_pctb = col('bb_percent_b')
-bb_squeeze = col('bb_squeeze')
-atr_pct = col('atr_pct_norm')
-vol_buy = col('vol_delta_buy_ratio')
-ema_cross = col('ema_cross_signal')
-ema_dist = col('ema_dist_norm')
-stoch_k = col('stoch_k_norm')
-ha_consec = col('ha_signed_consec')
-regime_trending = col('regime_trending')
-regime_confidence = col('regime_confidence')  # v8: was regime_choppy
-regime_mr = col('regime_mean_reverting')
-ha_green = col('ha_is_green')
-
-new = {}
-# --- Original 16 engineered features ---
-new['delta_1m_capped'] = np.clip(delta_1m, -0.003, 0.003)
-new['momentum_accel'] = delta_1m - (delta_3m / 3)
-new['rsi_x_trending'] = rsi * regime_trending
-new['rsi_x_regime_conf'] = rsi * regime_confidence  # v8: was rsi_x_choppy = rsi * regime_choppy
-new['rsi_x_mean_rev'] = rsi * regime_mr
-new['delta1m_x_multitf'] = delta_1m * multi_tf
-new['bb_pctb_x_squeeze'] = bb_pctb * bb_squeeze
-new['vol_buy_x_delta'] = vol_buy * np.sign(delta_1m)
-new['vwap_trend_strength'] = vwap_dist * np.sign(vwap_slope)
-new['rsi_divergence'] = np.sign(delta_3m) * (-rsi_slope)
-new['combined_oscillator'] = (rsi + stoch_k + bb_pctb) / 3
-new['ha_delta_agree'] = (np.sign(ha_consec) == np.sign(delta_1m)).astype(np.float32)
-atr_safe = np.where(atr_pct > 0.01, atr_pct, 0.01)
-new['delta_1m_atr_adj'] = delta_1m / atr_safe
-new['price_position_score'] = np.sign(vwap_dist)*0.4 + (bb_pctb-0.5)*0.3 + (ema_cross-0.5)*0.3
-new['vol_weighted_momentum'] = delta_1m * vol_ratio
-new['macd_x_rsi_slope'] = np.sign(macd_line) * rsi_slope
-
-# --- 6 engineered features (agreement/confirmation focus) ---
-new['trend_alignment_score'] = regime_trending * multi_tf * np.sign(delta_1m)
-new['oscillator_extreme'] = np.maximum(rsi - 0.7, 0) + np.maximum(0.3 - rsi, 0)
-new['vol_momentum_confirm'] = vol_buy * np.sign(delta_1m) * vol_ratio
-new['squeeze_breakout_potential'] = bb_squeeze * np.abs(stoch_k - 0.5) * 2
-
-delta_dir = np.sign(delta_1m)
-agree_count = (
-    (np.sign(ha_consec) == delta_dir).astype(np.float32) +
-    (np.sign(macd_hist) == delta_dir).astype(np.float32) +
-    (np.sign(vwap_dist) == delta_dir).astype(np.float32) +
-    ((rsi > 0.5).astype(np.float32) == (delta_dir > 0).astype(np.float32)).astype(np.float32) +
-    (multi_tf).astype(np.float32)
-)
-new['multi_indicator_agree'] = agree_count / 5.0
-new['stoch_rsi_extreme'] = np.maximum(stoch_k - 0.8, 0) * 5 + np.maximum(0.2 - stoch_k, 0) * 5
-
-# --- 3 engineered features (Polymarket crowd/orderbook interactions) ---
-market_price_momentum = col('market_price_momentum')
-orderbook_imbalance = col('orderbook_imbalance')
-crowd_model_divergence = col('crowd_model_divergence')
-rule_confidence = col('rule_confidence')
-
-new['crowd_agree_momentum'] = np.sign(market_price_momentum) * np.sign(delta_1m)
-new['divergence_x_confidence'] = crowd_model_divergence * rule_confidence
-new['imbalance_x_vol_delta'] = orderbook_imbalance * vol_buy
-
-new_names = list(new.keys())
-X = np.hstack([X_orig, np.column_stack([new[n] for n in new_names])]).astype(np.float32)
-X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
-feature_cols = feature_cols_orig + new_names
+fi = {name: i for i, name in enumerate(feature_cols_orig)}  # base-feature index map (used by later sections)
+X, feature_cols = engineer_features(X_orig, feature_cols_orig)
+new_names = feature_cols[len(feature_cols_orig):]
 print(f"   +{len(new_names)} engineered = {len(feature_cols)} total features")
 
 # Build pre-exclude feature weights (Task B: zero out consistently pruned features BEFORE Optuna)
@@ -366,222 +294,26 @@ import xgboost as xgb
 from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, f1_score, precision_score, recall_score, confusion_matrix, brier_score_loss
 from sklearn.linear_model import LogisticRegression
 
-def safe_round(value: float | int | None, digits: int = 4) -> float | None:
-    if value is None:
-        return None
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not np.isfinite(v):
-        return None
-    return round(v, digits)
+# Pure logic extracted into the mltrain package (importable + unit-tested).
+from mltrain.metrics import safe_round, calibration_summary, confidence_bucket_summary
+from mltrain.cv import walk_forward_cv as _walk_forward_cv
 
-def calibration_summary(y_true: np.ndarray, y_prob: np.ndarray, bins: int = 10) -> dict[str, object]:
-    """Expected calibration error for probability-of-UP predictions."""
-    y_true = np.asarray(y_true)
-    y_prob = np.asarray(y_prob)
-    nan_mask = np.isnan(y_prob)
-    if np.any(nan_mask):
-        print(f"   [WARN] calibration_summary: dropping {int(nan_mask.sum())} NaN probabilities")
-        y_true = y_true[~nan_mask]
-        y_prob = y_prob[~nan_mask]
-    edges = np.linspace(0.0, 1.0, bins + 1)
-    total = max(1, len(y_prob))
-    rows = []
-    ece = 0.0
-    mce = 0.0
-
-    for i in range(bins):
-        lo = float(edges[i])
-        hi = float(edges[i + 1])
-        if i == bins - 1:
-            mask = (y_prob >= lo) & (y_prob <= hi)
-        else:
-            mask = (y_prob >= lo) & (y_prob < hi)
-
-        count = int(mask.sum())
-        if count == 0:
-            rows.append({
-                'min_prob': round(lo, 2),
-                'max_prob': round(hi, 2),
-                'count': 0,
-                'coverage_pct': 0.0,
-                'avg_predicted': None,
-                'observed_rate': None,
-                'gap': None,
-            })
-            continue
-
-        avg_pred = float(y_prob[mask].mean())
-        observed = float(y_true[mask].mean())
-        gap = abs(avg_pred - observed)
-        ece += (count / total) * gap
-        mce = max(mce, gap)
-        rows.append({
-            'min_prob': round(lo, 2),
-            'max_prob': round(hi, 2),
-            'count': count,
-            'coverage_pct': round(count / total * 100, 2),
-            'avg_predicted': round(avg_pred, 4),
-            'observed_rate': round(observed, 4),
-            'gap': round(gap, 4),
-        })
-
-    return {
-        'ece': float(ece),
-        'mce': float(mce),
-        'bins': rows,
-    }
-
-def confidence_bucket_summary(y_true: np.ndarray, y_prob: np.ndarray) -> list[dict[str, object]]:
-    """Accuracy broken down by prediction-confidence bucket.
-
-    Confidence is max(p, 1-p) of the probability-of-UP prediction, bucketed
-    into [0.50, 0.55), ..., [0.80, 0.90), [0.90, 1.00] (upper bucket inclusive).
-    Returns one dict per bucket with: min_confidence, max_confidence, count,
-    coverage_pct, and accuracy (None when the bucket is empty).
-    """
-    y_true = np.asarray(y_true)
-    y_prob = np.asarray(y_prob)
-    nan_mask = np.isnan(y_prob)
-    if np.any(nan_mask):
-        print(f"   [WARN] confidence_bucket_summary: dropping {int(nan_mask.sum())} NaN probabilities")
-        y_true = y_true[~nan_mask]
-        y_prob = y_prob[~nan_mask]
-    y_pred = y_prob >= 0.5
-    confidence = np.maximum(y_prob, 1 - y_prob)
-    total = max(1, len(y_prob))
-    buckets = [(0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70),
-               (0.70, 0.75), (0.75, 0.80), (0.80, 0.90), (0.90, 1.01)]
-    rows = []
-
-    for lo, hi in buckets:
-        if hi >= 1.0:
-            mask = (confidence >= lo) & (confidence <= 1.0)
-        else:
-            mask = (confidence >= lo) & (confidence < hi)
-        count = int(mask.sum())
-        acc = accuracy_score(y_true[mask], y_pred[mask]) if count > 0 else None
-        rows.append({
-            'min_confidence': round(lo, 2),
-            'max_confidence': round(min(hi, 1.0), 2),
-            'count': count,
-            'coverage_pct': round(count / total * 100, 2),
-            'accuracy': safe_round(acc),
-        })
-
-    return rows
 
 NUM_BOOST_ROUND = 1200
 EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
-# --- Walk-Forward CV ---
+# --- Walk-Forward CV (logic lives in mltrain/cv.py; bound to this run's config) ---
 def walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, cfg: dict, w_tr: np.ndarray | None = None,
                     n_folds: int = N_CV_FOLDS, return_preds: bool = False,
                     feat_weights: np.ndarray | None = None,
                     return_importances: bool = False) -> tuple:
-    """Walk-forward CV: train on folds 1..k, validate on fold k+1.
-    Optionally returns out-of-fold predictions AND raw margins for calibration,
-    plus oof_idx — the X_tr row index of every OOF prediction. oof_idx lets
-    downstream SELECTION sweeps (threshold / phase-grid / ensemble-weight)
-    recover per-row metadata (e.g. minutes_left_norm) and verify row alignment
-    against another model's OOF arrays, so selection can run on OOF predictions
-    instead of the holdout (multiple-testing fix, Sep 2026).
-    Indices are appended in the same place as predictions, so a fold skipped by
-    the NaN guard stays consistently absent from preds, margins, labels AND idx.
-    feat_weights: optional per-feature weight array (0=exclude from splits).
-    return_importances: also return per-fold gain importance dicts (for
-    stability-filtered pruning)."""
-    fold_size = len(X_tr) // (n_folds + 2)
-    aucs, accs = [], []
-    oof_preds, oof_margins, oof_labels = [], [], []
-    oof_idx: list[int] = []
-    fold_importances = []
-
-    for fold in range(n_folds):
-        tr_end = fold_size * (fold + 2)
-        # Embargo: first val rows share feature lookback with the train tail;
-        # skipping them keeps the CV score (Optuna's objective) honest.
-        val_start = tr_end + CV_EMBARGO
-        val_end = len(X_tr) if fold == n_folds - 1 else tr_end + fold_size
-        if val_end <= val_start:
-            continue
-
-        X_f_train = X_tr[:tr_end]
-        y_f_train = y_tr[:tr_end]
-        X_f_val = X_tr[val_start:val_end]
-        y_f_val = y_tr[val_start:val_end]
-        w_f_train = w_tr[:tr_end] if w_tr is not None else None
-
-        spw_f = (len(y_f_train) - y_f_train.sum()) / max(y_f_train.sum(), 1)
-
-        params = {
-            'objective': 'binary:logistic',
-            'eval_metric': ['logloss', 'auc'],
-            'scale_pos_weight': spw_f,
-            'seed': args.seed,
-            'tree_method': 'hist',
-            **cfg,
-        }
-        # feature_weights requires colsample_bytree < 1.0
-        if feat_weights is not None and params.get('colsample_bytree', 1.0) >= 1.0:
-            params['colsample_bytree'] = 0.95
-
-        dtrain_f = xgb.DMatrix(X_f_train, label=y_f_train, weight=w_f_train, feature_names=feature_cols)
-        if feat_weights is not None:
-            dtrain_f.feature_weights = feat_weights
-        dval_f = xgb.DMatrix(X_f_val, label=y_f_val, feature_names=feature_cols)
-
-        model_f = xgb.train(
-            params, dtrain_f,
-            num_boost_round=NUM_BOOST_ROUND,
-            evals=[(dval_f, 'eval')],
-            early_stopping_rounds=EARLY_STOPPING,
-            verbose_eval=False,
-        )
-
-        y_prob_f = model_f.predict(dval_f)
-
-        # Guard against NaN predictions from degenerate hyperparameters
-        if np.any(np.isnan(y_prob_f)):
-            continue
-
-        acc_f = accuracy_score(y_f_val, (y_prob_f >= 0.5).astype(int))
-        try:
-            auc_f = roc_auc_score(y_f_val, y_prob_f)
-        except ValueError:
-            # Only one class in fold or other issue
-            auc_f = 0.5
-        if np.isnan(auc_f):
-            auc_f = 0.5
-        aucs.append(auc_f)
-        accs.append(acc_f)
-
-        if return_preds:
-            oof_preds.extend(y_prob_f.tolist())
-            # Also collect raw margins (logits) for Platt-on-logits calibration (C4)
-            y_margin_f = model_f.predict(dval_f, output_margin=True)
-            oof_margins.extend(y_margin_f.tolist())
-            oof_labels.extend(y_f_val.tolist())
-            oof_idx.extend(range(val_start, val_end))
-
-        if return_importances:
-            fold_importances.append(model_f.get_score(importance_type='gain'))
-
-    mean_auc = np.mean(aucs) if aucs else 0
-    mean_acc = np.mean(accs) if accs else 0
-
-    if return_preds and return_importances:
-        return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
-                np.array(oof_idx, dtype=np.int64), fold_importances)
-    if return_preds:
-        return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
-                np.array(oof_idx, dtype=np.int64))
-    if return_importances:
-        return mean_auc, mean_acc, fold_importances
-    return mean_auc, mean_acc
+    """Thin binding of mltrain.cv.walk_forward_cv to this run's globals."""
+    return _walk_forward_cv(
+        X_tr, y_tr, cfg, w_tr, n_folds, return_preds, feat_weights, return_importances,
+        feature_cols=feature_cols, seed=args.seed, embargo=CV_EMBARGO,
+        num_boost_round=NUM_BOOST_ROUND, early_stopping=EARLY_STOPPING,
+    )
 
 
 # --- 8 Seed Configurations ---

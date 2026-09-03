@@ -37,6 +37,11 @@ backtest/*
 backtest/ml_training/*
 !backtest/ml_training/*.py
 !backtest/ml_training/*.mts
+!backtest/ml_training/mltrain/
+!backtest/ml_training/mltrain/*.py
+!backtest/ml_training/tests/
+!backtest/ml_training/tests/*.py
+!backtest/ml_training/pytest.ini
 .backtest_cache/
 .backtest/
 
