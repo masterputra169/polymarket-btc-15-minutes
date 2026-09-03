@@ -17,6 +17,20 @@ Notes:
     - Historical entries without rlActionIdx assigned action 2 (scalar 1.0, neutral baseline)
     - Training requires ≥50 real trades. Saves only if val Sharpe improvement over baseline.
     - Augmentation: bootstraps minority regimes (trending, asia) to prevent overfitting
+
+Performance:
+    - The MLP forward/backward is vectorized with numpy (matrix-vector products and
+      outer-product weight updates). The previous pure-Python nested-loop implementation
+      cost ~6-10 ms per sample update, i.e. ~50+ minutes for a full --augment run
+      (200 epochs x ~1600 samples) and blew the auto-retrain 30-minute budget.
+      The numpy version runs the same per-sample REINFORCE updates in the same order
+      (including using post-update weights when propagating gradients to earlier
+      layers, matching the original implementation) and completes the full --augment
+      run in well under a minute on the same machine.
+    - Updates remain strictly per-sample (SGD, batch size 1) because the EMA reward
+      baseline and sequential weight updates are order-dependent; only the per-sample
+      linear algebra is vectorized. numpy is already required by the training
+      pipeline (see requirements.txt).
 """
 
 import json
@@ -25,6 +39,8 @@ import random
 import argparse
 import sys
 from pathlib import Path
+
+import numpy as np
 
 
 # ── Constants ──
@@ -122,112 +138,97 @@ def compute_reward(entry: dict) -> float | None:
     return max(-CLIP_REWARD, min(CLIP_REWARD, reward))
 
 
-# ── MLP (pure Python/numpy-free, for portability) ──
+# ── MLP (numpy-vectorized; see module docstring "Performance") ──
 class MLP:
-    """Minimal 3-layer MLP with numpy-free forward/backward."""
+    """Minimal 3-layer MLP with numpy-vectorized forward/backward.
 
-    def __init__(self, in_dim, hidden_dim, out_dim, seed=42):
+    Weight init draws from Python's `random.gauss` in the exact same order as the
+    original list-based implementation, so initial weights and the global RNG state
+    after construction are unchanged (epoch shuffles stay deterministic).
+    """
+
+    def __init__(self, in_dim: int, hidden_dim: int, out_dim: int, seed: int = 42) -> None:
         random.seed(seed)
-        self.layers = [
+        self.layers: list[dict] = [
             self._init_layer(in_dim, hidden_dim),
             self._init_layer(hidden_dim, hidden_dim),
             self._init_layer(hidden_dim, out_dim),
         ]
+        self._cache: list[np.ndarray] = []
 
-    def _init_layer(self, in_d, out_d):
-        # He init for ReLU layers
+    def _init_layer(self, in_d: int, out_d: int) -> dict:
+        # He init for ReLU layers (same random.gauss sequence as the original code)
         scale = math.sqrt(2.0 / in_d)
-        W = [[random.gauss(0, scale) for _ in range(in_d)] for _ in range(out_d)]
-        b = [0.0] * out_d
+        W = np.array(
+            [[random.gauss(0, scale) for _ in range(in_d)] for _ in range(out_d)],
+            dtype=np.float64,
+        )
+        b = np.zeros(out_d, dtype=np.float64)
         return {'W': W, 'b': b, 'in_d': in_d, 'out_d': out_d}
 
-    def _relu(self, v):
-        return max(0.0, v)
+    @staticmethod
+    def _softmax(logits: np.ndarray) -> np.ndarray:
+        exp_l = np.exp(logits - logits.max())
+        return exp_l / exp_l.sum()
 
-    def _softmax(self, logits):
-        max_l = max(logits)
-        exp_l = [math.exp(l - max_l) for l in logits]
-        s = sum(exp_l)
-        return [e / s for e in exp_l]
-
-    def _layer_forward(self, x, layer, activation='relu'):
-        W, b = layer['W'], layer['b']
-        out = []
-        for j in range(layer['out_d']):
-            s = b[j] + sum(x[i] * W[j][i] for i in range(layer['in_d']))
-            out.append(s)
-        if activation == 'relu':
-            return [self._relu(s) for s in out]
-        if activation == 'softmax':
-            return self._softmax(out)
-        return out
-
-    def forward(self, x):
-        h = x[:]
+    def forward(self, x: "np.ndarray | list[float]") -> np.ndarray:
+        h = np.asarray(x, dtype=np.float64)
         self._cache = [h]
         for i, layer in enumerate(self.layers):
-            act = 'relu' if i < len(self.layers) - 1 else 'softmax'
-            h = self._layer_forward(h, layer, activation=act)
+            z = layer['W'] @ h + layer['b']
+            h = np.maximum(z, 0.0) if i < len(self.layers) - 1 else self._softmax(z)
             self._cache.append(h)
         return h  # probs
 
-    def policy_gradient_update(self, x, action_idx, reward, baseline, lr, l2):
-        """Single REINFORCE update step."""
+    def policy_gradient_update(self, x: "np.ndarray | list[float]", action_idx: int,
+                               reward: float, baseline: float, lr: float, l2: float) -> None:
+        """Single REINFORCE update step.
+
+        Matches the original loop-based implementation exactly, including its
+        quirk of propagating gradients to earlier layers through the
+        already-updated weight matrices.
+        """
         probs = self.forward(x)
         advantage = reward - baseline
 
         # Policy gradient: ∇ log π(a|s) × advantage
         # For softmax output: d_log_pi/d_logit[j] = I(j==a) - pi[j]
-        d_logits = [-p for p in probs]
+        d_logits = -probs.copy()
         d_logits[action_idx] += 1.0
-        d_logits = [d * advantage for d in d_logits]  # × advantage
+        d_logits *= advantage
 
-        # Backprop through layer 3 (64→5)
+        # Backprop through layer 3 (64→5); W updated in-place (gradient + L2)
         layer = self.layers[2]
         h2 = self._cache[2]
-        for j in range(layer['out_d']):
-            layer['b'][j] += lr * d_logits[j]
-            for i in range(layer['in_d']):
-                # Gradient + L2 regularization
-                layer['W'][j][i] += lr * (d_logits[j] * h2[i] - l2 * layer['W'][j][i])
+        layer['b'] += lr * d_logits
+        layer['W'] += lr * (np.outer(d_logits, h2) - l2 * layer['W'])
 
-        # Backprop through layer 2 (64→64 ReLU)
-        d_h2 = [0.0] * self.layers[2]['in_d']
-        for j in range(layer['out_d']):
-            for i in range(layer['in_d']):
-                d_h2[i] += layer['W'][j][i] * d_logits[j]
-        # Apply ReLU mask
-        d_h2 = [d if h2[i] > 0 else 0.0 for i, d in enumerate(d_h2)]
+        # Backprop through layer 2 (64→64 ReLU) — uses post-update W3, as before
+        d_h2 = layer['W'].T @ d_logits
+        d_h2 = np.where(h2 > 0, d_h2, 0.0)  # ReLU mask
 
         layer2 = self.layers[1]
         h1 = self._cache[1]
-        for j in range(layer2['out_d']):
-            layer2['b'][j] += lr * d_h2[j]
-            for i in range(layer2['in_d']):
-                layer2['W'][j][i] += lr * (d_h2[j] * h1[i] - l2 * layer2['W'][j][i])
+        layer2['b'] += lr * d_h2
+        layer2['W'] += lr * (np.outer(d_h2, h1) - l2 * layer2['W'])
 
-        # Backprop through layer 1 (16→64 ReLU)
-        d_h1 = [0.0] * layer2['in_d']
-        for j in range(layer2['out_d']):
-            for i in range(layer2['in_d']):
-                d_h1[i] += layer2['W'][j][i] * d_h2[j]
-        d_h1 = [d if h1[i] > 0 else 0.0 for i, d in enumerate(d_h1)]
+        # Backprop through layer 1 (16→64 ReLU) — uses post-update W2, as before
+        d_h1 = layer2['W'].T @ d_h2
+        d_h1 = np.where(h1 > 0, d_h1, 0.0)
 
         layer1 = self.layers[0]
         x0 = self._cache[0]
-        for j in range(layer1['out_d']):
-            layer1['b'][j] += lr * d_h1[j]
-            for i in range(layer1['in_d']):
-                layer1['W'][j][i] += lr * (d_h1[j] * x0[i] - l2 * layer1['W'][j][i])
+        layer1['b'] += lr * d_h1
+        layer1['W'] += lr * (np.outer(d_h1, x0) - l2 * layer1['W'])
 
-    def get_weights(self):
-        """Flatten weights for JSON serialization (row-major)."""
-        result = {}
+    def get_weights(self) -> dict[str, list[float]]:
+        """Flatten weights for JSON serialization (row-major, same layout as before)."""
+        result: dict[str, list[float]] = {}
         names = ['1', '2', '3']
         for idx, layer in enumerate(self.layers):
             n = names[idx]
-            result[f'w{n}'] = [v for row in layer['W'] for v in row]
-            result[f'b{n}'] = layer['b'][:]
+            result[f'w{n}'] = layer['W'].flatten().tolist()
+            result[f'b{n}'] = layer['b'].tolist()
         return result
 
 
@@ -241,14 +242,14 @@ def compute_sharpe(rewards):
     return mean_r / std
 
 
-def evaluate(model, samples):
+def evaluate(model: MLP, samples: list[tuple]) -> tuple[float, float]:
     """Evaluate model on samples: compute avg reward and Sharpe."""
     total_r = 0.0
     rewards = []
     for state, action_idx, reward in samples:
         probs = model.forward(state)
-        # Greedy action
-        pred_action = max(range(N_ACTIONS), key=lambda i: probs[i])
+        # Greedy action (argmax picks the first max, same tie-break as before)
+        pred_action = int(np.argmax(probs))
         # Use actual reward if predicted action matches historical, else penalize
         r = reward if pred_action == action_idx else reward * 0.5
         total_r += r
@@ -340,11 +341,12 @@ def augment_samples(samples: list[tuple]) -> list[tuple]:
 
 
 # ── Main training loop ──
-def train(samples, args):
+def train(samples: list[tuple], args: argparse.Namespace) -> tuple[dict | None, float, float]:
     random.shuffle(samples)
     n_val = max(10, int(len(samples) * VAL_FRAC))
-    val_samples = samples[:n_val]
-    train_samples = samples[n_val:]
+    # Convert states to numpy once up front (avoids per-update list→array conversion)
+    val_samples = [(np.asarray(s, dtype=np.float64), a, r) for s, a, r in samples[:n_val]]
+    train_samples = [(np.asarray(s, dtype=np.float64), a, r) for s, a, r in samples[n_val:]]
 
     print(f'Train: {len(train_samples)}  Val: {n_val}')
 
