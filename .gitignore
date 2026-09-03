@@ -81,3 +81,6 @@ bot/_*.mts
 insight polymarket/
 monte carlo/
 .claude/settings.local.json
+
+# Training pipeline dependency manifests (the blanket *.txt rule above is for notes)
+!backtest/ml_training/requirements*.txt

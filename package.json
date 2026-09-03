@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ml": "python -m pytest backtest/ml_training/tests -q",
+    "test:ml:cov": "python -m pytest backtest/ml_training/tests --cov=mltrain --cov-report=term-missing",
     "pg:backfill": "node bot/scripts/backfillPostgres.mts",
     "pg:report": "node bot/scripts/postgresReport.mts",
     "ml:audit": "node bot/scripts/mlQualityAudit.mts",
