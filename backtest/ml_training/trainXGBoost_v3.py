@@ -24,9 +24,10 @@ Strategy: Optuna or 8 hand-tuned seed configs + walk-forward CV
 
 import argparse, json, os, sys, warnings
 import numpy as np
-import pandas as pd
 
+from mltrain.data import load_training_data, temporal_split
 from mltrain.features import engineer_features
+from mltrain.weights import build_feature_weights, build_sample_weights, count_regimes
 
 warnings.filterwarnings('ignore')
 
@@ -113,52 +114,16 @@ print(f"""
 # 1. LOAD
 # ================================================
 print("[1/8] Loading data...")
-df = pd.read_csv(args.input)
-# Drop metadata columns (not features, just row identifiers from data generation)
-metadata_cols = ['slug_timestamp']
+# CSV read, metadata-column drop, leakage assertions and --zero-features live in
+# mltrain/data.py (importable + unit-tested); this owns only the run summary.
+data = load_training_data(args.input, zero_features=zero_feature_names)
+X_orig = data.X_orig
+y = data.y
+feature_cols_orig = data.feature_cols_orig
 
-# Audit fix (May 2026): assert chronological + unique slug ordering BEFORE split.
-# Catches data-generation bugs that would silently leak labels across train/test.
-if 'slug_timestamp' in df.columns:
-    slug_ts_series = pd.to_numeric(df['slug_timestamp'], errors='coerce')
-    real_mask = slug_ts_series.notna()
-    n_real = int(real_mask.sum())
-    if n_real > 0:
-        real_ts = slug_ts_series[real_mask].values
-        # 1. Uniqueness: per-slug dedup in generateTrainingData should guarantee this
-        dup_count = len(real_ts) - len(set(real_ts.tolist()))
-        if dup_count > 0:
-            raise SystemExit(
-                f"[FATAL] {dup_count} duplicate slug_timestamps detected — "
-                f"group-leakage risk across train/test split. Regenerate training data."
-            )
-        # 2. Monotonic non-decreasing: trainXGBoost X[:split] is honest only if so
-        if not np.all(np.diff(real_ts) >= 0):
-            n_inversions = int((np.diff(real_ts) < 0).sum())
-            print(f"   [WARN] slug_timestamps NOT monotonic ({n_inversions} inversions) — "
-                  f"temporal split may leak. Recommend regenerate with chronological sort.")
-        else:
-            print(f"   [OK] slug_timestamps monotonic ({n_real:,} real-labeled rows)")
-
-feature_cols_orig = [c for c in df.columns if c != 'label' and c not in metadata_cols]
-X_orig = df[feature_cols_orig].values.astype(np.float32)
-y = df['label'].values.astype(np.int32)
-X_orig = np.nan_to_num(X_orig, nan=0.0, posinf=0.0, neginf=0.0)
-
-# Apply --zero-features: zero out specified columns
-if zero_feature_names:
-    fi_lookup = {name: i for i, name in enumerate(feature_cols_orig)}
-    for zf in zero_feature_names:
-        if zf in fi_lookup:
-            X_orig[:, fi_lookup[zf]] = 0.0
-            print(f"   Zeroed feature: {zf} (idx {fi_lookup[zf]})")
-        else:
-            print(f"   WARNING: --zero-features '{zf}' not found in CSV columns")
-
-n_base = len(feature_cols_orig)
-up = int(y.sum()); dn = len(y) - up
-print(f"   {len(df):,} rows | {n_base} base features | UP={up} DOWN={dn}")
-spw = dn / max(up, 1)
+n_base = data.n_base
+print(f"   {data.n_rows:,} rows | {n_base} base features | UP={data.n_up} DOWN={data.n_down}")
+spw = data.scale_pos_weight
 
 # ================================================
 # 2. ENGINEER 25 FEATURES
@@ -170,117 +135,38 @@ X, feature_cols = engineer_features(X_orig, feature_cols_orig)
 new_names = feature_cols[len(feature_cols_orig):]
 print(f"   +{len(new_names)} engineered = {len(feature_cols)} total features")
 
-# Build pre-exclude feature weights (Task B: zero out consistently pruned features BEFORE Optuna)
-pre_exclude_fw = np.ones(len(feature_cols), dtype=np.float32)
-if exclude_feature_names:
-    fi_all = {name: i for i, name in enumerate(feature_cols)}
-    excluded_count = 0
-    for ef in exclude_feature_names:
-        if ef in fi_all:
-            pre_exclude_fw[fi_all[ef]] = 0.0
-            excluded_count += 1
-        else:
-            print(f"   WARNING: --exclude-features '{ef}' not found in feature list")
-    print(f"   Pre-excluded {excluded_count} features via feature_weights=0")
+pre_exclude_fw = build_feature_weights(feature_cols, exclude_feature_names)
 
 # ================================================
 # 3. TEMPORAL SPLIT
 # ================================================
 print("[3/8] Temporal split...")
-split = int(len(X) * (1 - args.test_size))
-# Embargo: drop the first CV_EMBARGO test rows — their feature lookbacks overlap
-# the training window, so keeping them inflates test metrics.
-X_train, X_test = X[:split], X[split + CV_EMBARGO:]
-y_train, y_test = y[:split], y[split + CV_EMBARGO:]
-print(f"   Train: {len(X_train):,} | Test: {len(X_test):,} (embargo {CV_EMBARGO} rows)")
-
-# OOS holdout: reserve final portion of training data for true out-of-sample evaluation
-# This data is NOT seen by Optuna or walk-forward CV
-X_holdout, y_holdout, w_holdout = None, None, None
-holdout_start_idx = None
+# Split arithmetic + embargo live in mltrain/data.py. X_train/y_train below are
+# the TUNE subset whenever a holdout was carved out (Optuna/CV never see it).
+splits = temporal_split(X, y, test_size=args.test_size,
+                        holdout_frac=args.holdout_frac, embargo=CV_EMBARGO)
+X_train, y_train = splits.X_train, splits.y_train
+X_test, y_test = splits.X_test, splits.y_test
+X_train_full, y_train_full = splits.X_train_full, splits.y_train_full
+X_holdout, y_holdout = splits.X_holdout, splits.y_holdout
+holdout_start_idx = splits.holdout_start_idx
 holdout_acc = None
 holdout_auc = None
-if args.holdout_frac > 0:
-    holdout_boundary = int(len(X_train) * (1 - args.holdout_frac))
-    holdout_start_idx = holdout_boundary + CV_EMBARGO
-    X_holdout = X_train[holdout_boundary + CV_EMBARGO:]
-    y_holdout = y_train[holdout_boundary + CV_EMBARGO:]
-    X_tune = X_train[:holdout_boundary]
-    y_tune = y_train[:holdout_boundary]
-    print(f"   OOS HOLDOUT: {len(X_holdout):,} samples reserved (not used for tuning)")
-    print(f"   Tune set: {len(X_tune):,} | Holdout: {len(X_holdout):,}")
-    # Swap: Optuna and CV will use X_tune/y_tune instead of full X_train/y_train
-    X_train_full, y_train_full = X_train, y_train  # keep reference to full train for final model
-    X_train, y_train = X_tune, y_tune
-else:
-    X_train_full, y_train_full = X_train, y_train
 
 # ================================================
 # 4. REGIME STATS (no sample weighting — v7 showed it doesn't help)
 # ================================================
 print("[4/8] Regime statistics (uniform weights)...")
 
-regime_idx = {
-    'trending': fi.get('regime_trending'),
-    'mean_rev': fi.get('regime_mean_reverting'),
-    'moderate': fi.get('regime_moderate'),
-}
-
-regime_counts = {}
-for regime_name, feat_idx in regime_idx.items():
-    if feat_idx is None:
-        continue
-    mask = X_orig[:, feat_idx] > 0.5
-    regime_counts[regime_name] = int(mask.sum())
+regime_counts = count_regimes(X_orig, fi)
 
 # Sample weights: start with uniform, optionally add recency weighting
-w_train = None
-w_test = None
-
-if args.recency:
-    # Task H: Recency-weighted training — recent data matters more
-    # Rows are chronological; estimate days_ago from row position
-    n_train = len(X_train)
-    days_ago = np.linspace(args.days, 0, n_train)  # first row = oldest, last = newest
-    recency_weight = 0.5 + 0.5 * np.exp(-days_ago / args.recency_halflife)
-    w_train = recency_weight.astype(np.float32)
-    print(f"   Recency weighting: half-life={args.recency_halflife}d")
-    print(f"     Oldest sample weight: {w_train[0]:.3f} | Newest: {w_train[-1]:.3f} | Mean: {w_train.mean():.3f}")
-
-if args.session_weight:
-    # v10: Session-based sample weighting — boost underrepresented US/Overlap patterns.
-    # US and EU/US Overlap sessions have lower ML confidence in production because the
-    # model sees fewer high-quality examples from these volatile hours. Up-weighting
-    # forces the model to learn US-specific patterns from existing session features
-    # (session_us, session_overlap, hour_sin/cos at indices 22, 23, 42, 43 in X_orig).
-    # No new features needed — works with existing 74-feature vector.
-    if w_train is None:
-        w_train = np.ones(len(X_train), dtype=np.float32)
-    # Feature indices from fi lookup (X_orig columns = same indices in X since engineered appended)
-    sess_us_idx  = fi.get('session_us')       # index 22
-    sess_ov_idx  = fi.get('session_overlap')  # index 23
-    sess_asia_idx = fi.get('session_asia')    # index 20
-    n_us = n_ov = n_asia = 0
-    if sess_us_idx is not None:
-        us_mask = X_train[:, sess_us_idx] > 0.5
-        w_train[us_mask] *= 1.5
-        n_us = int(us_mask.sum())
-    if sess_ov_idx is not None:
-        ov_mask = X_train[:, sess_ov_idx] > 0.5
-        w_train[ov_mask] *= 1.3
-        n_ov = int(ov_mask.sum())
-    if sess_asia_idx is not None:
-        asia_mask = X_train[:, sess_asia_idx] > 0.5
-        w_train[asia_mask] *= 0.8
-        n_asia = int(asia_mask.sum())
-    # Normalize so mean weight stays ~1.0 (preserves effective sample count)
-    w_mean = w_train.mean()
-    w_train = w_train / w_mean
-    print(f"   Session weighting applied:")
-    print(f"     US ×1.5       : {n_us:,} samples")
-    print(f"     Overlap ×1.3  : {n_ov:,} samples")
-    print(f"     Asia ×0.8     : {n_asia:,} samples")
-    print(f"     Normalized (mean={w_mean:.3f} -> 1.000)")
+# (both schemes live in mltrain/weights.py; None means uniform).
+w_train = build_sample_weights(
+    X_train, fi,
+    use_recency=args.recency, days=args.days, halflife=args.recency_halflife,
+    use_session=args.session_weight,
+)
 
 for rn, rc in regime_counts.items():
     pct = rc / len(X) * 100
@@ -297,6 +183,15 @@ from sklearn.linear_model import LogisticRegression
 # Pure logic extracted into the mltrain package (importable + unit-tested).
 from mltrain.metrics import safe_round, calibration_summary, confidence_bucket_summary
 from mltrain.cv import walk_forward_cv as _walk_forward_cv
+from mltrain.export import (
+    ValidationInfo,
+    XgbEvalMetrics,
+    build_browser_model,
+    build_norm_export,
+    compute_signal_modifiers,
+    dump_browser_trees,
+)
+from mltrain.report import build_training_report
 from mltrain.sweeps import (
     align_oof_predictions,
     select_ensemble_weights,
@@ -850,47 +745,9 @@ if pruned_features:
 print("\n   --- Data-Driven Calibration ---")
 
 # === Signal Modifiers (H2): Feature importance → probability.js signal weights ===
-# Map XGBoost feature importances to probability.js signal modifier keys.
-# Each key groups features that inform one scoring signal in scoreDirection().
-SIGNAL_FEATURE_MAP = {
-    'ptbDistance': ['ptb_dist_pct'],
-    'momentum': ['delta_1m_pct', 'delta_3m_pct', 'momentum_5candle_slope',
-                  'delta_1m_capped', 'momentum_accel', 'vol_weighted_momentum',
-                  'delta_1m_atr_adj'],
-    'rsi': ['rsi_norm', 'rsi_slope', 'stoch_k_norm', 'stoch_kd_norm',
-            'rsi_x_trending', 'rsi_x_regime_conf', 'rsi_x_mean_rev',
-            'combined_oscillator', 'oscillator_extreme', 'rsi_divergence',
-            'stoch_rsi_extreme'],
-    'macdHist': ['macd_hist'],
-    'macdLine': ['macd_line', 'macd_x_rsi_slope'],
-    'vwapPos': ['vwap_dist', 'vwap_trend_strength', 'price_position_score'],
-    'vwapSlope': ['vwap_slope'],
-    'heikenAshi': ['ha_signed_consec', 'ha_is_green', 'ha_delta_agree'],
-    'failedVwap': ['failed_vwap_reclaim'],
-    'orderbook': ['orderbook_imbalance', 'imbalance_x_vol_delta'],
-    'multiTf': ['multi_tf_agreement', 'delta1m_x_multitf',
-                'trend_alignment_score', 'multi_indicator_agree'],
-    'bbPos': ['bb_percent_b', 'bb_width', 'bb_squeeze', 'bb_squeeze_intensity',
-              'bb_pctb_x_squeeze', 'squeeze_breakout_potential'],
-    'atrExpand': ['atr_pct_norm', 'atr_ratio_norm', 'atr_expanding'],
-}
-
-signal_importances = {}
-for signal_key, feat_names in SIGNAL_FEATURE_MAP.items():
-    total_gain = sum(importance.get(fn, 0) for fn in feat_names)
-    signal_importances[signal_key] = total_gain
-
-# Normalize: mean modifier = 1.0
-sig_gains = list(signal_importances.values())
-mean_sig_gain = np.mean(sig_gains) if sig_gains else 1.0
-if mean_sig_gain < 1e-8:
-    mean_sig_gain = 1.0
-
-signal_modifiers = {}
-for key, gain in signal_importances.items():
-    mod_val = gain / mean_sig_gain
-    mod_val = max(0.3, min(3.0, mod_val))  # clamp to prevent extreme values
-    signal_modifiers[key] = round(float(mod_val), 2)
+# The SIGNAL_FEATURE_MAP grouping and the mean-1.0 normalisation live in
+# mltrain/export.compute_signal_modifiers; this block owns only the reporting.
+signal_modifiers = compute_signal_modifiers(importance)
 
 print(f"   Signal Modifiers (H2):")
 for k in sorted(signal_modifiers.keys()):
@@ -946,69 +803,68 @@ print(f"\n   Exporting model...")
 
 model.save_model(os.path.join(args.output_dir, 'xgboost_model.ubj'))
 
-json_dump = model.get_dump(dump_format='json')
-all_trees = [json.loads(t) for t in json_dump]
-best_trees = all_trees[:model.best_iteration + 1]
+trees_dump = dump_browser_trees(model)
+all_trees, best_trees = trees_dump.all_trees, trees_dump.best_trees
 print(f"   Trees: {len(best_trees)} (best) / {len(all_trees)} (total)")
 
-browser_model = {
-    'format': 'xgboost_json_v9',
-    'version': 3,
-    'num_features': len(feature_cols),
-    'num_trees': len(best_trees),
-    'feature_names': feature_cols,
-    'original_features': len(feature_cols_orig),
-    'engineered_features': new_names,
-    'best_iteration': model.best_iteration,
-    'optimal_threshold': best_threshold,
-    'platt_a': platt_a,
-    'platt_b': platt_b,
-    'platt_on_logits': platt_on_logits,
-    'pruned_features': pruned_features,
-    'pre_excluded_features': exclude_feature_names,
-    'zero_features': zero_feature_names,
-    'recency_weighting': {'enabled': args.recency, 'halflife_days': args.recency_halflife} if args.recency else None,
-    'signal_modifiers': signal_modifiers,
-    'phase_thresholds': calibrated_phase_thresholds,
-    'params': {k: str(v) for k, v in final_params.items()},
-    'training_method': 'optuna' if USE_OPTUNA else 'grid_search',
-    'validation': {
-        'split': 'temporal',
-        'test_size': args.test_size,
-        'holdout_frac': args.holdout_frac if args.holdout_frac > 0 else None,
-        'strict_holdout': bool(args.strict_holdout),
-        'threshold_source': sweep_name,
-        'calibration_eval_source': eval_label,
-        'test_samples': int(len(y_test)),
-        'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
-    },
-    'metrics': {
-        'accuracy': round(accuracy, 4),
-        'auc': round(auc, 4),
-        'f1': round(f1, 4),
-        'logloss': round(ll, 4),
-        'brier': round(brier, 4),
-        'calibration_ece': safe_round(calibration['ece']),
-        'calibration_mce': safe_round(calibration['mce']),
-        'high_conf_accuracy': round(hc_acc, 4),
-        'high_conf_ratio': round(hc_ratio, 2),
-        'high_conf_count': hc_count,
-        'high_conf_threshold': best_threshold,
-        'cv_auc': round(cv_auc_final, 4),
-        'cv_acc': round(cv_acc_final, 4),
-        'cv_test_acc_gap': safe_round(cv_test_acc_gap),
-        'cv_test_auc_gap': safe_round(cv_test_auc_gap),
-        'holdout_accuracy': safe_round(final_holdout_acc),
-        'holdout_auc': safe_round(final_holdout_auc),
-        'test_holdout_acc_gap': safe_round(test_holdout_acc_gap),
-        'test_holdout_auc_gap': safe_round(test_holdout_auc_gap),
-        'test_samples': int(len(y_test)),
-        'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
-        'confidence_buckets': confidence_buckets,
-        'calibration_bins': calibration['bins'],
-    },
-    'trees': best_trees,
-}
+# One metrics object feeds both the exported JSON block and training_report.txt,
+# so the two can never disagree. JSON key order lives in mltrain/export.py.
+export_holdout_frac = args.holdout_frac if args.holdout_frac > 0 else None
+export_holdout_samples = int(len(y_holdout)) if y_holdout is not None else 0
+xgb_metrics = XgbEvalMetrics(
+    accuracy=accuracy,
+    auc=auc,
+    f1=f1,
+    logloss=ll,
+    brier=brier,
+    calibration=calibration,
+    high_conf_accuracy=hc_acc,
+    high_conf_ratio=hc_ratio,
+    high_conf_count=hc_count,
+    high_conf_threshold=best_threshold,
+    cv_auc=cv_auc_final,
+    cv_acc=cv_acc_final,
+    cv_test_acc_gap=cv_test_acc_gap,
+    cv_test_auc_gap=cv_test_auc_gap,
+    holdout_accuracy=final_holdout_acc,
+    holdout_auc=final_holdout_auc,
+    test_holdout_acc_gap=test_holdout_acc_gap,
+    test_holdout_auc_gap=test_holdout_auc_gap,
+    test_samples=int(len(y_test)),
+    holdout_samples=export_holdout_samples,
+    confidence_buckets=confidence_buckets,
+)
+
+browser_model = build_browser_model(
+    best_trees,
+    feature_cols=feature_cols,
+    feature_cols_orig=feature_cols_orig,
+    engineered_features=new_names,
+    best_iteration=model.best_iteration,
+    optimal_threshold=best_threshold,
+    platt_a=platt_a,
+    platt_b=platt_b,
+    platt_on_logits=platt_on_logits,
+    pruned_features=pruned_features,
+    pre_excluded_features=exclude_feature_names,
+    zero_features=zero_feature_names,
+    recency_enabled=args.recency,
+    recency_halflife=args.recency_halflife,
+    signal_modifiers=signal_modifiers,
+    phase_thresholds=calibrated_phase_thresholds,
+    params=final_params,
+    use_optuna=USE_OPTUNA,
+    validation=ValidationInfo(
+        test_size=args.test_size,
+        holdout_frac=export_holdout_frac,
+        strict_holdout=bool(args.strict_holdout),
+        threshold_source=sweep_name,
+        calibration_eval_source=eval_label,
+        test_samples=int(len(y_test)),
+        holdout_samples=export_holdout_samples,
+    ),
+    metrics=xgb_metrics,
+)
 
 model_path = os.path.join(args.output_dir, 'xgboost_model.json')
 with open(model_path, 'w') as f:
@@ -1016,80 +872,48 @@ with open(model_path, 'w') as f:
 mb = os.path.getsize(model_path) / 1024 / 1024
 print(f"   Browser model: {model_path} ({mb:.1f} MB)")
 
-# Normalization (use full training data for mean/std, not just tune subset)
-means = X_train_full.mean(axis=0).tolist()
-stds = X_train_full.std(axis=0).tolist()
-for i in range(len(stds)):
-    if stds[i] < 1e-8: stds[i] = 1.0
-
-norm = {
-    'version': 3,
-    'means': means,
-    'stds': stds,
-    'feature_names': feature_cols,
-    'num_features': len(feature_cols),
-    'original_features': len(feature_cols_orig),
-    'platt_a': platt_a,
-    'platt_b': platt_b,
-    'platt_on_logits': platt_on_logits,
-    'pruned_features': pruned_features,
-    'engineered_feature_specs': {
-        'delta_1m_capped': {'type': 'clip', 'source': 'delta_1m_pct', 'clip_std': 3},
-        'momentum_accel': {'type': 'formula', 'formula': 'delta_1m - delta_3m/3'},
-        'rsi_x_trending': {'type': 'multiply', 'a': 'rsi_norm', 'b': 'regime_trending'},
-        'rsi_x_regime_conf': {'type': 'multiply', 'a': 'rsi_norm', 'b': 'regime_confidence'},
-        'rsi_x_mean_rev': {'type': 'multiply', 'a': 'rsi_norm', 'b': 'regime_mean_reverting'},
-        'delta1m_x_multitf': {'type': 'multiply', 'a': 'delta_1m_pct', 'b': 'multi_tf_agreement'},
-        'bb_pctb_x_squeeze': {'type': 'multiply', 'a': 'bb_percent_b', 'b': 'bb_squeeze'},
-        'vol_buy_x_delta': {'type': 'formula', 'formula': 'vol_delta_buy_ratio * sign(delta_1m_pct)'},
-        'vwap_trend_strength': {'type': 'formula', 'formula': 'vwap_dist * sign(vwap_slope)'},
-        'rsi_divergence': {'type': 'formula', 'formula': 'sign(delta_3m_pct) * (-rsi_slope)'},
-        'combined_oscillator': {'type': 'formula', 'formula': '(rsi_norm + stoch_k_norm + bb_percent_b) / 3'},
-        'ha_delta_agree': {'type': 'formula', 'formula': 'sign(ha_signed_consec) == sign(delta_1m_pct) ? 1 : 0'},
-        'delta_1m_atr_adj': {'type': 'formula', 'formula': 'delta_1m_pct / max(atr_pct_norm, 0.01)'},
-        'price_position_score': {'type': 'formula', 'formula': 'sign(vwap_dist)*0.4 + (bb_percent_b-0.5)*0.3 + (ema_cross_signal-0.5)*0.3'},
-        'vol_weighted_momentum': {'type': 'multiply', 'a': 'delta_1m_pct', 'b': 'vol_ratio_norm'},
-        'macd_x_rsi_slope': {'type': 'formula', 'formula': 'sign(macd_line) * rsi_slope'},
-        'trend_alignment_score': {'type': 'formula', 'formula': 'regime_trending * multi_tf_agreement * sign(delta_1m_pct)'},
-        'oscillator_extreme': {'type': 'formula', 'formula': 'max(rsi_norm - 0.7, 0) + max(0.3 - rsi_norm, 0)'},
-        'vol_momentum_confirm': {'type': 'formula', 'formula': 'vol_delta_buy_ratio * sign(delta_1m_pct) * vol_ratio_norm'},
-        'squeeze_breakout_potential': {'type': 'formula', 'formula': 'bb_squeeze * abs(stoch_k_norm - 0.5) * 2'},
-        'multi_indicator_agree': {'type': 'formula', 'formula': '(ha_agree + macd_agree + vwap_agree + rsi_agree + multi_tf) / 5'},
-        'stoch_rsi_extreme': {'type': 'formula', 'formula': 'max(stoch_k_norm - 0.8, 0)*5 + max(0.2 - stoch_k_norm, 0)*5'},
-        'crowd_agree_momentum': {'type': 'formula', 'formula': 'sign(market_price_momentum) * sign(delta_1m_pct)'},
-        'divergence_x_confidence': {'type': 'multiply', 'a': 'crowd_model_divergence', 'b': 'rule_confidence'},
-        'imbalance_x_vol_delta': {'type': 'multiply', 'a': 'orderbook_imbalance', 'b': 'vol_delta_buy_ratio'},
-    },
-    'signal_modifiers': signal_modifiers,
-    'phase_thresholds': calibrated_phase_thresholds,
-    'train_samples': len(X_train_full),
-    'holdout_frac': args.holdout_frac if args.holdout_frac > 0 else None,
-    'holdout_start_idx': holdout_start_idx,
-}
+# Normaliser + engineered-feature specs assembled in mltrain/export.py (means and
+# stds come from the FULL train block, not just the tune subset).
+norm = build_norm_export(
+    X_train_full,
+    feature_cols=feature_cols,
+    feature_cols_orig=feature_cols_orig,
+    platt_a=platt_a,
+    platt_b=platt_b,
+    platt_on_logits=platt_on_logits,
+    pruned_features=pruned_features,
+    signal_modifiers=signal_modifiers,
+    phase_thresholds=calibrated_phase_thresholds,
+    holdout_frac=export_holdout_frac,
+    holdout_start_idx=holdout_start_idx,
+)
 
 with open(os.path.join(args.output_dir, 'norm_browser.json'), 'w') as f:
     json.dump(norm, f, indent=2)
 
-# Training report
-report = [
-    f"=== XGBoost v9 Training Report ===",
-    f"Method: {'Optuna (' + str(args.tune_trials) + ' trials)' if USE_OPTUNA else 'Grid search (8 configs)'}",
-    f"Winner: {best_cfg_name}",
-    f"Accuracy: {accuracy*100:.2f}% | AUC: {auc:.4f}",
-    f"Calibration: Brier={brier:.4f} | ECE={calibration['ece']:.4f} | MCE={calibration['mce']:.4f}",
-    f"Overfit gaps: test-CV acc={cv_test_acc_gap*100:+.2f}pp | test-holdout acc={(test_holdout_acc_gap*100 if test_holdout_acc_gap is not None else 0):+.2f}pp",
-    f"High-conf: {hc_acc*100:.1f}% ({hc_count:,} signals, {hc_ratio:.1f}%)",
-    f"Threshold: {best_threshold:.3f} | Trees: {len(best_trees)}",
-    f"Features: {len(feature_cols)} ({len(feature_cols_orig)} base + {len(new_names)} engineered)",
-    f"Platt calibration (on logits): A={platt_a:.4f}, B={platt_b:.4f}",
-    f"Pruned features ({len(pruned_features)}): {', '.join(pruned_features) if pruned_features else 'none'}",
-    f"Zero features: {', '.join(zero_feature_names) if zero_feature_names else 'none'}",
-    f"Pre-excluded: {', '.join(exclude_feature_names) if exclude_feature_names else 'none'}",
-    f"Recency: {'half-life=' + str(args.recency_halflife) + 'd' if args.recency else 'off'}",
-    f"CV folds: {N_CV_FOLDS} | Boost rounds: {NUM_BOOST_ROUND} | Early stopping: {EARLY_STOPPING}",
-    f"",
-    f"Params: {json.dumps({k:v for k,v in final_params.items() if k not in ['objective','eval_metric','tree_method','seed']}, indent=2)}",
-]
+# Training report (text assembly in mltrain/report.py)
+report = build_training_report(
+    xgb_metrics,
+    use_optuna=USE_OPTUNA,
+    tune_trials=args.tune_trials,
+    winner=best_cfg_name,
+    threshold=best_threshold,
+    n_trees=len(best_trees),
+    feature_cols=feature_cols,
+    feature_cols_orig=feature_cols_orig,
+    engineered_features=new_names,
+    platt_a=platt_a,
+    platt_b=platt_b,
+    pruned_features=pruned_features,
+    zero_features=zero_feature_names,
+    pre_excluded_features=exclude_feature_names,
+    recency_enabled=args.recency,
+    recency_halflife=args.recency_halflife,
+    cv_folds=N_CV_FOLDS,
+    num_boost_round=NUM_BOOST_ROUND,
+    early_stopping=EARLY_STOPPING,
+    params=final_params,
+)
 
 with open(os.path.join(args.output_dir, 'training_report.txt'), 'w') as f:
     f.write('\n'.join(report))
