@@ -178,9 +178,10 @@ for rn, rc in regime_counts.items():
 
 import xgboost as xgb
 from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, f1_score, precision_score, recall_score, confusion_matrix, brier_score_loss
-from sklearn.linear_model import LogisticRegression
 
 # Pure logic extracted into the mltrain package (importable + unit-tested).
+from mltrain.calibration import calibrate_platt
+from mltrain.configs import EARLY_STOPPING, N_CV_FOLDS, NUM_BOOST_ROUND
 from mltrain.metrics import safe_round, calibration_summary, confidence_bucket_summary
 from mltrain.cv import walk_forward_cv as _walk_forward_cv
 from mltrain.export import (
@@ -191,6 +192,7 @@ from mltrain.export import (
     compute_signal_modifiers,
     dump_browser_trees,
 )
+from mltrain.pruning import evaluate_pruning
 from mltrain.report import build_training_report
 from mltrain.sweeps import (
     align_oof_predictions,
@@ -198,11 +200,8 @@ from mltrain.sweeps import (
     select_phase_thresholds,
     select_threshold,
 )
+from mltrain.tuning import search_hyperparameters
 
-
-NUM_BOOST_ROUND = 1200
-EARLY_STOPPING = 80
-N_CV_FOLDS = 5
 
 # --- Walk-Forward CV (logic lives in mltrain/cv.py; bound to this run's config) ---
 def walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, cfg: dict, w_tr: np.ndarray | None = None,
@@ -217,118 +216,21 @@ def walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, cfg: dict, w_tr: np.ndar
     )
 
 
-# --- 8 Seed Configurations ---
-configs = {
-    'A_balanced': {
-        'max_depth': 5, 'learning_rate': 0.05, 'subsample': 0.8,
-        'colsample_bytree': 0.8, 'min_child_weight': 5, 'gamma': 0.1,
-        'reg_alpha': 0.1, 'reg_lambda': 1.0,
-    },
-    'B_deeper': {
-        'max_depth': 7, 'learning_rate': 0.03, 'subsample': 0.75,
-        'colsample_bytree': 0.7, 'min_child_weight': 3, 'gamma': 0.05,
-        'reg_alpha': 0.05, 'reg_lambda': 0.8,
-    },
-    'C_wider': {
-        'max_depth': 5, 'learning_rate': 0.08, 'subsample': 0.85,
-        'colsample_bytree': 0.9, 'min_child_weight': 7, 'gamma': 0.15,
-        'reg_alpha': 0.2, 'reg_lambda': 1.5,
-    },
-    'D_shallow_fast': {
-        'max_depth': 4, 'learning_rate': 0.10, 'subsample': 0.9,
-        'colsample_bytree': 0.85, 'min_child_weight': 10, 'gamma': 0.2,
-        'reg_alpha': 0.3, 'reg_lambda': 2.0,
-    },
-    'E_deep_slow': {
-        'max_depth': 6, 'learning_rate': 0.02, 'subsample': 0.7,
-        'colsample_bytree': 0.75, 'min_child_weight': 4, 'gamma': 0.08,
-        'reg_alpha': 0.1, 'reg_lambda': 1.2,
-    },
-    'F_aggressive': {
-        'max_depth': 5, 'learning_rate': 0.12, 'subsample': 0.85,
-        'colsample_bytree': 0.95, 'min_child_weight': 5, 'gamma': 0.05,
-        'reg_alpha': 0.05, 'reg_lambda': 0.5,
-    },
-    'G_regularized': {
-        'max_depth': 5, 'learning_rate': 0.06, 'subsample': 0.8,
-        'colsample_bytree': 0.8, 'min_child_weight': 8, 'gamma': 0.25,
-        'reg_alpha': 0.5, 'reg_lambda': 3.0,
-    },
-    'H_wide_shallow': {
-        'max_depth': 3, 'learning_rate': 0.15, 'subsample': 0.9,
-        'colsample_bytree': 0.95, 'min_child_weight': 12, 'gamma': 0.3,
-        'reg_alpha': 0.4, 'reg_lambda': 2.5,
-    },
-}
-
-best_cfg = None
-best_cfg_name = None
-
-if USE_OPTUNA:
-    # --- Optuna Bayesian Optimization ---
-    print(f"[5/8] Optuna optimization ({args.tune_trials} trials, {N_CV_FOLDS}-fold CV)...")
-
-    def objective(trial):
-        cfg = {
-            'max_depth': trial.suggest_int('max_depth', 3, 7),
-            'learning_rate': trial.suggest_float('learning_rate', 0.008, 0.2, log=True),
-            'subsample': trial.suggest_float('subsample', 0.6, 0.95),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 0.95),
-            'min_child_weight': trial.suggest_int('min_child_weight', 2, 15),
-            'gamma': trial.suggest_float('gamma', 0.0, 0.5),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 2.0, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 0.3, 6.0),
-        }
-        cv_auc, _ = walk_forward_cv(X_train, y_train, cfg, w_train, feat_weights=pre_exclude_fw if exclude_feature_names else None)
-        if np.isnan(cv_auc) or cv_auc == 0:
-            return 0.5  # random chance — bad trial but not NaN
-        return cv_auc
-
-    study = optuna.create_study(
-        direction='maximize',
-        sampler=optuna.samplers.TPESampler(seed=args.seed),
-    )
-
-    # Seed with 8 hand-tuned configs so Optuna starts smart
-    for name, cfg in configs.items():
-        study.enqueue_trial({
-            'max_depth': cfg['max_depth'],
-            'learning_rate': cfg['learning_rate'],
-            'subsample': cfg['subsample'],
-            'colsample_bytree': cfg['colsample_bytree'],
-            'min_child_weight': cfg['min_child_weight'],
-            'gamma': cfg['gamma'],
-            'reg_alpha': cfg['reg_alpha'],
-            'reg_lambda': cfg['reg_lambda'],
-        })
-
-    study.optimize(objective, n_trials=args.tune_trials, show_progress_bar=True)
-
-    best_cfg = study.best_trial.params
-    best_cfg_name = f"Optuna_trial_{study.best_trial.number}"
-    print(f"   Best trial #{study.best_trial.number}: CV AUC = {study.best_value:.4f}")
-    print(f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in best_cfg.items()})}")
-
-    # Show top 5 trials
-    print(f"\n   Top 5 trials:")
-    trials_sorted = sorted(study.trials, key=lambda t: t.value if t.value is not None else 0, reverse=True)
-    for t in trials_sorted[:5]:
-        print(f"     #{t.number}: AUC={t.value:.4f} | depth={t.params.get('max_depth')} lr={t.params.get('learning_rate',0):.4f} lambda={t.params.get('reg_lambda',0):.2f}")
-
-else:
-    # --- Grid Search (8 fixed configs) ---
-    print(f"[5/8] Training 8 configs with {N_CV_FOLDS}-fold walk-forward CV...")
-
-    cv_results = {}
-    for name, cfg in configs.items():
-        cv_auc, cv_acc = walk_forward_cv(X_train, y_train, cfg, w_train, feat_weights=pre_exclude_fw if exclude_feature_names else None)
-        cv_results[name] = {'auc': cv_auc, 'acc': cv_acc}
-        print(f"   {name}: CV acc={cv_acc*100:.1f}% | CV AUC={cv_auc:.4f}")
-
-    # Pick best by CV AUC
-    best_cfg_name = max(cv_results, key=lambda n: cv_results[n]['auc'])
-    best_cfg = configs[best_cfg_name]
-    print(f"\n   >>> Best config: {best_cfg_name} (CV AUC={cv_results[best_cfg_name]['auc']:.4f})")
+# Hyperparameter search — Optuna study or the 8-config grid — lives in
+# mltrain/tuning.py, and the seed configs + boosting budget in mltrain/configs.py.
+# The TPE sampler seed and the enqueue-before-optimize order are documented there
+# (they decide which trials run); this owns only the winner's name for reporting.
+search = search_hyperparameters(
+    X_train, y_train, w_train,
+    cv_fn=walk_forward_cv,
+    feat_weights=pre_exclude_fw if exclude_feature_names else None,
+    use_optuna=USE_OPTUNA,
+    n_trials=args.tune_trials,
+    seed=args.seed,
+    n_folds=N_CV_FOLDS,
+)
+best_cfg = search.config
+best_cfg_name = search.name
 
 
 # --- Train final model with best config ---
@@ -433,117 +335,35 @@ if X_holdout is not None and len(X_holdout) > 0:
 # ================================================
 print("\n[6/8] Feature selection...")
 
-importance = model.get_score(importance_type='gain')
-total_gain = sum(importance.values())
-sorted_imp = sorted(importance.items(), key=lambda x: x[1], reverse=True)
-
-# Identify low-importance features
-PRUNE_THRESHOLD = 0.005  # features with <0.5% of total gain
-pruned_features = []
-pruned_model_kept = False  # True only when the soft-pruned retrain replaces `model`
-combined_fw = None         # pre-exclude + soft-pruning feature weights (set on retrain)
-feature_weights = np.ones(len(feature_cols), dtype=np.float32)
-
-# Stability filter (ML4T ch8/11): single-model gain is noisy, so a feature is
-# only pruned when it is ALSO below threshold in every walk-forward fold.
-# Prevents pruning on noise and feature churn between retrains.
-print("   Computing per-fold importances for stability check...")
-_, _, fold_importances = walk_forward_cv(
-    X_train, y_train, best_cfg, w_train, return_importances=True,
-    feat_weights=pre_exclude_fw if exclude_feature_names else None
+# Gain thresholding, the fold-stability filter (a feature weak in the final model
+# but strong in >=1 walk-forward fold is rescued, not pruned), the soft-pruned
+# retrain and the keep/reject comparison all live in mltrain/pruning.py. This
+# owns only the eval-set plumbing: `dholdout` exists as a name only when a
+# holdout was carved out, so it is passed conditionally.
+has_holdout = X_holdout is not None and len(X_holdout) > 0
+pruning = evaluate_pruning(
+    model,
+    feature_cols=feature_cols,
+    cv_fn=walk_forward_cv,
+    X_train=X_train, y_train=y_train, w_train=w_train,
+    best_cfg=best_cfg,
+    feat_weights=pre_exclude_fw if exclude_feature_names else None,
+    pre_exclude_fw=pre_exclude_fw,
+    has_pre_excluded=bool(exclude_feature_names),
+    final_params=final_params,
+    X_final_train=X_final_train, y_final_train=y_final_train,
+    w_train_final=w_train_final,
+    num_boost_round=NUM_BOOST_ROUND, early_stopping=EARLY_STOPPING,
+    dtest=dtest, y_test=y_test,
+    dholdout=dholdout if has_holdout else None, y_holdout=y_holdout,
+    initial_auc=initial_auc,
 )
-fold_fracs: dict[str, list[float]] = {feat: [] for feat in feature_cols}
-for imp in fold_importances:
-    fold_total = sum(imp.values())
-    for feat in feature_cols:
-        fold_fracs[feat].append((imp.get(feat, 0.0) / fold_total) if fold_total > 0 else 0.0)
-
-rescued_by_stability = []
-for i, feat in enumerate(feature_cols):
-    gain = importance.get(feat, 0)
-    frac = gain / total_gain if total_gain > 0 else 0
-    if frac < PRUNE_THRESHOLD:
-        fracs = fold_fracs.get(feat) or [0.0]
-        if all(f < PRUNE_THRESHOLD for f in fracs):
-            feature_weights[i] = 0.0  # effectively exclude from splits
-            pruned_features.append(feat)
-        else:
-            rescued_by_stability.append(feat)
-
-print(f"   Total features: {len(feature_cols)}")
-print(f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain in final model AND all {len(fold_importances)} folds): {len(pruned_features)}")
-if rescued_by_stability:
-    print(f"   Rescued by fold stability (weak in final model, strong in >=1 fold): {len(rescued_by_stability)}"
-          f" — {', '.join(rescued_by_stability[:10])}{'...' if len(rescued_by_stability) > 10 else ''}")
-if pruned_features:
-    print(f"   Pruned list: {', '.join(pruned_features[:15])}{'...' if len(pruned_features) > 15 else ''}")
-
-# Retrain with feature weights if any features were pruned
-if pruned_features and len(pruned_features) < len(feature_cols) * 0.5:
-    print(f"   Retraining with {len(feature_cols) - len(pruned_features)} active features...")
-
-    # Need colsample_bytree < 1.0 for feature_weights to take effect
-    retrain_params = dict(final_params)
-    if retrain_params.get('colsample_bytree', 1.0) >= 1.0:
-        retrain_params['colsample_bytree'] = 0.95
-
-    # Combine pre-exclude weights with soft-pruning weights
-    combined_fw = feature_weights.copy()
-    if exclude_feature_names:
-        combined_fw = np.minimum(combined_fw, pre_exclude_fw)
-    # Audit fix (May 2026 P6 follow-up): use X_final_train / y_final_train (which
-    # respect strict-holdout). Previously used X_train_full unconditionally → weight
-    # dimension mismatch when strict_holdout excluded holdout from final train.
-    dtrain_fw = xgb.DMatrix(X_final_train, label=y_final_train, weight=w_train_final, feature_names=feature_cols)
-    dtrain_fw.feature_weights = combined_fw
-
-    # Early stop on holdout for pruned model too (audit fix M-prune)
-    if X_holdout is not None and len(X_holdout) > 0:
-        prune_early_stop_set = (dholdout, 'holdout')
-    else:
-        prune_early_stop_set = (dtest, 'eval')
-
-    ev2 = {}
-    model_pruned = xgb.train(
-        retrain_params, dtrain_fw,
-        num_boost_round=NUM_BOOST_ROUND,
-        evals=[(dtrain_fw, 'train'), prune_early_stop_set],
-        evals_result=ev2,
-        early_stopping_rounds=EARLY_STOPPING,
-        verbose_eval=False,
-    )
-
-    # Evaluate pruned model on holdout (audit fix M-prune) or test as fallback
-    if X_holdout is not None and len(X_holdout) > 0:
-        y_prob_pruned_eval = model_pruned.predict(dholdout)
-        pruned_acc = accuracy_score(y_holdout, (y_prob_pruned_eval >= 0.5).astype(int))
-        pruned_auc = roc_auc_score(y_holdout, y_prob_pruned_eval)
-        eval_set_name = "holdout"
-    else:
-        y_prob_pruned_eval = model_pruned.predict(dtest)
-        pruned_acc = accuracy_score(y_test, (y_prob_pruned_eval >= 0.5).astype(int))
-        pruned_auc = roc_auc_score(y_test, y_prob_pruned_eval)
-        eval_set_name = "test"
-    print(f"   Pruned model ({eval_set_name}): acc={pruned_acc*100:.1f}% | AUC={pruned_auc:.4f} | trees={model_pruned.best_iteration+1}")
-
-    # Compare on same eval set (holdout if available, test otherwise)
-    if X_holdout is not None and len(X_holdout) > 0:
-        initial_eval_prob = model.predict(dholdout)
-        initial_eval_auc = roc_auc_score(y_holdout, initial_eval_prob)
-    else:
-        initial_eval_auc = initial_auc
-
-    # Keep better model
-    if pruned_auc >= initial_eval_auc - 0.002:  # allow tiny regression for simpler model
-        print(f"   [OK]Using pruned model (AUC diff: {(pruned_auc-initial_eval_auc)*100:+.2f}%)")
-        model = model_pruned
-        pruned_model_kept = True
-        y_prob = model_pruned.predict(dtest)  # always keep test predictions for final eval
-    else:
-        print(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})")
-        pruned_features = []  # reset since we're not using pruned model
-else:
-    print(f"   No features pruned (all above threshold or too many would be pruned)")
+model = pruning.model
+pruned_features = pruning.pruned_features
+pruned_model_kept = pruning.pruned_model_kept
+combined_fw = pruning.combined_fw
+if pruning.test_probs is not None:
+    y_prob = pruning.test_probs  # pruned retrain replaced `model`
 
 # ================================================
 # 7. PLATT CALIBRATION
@@ -563,71 +383,23 @@ print(f"   CV AUC: {cv_auc_final:.4f} | CV acc: {cv_acc_final*100:.1f}%")
 print(f"   Out-of-fold predictions: {len(oof_preds)} samples")
 print(f"   Out-of-fold margins: {len(oof_margins)} samples")
 
-# Fit Platt scaling on RAW LOGITS (not post-sigmoid probabilities)
-# This is the correct way: sigmoid(A*logit + B) gives properly calibrated probs
-platt_a, platt_b = 1.0, 0.0  # defaults (identity)
-platt_on_logits = True  # flag for browser inference
-eval_label = 'test'  # where calibration was evaluated (overwritten below when holdout is used)
-
-if len(oof_margins) > 100:
-    lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
-    lr.fit(oof_margins.reshape(-1, 1), oof_labels)
-    platt_a = float(lr.coef_[0][0])
-    platt_b = float(lr.intercept_[0])
-
-    # Get raw margins from final model for evaluation
-    y_margin_test = model.predict(dtest, output_margin=True)
-    y_prob_calibrated = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_test + platt_b)))
-
-    # Evaluate calibration on holdout (audit fix M-cal) or test as fallback
-    if X_holdout is not None and len(X_holdout) > 0:
-        y_margin_holdout = model.predict(dholdout, output_margin=True)
-        y_prob_cal_holdout = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_holdout + platt_b)))
-        cal_acc = accuracy_score(y_holdout, (y_prob_cal_holdout >= 0.5).astype(int))
-        cal_auc = roc_auc_score(y_holdout, y_prob_cal_holdout)
-        # Compare vs raw on same holdout set
-        raw_prob_holdout = model.predict(dholdout)
-        raw_acc = accuracy_score(y_holdout, (raw_prob_holdout >= 0.5).astype(int))
-        raw_auc = roc_auc_score(y_holdout, raw_prob_holdout)
-        eval_label = "holdout"
-    else:
-        cal_acc = accuracy_score(y_test, (y_prob_calibrated >= 0.5).astype(int))
-        cal_auc = roc_auc_score(y_test, y_prob_calibrated)
-        raw_acc = accuracy_score(y_test, (y_prob >= 0.5).astype(int))
-        raw_auc = roc_auc_score(y_test, y_prob)
-        eval_label = "test"
-
-    print(f"   Platt params (on logits): A={platt_a:.4f}, B={platt_b:.4f}")
-    print(f"   Raw ({eval_label}):        acc={raw_acc*100:.1f}% | AUC={raw_auc:.4f}")
-    print(f"   Calibrated ({eval_label}): acc={cal_acc*100:.1f}% | AUC={cal_auc:.4f}")
-
-    if cal_auc < raw_auc - 0.005:
-        print(f"   [WARN] Calibration hurts AUC on {eval_label}, disabling (A=1, B=0)")
-        platt_a, platt_b = 1.0, 0.0
-        y_prob_final = y_prob
-    else:
-        print(f"   [OK] Platt-on-logits calibration active")
-        y_prob_final = y_prob_calibrated  # calibrated test probs for final eval
-else:
-    print(f"   [WARN] Not enough OOF margins ({len(oof_margins)}), skipping calibration")
-    y_prob_final = y_prob
-
-# --- Final holdout metrics (post-pruning, post-calibration) ---
-# holdout_acc/holdout_auc above were measured on the INITIAL model, before feature
-# pruning could swap `model` (section 6) and before Platt calibration moved the
-# decision boundary (section 7). Recompute against the FINAL model artifact with
-# the FINAL Platt transform (identity A=1, B=0 when calibration was skipped or
-# disabled) so the exported holdout metrics and the test/holdout deploy-gate gaps
-# compare the same artifact on both sides.
-final_holdout_acc = None
-final_holdout_auc = None
-if X_holdout is not None and len(X_holdout) > 0:
-    final_margin_ho = model.predict(dholdout, output_margin=True)
-    final_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * final_margin_ho + platt_b)))
-    final_holdout_acc = float(accuracy_score(y_holdout, (final_prob_ho >= 0.5).astype(int)))
-    final_holdout_auc = float(roc_auc_score(y_holdout, final_prob_ho))
-    print(f"   Final holdout (final model + final Platt): "
-          f"acc={final_holdout_acc*100:.1f}% | AUC={final_holdout_auc:.4f}")
+# The fit on OOF logits, the keep-or-revert decision judged on the strict OOS
+# holdout, and the final-holdout recompute against the SHIPPED booster with the
+# SHIPPED transform all live in mltrain/calibration.py (audit fixes C4 / M-cal).
+# `platt_on_logits` is exported alongside A/B so Mlpredictor.ts applies the same
+# sigmoid(A*logit + B) the numbers here were measured with.
+calib = calibrate_platt(
+    model,
+    oof_margins=oof_margins, oof_labels=oof_labels,
+    dtest=dtest, y_test=y_test, y_prob=y_prob,
+    dholdout=dholdout if has_holdout else None, y_holdout=y_holdout,
+)
+platt_a, platt_b = calib.a, calib.b
+platt_on_logits = calib.on_logits
+eval_label = calib.eval_label          # where the keep/revert decision was taken
+y_prob_final = calib.probabilities     # calibrated test probs for the final eval
+final_holdout_acc = calib.holdout_accuracy
+final_holdout_auc = calib.holdout_auc
 
 # ================================================
 # 8. EVALUATE + EXPORT
