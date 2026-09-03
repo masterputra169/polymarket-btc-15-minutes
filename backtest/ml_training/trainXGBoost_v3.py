@@ -4,7 +4,10 @@
 
 v9 improvements (ML-retrain audit fixes):
   - C1: Real Polymarket market prices (via polymarket_lookup.json)
-  - C3: Threshold sweep on holdout split (default 12.5%), not test
+  - C3: Threshold sweep off test data. Revised Sep 2026: ALL selection sweeps
+        (threshold, phase-threshold grid, ensemble weights) now select on
+        calibrated out-of-fold CV predictions; the 12.5% holdout is
+        EVALUATION-only (multiple-testing fix, Lopez de Prado / ML4T ch16)
   - C4: Platt calibration on raw logits (not double-sigmoid)
   - H: Real minutesLeft, real features 44-48, real labels from Polymarket
   - M: Early-stop, pruning, calibration evaluated on holdout
@@ -475,16 +478,26 @@ EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
 # --- Walk-Forward CV ---
-def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False, feat_weights=None,
-                    return_importances=False):
+def walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, cfg: dict, w_tr: np.ndarray | None = None,
+                    n_folds: int = N_CV_FOLDS, return_preds: bool = False,
+                    feat_weights: np.ndarray | None = None,
+                    return_importances: bool = False) -> tuple:
     """Walk-forward CV: train on folds 1..k, validate on fold k+1.
-    Optionally returns out-of-fold predictions AND raw margins for calibration.
+    Optionally returns out-of-fold predictions AND raw margins for calibration,
+    plus oof_idx — the X_tr row index of every OOF prediction. oof_idx lets
+    downstream SELECTION sweeps (threshold / phase-grid / ensemble-weight)
+    recover per-row metadata (e.g. minutes_left_norm) and verify row alignment
+    against another model's OOF arrays, so selection can run on OOF predictions
+    instead of the holdout (multiple-testing fix, Sep 2026).
+    Indices are appended in the same place as predictions, so a fold skipped by
+    the NaN guard stays consistently absent from preds, margins, labels AND idx.
     feat_weights: optional per-feature weight array (0=exclude from splits).
     return_importances: also return per-fold gain importance dicts (for
     stability-filtered pruning)."""
     fold_size = len(X_tr) // (n_folds + 2)
     aucs, accs = [], []
     oof_preds, oof_margins, oof_labels = [], [], []
+    oof_idx: list[int] = []
     fold_importances = []
 
     for fold in range(n_folds):
@@ -552,6 +565,7 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
             y_margin_f = model_f.predict(dval_f, output_margin=True)
             oof_margins.extend(y_margin_f.tolist())
             oof_labels.extend(y_f_val.tolist())
+            oof_idx.extend(range(val_start, val_end))
 
         if return_importances:
             fold_importances.append(model_f.get_score(importance_type='gain'))
@@ -560,9 +574,11 @@ def walk_forward_cv(X_tr, y_tr, cfg, w_tr=None, n_folds=N_CV_FOLDS, return_preds
     mean_acc = np.mean(accs) if accs else 0
 
     if return_preds and return_importances:
-        return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels), fold_importances
+        return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
+                np.array(oof_idx, dtype=np.int64), fold_importances)
     if return_preds:
-        return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels)
+        return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
+                np.array(oof_idx, dtype=np.int64))
     if return_importances:
         return mean_auc, mean_acc, fold_importances
     return mean_auc, mean_acc
@@ -906,7 +922,7 @@ print("\n[7/8] Platt calibration (on raw logits — audit fix C4)...")
 # weights (combined_fw) when the pruned retrain was kept, otherwise the
 # pre-exclude weights (if any). Keeps cv_test_*_gap apples-to-apples.
 cv_feat_weights = combined_fw if pruned_model_kept else (pre_exclude_fw if exclude_feature_names else None)
-cv_auc_final, cv_acc_final, oof_preds, oof_margins, oof_labels = walk_forward_cv(
+cv_auc_final, cv_acc_final, oof_preds, oof_margins, oof_labels, oof_idx = walk_forward_cv(
     X_train, y_train, best_cfg, w_train, return_preds=True,
     feat_weights=cv_feat_weights
 )
@@ -1035,10 +1051,26 @@ for lo, hi in buckets:
         a = accuracy_score(y_test[mask], y_pred[mask])
         print(f"     {lo:.2f}-{hi:.2f}: {a*100:.1f}% acc ({mask.sum():,} samples, {mask.sum()/len(y_test)*100:.1f}%)")
 
-# --- Optimal threshold scan on holdout (audit fix C3) or test fallback ---
-# Threshold is selected on holdout to prevent information leakage
-if X_holdout is not None and len(X_holdout) > 0:
-    # Use holdout for threshold selection
+# --- Optimal threshold scan on calibrated OOF CV predictions (audit fix C3, revised Sep 2026) ---
+# MULTIPLE-TESTING FIX: this sweep tries ~60 candidate thresholds and keeps the
+# best-scoring one. Running the sweep on the strict OOS holdout — the same set
+# the deploy gates (autoRetrain.ts / mlQualityAudit.mts) treat as "honest OOS"
+# — quietly optimizes the gate metrics themselves (Lopez de Prado / ML4T ch16
+# selection bias under multiple comparisons). SELECTION therefore moved onto
+# out-of-fold walk-forward-CV predictions; the holdout is now EVALUATION-only.
+# Thresholds are applied to calibrated probabilities at inference, so the sweep
+# runs on the FINAL Platt transform (identity A=1/B=0 when calibration was
+# disabled) applied to the OOF margins — the same probability space inference
+# sees. Holdout/test fallbacks remain only for degenerate CV (no OOF rows).
+oof_cal_probs = (1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
+                 if len(oof_margins) > 0 else np.array([]))
+if len(oof_cal_probs) >= 100:
+    sweep_probs = oof_cal_probs
+    sweep_labels = oof_labels
+    sweep_preds = (oof_cal_probs >= 0.5).astype(int)
+    sweep_name = "oof_cv"
+elif X_holdout is not None and len(X_holdout) > 0:
+    # Fallback (degenerate CV only): legacy holdout selection
     y_margin_ho = model.predict(dholdout, output_margin=True)
     y_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_ho + platt_b)))
     y_pred_ho = (y_prob_ho >= 0.5).astype(int)
@@ -1140,22 +1172,32 @@ for k in sorted(signal_modifiers.keys()):
     bar = '#' * int(signal_modifiers[k] * 15)
     print(f"     {k:<15s}: {signal_modifiers[k]:.2f}  {bar}")
 
-# === Phase Thresholds (H3): Sweep optimal minEdge/minProb per phase on holdout ===
+# === Phase Thresholds (H3): Sweep optimal minEdge/minProb per phase on OOF CV preds ===
+# MULTIPLE-TESTING FIX (Sep 2026): this grid scores ~36x26 ≈ 900 (minEdge,
+# minProb) combinations per phase and keeps the max — by far the heaviest
+# selection procedure in the script. Selecting on the strict OOS holdout made
+# the holdout no longer honest for the deploy-gate metrics (Lopez de Prado /
+# ML4T ch16 multiple-testing problem). SELECTION moved to calibrated
+# out-of-fold CV predictions; holdout stays EVALUATION-only.
+# Metadata recovery: every OOF prediction corresponds to a specific X_train
+# row (oof_idx, produced by the same fold arithmetic that cut the validation
+# slices, embargo included), so minutes_left_norm and market_yes_price are
+# read from those X_train rows — no bootstrap fallback needed.
 calibrated_phase_thresholds = None
-if X_holdout is not None and len(X_holdout) > 200:
-    print(f"\n   Phase Threshold Calibration (H3) on holdout ({len(X_holdout):,} samples)...")
+if len(oof_cal_probs) > 200 and len(oof_idx) == len(oof_cal_probs):
+    print(f"\n   Phase Threshold Calibration (H3) on OOF CV predictions ({len(oof_cal_probs):,} samples)...")
 
-    # Get calibrated probabilities on holdout
-    ho_margin = model.predict(dholdout, output_margin=True)
-    ho_prob = 1.0 / (1.0 + np.exp(-(platt_a * ho_margin + platt_b)))
+    # Calibrated OOF probabilities (same Platt space inference uses)
+    ph_prob = oof_cal_probs
+    ph_labels = np.asarray(oof_labels)
 
-    # Extract minutesLeft and market_yes_price from holdout features
+    # Extract minutesLeft and market_yes_price from the X_train rows behind each OOF pred
     ml_idx = fi.get('minutes_left_norm')   # index 11
     mkt_idx = fi.get('market_yes_price')   # index 44
 
     if ml_idx is not None and mkt_idx is not None:
-        ho_minutes = X_holdout[:, ml_idx] * 15  # denormalize
-        ho_mkt_price = X_holdout[:, mkt_idx]
+        ph_minutes = X_train[oof_idx, ml_idx] * 15  # denormalize
+        ph_mkt_price = X_train[oof_idx, mkt_idx]
 
         # Phase brackets (same as edge.js decide())
         phase_brackets = {
@@ -1167,15 +1209,15 @@ if X_holdout is not None and len(X_holdout) > 200:
 
         calibrated_phase_thresholds = {}
         for phase_name, (lo_min, hi_min) in phase_brackets.items():
-            phase_mask = (ho_minutes > lo_min) & (ho_minutes <= hi_min)
+            phase_mask = (ph_minutes > lo_min) & (ph_minutes <= hi_min)
             n_phase = int(phase_mask.sum())
             if n_phase < 50:
                 print(f"     {phase_name:10s}: too few samples ({n_phase}), using defaults")
                 continue
 
-            p_probs = ho_prob[phase_mask]
-            p_mkt = ho_mkt_price[phase_mask]
-            p_labels = y_holdout[phase_mask]
+            p_probs = ph_prob[phase_mask]
+            p_mkt = ph_mkt_price[phase_mask]
+            p_labels = ph_labels[phase_mask]
 
             # Best edge and best side for each sample
             p_edge_abs = np.abs(p_probs - p_mkt)
@@ -1214,7 +1256,7 @@ if X_holdout is not None and len(X_holdout) > 200:
     else:
         print(f"   [WARN] minutes_left_norm or market_yes_price not found in features")
 else:
-    print(f"   Phase thresholds: skipped (no holdout or too few samples)")
+    print(f"   Phase thresholds: skipped (too few OOF CV predictions)")
 
 # --- EXPORT ---
 print(f"\n   Exporting model...")
@@ -1411,11 +1453,19 @@ if HAS_LGB:
     LGB_EARLY_STOPPING = 80
     LGB_OPTUNA_TRIALS = 50
 
-    def lgb_walk_forward_cv(X_tr, y_tr, params, w_tr=None, n_folds=N_CV_FOLDS, return_preds=False):
-        """Walk-forward CV for LightGBM. Returns margins for Platt-on-logits."""
+    def lgb_walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, params: dict,
+                            w_tr: np.ndarray | None = None, n_folds: int = N_CV_FOLDS,
+                            return_preds: bool = False) -> tuple:
+        """Walk-forward CV for LightGBM. Returns margins for Platt-on-logits.
+        Also returns oof_idx (X_tr row index per OOF prediction) so the
+        ensemble-weight sweep can VERIFY row alignment against the XGBoost OOF
+        arrays instead of assuming it (multiple-testing fix, Sep 2026). Fold
+        arithmetic (fold_size formula, CV_EMBARGO, X_tr ordering) is identical
+        to walk_forward_cv, so the arrays normally align 1:1."""
         fold_size = len(X_tr) // (n_folds + 2)
         aucs, accs = [], []
         oof_preds, oof_margins, oof_labels = [], [], []
+        oof_idx: list[int] = []
 
         for fold in range(n_folds):
             tr_end = fold_size * (fold + 2)
@@ -1468,12 +1518,14 @@ if HAS_LGB:
                 y_margin_f = model_f.predict(X_f_val, raw_score=True)
                 oof_margins.extend(y_margin_f.tolist())
                 oof_labels.extend(y_f_val.tolist())
+                oof_idx.extend(range(val_start, val_end))
 
         mean_auc = np.mean(aucs) if aucs else 0
         mean_acc = np.mean(accs) if accs else 0
 
         if return_preds:
-            return mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels)
+            return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
+                    np.array(oof_idx, dtype=np.int64))
         return mean_auc, mean_acc
 
     # --- LightGBM Hyperparameter Optimization ---
@@ -1566,7 +1618,7 @@ if HAS_LGB:
 
     # --- LightGBM Platt Calibration (on raw logits — audit fix C4) ---
     print(f"   LightGBM Platt calibration (on logits)...")
-    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_margins, lgb_oof_labels = lgb_walk_forward_cv(
+    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_margins, lgb_oof_labels, lgb_oof_idx = lgb_walk_forward_cv(
         X_train, y_train, lgb_best_params, w_train, return_preds=True
     )
     print(f"   LGB CV AUC: {lgb_cv_auc:.4f} | CV acc: {lgb_cv_acc*100:.1f}%")
@@ -1601,10 +1653,52 @@ if HAS_LGB:
     lgb_calibration = calibration_summary(y_test, lgb_y_prob_cal)
     print(f"   LGB calibrated (exported): Brier={lgb_brier:.4f} | ECE={lgb_calibration['ece']:.4f}")
 
-    # --- Ensemble Weight Optimization (on holdout — audit fix H5) ---
-    # Sweep ensemble weights on holdout to prevent test leakage
-    if X_holdout is not None and len(X_holdout) > 0:
-        print(f"\n   Optimizing ensemble weights (on holdout)...")
+    # --- Ensemble Weight Optimization (on OOF CV preds — audit fix H5, revised Sep 2026) ---
+    # MULTIPLE-TESTING FIX: 11 candidate weights were scored on the strict OOS
+    # holdout and the argmax kept — selecting the exported ensemble_weights on
+    # the very set the deploy gates treat as honest OOS (Lopez de Prado / ML4T
+    # ch16). SELECTION moved to calibrated out-of-fold CV predictions; the
+    # holdout stays EVALUATION-only. XGB and LGB OOF rows are produced by
+    # identical fold arithmetic (same fold_size formula, same CV_EMBARGO, same
+    # X_train ordering), so they should align 1:1 — but this is VERIFIED below
+    # via the per-row oof_idx arrays rather than assumed; on mismatch (e.g. a
+    # NaN-skipped fold in one model only) the arrays are re-aligned on the
+    # intersection of X_train row indices instead.
+    ens_oof_xgb = None
+    ens_oof_lgb = None
+    ens_oof_labels = None
+    if len(oof_margins) > 0 and len(lgb_oof_margins) > 0:
+        xgb_oof_cal = 1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
+        lgb_oof_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_oof_margins + lgb_platt_b)))
+        if len(oof_idx) == len(lgb_oof_idx) and np.array_equal(oof_idx, lgb_oof_idx):
+            print(f"\n   Ensemble OOF alignment check: OK "
+                  f"({len(oof_idx):,} rows, XGB/LGB fold arithmetic identical)")
+            ens_oof_xgb = xgb_oof_cal
+            ens_oof_lgb = lgb_oof_cal
+            ens_oof_labels = np.asarray(oof_labels)
+        else:
+            common_idx, xgb_pos, lgb_pos = np.intersect1d(oof_idx, lgb_oof_idx, return_indices=True)
+            print(f"\n   [WARN] Ensemble OOF rows misaligned (xgb={len(oof_idx)}, lgb={len(lgb_oof_idx)}) "
+                  f"— re-aligning on {len(common_idx):,} common X_train row indices")
+            if len(common_idx) >= 100:
+                ens_oof_xgb = xgb_oof_cal[xgb_pos]
+                ens_oof_lgb = lgb_oof_cal[lgb_pos]
+                ens_oof_labels = np.asarray(oof_labels)[xgb_pos]
+
+    if ens_oof_xgb is not None and len(ens_oof_xgb) >= 100:
+        print(f"   Optimizing ensemble weights (on OOF CV predictions, {len(ens_oof_xgb):,} rows)...")
+        best_ens_auc = 0
+        best_ens_w = 0.5
+        for w in np.arange(0.25, 0.80, 0.05):
+            ens_prob = w * ens_oof_xgb + (1 - w) * ens_oof_lgb
+            ens_auc_val = roc_auc_score(ens_oof_labels, ens_prob)
+            if ens_auc_val > best_ens_auc:
+                best_ens_auc = ens_auc_val
+                best_ens_w = w
+        sweep_label = "oof_cv"
+    elif X_holdout is not None and len(X_holdout) > 0:
+        # Fallback (degenerate/misaligned CV only): legacy holdout selection
+        print(f"\n   Optimizing ensemble weights (on holdout — OOF unavailable)...")
         xgb_margin_ho = model.predict(dholdout, output_margin=True)
         xgb_cal_ho = 1.0 / (1.0 + np.exp(-(platt_a * xgb_margin_ho + platt_b)))
         lgb_margin_ho = lgb_model_final.predict(X_holdout, raw_score=True)
