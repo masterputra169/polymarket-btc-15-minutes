@@ -59,7 +59,7 @@ parser.add_argument('--recency-halflife', type=int, default=90,
 parser.add_argument('--regime-split', action='store_true',
                     help='Train separate models per regime (trending/moderate/choppy)')
 parser.add_argument('--session-weight', action='store_true',
-                    help='Apply session-based sample weighting: US/Overlap +50%/+30%, Asia -20%. '
+                    help='Apply session-based sample weighting: US/Overlap +50%%/+30%%, Asia -20%%. '
                          'Improves model accuracy during US trading hours without changing feature vector.')
 parser.add_argument('--holdout-frac', type=float, default=0.125,
                     help='Reserve final N%% of train data as holdout (not seen by Optuna/CV). '
@@ -297,6 +297,12 @@ from sklearn.linear_model import LogisticRegression
 # Pure logic extracted into the mltrain package (importable + unit-tested).
 from mltrain.metrics import safe_round, calibration_summary, confidence_bucket_summary
 from mltrain.cv import walk_forward_cv as _walk_forward_cv
+from mltrain.sweeps import (
+    align_oof_predictions,
+    select_ensemble_weights,
+    select_phase_thresholds,
+    select_threshold,
+)
 
 
 NUM_BOOST_ROUND = 1200
@@ -784,16 +790,13 @@ for lo, hi in buckets:
         print(f"     {lo:.2f}-{hi:.2f}: {a*100:.1f}% acc ({mask.sum():,} samples, {mask.sum()/len(y_test)*100:.1f}%)")
 
 # --- Optimal threshold scan on calibrated OOF CV predictions (audit fix C3, revised Sep 2026) ---
-# MULTIPLE-TESTING FIX: this sweep tries ~60 candidate thresholds and keeps the
-# best-scoring one. Running the sweep on the strict OOS holdout — the same set
-# the deploy gates (autoRetrain.ts / mlQualityAudit.mts) treat as "honest OOS"
-# — quietly optimizes the gate metrics themselves (Lopez de Prado / ML4T ch16
-# selection bias under multiple comparisons). SELECTION therefore moved onto
-# out-of-fold walk-forward-CV predictions; the holdout is now EVALUATION-only.
-# Thresholds are applied to calibrated probabilities at inference, so the sweep
-# runs on the FINAL Platt transform (identity A=1/B=0 when calibration was
-# disabled) applied to the OOF margins — the same probability space inference
-# sees. Holdout/test fallbacks remain only for degenerate CV (no OOF rows).
+# The sweep itself (and the multiple-testing rationale behind selecting on OOF
+# rather than on the strict OOS holdout) lives in mltrain/sweeps.select_threshold.
+# This block owns only the source selection: OOF CV when available, with the
+# holdout/test fallbacks kept for degenerate CV (no OOF rows). Thresholds are
+# applied to calibrated probabilities at inference, so the sweep runs on the
+# FINAL Platt transform (identity A=1/B=0 when calibration was disabled) applied
+# to the OOF margins — the same probability space inference sees.
 oof_cal_probs = (1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
                  if len(oof_margins) > 0 else np.array([]))
 if len(oof_cal_probs) >= 100:
@@ -816,17 +819,7 @@ else:
     sweep_preds = y_pred
     sweep_name = "test"
 
-best_threshold = 0.60
-best_score = 0
-for thresh in np.arange(0.55, 0.85, 0.005):
-    hmask = (sweep_probs < (1-thresh)) | (sweep_probs > thresh)
-    if hmask.sum() < 50: continue
-    hacc = accuracy_score(sweep_labels[hmask], sweep_preds[hmask])
-    hratio = hmask.sum() / len(sweep_labels)
-    score = hacc * np.sqrt(hratio)
-    if score > best_score:
-        best_score = score
-        best_threshold = thresh
+best_threshold = select_threshold(sweep_probs, sweep_labels, sweep_preds).threshold
 
 print(f"\n   Optimal Threshold (from {sweep_name}): {best_threshold:.3f}")
 
@@ -905,23 +898,16 @@ for k in sorted(signal_modifiers.keys()):
     print(f"     {k:<15s}: {signal_modifiers[k]:.2f}  {bar}")
 
 # === Phase Thresholds (H3): Sweep optimal minEdge/minProb per phase on OOF CV preds ===
-# MULTIPLE-TESTING FIX (Sep 2026): this grid scores ~36x26 ≈ 900 (minEdge,
-# minProb) combinations per phase and keeps the max — by far the heaviest
-# selection procedure in the script. Selecting on the strict OOS holdout made
-# the holdout no longer honest for the deploy-gate metrics (Lopez de Prado /
-# ML4T ch16 multiple-testing problem). SELECTION moved to calibrated
-# out-of-fold CV predictions; holdout stays EVALUATION-only.
-# Metadata recovery: every OOF prediction corresponds to a specific X_train
-# row (oof_idx, produced by the same fold arithmetic that cut the validation
-# slices, embargo included), so minutes_left_norm and market_yes_price are
-# read from those X_train rows — no bootstrap fallback needed.
+# The ~36x26 grid per phase (and the multiple-testing rationale for selecting on
+# OOF instead of the strict OOS holdout) lives in
+# mltrain/sweeps.select_phase_thresholds. This block owns the metadata recovery:
+# every OOF prediction corresponds to a specific X_train row (oof_idx, produced
+# by the same fold arithmetic that cut the validation slices, embargo included),
+# so minutes_left_norm and market_yes_price are read from those X_train rows —
+# no bootstrap fallback needed — plus the reporting and the exported dict.
 calibrated_phase_thresholds = None
 if len(oof_cal_probs) > 200 and len(oof_idx) == len(oof_cal_probs):
     print(f"\n   Phase Threshold Calibration (H3) on OOF CV predictions ({len(oof_cal_probs):,} samples)...")
-
-    # Calibrated OOF probabilities (same Platt space inference uses)
-    ph_prob = oof_cal_probs
-    ph_labels = np.asarray(oof_labels)
 
     # Extract minutesLeft and market_yes_price from the X_train rows behind each OOF pred
     ml_idx = fi.get('minutes_left_norm')   # index 11
@@ -931,60 +917,25 @@ if len(oof_cal_probs) > 200 and len(oof_idx) == len(oof_cal_probs):
         ph_minutes = X_train[oof_idx, ml_idx] * 15  # denormalize
         ph_mkt_price = X_train[oof_idx, mkt_idx]
 
-        # Phase brackets (same as edge.js decide())
-        phase_brackets = {
-            'EARLY':     (10, 15.01),
-            'MID':       (5,  10),
-            'LATE':      (2,  5),
-            'VERY_LATE': (0,  2),
-        }
+        # oof_cal_probs is the calibrated OOF probability (same Platt space inference uses)
+        phase_results = select_phase_thresholds(
+            oof_cal_probs, oof_labels, ph_minutes, ph_mkt_price,
+        )
 
         calibrated_phase_thresholds = {}
-        for phase_name, (lo_min, hi_min) in phase_brackets.items():
-            phase_mask = (ph_minutes > lo_min) & (ph_minutes <= hi_min)
-            n_phase = int(phase_mask.sum())
-            if n_phase < 50:
-                print(f"     {phase_name:10s}: too few samples ({n_phase}), using defaults")
+        for ph in phase_results:
+            if not ph.selected:
+                print(f"     {ph.phase:10s}: too few samples ({ph.n_samples}), using defaults")
                 continue
 
-            p_probs = ph_prob[phase_mask]
-            p_mkt = ph_mkt_price[phase_mask]
-            p_labels = ph_labels[phase_mask]
-
-            # Best edge and best side for each sample
-            p_edge_abs = np.abs(p_probs - p_mkt)
-            p_model_best = np.maximum(p_probs, 1 - p_probs)
-            p_predicted_up = p_probs > p_mkt
-            p_correct = (p_predicted_up & (p_labels == 1)) | (~p_predicted_up & (p_labels == 0))
-
-            best_score = 0
-            best_me = 0.06
-            best_mp = 0.54
-
-            for me in np.arange(0.02, 0.20, 0.005):
-                for mp in np.arange(0.52, 0.65, 0.005):
-                    entry_mask = (p_edge_abs >= me) & (p_model_best >= mp)
-                    n_entries = entry_mask.sum()
-                    if n_entries < max(20, n_phase * 0.05):
-                        continue
-                    acc = p_correct[entry_mask].mean()
-                    coverage = n_entries / n_phase
-                    score = acc * np.sqrt(coverage)
-                    if score > best_score:
-                        best_score = score
-                        best_me = me
-                        best_mp = mp
-
-            calibrated_phase_thresholds[phase_name] = {
-                'minEdge': round(float(best_me), 3),
-                'minProb': round(float(best_mp), 3),
+            calibrated_phase_thresholds[ph.phase] = {
+                'minEdge': round(float(ph.min_edge), 3),
+                'minProb': round(float(ph.min_prob), 3),
             }
 
-            entry_mask = (p_edge_abs >= best_me) & (p_model_best >= best_mp)
-            n_enter = int(entry_mask.sum())
-            acc_val = float(p_correct[entry_mask].mean()) if n_enter > 0 else 0
-            print(f"     {phase_name:10s}: minEdge={best_me:.3f} minProb={best_mp:.3f} | "
-                  f"{n_enter}/{n_phase} entries ({n_enter/n_phase*100:.1f}%), acc={acc_val*100:.1f}%")
+            print(f"     {ph.phase:10s}: minEdge={ph.min_edge:.3f} minProb={ph.min_prob:.3f} | "
+                  f"{ph.n_entries}/{ph.n_samples} entries ({ph.n_entries/ph.n_samples*100:.1f}%), "
+                  f"acc={ph.accuracy*100:.1f}%")
     else:
         print(f"   [WARN] minutes_left_norm or market_yes_price not found in features")
 else:
@@ -1386,47 +1337,33 @@ if HAS_LGB:
     print(f"   LGB calibrated (exported): Brier={lgb_brier:.4f} | ECE={lgb_calibration['ece']:.4f}")
 
     # --- Ensemble Weight Optimization (on OOF CV preds — audit fix H5, revised Sep 2026) ---
-    # MULTIPLE-TESTING FIX: 11 candidate weights were scored on the strict OOS
-    # holdout and the argmax kept — selecting the exported ensemble_weights on
-    # the very set the deploy gates treat as honest OOS (Lopez de Prado / ML4T
-    # ch16). SELECTION moved to calibrated out-of-fold CV predictions; the
-    # holdout stays EVALUATION-only. XGB and LGB OOF rows are produced by
-    # identical fold arithmetic (same fold_size formula, same CV_EMBARGO, same
-    # X_train ordering), so they should align 1:1 — but this is VERIFIED below
-    # via the per-row oof_idx arrays rather than assumed; on mismatch (e.g. a
-    # NaN-skipped fold in one model only) the arrays are re-aligned on the
-    # intersection of X_train row indices instead.
+    # The 11-candidate weight sweep and the OOF row-alignment check live in
+    # mltrain/sweeps (select_ensemble_weights / align_oof_predictions), which
+    # carry the multiple-testing rationale for selecting on OOF instead of the
+    # strict OOS holdout. This block owns the Platt transforms, the reporting,
+    # and the holdout/test fallbacks kept for degenerate/misaligned CV.
     ens_oof_xgb = None
     ens_oof_lgb = None
     ens_oof_labels = None
     if len(oof_margins) > 0 and len(lgb_oof_margins) > 0:
         xgb_oof_cal = 1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
         lgb_oof_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_oof_margins + lgb_platt_b)))
-        if len(oof_idx) == len(lgb_oof_idx) and np.array_equal(oof_idx, lgb_oof_idx):
+        ens_align = align_oof_predictions(
+            xgb_oof_cal, lgb_oof_cal, oof_labels, oof_idx, lgb_oof_idx,
+        )
+        if ens_align.identical:
             print(f"\n   Ensemble OOF alignment check: OK "
                   f"({len(oof_idx):,} rows, XGB/LGB fold arithmetic identical)")
-            ens_oof_xgb = xgb_oof_cal
-            ens_oof_lgb = lgb_oof_cal
-            ens_oof_labels = np.asarray(oof_labels)
         else:
-            common_idx, xgb_pos, lgb_pos = np.intersect1d(oof_idx, lgb_oof_idx, return_indices=True)
             print(f"\n   [WARN] Ensemble OOF rows misaligned (xgb={len(oof_idx)}, lgb={len(lgb_oof_idx)}) "
-                  f"— re-aligning on {len(common_idx):,} common X_train row indices")
-            if len(common_idx) >= 100:
-                ens_oof_xgb = xgb_oof_cal[xgb_pos]
-                ens_oof_lgb = lgb_oof_cal[lgb_pos]
-                ens_oof_labels = np.asarray(oof_labels)[xgb_pos]
+                  f"— re-aligning on {ens_align.n_common:,} common X_train row indices")
+        ens_oof_xgb = ens_align.xgb_probs
+        ens_oof_lgb = ens_align.lgb_probs
+        ens_oof_labels = ens_align.labels
 
     if ens_oof_xgb is not None and len(ens_oof_xgb) >= 100:
         print(f"   Optimizing ensemble weights (on OOF CV predictions, {len(ens_oof_xgb):,} rows)...")
-        best_ens_auc = 0
-        best_ens_w = 0.5
-        for w in np.arange(0.25, 0.80, 0.05):
-            ens_prob = w * ens_oof_xgb + (1 - w) * ens_oof_lgb
-            ens_auc_val = roc_auc_score(ens_oof_labels, ens_prob)
-            if ens_auc_val > best_ens_auc:
-                best_ens_auc = ens_auc_val
-                best_ens_w = w
+        best_ens_w = select_ensemble_weights(ens_oof_xgb, ens_oof_lgb, ens_oof_labels).weight_xgb
         sweep_label = "oof_cv"
     elif X_holdout is not None and len(X_holdout) > 0:
         # Fallback (degenerate/misaligned CV only): legacy holdout selection
@@ -1436,14 +1373,7 @@ if HAS_LGB:
         lgb_margin_ho = lgb_model_final.predict(X_holdout, raw_score=True)
         lgb_cal_ho = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_ho + lgb_platt_b)))
 
-        best_ens_auc = 0
-        best_ens_w = 0.5
-        for w in np.arange(0.25, 0.80, 0.05):
-            ens_prob = w * xgb_cal_ho + (1 - w) * lgb_cal_ho
-            ens_auc_val = roc_auc_score(y_holdout, ens_prob)
-            if ens_auc_val > best_ens_auc:
-                best_ens_auc = ens_auc_val
-                best_ens_w = w
+        best_ens_w = select_ensemble_weights(xgb_cal_ho, lgb_cal_ho, y_holdout).weight_xgb
         sweep_label = "holdout"
     else:
         print(f"\n   Optimizing ensemble weights (on test, no holdout)...")
@@ -1451,14 +1381,7 @@ if HAS_LGB:
         lgb_margin_test = lgb_model_final.predict(X_test, raw_score=True)
         lgb_cal_test = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_test + lgb_platt_b)))
 
-        best_ens_auc = 0
-        best_ens_w = 0.5
-        for w in np.arange(0.25, 0.80, 0.05):
-            ens_prob = w * xgb_cal_test + (1 - w) * lgb_cal_test
-            ens_auc_val = roc_auc_score(y_test, ens_prob)
-            if ens_auc_val > best_ens_auc:
-                best_ens_auc = ens_auc_val
-                best_ens_w = w
+        best_ens_w = select_ensemble_weights(xgb_cal_test, lgb_cal_test, y_test).weight_xgb
         sweep_label = "test"
 
     ens_weight_xgb = round(best_ens_w, 3)
