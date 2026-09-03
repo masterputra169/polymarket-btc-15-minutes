@@ -117,9 +117,15 @@ class TestFoldStabilityFilter:
         assert result.rescued_features == ['rescued']
         assert 'rescued' not in result.pruned_features
 
-    def test_feature_weak_in_every_fold_is_pruned(self) -> None:
-        result = self._run()
-        assert result.pruned_features == ['weak_a', 'weak_b']
+    def test_feature_weak_in_every_fold_is_identified(self) -> None:
+        # This fixture trips the >=50% guard, so the retrain is skipped and the
+        # exported list is emptied (see test_skipped_retrain_reports_no_pruned_features).
+        # Candidate identification is therefore asserted through the log, which
+        # reports what the stability filter selected before that clearing.
+        lines: list[str] = []
+        self._run(log=lines.append)
+        assert any('Pruned list: weak_a, weak_b' in line for line in lines)
+        assert any('folds): 2' in line for line in lines)
 
     def test_feature_strong_overall_is_never_a_candidate(self) -> None:
         result = self._run()
@@ -146,6 +152,12 @@ class TestFoldStabilityFilter:
         assert result.pruned_model_kept is False
         assert result.combined_fw is None
         assert result.test_probs is None
+
+    def test_skipped_retrain_reports_no_pruned_features(self) -> None:
+        # The exported pruned_features feeds xgboost_model.json. When the >=50%
+        # guard skips the retrain, nothing was pruned, so the model must not
+        # claim a pruning that never happened.
+        assert self._run().pruned_features == []
 
 
 @pytest.mark.integration

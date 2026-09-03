@@ -13,9 +13,10 @@ Columns that are weak overall but carry one fold are reported as "rescued".
 
 The retrain is only kept when it does not lose AUC on the strict OOS holdout
 (test is the fallback when no holdout was carved out), with a 0.002 tolerance
-buying simplicity; on rejection the caller keeps the original model AND an empty
-pruned list, so the exported `pruned_features` always describes the artifact
-actually shipped.
+buying simplicity; on rejection — and likewise when the >=50% guard skips the
+retrain entirely — the caller keeps the original model AND an empty pruned list,
+so the exported `pruned_features` always describes the artifact actually
+shipped.
 
 Pure logic with an injected `log` callable; the trainer owns stdout and all JSON.
 """
@@ -219,6 +220,11 @@ def evaluate_pruning(model: xgb.Booster,
             log(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})")
             pruned_features = []  # reset since we're not using pruned model
     else:
+        # The >=50% guard skipped the retrain, so nothing was actually pruned.
+        # Clear the list for the same reason the rejection branch above does:
+        # `pruned_features` is exported into xgboost_model.json and must describe
+        # the artifact that ships, never a pruning that was only contemplated.
+        pruned_features = []
         log(f"   No features pruned (all above threshold or too many would be pruned)")
 
     return PruningResult(
