@@ -1120,7 +1120,7 @@ print(f"""
 # ================================================
 
 try:
-    import lightgbm as lgb
+    import lightgbm  # availability probe — every lgb call lives in mltrain.lightgbm_*
     HAS_LGB = True
 except ImportError:
     HAS_LGB = False
@@ -1130,142 +1130,45 @@ lgb_platt_a, lgb_platt_b = 1.0, 0.0
 ens_weight_xgb, ens_weight_lgb = 0.5, 0.5
 
 if HAS_LGB:
+    # CV / tuning / training / calibration live in mltrain/lightgbm_train.py, the
+    # browser export in mltrain/lightgbm_export.py (importable + unit-tested).
+    # Imported inside the guard so a missing lightgbm still degrades cleanly to
+    # the XGBoost-only branch at the bottom of this section.
+    from mltrain.lightgbm_export import (
+        build_lgb_browser_model,
+        compute_init_score,
+        verify_browser_inference,
+    )
+    from mltrain.lightgbm_train import (
+        LGB_OPTUNA_TRIALS,
+        default_lgb_params,
+        evaluate_lgb,
+        fit_lgb_platt,
+        lgb_walk_forward_cv,
+        platt_probs,
+        train_final_lgb,
+        tune_lgb_params,
+    )
+
     print("[9/9] Training LightGBM ensemble partner...")
-
-    LGB_BOOST_ROUND = 1200
-    LGB_EARLY_STOPPING = 80
-    LGB_OPTUNA_TRIALS = 50
-
-    def lgb_walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, params: dict,
-                            w_tr: np.ndarray | None = None, n_folds: int = N_CV_FOLDS,
-                            return_preds: bool = False) -> tuple:
-        """Walk-forward CV for LightGBM. Returns margins for Platt-on-logits.
-        Also returns oof_idx (X_tr row index per OOF prediction) so the
-        ensemble-weight sweep can VERIFY row alignment against the XGBoost OOF
-        arrays instead of assuming it (multiple-testing fix, Sep 2026). Fold
-        arithmetic (fold_size formula, CV_EMBARGO, X_tr ordering) is identical
-        to walk_forward_cv, so the arrays normally align 1:1."""
-        fold_size = len(X_tr) // (n_folds + 2)
-        aucs, accs = [], []
-        oof_preds, oof_margins, oof_labels = [], [], []
-        oof_idx: list[int] = []
-
-        for fold in range(n_folds):
-            tr_end = fold_size * (fold + 2)
-            # Same embargo as the XGBoost CV — keeps the two ensembles' CV honest
-            # and comparable.
-            val_start = tr_end + CV_EMBARGO
-            val_end = len(X_tr) if fold == n_folds - 1 else tr_end + fold_size
-            if val_end <= val_start:
-                continue
-
-            X_f_train = X_tr[:tr_end]
-            y_f_train = y_tr[:tr_end]
-            X_f_val = X_tr[val_start:val_end]
-            y_f_val = y_tr[val_start:val_end]
-            w_f_train = w_tr[:tr_end] if w_tr is not None else None
-
-            dtrain = lgb.Dataset(X_f_train, label=y_f_train, weight=w_f_train,
-                                 feature_name=feature_cols, free_raw_data=False)
-            dval = lgb.Dataset(X_f_val, label=y_f_val,
-                               feature_name=feature_cols, free_raw_data=False, reference=dtrain)
-
-            callbacks = [lgb.early_stopping(LGB_EARLY_STOPPING, verbose=False),
-                         lgb.log_evaluation(period=0)]
-
-            model_f = lgb.train(
-                params, dtrain,
-                num_boost_round=LGB_BOOST_ROUND,
-                valid_sets=[dval],
-                callbacks=callbacks,
-            )
-
-            y_prob_f = model_f.predict(X_f_val)
-
-            if np.any(np.isnan(y_prob_f)):
-                continue
-
-            acc_f = accuracy_score(y_f_val, (y_prob_f >= 0.5).astype(int))
-            try:
-                auc_f = roc_auc_score(y_f_val, y_prob_f)
-            except ValueError:
-                auc_f = 0.5
-            if np.isnan(auc_f):
-                auc_f = 0.5
-            aucs.append(auc_f)
-            accs.append(acc_f)
-
-            if return_preds:
-                oof_preds.extend(y_prob_f.tolist())
-                # Raw logits for Platt-on-logits (C4)
-                y_margin_f = model_f.predict(X_f_val, raw_score=True)
-                oof_margins.extend(y_margin_f.tolist())
-                oof_labels.extend(y_f_val.tolist())
-                oof_idx.extend(range(val_start, val_end))
-
-        mean_auc = np.mean(aucs) if aucs else 0
-        mean_acc = np.mean(accs) if accs else 0
-
-        if return_preds:
-            return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
-                    np.array(oof_idx, dtype=np.int64))
-        return mean_auc, mean_acc
 
     # --- LightGBM Hyperparameter Optimization ---
     lgb_best_params = None
 
     if USE_OPTUNA:
         print(f"   Optuna optimization ({LGB_OPTUNA_TRIALS} trials, {N_CV_FOLDS}-fold CV)...")
-
-        def lgb_objective(trial):
-            params = {
-                'objective': 'binary',
-                'metric': ['binary_logloss', 'auc'],
-                'verbosity': -1,
-                'num_leaves': trial.suggest_int('num_leaves', 15, 63),
-                'learning_rate': trial.suggest_float('learning_rate', 0.008, 0.2, log=True),
-                'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 0.95),
-                'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 0.95),
-                'bagging_freq': 5,
-                'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
-                'lambda_l1': trial.suggest_float('lambda_l1', 1e-3, 2.0, log=True),
-                'lambda_l2': trial.suggest_float('lambda_l2', 0.3, 6.0),
-            }
-            cv_auc, _ = lgb_walk_forward_cv(X_train, y_train, params, w_train)
-            if np.isnan(cv_auc) or cv_auc == 0:
-                return 0.5
-            return cv_auc
-
-        lgb_study = optuna.create_study(
-            direction='maximize',
-            sampler=optuna.samplers.TPESampler(seed=args.seed + 1),
+        # seed + 1: the LGB study must not replay the XGBoost study's trial sequence.
+        lgb_tuning = tune_lgb_params(
+            X_train, y_train, w_train,
+            feature_cols=feature_cols, seed=args.seed + 1, embargo=CV_EMBARGO,
+            n_folds=N_CV_FOLDS,
         )
-        lgb_study.optimize(lgb_objective, n_trials=LGB_OPTUNA_TRIALS, show_progress_bar=True)
-
-        lgb_best_params = lgb_study.best_trial.params
-        lgb_best_params.update({
-            'objective': 'binary',
-            'metric': ['binary_logloss', 'auc'],
-            'verbosity': -1,
-            'bagging_freq': 5,
-        })
-        print(f"   Best trial #{lgb_study.best_trial.number}: CV AUC = {lgb_study.best_value:.4f}")
+        lgb_best_params = lgb_tuning.params
+        print(f"   Best trial #{lgb_tuning.best_trial}: CV AUC = {lgb_tuning.best_value:.4f}")
         print(f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in lgb_best_params.items() if k not in ['objective','metric','verbosity']})}")
     else:
         # Default LightGBM params (no Optuna)
-        lgb_best_params = {
-            'objective': 'binary',
-            'metric': ['binary_logloss', 'auc'],
-            'verbosity': -1,
-            'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.8,
-            'bagging_fraction': 0.8,
-            'bagging_freq': 5,
-            'min_child_samples': 20,
-            'lambda_l1': 0.1,
-            'lambda_l2': 1.0,
-        }
+        lgb_best_params = default_lgb_params()
         print(f"   Using default LightGBM params (no Optuna)")
 
     # --- Train final LightGBM model ---
@@ -1273,65 +1176,47 @@ if HAS_LGB:
     print(f"   Training final LightGBM model...")
 
     # Audit fix (May 2026 P6 follow-up): respect strict-holdout for LGB too
-    lgb_dtrain = lgb.Dataset(X_final_train, label=y_final_train, weight=w_train_final,
-                             feature_name=feature_cols, free_raw_data=False)
     if X_holdout is not None and len(X_holdout) > 0:
-        lgb_dval = lgb.Dataset(X_holdout, label=y_holdout,
-                               feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+        lgb_X_val, lgb_y_val = X_holdout, y_holdout
         print(f"   LGB early stopping on: holdout ({len(X_holdout):,} samples)")
     else:
-        lgb_dval = lgb.Dataset(X_test, label=y_test,
-                               feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+        lgb_X_val, lgb_y_val = X_test, y_test
 
-    lgb_callbacks = [lgb.early_stopping(LGB_EARLY_STOPPING, verbose=False),
-                     lgb.log_evaluation(period=0)]
-
-    lgb_model_final = lgb.train(
-        lgb_best_params, lgb_dtrain,
-        num_boost_round=LGB_BOOST_ROUND,
-        valid_sets=[lgb_dval],
-        callbacks=lgb_callbacks,
+    lgb_model_final = train_final_lgb(
+        X_final_train, y_final_train, w_train_final, lgb_X_val, lgb_y_val,
+        lgb_best_params, feature_cols=feature_cols,
     )
 
-    lgb_y_prob = lgb_model_final.predict(X_test)
-    lgb_acc = accuracy_score(y_test, (lgb_y_prob >= 0.5).astype(int))
-    lgb_auc = roc_auc_score(y_test, lgb_y_prob)
-    lgb_n_trees = lgb_model_final.best_iteration if lgb_model_final.best_iteration > 0 else lgb_model_final.num_trees()
+    lgb_scores = evaluate_lgb(lgb_model_final, X_test, y_test)
+    lgb_acc, lgb_auc, lgb_n_trees = lgb_scores.accuracy, lgb_scores.auc, lgb_scores.n_trees
     print(f"   LightGBM: acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f} | trees={lgb_n_trees}")
 
     # --- LightGBM Platt Calibration (on raw logits — audit fix C4) ---
     print(f"   LightGBM Platt calibration (on logits)...")
     lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_margins, lgb_oof_labels, lgb_oof_idx = lgb_walk_forward_cv(
-        X_train, y_train, lgb_best_params, w_train, return_preds=True
+        X_train, y_train, lgb_best_params, w_train, N_CV_FOLDS, return_preds=True,
+        feature_cols=feature_cols, embargo=CV_EMBARGO,
     )
     print(f"   LGB CV AUC: {lgb_cv_auc:.4f} | CV acc: {lgb_cv_acc*100:.1f}%")
 
-    lgb_platt_on_logits = True
-    if len(lgb_oof_margins) > 100:
-        lgb_lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
-        lgb_lr.fit(lgb_oof_margins.reshape(-1, 1), lgb_oof_labels)
-        lgb_platt_a = float(lgb_lr.coef_[0][0])
-        lgb_platt_b = float(lgb_lr.intercept_[0])
-
-        # Apply Platt on raw logits of test predictions
-        lgb_y_margin_test = lgb_model_final.predict(X_test, raw_score=True)
-        lgb_y_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_test + lgb_platt_b)))
-        lgb_cal_acc = accuracy_score(y_test, (lgb_y_cal >= 0.5).astype(int))
-        lgb_cal_auc = roc_auc_score(y_test, lgb_y_cal)
-
-        if lgb_cal_auc < lgb_auc - 0.005:
+    lgb_calibrator = fit_lgb_platt(
+        lgb_model_final, X_test, y_test, lgb_oof_margins, lgb_oof_labels, raw_auc=lgb_auc,
+    )
+    lgb_platt_a, lgb_platt_b = lgb_calibrator.a, lgb_calibrator.b
+    lgb_platt_on_logits = lgb_calibrator.on_logits
+    if lgb_calibrator.fitted:
+        if not lgb_calibrator.kept:
             print(f"   [WARN] LGB calibration hurts AUC, disabling")
-            lgb_platt_a, lgb_platt_b = 1.0, 0.0
         else:
             print(f"   LGB Platt (on logits): A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
-            print(f"   LGB calibrated: acc={lgb_cal_acc*100:.1f}% | AUC={lgb_cal_auc:.4f}")
+            print(f"   LGB calibrated: acc={lgb_calibrator.cal_accuracy*100:.1f}% | AUC={lgb_calibrator.cal_auc:.4f}")
 
     # Exported Brier/calibration must reflect the probabilities inference uses:
     # apply the FINAL Platt transform (identity when calibration was skipped or
     # disabled — sigmoid(raw margin) then equals the raw probability) to the raw
     # test margins before scoring.
     lgb_y_margin_final = lgb_model_final.predict(X_test, raw_score=True)
-    lgb_y_prob_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_final + lgb_platt_b)))
+    lgb_y_prob_cal = platt_probs(lgb_y_margin_final, lgb_platt_a, lgb_platt_b)
     lgb_brier = brier_score_loss(y_test, lgb_y_prob_cal)
     lgb_calibration = calibration_summary(y_test, lgb_y_prob_cal)
     print(f"   LGB calibrated (exported): Brier={lgb_brier:.4f} | ECE={lgb_calibration['ece']:.4f}")
@@ -1346,8 +1231,8 @@ if HAS_LGB:
     ens_oof_lgb = None
     ens_oof_labels = None
     if len(oof_margins) > 0 and len(lgb_oof_margins) > 0:
-        xgb_oof_cal = 1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
-        lgb_oof_cal = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_oof_margins + lgb_platt_b)))
+        xgb_oof_cal = platt_probs(oof_margins, platt_a, platt_b)
+        lgb_oof_cal = platt_probs(lgb_oof_margins, lgb_platt_a, lgb_platt_b)
         ens_align = align_oof_predictions(
             xgb_oof_cal, lgb_oof_cal, oof_labels, oof_idx, lgb_oof_idx,
         )
@@ -1369,9 +1254,9 @@ if HAS_LGB:
         # Fallback (degenerate/misaligned CV only): legacy holdout selection
         print(f"\n   Optimizing ensemble weights (on holdout — OOF unavailable)...")
         xgb_margin_ho = model.predict(dholdout, output_margin=True)
-        xgb_cal_ho = 1.0 / (1.0 + np.exp(-(platt_a * xgb_margin_ho + platt_b)))
+        xgb_cal_ho = platt_probs(xgb_margin_ho, platt_a, platt_b)
         lgb_margin_ho = lgb_model_final.predict(X_holdout, raw_score=True)
-        lgb_cal_ho = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_ho + lgb_platt_b)))
+        lgb_cal_ho = platt_probs(lgb_margin_ho, lgb_platt_a, lgb_platt_b)
 
         best_ens_w = select_ensemble_weights(xgb_cal_ho, lgb_cal_ho, y_holdout).weight_xgb
         sweep_label = "holdout"
@@ -1379,7 +1264,7 @@ if HAS_LGB:
         print(f"\n   Optimizing ensemble weights (on test, no holdout)...")
         xgb_cal_test = y_prob_final
         lgb_margin_test = lgb_model_final.predict(X_test, raw_score=True)
-        lgb_cal_test = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_margin_test + lgb_platt_b)))
+        lgb_cal_test = platt_probs(lgb_margin_test, lgb_platt_a, lgb_platt_b)
 
         best_ens_w = select_ensemble_weights(xgb_cal_test, lgb_cal_test, y_test).weight_xgb
         sweep_label = "test"
@@ -1390,7 +1275,7 @@ if HAS_LGB:
     # Report on test (read-only) regardless of where weights were tuned
     xgb_cal_probs = y_prob_final
     lgb_y_margin_ens = lgb_model_final.predict(X_test, raw_score=True)
-    lgb_cal_probs = 1.0 / (1.0 + np.exp(-(lgb_platt_a * lgb_y_margin_ens + lgb_platt_b)))
+    lgb_cal_probs = platt_probs(lgb_y_margin_ens, lgb_platt_a, lgb_platt_b)
     ens_prob_final = ens_weight_xgb * xgb_cal_probs + ens_weight_lgb * lgb_cal_probs
     ens_acc = accuracy_score(y_test, (ens_prob_final >= 0.5).astype(int))
     ens_auc_final = roc_auc_score(y_test, ens_prob_final)
@@ -1409,35 +1294,25 @@ if HAS_LGB:
     lgb_dump = lgb_model_final.dump_model()
 
     # Compute init_score for browser inference
-    label_mean = float(np.average(y_train, weights=w_train)) if w_train is not None else float(y_train.mean())
-    lgb_init_score = float(np.log(label_mean / (1 - label_mean)))
+    lgb_init_score = compute_init_score(y_train, w_train)
 
     # C2: Use len(sliced_trees) for num_trees to avoid off-by-one
     sliced_tree_info = lgb_dump['tree_info'][:lgb_n_trees]
-    lgb_browser = {
-        'format': 'lightgbm_json_v2',
-        'version': 2,
-        'num_features': len(feature_cols),
-        'num_trees': len(sliced_tree_info),
-        'feature_names': feature_cols,
-        'init_score': lgb_init_score,
-        'platt_a': lgb_platt_a,
-        'platt_b': lgb_platt_b,
-        'platt_on_logits': lgb_platt_on_logits,
-        'metrics': {
-            'accuracy': round(lgb_acc, 4),
-            'auc': round(lgb_auc, 4),
-            'brier': round(lgb_brier, 4),
-            'calibration_ece': safe_round(lgb_calibration['ece']),
-            'calibration_mce': safe_round(lgb_calibration['mce']),
-            'cv_auc': safe_round(lgb_cv_auc),
-            'cv_acc': safe_round(lgb_cv_acc),
-            'cv_test_acc_gap': safe_round(lgb_acc - lgb_cv_acc),
-            'cv_test_auc_gap': safe_round(lgb_auc - lgb_cv_auc),
-        },
-        'ensemble_weights': {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
-        'tree_info': sliced_tree_info,
-    }
+    lgb_browser = build_lgb_browser_model(
+        sliced_tree_info,
+        feature_cols=feature_cols,
+        init_score=lgb_init_score,
+        platt_a=lgb_platt_a,
+        platt_b=lgb_platt_b,
+        platt_on_logits=lgb_platt_on_logits,
+        accuracy=lgb_acc,
+        auc=lgb_auc,
+        brier=lgb_brier,
+        calibration=lgb_calibration,
+        cv_auc=lgb_cv_auc,
+        cv_acc=lgb_cv_acc,
+        ensemble_weights={'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
+    )
 
     lgb_path = os.path.join(args.output_dir, 'lightgbm_model.json')
     with open(lgb_path, 'w') as f:
@@ -1469,28 +1344,7 @@ if HAS_LGB:
 
     # --- Verify browser inference consistency ---
     print(f"\n   Verifying LGB browser inference...")
-    def _traverse_lgb_tree(node, features):
-        if 'leaf_value' in node:
-            return node['leaf_value']
-        fi = node['split_feature']
-        thr = node['threshold']
-        val = features[fi]
-        default_left = node.get('default_left', True)
-        if np.isnan(val):
-            return _traverse_lgb_tree(node['left_child'] if default_left else node['right_child'], features)
-        if val <= thr:
-            return _traverse_lgb_tree(node['left_child'], features)
-        else:
-            return _traverse_lgb_tree(node['right_child'], features)
-
-    model_raw_scores = lgb_model_final.predict(X_test[:5], raw_score=True)
-    max_diff = 0
-    for i in range(5):
-        manual_raw = lgb_init_score
-        for ti in lgb_dump['tree_info'][:lgb_n_trees]:
-            manual_raw += _traverse_lgb_tree(ti['tree_structure'], X_test[i])
-        diff = abs(model_raw_scores[i] - manual_raw)
-        max_diff = max(max_diff, diff)
+    max_diff = verify_browser_inference(lgb_model_final, sliced_tree_info, lgb_init_score, X_test)
     print(f"   Max raw score diff (model vs manual): {max_diff:.8f}")
     if max_diff > 0.01:
         print(f"   [WARN] Large inference discrepancy! Browser predictions may differ.")
