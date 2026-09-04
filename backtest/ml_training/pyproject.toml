@@ -1,0 +1,45 @@
+# Tooling config for the ML training pipeline.
+#
+# Scoped to backtest/ml_training/ deliberately: the rest of the repo is
+# TypeScript and has its own toolchain. Line length is 100 rather than black's
+# default 88 because the training code carries wide numeric expressions and
+# long explanatory comments that read worse when wrapped.
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["output", "__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes — undefined names, unused imports/variables
+    "I",    # isort — import ordering
+    "UP",   # pyupgrade — modern syntax for the target version
+    "B",    # bugbear — likely bugs (mutable defaults, unused loop vars, ...)
+    "SIM",  # simplification
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",    # line length is black's job, not the linter's
+    "E741",    # single-letter names like `l` appear in maths-heavy code
+    "B008",    # function calls in defaults — used intentionally for np defaults
+    "SIM108",  # ternary-instead-of-if hurts readability in the training flow
+    "RUF001",  # the multiplication sign in log output is intentional and human-facing
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests legitimately use assert-heavy, repetitive structures. Class-level lists
+# are shared fixture data (RUF012), and zip() over equal-length arrays built in
+# the test itself needs neither strict= nor pairwise (B905/RUF007).
+"tests/*" = ["B011", "RUF012", "B905", "RUF007"]
+# The entrypoint is a top-to-bottom script by design: module-level statements
+# after imports are the whole point, and it re-exports names for its sections.
+"trainXGBoost_v3.py" = ["E402", "F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mltrain"]

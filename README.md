@@ -602,7 +602,7 @@ frontend/
 │   ├── trainXGBoost_v3.py        # Main trainer (Optuna HPO)
 │   ├── generateTrainingData.mts  # Feature engineering
 │   ├── backtestPnL.py            # Threshold sweep backtest
-│   └── quickUpdateLookup.py      # Scrape recent Polymarket markets
+│   └── fetchFreshMarkets.mts     # Discover + enrich Polymarket markets (labels AND tick prices)
 │
 ├── ecosystem.config.cts          # PM2: bot + frontend processes
 ├── vite.config.ts                # Dev server + CORS proxies

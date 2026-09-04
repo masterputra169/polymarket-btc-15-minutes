@@ -42,6 +42,7 @@ backtest/ml_training/*
 !backtest/ml_training/tests/
 !backtest/ml_training/tests/*.py
 !backtest/ml_training/pytest.ini
+!backtest/ml_training/pyproject.toml
 .backtest_cache/
 .backtest/
 
