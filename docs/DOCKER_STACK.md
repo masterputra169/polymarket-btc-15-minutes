@@ -255,3 +255,38 @@ Do not share `docker compose config` output publicly because it expands `bot/.en
 The stack serves plain HTTP; HSTS is deliberately not set in `docker/nginx.conf`. If you put the dashboard behind a TLS-terminating reverse proxy, add HSTS (and TLS redirects) on that proxy, not here.
 
 Images are pinned to minor versions (`postgres:17-alpine`, `redis:7-alpine`, `nginx:1.27-alpine`, `node:25-bookworm-slim`). For production immutability, pin by digest (`image@sha256:...`) instead so a retagged upstream image cannot change what you run.
+
+## Watchdog and unattended running
+
+The Docker engine on this machine has hung twice (2026-09-02, 2026-09-04),
+each time leaving a stale backend process behind and stopping the bot without
+any visible signal — an observation window that looked healthy had collected
+nothing. Sleep and hibernate were already disabled and the machine had not
+rebooted, so this is a Docker fault, not power management.
+
+`scripts/stack-watchdog.ps1` is the recovery path. Every 10 minutes it checks
+the engine, force-restarts Docker Desktop if it is unreachable (kill stale
+processes, `wsl --shutdown`, cold start), then brings the stack up if the bot
+container is missing. Install once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-watchdog.ps1
+```
+
+That also drops a Startup shortcut so Docker Desktop comes back after a reboot.
+Remove both with `-Uninstall`. Check it without changing anything:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\stack-watchdog.ps1 -WhatIfOnly
+```
+
+It logs only interventions to `bot/data/watchdog.log` — a silent log means the
+stack never needed help.
+
+### Dry-run vs live
+
+The bot's mode comes from `DRY_RUN` in `bot/.env`, which Compose loads via
+`env_file`. The watchdog runs `docker compose up -d` with no override file, so
+it can never flip a live bot into dry-run or a dry-run bot into live. To go
+live: set `DRY_RUN=false` in `bot/.env`, then `docker compose up -d bot`.
+Never run the Docker bot and the PM2 bot at the same time — same wallet.
