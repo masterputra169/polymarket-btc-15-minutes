@@ -53,6 +53,11 @@ services:
       - SETGID
       - SETUID
       - CHOWN
+      # The redis entrypoint runs `find /data ! -user redis -exec chown ...` as
+      # root. Without DAC_OVERRIDE that traversal fails on an existing volume
+      # whose files are owned by the redis user, and the container crash-loops
+      # with "find: ./appendonlydir: Permission denied".
+      - DAC_OVERRIDE
     networks:
       - polymarket_net
 
