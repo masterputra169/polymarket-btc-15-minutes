@@ -17,6 +17,9 @@ Notes:
     - Historical entries without rlActionIdx assigned action 2 (scalar 1.0, neutral baseline)
     - Training requires ≥50 real trades. Saves only if val Sharpe improvement over baseline.
     - Augmentation: bootstraps minority regimes (trending, asia) to prevent overfitting
+    - Journal rows are untrusted input: every numeric field is coerced through
+      _as_float, so a malformed or NaN value skips the sample instead of
+      aborting the run (or, for NaN, saturating a feature / reward).
 
 Performance:
     - The MLP forward/backward is vectorized with numpy (matrix-vector products and
@@ -33,15 +36,15 @@ Performance:
       pipeline (see requirements.txt).
 """
 
+import argparse
 import json
 import math
 import random
-import argparse
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
-
 
 # ── Constants ──
 ACTIONS = [0.5, 0.75, 1.0, 1.25, 1.5]
@@ -56,44 +59,77 @@ VAL_FRAC = 0.2
 CLIP_REWARD = 3.0
 MIN_TRADES = 50
 
+
+def _as_float(value: object) -> float | None:
+    """Coerce a raw journal field to a finite float, or None when it is unusable.
+
+    Journal rows are written by the TypeScript bot and are never schema-validated
+    on the way in. Two shapes used to be actively harmful here:
+
+      * a string / object where a number belongs raised TypeError or ValueError
+        and aborted the entire retrain run over one corrupt row;
+      * a NaN or inf `pnl` survived `max(-CLIP, min(CLIP, r))` as +CLIP, because
+        every NaN comparison is False — a corrupt row was taught to the agent as
+        the single best trade it had ever made.
+
+    Returning None routes both through the existing "missing value" paths: skip
+    the sample (compute_reward) or fall back to the neutral default
+    (extract_state). Finite numbers pass through bit-identically.
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
 # ── CLI ──
-def parse_args():
-    p = argparse.ArgumentParser(description='Train RL contextual bandit for bet sizing')
-    p.add_argument('--journal', default='../../bot/data/trade_journal.jsonl',
-                   help='Path to trade_journal.jsonl')
-    p.add_argument('--output', default='../../public/ml/rl_agent_weights.json',
-                   help='Output JSON weights file')
-    p.add_argument('--augment', action='store_true',
-                   help='Bootstrap minority regimes to 2000+ samples')
-    p.add_argument('--epochs', type=int, default=EPOCHS)
-    p.add_argument('--lr', type=float, default=LR)
-    p.add_argument('--dry-run', action='store_true',
-                   help='Train and evaluate but do not save weights')
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Train RL contextual bandit for bet sizing")
+    p.add_argument(
+        "--journal",
+        default="../../bot/data/trade_journal.jsonl",
+        help="Path to trade_journal.jsonl",
+    )
+    p.add_argument(
+        "--output", default="../../public/ml/rl_agent_weights.json", help="Output JSON weights file"
+    )
+    p.add_argument(
+        "--augment", action="store_true", help="Bootstrap minority regimes to 2000+ samples"
+    )
+    p.add_argument("--epochs", type=int, default=EPOCHS)
+    p.add_argument("--lr", type=float, default=LR)
+    p.add_argument(
+        "--dry-run", action="store_true", help="Train and evaluate but do not save weights"
+    )
     return p.parse_args()
 
 
 # ── Feature extraction (mirrors rlAgent.js extractRLState) ──
 def extract_state(entry: dict) -> list[float]:
-    e = entry.get('entry', entry)  # support both nested and flat
-    a = entry.get('analysis', {})
+    e = entry.get("entry", entry)  # support both nested and flat
 
-    ml_conf = e.get('mlConfidence')
-    best_edge = e.get('bestEdge')
-    token_price = e.get('tokenPrice')
-    regime = e.get('regime', 'moderate')
-    session = e.get('session', '')
-    rsi = e.get('rsiNow')
-    macd_hist = e.get('macdHist')
-    spread = e.get('spread')
-    atr_ratio = e.get('atrRatio')
-    delta1m = e.get('delta1m')
-    time_left = e.get('timeLeftMin')
-    consec = e.get('consecutiveLosses', 0)
-    ob_imbalance = e.get('orderbookImbalance')
-    recent_flips = e.get('recentFlips', 0)
+    # Every numeric field goes through _as_float so one malformed row cannot
+    # crash the run (or, when NaN, saturate a feature at 1.0).
+    ml_conf = _as_float(e.get("mlConfidence"))
+    best_edge = _as_float(e.get("bestEdge"))
+    token_price = _as_float(e.get("tokenPrice"))
+    regime = e.get("regime", "moderate")
+    session = e.get("session", "")
+    rsi = _as_float(e.get("rsiNow"))
+    macd_hist = _as_float(e.get("macdHist"))
+    spread = _as_float(e.get("spread"))
+    atr_ratio = _as_float(e.get("atrRatio"))
+    delta1m = _as_float(e.get("delta1m"))
+    time_left = _as_float(e.get("timeLeftMin"))
+    consec = _as_float(e.get("consecutiveLosses", 0))
+    ob_imbalance = _as_float(e.get("orderbookImbalance"))
+    recent_flips = _as_float(e.get("recentFlips", 0))
 
-    is_us = any(s in (session or '') for s in ['US', 'EU/US', 'Europe/US'])
-    is_asia = 'Asia' in (session or '')
+    is_us = any(s in (session or "") for s in ["US", "EU/US", "Europe/US"])
+    is_asia = "Asia" in (session or "")
 
     def clamp(v, lo=0.0, hi=1.0):
         if v is None:
@@ -101,40 +137,40 @@ def extract_state(entry: dict) -> list[float]:
         return max(lo, min(hi, float(v)))
 
     return [
-        clamp(ml_conf),                                                    # [0]
-        clamp((best_edge or 0) * 4 + 0.5),                                # [1] edge scaled
-        clamp(token_price, 0, 1),                                          # [2]
-        1.0 if regime == 'trending' else 0.0,                              # [3]
-        1.0 if regime == 'choppy' else 0.0,                                # [4]
-        1.0 if is_us else 0.0,                                             # [5]
-        1.0 if is_asia else 0.0,                                           # [6]
-        clamp((rsi or 50) / 100),                                          # [7]
+        clamp(ml_conf),  # [0]
+        clamp((best_edge or 0) * 4 + 0.5),  # [1] edge scaled
+        clamp(token_price, 0, 1),  # [2]
+        1.0 if regime == "trending" else 0.0,  # [3]
+        1.0 if regime == "choppy" else 0.0,  # [4]
+        1.0 if is_us else 0.0,  # [5]
+        1.0 if is_asia else 0.0,  # [6]
+        clamp((rsi or 50) / 100),  # [7]
         1.0 if (macd_hist or 0) > 0 else (0.0 if (macd_hist or 0) < 0 else 0.5),  # [8]
-        clamp(1 - (spread or 0) * 20),                                     # [9] narrow spread → high
-        clamp((atr_ratio or 0) / 3),                                       # [10]
-        1.0 if (delta1m or 0) > 0 else (0.0 if (delta1m or 0) < 0 else 0.5),      # [11]
-        clamp((time_left or 7.5) / 15),                                    # [12]
-        clamp(min((consec or 0), 5) / 5),                                  # [13]
-        clamp(((ob_imbalance or 0) + 1) / 2),                              # [14]
-        clamp((recent_flips or 0) / 10),                                   # [15]
+        clamp(1 - (spread or 0) * 20),  # [9] narrow spread → high
+        clamp((atr_ratio or 0) / 3),  # [10]
+        1.0 if (delta1m or 0) > 0 else (0.0 if (delta1m or 0) < 0 else 0.5),  # [11]
+        clamp((time_left or 7.5) / 15),  # [12]
+        clamp(min((consec or 0), 5) / 5),  # [13]
+        clamp(((ob_imbalance or 0) + 1) / 2),  # [14]
+        clamp((recent_flips or 0) / 10),  # [15]
     ]
 
 
 def compute_reward(entry: dict) -> float | None:
-    a = entry.get('analysis', {})
-    e = entry.get('entry', entry)
+    a = entry.get("analysis", {})
+    e = entry.get("entry", entry)
 
-    outcome = a.get('outcome', '')
-    if outcome == 'DRY_RUN':
+    outcome = a.get("outcome", "")
+    if outcome == "DRY_RUN":
         return None  # Skip dry runs
 
-    pnl = a.get('pnl')
-    bet_amount = e.get('betAmount') or e.get('cost')
+    pnl = _as_float(a.get("pnl"))
+    bet_amount = _as_float(e.get("betAmount") or e.get("cost"))
 
     if pnl is None or bet_amount is None or bet_amount <= 0:
         return None
 
-    reward = pnl / float(bet_amount)
+    reward = pnl / bet_amount
     return max(-CLIP_REWARD, min(CLIP_REWARD, reward))
 
 
@@ -164,7 +200,7 @@ class MLP:
             dtype=np.float64,
         )
         b = np.zeros(out_d, dtype=np.float64)
-        return {'W': W, 'b': b, 'in_d': in_d, 'out_d': out_d}
+        return {"W": W, "b": b, "in_d": in_d, "out_d": out_d}
 
     @staticmethod
     def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -175,13 +211,20 @@ class MLP:
         h = np.asarray(x, dtype=np.float64)
         self._cache = [h]
         for i, layer in enumerate(self.layers):
-            z = layer['W'] @ h + layer['b']
+            z = layer["W"] @ h + layer["b"]
             h = np.maximum(z, 0.0) if i < len(self.layers) - 1 else self._softmax(z)
             self._cache.append(h)
         return h  # probs
 
-    def policy_gradient_update(self, x: "np.ndarray | list[float]", action_idx: int,
-                               reward: float, baseline: float, lr: float, l2: float) -> None:
+    def policy_gradient_update(
+        self,
+        x: "np.ndarray | list[float]",
+        action_idx: int,
+        reward: float,
+        baseline: float,
+        lr: float,
+        l2: float,
+    ) -> None:
         """Single REINFORCE update step.
 
         Matches the original loop-based implementation exactly, including its
@@ -191,7 +234,7 @@ class MLP:
         probs = self.forward(x)
         advantage = reward - baseline
 
-        # Policy gradient: ∇ log π(a|s) × advantage
+        # Policy gradient: ∇ log π(a|s) x advantage
         # For softmax output: d_log_pi/d_logit[j] = I(j==a) - pi[j]
         d_logits = -probs.copy()
         d_logits[action_idx] += 1.0
@@ -200,40 +243,40 @@ class MLP:
         # Backprop through layer 3 (64→5); W updated in-place (gradient + L2)
         layer = self.layers[2]
         h2 = self._cache[2]
-        layer['b'] += lr * d_logits
-        layer['W'] += lr * (np.outer(d_logits, h2) - l2 * layer['W'])
+        layer["b"] += lr * d_logits
+        layer["W"] += lr * (np.outer(d_logits, h2) - l2 * layer["W"])
 
         # Backprop through layer 2 (64→64 ReLU) — uses post-update W3, as before
-        d_h2 = layer['W'].T @ d_logits
+        d_h2 = layer["W"].T @ d_logits
         d_h2 = np.where(h2 > 0, d_h2, 0.0)  # ReLU mask
 
         layer2 = self.layers[1]
         h1 = self._cache[1]
-        layer2['b'] += lr * d_h2
-        layer2['W'] += lr * (np.outer(d_h2, h1) - l2 * layer2['W'])
+        layer2["b"] += lr * d_h2
+        layer2["W"] += lr * (np.outer(d_h2, h1) - l2 * layer2["W"])
 
         # Backprop through layer 1 (16→64 ReLU) — uses post-update W2, as before
-        d_h1 = layer2['W'].T @ d_h2
+        d_h1 = layer2["W"].T @ d_h2
         d_h1 = np.where(h1 > 0, d_h1, 0.0)
 
         layer1 = self.layers[0]
         x0 = self._cache[0]
-        layer1['b'] += lr * d_h1
-        layer1['W'] += lr * (np.outer(d_h1, x0) - l2 * layer1['W'])
+        layer1["b"] += lr * d_h1
+        layer1["W"] += lr * (np.outer(d_h1, x0) - l2 * layer1["W"])
 
     def get_weights(self) -> dict[str, list[float]]:
         """Flatten weights for JSON serialization (row-major, same layout as before)."""
         result: dict[str, list[float]] = {}
-        names = ['1', '2', '3']
+        names = ["1", "2", "3"]
         for idx, layer in enumerate(self.layers):
             n = names[idx]
-            result[f'w{n}'] = layer['W'].flatten().tolist()
-            result[f'b{n}'] = layer['b'].tolist()
+            result[f"w{n}"] = layer["W"].flatten().tolist()
+            result[f"b{n}"] = layer["b"].tolist()
         return result
 
 
 # ── Metrics ──
-def compute_sharpe(rewards):
+def compute_sharpe(rewards: Sequence[float]) -> float:
     if len(rewards) < 2:
         return 0.0
     mean_r = sum(rewards) / len(rewards)
@@ -261,11 +304,11 @@ def evaluate(model: MLP, samples: list[tuple]) -> tuple[float, float]:
 def load_data(journal_path: str) -> list[dict]:
     path = Path(journal_path)
     if not path.exists():
-        print(f'ERROR: Journal not found: {journal_path}', file=sys.stderr)
+        print(f"ERROR: Journal not found: {journal_path}", file=sys.stderr)
         sys.exit(1)
 
     entries = []
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -275,7 +318,7 @@ def load_data(journal_path: str) -> list[dict]:
             except json.JSONDecodeError:
                 continue
 
-    print(f'Loaded {len(entries)} journal entries')
+    print(f"Loaded {len(entries)} journal entries")
     return entries
 
 
@@ -291,8 +334,8 @@ def prepare_samples(entries: list[dict], augment: bool) -> list[tuple]:
             continue
 
         state = extract_state(entry)
-        e = entry.get('entry', entry)
-        rl_action = e.get('rlActionIdx')
+        e = entry.get("entry", entry)
+        rl_action = e.get("rlActionIdx")
 
         if rl_action is None:
             action_idx = 2  # Neutral baseline (scalar 1.0)
@@ -301,10 +344,10 @@ def prepare_samples(entries: list[dict], augment: bool) -> list[tuple]:
 
         samples.append((state, action_idx, reward))
 
-    print(f'Prepared {len(samples)} samples ({skipped} skipped: DRY_RUN or missing pnl)')
+    print(f"Prepared {len(samples)} samples ({skipped} skipped: DRY_RUN or missing pnl)")
 
     if len(samples) < MIN_TRADES:
-        print(f'ERROR: Need ≥{MIN_TRADES} real trades, got {len(samples)}', file=sys.stderr)
+        print(f"ERROR: Need ≥{MIN_TRADES} real trades, got {len(samples)}", file=sys.stderr)
         sys.exit(1)
 
     if augment:
@@ -319,7 +362,6 @@ def augment_samples(samples: list[tuple]) -> list[tuple]:
 
     # Identify minority samples (trending regime = state[3]==1, asia = state[6]==1)
     minority = [s for s in samples if s[0][3] > 0.5 or s[0][6] > 0.5]
-    majority = [s for s in samples if s[0][3] <= 0.5 and s[0][6] <= 0.5]
 
     extra_needed = target - len(samples)
     if extra_needed <= 0 or len(minority) == 0:
@@ -336,7 +378,7 @@ def augment_samples(samples: list[tuple]) -> list[tuple]:
         extra.append((noisy, action, reward))
 
     augmented = samples + extra
-    print(f'Augmented: {len(samples)} -> {len(augmented)} samples')
+    print(f"Augmented: {len(samples)} -> {len(augmented)} samples")
     return augmented
 
 
@@ -348,7 +390,7 @@ def train(samples: list[tuple], args: argparse.Namespace) -> tuple[dict | None, 
     val_samples = [(np.asarray(s, dtype=np.float64), a, r) for s, a, r in samples[:n_val]]
     train_samples = [(np.asarray(s, dtype=np.float64), a, r) for s, a, r in samples[n_val:]]
 
-    print(f'Train: {len(train_samples)}  Val: {n_val}')
+    print(f"Train: {len(train_samples)}  Val: {n_val}")
 
     model = MLP(FEATURE_DIM, HIDDEN_DIM, N_ACTIONS)
 
@@ -356,11 +398,11 @@ def train(samples: list[tuple], args: argparse.Namespace) -> tuple[dict | None, 
     baseline = 0.0
     alpha_baseline = 0.1  # EMA coefficient
 
-    best_sharpe = -float('inf')
+    best_sharpe = -float("inf")
     best_weights = None
     baseline_sharpe = compute_sharpe([r for _, _, r in val_samples])
 
-    print(f'Baseline Sharpe (uniform policy): {baseline_sharpe:.4f}')
+    print(f"Baseline Sharpe (uniform policy): {baseline_sharpe:.4f}")
 
     for epoch in range(args.epochs):
         random.shuffle(train_samples)
@@ -371,17 +413,19 @@ def train(samples: list[tuple], args: argparse.Namespace) -> tuple[dict | None, 
 
         if (epoch + 1) % 20 == 0:
             avg_r, sharpe = evaluate(model, val_samples)
-            print(f'  Epoch {epoch+1:3d}/{args.epochs}  val_avg_reward={avg_r:.4f}  val_sharpe={sharpe:.4f}')
+            print(
+                f"  Epoch {epoch+1:3d}/{args.epochs}  val_avg_reward={avg_r:.4f}  val_sharpe={sharpe:.4f}"
+            )
 
             if sharpe > best_sharpe:
                 best_sharpe = sharpe
                 best_weights = model.get_weights()
 
-    print(f'\nBest val Sharpe: {best_sharpe:.4f}  (baseline: {baseline_sharpe:.4f})')
+    print(f"\nBest val Sharpe: {best_sharpe:.4f}  (baseline: {baseline_sharpe:.4f})")
     return best_weights, best_sharpe, baseline_sharpe
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     entries = load_data(args.journal)
@@ -390,42 +434,43 @@ def main():
     best_weights, best_sharpe, baseline_sharpe = train(samples, args)
 
     if best_weights is None:
-        print('ERROR: Training produced no weights', file=sys.stderr)
+        print("ERROR: Training produced no weights", file=sys.stderr)
         sys.exit(1)
 
     if best_sharpe <= baseline_sharpe:
-        print(f'WARNING: Trained policy Sharpe ({best_sharpe:.4f}) ≤ baseline ({baseline_sharpe:.4f}). '
-              f'Agent did not improve over neutral sizing.')
+        print(
+            f"WARNING: Trained policy Sharpe ({best_sharpe:.4f}) ≤ baseline ({baseline_sharpe:.4f}). "
+            f"Agent did not improve over neutral sizing."
+        )
         if not args.dry_run:
-            print('Saving anyway (user can evaluate in shadow mode)')
+            print("Saving anyway (user can evaluate in shadow mode)")
 
     import time
-    import hashlib
 
     output = {
         **best_weights,
-        'version': int(time.time()),
-        'trainedAt': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        'trainSamples': len(samples),
-        'valSharpe': round(best_sharpe, 4),
-        'baselineSharpe': round(baseline_sharpe, 4),
-        'improved': best_sharpe > baseline_sharpe,
-        'featureDim': FEATURE_DIM,
-        'hiddenDim': HIDDEN_DIM,
-        'nActions': N_ACTIONS,
-        'actions': ACTIONS,
+        "version": int(time.time()),
+        "trainedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "trainSamples": len(samples),
+        "valSharpe": round(best_sharpe, 4),
+        "baselineSharpe": round(baseline_sharpe, 4),
+        "improved": best_sharpe > baseline_sharpe,
+        "featureDim": FEATURE_DIM,
+        "hiddenDim": HIDDEN_DIM,
+        "nActions": N_ACTIONS,
+        "actions": ACTIONS,
     }
 
     if args.dry_run:
-        print('DRY-RUN: weights not saved')
+        print("DRY-RUN: weights not saved")
         return
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(output, separators=(',', ':')))
-    print(f'Weights saved: {out_path}  ({out_path.stat().st_size // 1024}KB)')
-    print(f'Done. Deploy to bot/data/ or public/ml/ as needed.')
+    out_path.write_text(json.dumps(output, separators=(",", ":")))
+    print(f"Weights saved: {out_path}  ({out_path.stat().st_size // 1024}KB)")
+    print("Done. Deploy to bot/data/ or public/ml/ as needed.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

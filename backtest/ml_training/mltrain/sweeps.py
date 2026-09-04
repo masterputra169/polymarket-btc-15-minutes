@@ -22,16 +22,17 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 
 # Phase brackets (same as edge.js decide())
 PHASE_BRACKETS: tuple[tuple[str, float, float], ...] = (
-    ('EARLY',     10, 15.01),
-    ('MID',       5,  10),
-    ('LATE',      2,  5),
-    ('VERY_LATE', 0,  2),
+    ("EARLY", 10, 15.01),
+    ("MID", 5, 10),
+    ("LATE", 2, 5),
+    ("VERY_LATE", 0, 2),
 )
 
 
 @dataclass(frozen=True)
 class ThresholdChoice:
     """Result of the high-confidence threshold sweep."""
+
     threshold: float
     score: float
 
@@ -45,6 +46,7 @@ class PhaseResult:
     `phase_thresholds` map. min_edge/min_prob are the raw grid values (not yet
     rounded for export) so the caller controls the exported precision.
     """
+
     phase: str
     selected: bool
     n_samples: int
@@ -63,6 +65,7 @@ class OofAlignment:
     index intersection. When too few rows survive, all three arrays are None
     and the caller falls back to holdout/test weight selection.
     """
+
     xgb_probs: np.ndarray | None
     lgb_probs: np.ndarray | None
     labels: np.ndarray | None
@@ -75,15 +78,20 @@ class OofAlignment:
 @dataclass(frozen=True)
 class WeightChoice:
     """Result of the XGB/LGB ensemble-weight sweep (weight is the XGB share)."""
+
     weight_xgb: float
     auc: float
 
 
-def select_threshold(probs: np.ndarray, labels: np.ndarray, preds: np.ndarray,
-                     *,
-                     grid: tuple[float, float, float] = (0.55, 0.85, 0.005),
-                     min_high_conf: int = 50,
-                     default_threshold: float = 0.60) -> ThresholdChoice:
+def select_threshold(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    preds: np.ndarray,
+    *,
+    grid: tuple[float, float, float] = (0.55, 0.85, 0.005),
+    min_high_conf: int = 50,
+    default_threshold: float = 0.60,
+) -> ThresholdChoice:
     """Scan ~60 candidate high-confidence thresholds and keep the best-scoring.
 
     MULTIPLE-TESTING FIX: this sweep tries ~60 candidate thresholds and keeps the
@@ -113,7 +121,8 @@ def select_threshold(probs: np.ndarray, labels: np.ndarray, preds: np.ndarray,
     best_score = 0
     for thresh in np.arange(*grid):
         hmask = (probs < (1 - thresh)) | (probs > thresh)
-        if hmask.sum() < min_high_conf: continue
+        if hmask.sum() < min_high_conf:
+            continue
         hacc = accuracy_score(labels[hmask], preds[hmask])
         hratio = hmask.sum() / len(labels)
         score = hacc * np.sqrt(hratio)
@@ -123,15 +132,19 @@ def select_threshold(probs: np.ndarray, labels: np.ndarray, preds: np.ndarray,
     return ThresholdChoice(threshold=best_threshold, score=best_score)
 
 
-def select_phase_thresholds(probs: np.ndarray, labels: np.ndarray,
-                            minutes_left: np.ndarray, market_price: np.ndarray,
-                            *,
-                            brackets: Sequence[tuple[str, float, float]] = PHASE_BRACKETS,
-                            edge_grid: tuple[float, float, float] = (0.02, 0.20, 0.005),
-                            prob_grid: tuple[float, float, float] = (0.52, 0.65, 0.005),
-                            min_phase_samples: int = 50,
-                            default_min_edge: float = 0.06,
-                            default_min_prob: float = 0.54) -> list[PhaseResult]:
+def select_phase_thresholds(
+    probs: np.ndarray,
+    labels: np.ndarray,
+    minutes_left: np.ndarray,
+    market_price: np.ndarray,
+    *,
+    brackets: Sequence[tuple[str, float, float]] = PHASE_BRACKETS,
+    edge_grid: tuple[float, float, float] = (0.02, 0.20, 0.005),
+    prob_grid: tuple[float, float, float] = (0.52, 0.65, 0.005),
+    min_phase_samples: int = 50,
+    default_min_edge: float = 0.06,
+    default_min_prob: float = 0.54,
+) -> list[PhaseResult]:
     """Sweep optimal (minEdge, minProb) per market phase.
 
     MULTIPLE-TESTING FIX (Sep 2026): this grid scores ~36x26 ~= 900 (minEdge,
@@ -169,11 +182,17 @@ def select_phase_thresholds(probs: np.ndarray, labels: np.ndarray,
         phase_mask = (ph_minutes > lo_min) & (ph_minutes <= hi_min)
         n_phase = int(phase_mask.sum())
         if n_phase < min_phase_samples:
-            results.append(PhaseResult(
-                phase=phase_name, selected=False, n_samples=n_phase,
-                min_edge=default_min_edge, min_prob=default_min_prob,
-                n_entries=0, accuracy=0.0,
-            ))
+            results.append(
+                PhaseResult(
+                    phase=phase_name,
+                    selected=False,
+                    n_samples=n_phase,
+                    min_edge=default_min_edge,
+                    min_prob=default_min_prob,
+                    n_entries=0,
+                    accuracy=0.0,
+                )
+            )
             continue
 
         p_probs = ph_prob[phase_mask]
@@ -207,19 +226,30 @@ def select_phase_thresholds(probs: np.ndarray, labels: np.ndarray,
         entry_mask = (p_edge_abs >= best_me) & (p_model_best >= best_mp)
         n_enter = int(entry_mask.sum())
         acc_val = float(p_correct[entry_mask].mean()) if n_enter > 0 else 0
-        results.append(PhaseResult(
-            phase=phase_name, selected=True, n_samples=n_phase,
-            min_edge=best_me, min_prob=best_mp,
-            n_entries=n_enter, accuracy=acc_val,
-        ))
+        results.append(
+            PhaseResult(
+                phase=phase_name,
+                selected=True,
+                n_samples=n_phase,
+                min_edge=best_me,
+                min_prob=best_mp,
+                n_entries=n_enter,
+                accuracy=acc_val,
+            )
+        )
 
     return results
 
 
-def align_oof_predictions(xgb_probs: np.ndarray, lgb_probs: np.ndarray,
-                          labels: np.ndarray,
-                          xgb_idx: np.ndarray, lgb_idx: np.ndarray,
-                          *, min_common: int = 100) -> OofAlignment:
+def align_oof_predictions(
+    xgb_probs: np.ndarray,
+    lgb_probs: np.ndarray,
+    labels: np.ndarray,
+    xgb_idx: np.ndarray,
+    lgb_idx: np.ndarray,
+    *,
+    min_common: int = 100,
+) -> OofAlignment:
     """Line up the two models' OOF predictions on their shared X_train rows.
 
     XGB and LGB OOF rows are produced by identical fold arithmetic (same
@@ -239,31 +269,45 @@ def align_oof_predictions(xgb_probs: np.ndarray, lgb_probs: np.ndarray,
     """
     if len(xgb_idx) == len(lgb_idx) and np.array_equal(xgb_idx, lgb_idx):
         return OofAlignment(
-            xgb_probs=xgb_probs, lgb_probs=lgb_probs, labels=np.asarray(labels),
-            identical=True, n_xgb=len(xgb_idx), n_lgb=len(lgb_idx),
+            xgb_probs=xgb_probs,
+            lgb_probs=lgb_probs,
+            labels=np.asarray(labels),
+            identical=True,
+            n_xgb=len(xgb_idx),
+            n_lgb=len(lgb_idx),
             n_common=len(xgb_idx),
         )
 
     common_idx, xgb_pos, lgb_pos = np.intersect1d(xgb_idx, lgb_idx, return_indices=True)
     if len(common_idx) >= min_common:
         return OofAlignment(
-            xgb_probs=xgb_probs[xgb_pos], lgb_probs=lgb_probs[lgb_pos],
+            xgb_probs=xgb_probs[xgb_pos],
+            lgb_probs=lgb_probs[lgb_pos],
             labels=np.asarray(labels)[xgb_pos],
-            identical=False, n_xgb=len(xgb_idx), n_lgb=len(lgb_idx),
+            identical=False,
+            n_xgb=len(xgb_idx),
+            n_lgb=len(lgb_idx),
             n_common=len(common_idx),
         )
     return OofAlignment(
-        xgb_probs=None, lgb_probs=None, labels=None,
-        identical=False, n_xgb=len(xgb_idx), n_lgb=len(lgb_idx),
+        xgb_probs=None,
+        lgb_probs=None,
+        labels=None,
+        identical=False,
+        n_xgb=len(xgb_idx),
+        n_lgb=len(lgb_idx),
         n_common=len(common_idx),
     )
 
 
-def select_ensemble_weights(xgb_probs: np.ndarray, lgb_probs: np.ndarray,
-                            labels: np.ndarray,
-                            *,
-                            grid: tuple[float, float, float] = (0.25, 0.80, 0.05),
-                            default_weight: float = 0.5) -> WeightChoice:
+def select_ensemble_weights(
+    xgb_probs: np.ndarray,
+    lgb_probs: np.ndarray,
+    labels: np.ndarray,
+    *,
+    grid: tuple[float, float, float] = (0.25, 0.80, 0.05),
+    default_weight: float = 0.5,
+) -> WeightChoice:
     """Score 11 candidate XGB/LGB blends by AUC and keep the best.
 
     MULTIPLE-TESTING FIX: 11 candidate weights were scored on the strict OOS

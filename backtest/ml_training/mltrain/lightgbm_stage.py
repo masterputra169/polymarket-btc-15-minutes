@@ -66,6 +66,7 @@ class LightGbmStageResult:
     "oof_cv", or the "holdout"/"test" fallbacks kept for degenerate CV — and is
     the same string exported as ensemble_metrics.weight_source.
     """
+
     accuracy: float
     auc: float
     n_trees: int
@@ -76,15 +77,18 @@ class LightGbmStageResult:
     weight_source: str
 
 
-def _resolve_lgb_params(X_train: np.ndarray, y_train: np.ndarray,
-                        w_train: np.ndarray | None,
-                        *,
-                        feature_cols: list[str],
-                        seed: int,
-                        embargo: int,
-                        n_folds: int,
-                        use_optuna: bool,
-                        log: Callable[..., None]) -> dict[str, Any]:
+def _resolve_lgb_params(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None,
+    *,
+    feature_cols: list[str],
+    seed: int,
+    embargo: int,
+    n_folds: int,
+    use_optuna: bool,
+    log: Callable[..., None],
+) -> dict[str, Any]:
     """Optuna-tuned LightGBM params, or the hand-tuned defaults.
 
     The study is scored by embargoed walk-forward CV AUC only (see
@@ -94,40 +98,48 @@ def _resolve_lgb_params(X_train: np.ndarray, y_train: np.ndarray,
         log(f"   Optuna optimization ({LGB_OPTUNA_TRIALS} trials, {n_folds}-fold CV)...")
         # seed + 1: the LGB study must not replay the XGBoost study's trial sequence.
         lgb_tuning = tune_lgb_params(
-            X_train, y_train, w_train,
-            feature_cols=feature_cols, seed=seed + 1, embargo=embargo,
+            X_train,
+            y_train,
+            w_train,
+            feature_cols=feature_cols,
+            seed=seed + 1,
+            embargo=embargo,
             n_folds=n_folds,
         )
         lgb_best_params = lgb_tuning.params
         log(f"   Best trial #{lgb_tuning.best_trial}: CV AUC = {lgb_tuning.best_value:.4f}")
-        log(f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in lgb_best_params.items() if k not in ['objective','metric','verbosity']})}")
+        log(
+            f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in lgb_best_params.items() if k not in ['objective','metric','verbosity']})}"
+        )
         return lgb_best_params
 
     # Default LightGBM params (no Optuna)
     lgb_best_params = default_lgb_params()
-    log(f"   Using default LightGBM params (no Optuna)")
+    log("   Using default LightGBM params (no Optuna)")
     return lgb_best_params
 
 
-def _select_ensemble_weight(*,
-                            xgb_oof_margins: np.ndarray,
-                            lgb_oof_margins: np.ndarray,
-                            xgb_oof_labels: np.ndarray,
-                            xgb_oof_idx: np.ndarray,
-                            lgb_oof_idx: np.ndarray,
-                            xgb_platt_a: float,
-                            xgb_platt_b: float,
-                            lgb_platt_a: float,
-                            lgb_platt_b: float,
-                            xgb_model: Any,
-                            xgb_dholdout: Any,
-                            lgb_model: Any,
-                            X_holdout: np.ndarray | None,
-                            y_holdout: np.ndarray | None,
-                            X_test: np.ndarray,
-                            y_test: np.ndarray,
-                            xgb_test_probs: np.ndarray,
-                            log: Callable[..., None]) -> tuple[float, str]:
+def _select_ensemble_weight(
+    *,
+    xgb_oof_margins: np.ndarray,
+    lgb_oof_margins: np.ndarray,
+    xgb_oof_labels: np.ndarray,
+    xgb_oof_idx: np.ndarray,
+    lgb_oof_idx: np.ndarray,
+    xgb_platt_a: float,
+    xgb_platt_b: float,
+    lgb_platt_a: float,
+    lgb_platt_b: float,
+    xgb_model: Any,
+    xgb_dholdout: Any,
+    lgb_model: Any,
+    X_holdout: np.ndarray | None,
+    y_holdout: np.ndarray | None,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    xgb_test_probs: np.ndarray,
+    log: Callable[..., None],
+) -> tuple[float, str]:
     """Pick the XGB blend weight, and report which split it was picked on.
 
     Audit fix H5, revised Sep 2026: the 11-candidate sweep and the OOF
@@ -153,25 +165,36 @@ def _select_ensemble_weight(*,
         xgb_oof_cal = platt_probs(xgb_oof_margins, xgb_platt_a, xgb_platt_b)
         lgb_oof_cal = platt_probs(lgb_oof_margins, lgb_platt_a, lgb_platt_b)
         ens_align = align_oof_predictions(
-            xgb_oof_cal, lgb_oof_cal, xgb_oof_labels, xgb_oof_idx, lgb_oof_idx,
+            xgb_oof_cal,
+            lgb_oof_cal,
+            xgb_oof_labels,
+            xgb_oof_idx,
+            lgb_oof_idx,
         )
         if ens_align.identical:
-            log(f"\n   Ensemble OOF alignment check: OK "
-                f"({len(xgb_oof_idx):,} rows, XGB/LGB fold arithmetic identical)")
+            log(
+                f"\n   Ensemble OOF alignment check: OK "
+                f"({len(xgb_oof_idx):,} rows, XGB/LGB fold arithmetic identical)"
+            )
         else:
-            log(f"\n   [WARN] Ensemble OOF rows misaligned (xgb={len(xgb_oof_idx)}, lgb={len(lgb_oof_idx)}) "
-                f"— re-aligning on {ens_align.n_common:,} common X_train row indices")
+            log(
+                f"\n   [WARN] Ensemble OOF rows misaligned (xgb={len(xgb_oof_idx)}, lgb={len(lgb_oof_idx)}) "
+                f"— re-aligning on {ens_align.n_common:,} common X_train row indices"
+            )
         ens_oof_xgb = ens_align.xgb_probs
         ens_oof_lgb = ens_align.lgb_probs
         ens_oof_labels = ens_align.labels
 
     if ens_oof_xgb is not None and len(ens_oof_xgb) >= 100:
         log(f"   Optimizing ensemble weights (on OOF CV predictions, {len(ens_oof_xgb):,} rows)...")
-        return select_ensemble_weights(ens_oof_xgb, ens_oof_lgb, ens_oof_labels).weight_xgb, "oof_cv"
+        return (
+            select_ensemble_weights(ens_oof_xgb, ens_oof_lgb, ens_oof_labels).weight_xgb,
+            "oof_cv",
+        )
 
     if X_holdout is not None and len(X_holdout) > 0:
         # Fallback (degenerate/misaligned CV only): legacy holdout selection
-        log(f"\n   Optimizing ensemble weights (on holdout — OOF unavailable)...")
+        log("\n   Optimizing ensemble weights (on holdout — OOF unavailable)...")
         xgb_margin_ho = xgb_model.predict(xgb_dholdout, output_margin=True)
         xgb_cal_ho = platt_probs(xgb_margin_ho, xgb_platt_a, xgb_platt_b)
         lgb_margin_ho = lgb_model.predict(X_holdout, raw_score=True)
@@ -179,7 +202,7 @@ def _select_ensemble_weight(*,
 
         return select_ensemble_weights(xgb_cal_ho, lgb_cal_ho, y_holdout).weight_xgb, "holdout"
 
-    log(f"\n   Optimizing ensemble weights (on test, no holdout)...")
+    log("\n   Optimizing ensemble weights (on test, no holdout)...")
     xgb_cal_test = xgb_test_probs
     lgb_margin_test = lgb_model.predict(X_test, raw_score=True)
     lgb_cal_test = platt_probs(lgb_margin_test, lgb_platt_a, lgb_platt_b)
@@ -187,38 +210,40 @@ def _select_ensemble_weight(*,
     return select_ensemble_weights(xgb_cal_test, lgb_cal_test, y_test).weight_xgb, "test"
 
 
-def run_lightgbm_stage(*,
-                       X_train: np.ndarray,
-                       y_train: np.ndarray,
-                       w_train: np.ndarray | None,
-                       X_final_train: np.ndarray,
-                       y_final_train: np.ndarray,
-                       w_train_final: np.ndarray | None,
-                       X_test: np.ndarray,
-                       y_test: np.ndarray,
-                       X_holdout: np.ndarray | None,
-                       y_holdout: np.ndarray | None,
-                       feature_cols: list[str],
-                       seed: int,
-                       embargo: int,
-                       n_folds: int,
-                       use_optuna: bool,
-                       xgb_model: Any,
-                       xgb_dholdout: Any,
-                       xgb_oof_margins: np.ndarray,
-                       xgb_oof_labels: np.ndarray,
-                       xgb_oof_idx: np.ndarray,
-                       xgb_platt_a: float,
-                       xgb_platt_b: float,
-                       xgb_test_probs: np.ndarray,
-                       xgb_accuracy: float,
-                       xgb_auc: float,
-                       norm: dict[str, Any],
-                       output_dir: str,
-                       strict_holdout: bool,
-                       num_boost_round: int = LGB_BOOST_ROUND,
-                       early_stopping: int = LGB_EARLY_STOPPING,
-                       log: Callable[..., None] = print) -> LightGbmStageResult:
+def run_lightgbm_stage(
+    *,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None,
+    X_final_train: np.ndarray,
+    y_final_train: np.ndarray,
+    w_train_final: np.ndarray | None,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    X_holdout: np.ndarray | None,
+    y_holdout: np.ndarray | None,
+    feature_cols: list[str],
+    seed: int,
+    embargo: int,
+    n_folds: int,
+    use_optuna: bool,
+    xgb_model: Any,
+    xgb_dholdout: Any,
+    xgb_oof_margins: np.ndarray,
+    xgb_oof_labels: np.ndarray,
+    xgb_oof_idx: np.ndarray,
+    xgb_platt_a: float,
+    xgb_platt_b: float,
+    xgb_test_probs: np.ndarray,
+    xgb_accuracy: float,
+    xgb_auc: float,
+    norm: dict[str, Any],
+    output_dir: str,
+    strict_holdout: bool,
+    num_boost_round: int = LGB_BOOST_ROUND,
+    early_stopping: int = LGB_EARLY_STOPPING,
+    log: Callable[..., None] = print,
+) -> LightGbmStageResult:
     """Train, calibrate, blend and export the LightGBM half of the ensemble.
 
     Steps run in a fixed order because each feeds the next: params -> final fit
@@ -251,14 +276,20 @@ def run_lightgbm_stage(*,
     """
     # --- LightGBM Hyperparameter Optimization ---
     lgb_best_params = _resolve_lgb_params(
-        X_train, y_train, w_train,
-        feature_cols=feature_cols, seed=seed, embargo=embargo, n_folds=n_folds,
-        use_optuna=use_optuna, log=log,
+        X_train,
+        y_train,
+        w_train,
+        feature_cols=feature_cols,
+        seed=seed,
+        embargo=embargo,
+        n_folds=n_folds,
+        use_optuna=use_optuna,
+        log=log,
     )
 
     # --- Train final LightGBM model ---
     # Use full training data; early stop on holdout (audit fix M-early)
-    log(f"   Training final LightGBM model...")
+    log("   Training final LightGBM model...")
 
     # Audit fix (May 2026 P6 follow-up): respect strict-holdout for LGB too
     if X_holdout is not None and len(X_holdout) > 0:
@@ -268,9 +299,15 @@ def run_lightgbm_stage(*,
         lgb_X_val, lgb_y_val = X_test, y_test
 
     lgb_model_final = train_final_lgb(
-        X_final_train, y_final_train, w_train_final, lgb_X_val, lgb_y_val,
-        lgb_best_params, feature_cols=feature_cols,
-        num_boost_round=num_boost_round, early_stopping=early_stopping,
+        X_final_train,
+        y_final_train,
+        w_train_final,
+        lgb_X_val,
+        lgb_y_val,
+        lgb_best_params,
+        feature_cols=feature_cols,
+        num_boost_round=num_boost_round,
+        early_stopping=early_stopping,
     )
 
     lgb_scores = evaluate_lgb(lgb_model_final, X_test, y_test)
@@ -278,25 +315,41 @@ def run_lightgbm_stage(*,
     log(f"   LightGBM: acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f} | trees={lgb_n_trees}")
 
     # --- LightGBM Platt Calibration (on raw logits — audit fix C4) ---
-    log(f"   LightGBM Platt calibration (on logits)...")
-    lgb_cv_auc, lgb_cv_acc, lgb_oof_preds, lgb_oof_margins, lgb_oof_labels, lgb_oof_idx = lgb_walk_forward_cv(
-        X_train, y_train, lgb_best_params, w_train, n_folds, return_preds=True,
-        feature_cols=feature_cols, embargo=embargo,
-        num_boost_round=num_boost_round, early_stopping=early_stopping,
+    log("   LightGBM Platt calibration (on logits)...")
+    lgb_cv_auc, lgb_cv_acc, _lgb_oof_preds, lgb_oof_margins, lgb_oof_labels, lgb_oof_idx = (
+        lgb_walk_forward_cv(
+            X_train,
+            y_train,
+            lgb_best_params,
+            w_train,
+            n_folds,
+            return_preds=True,
+            feature_cols=feature_cols,
+            embargo=embargo,
+            num_boost_round=num_boost_round,
+            early_stopping=early_stopping,
+        )
     )
     log(f"   LGB CV AUC: {lgb_cv_auc:.4f} | CV acc: {lgb_cv_acc*100:.1f}%")
 
     lgb_calibrator = fit_lgb_platt(
-        lgb_model_final, X_test, y_test, lgb_oof_margins, lgb_oof_labels, raw_auc=lgb_auc,
+        lgb_model_final,
+        X_test,
+        y_test,
+        lgb_oof_margins,
+        lgb_oof_labels,
+        raw_auc=lgb_auc,
     )
     lgb_platt_a, lgb_platt_b = lgb_calibrator.a, lgb_calibrator.b
     lgb_platt_on_logits = lgb_calibrator.on_logits
     if lgb_calibrator.fitted:
         if not lgb_calibrator.kept:
-            log(f"   [WARN] LGB calibration hurts AUC, disabling")
+            log("   [WARN] LGB calibration hurts AUC, disabling")
         else:
             log(f"   LGB Platt (on logits): A={lgb_platt_a:.4f}, B={lgb_platt_b:.4f}")
-            log(f"   LGB calibrated: acc={lgb_calibrator.cal_accuracy*100:.1f}% | AUC={lgb_calibrator.cal_auc:.4f}")
+            log(
+                f"   LGB calibrated: acc={lgb_calibrator.cal_accuracy*100:.1f}% | AUC={lgb_calibrator.cal_auc:.4f}"
+            )
 
     # Exported Brier/calibration must reflect the probabilities inference uses:
     # apply the FINAL Platt transform (identity when calibration was skipped or
@@ -310,13 +363,23 @@ def run_lightgbm_stage(*,
 
     # --- Ensemble Weight Optimization (on OOF CV preds — audit fix H5, revised Sep 2026) ---
     best_ens_w, sweep_label = _select_ensemble_weight(
-        xgb_oof_margins=xgb_oof_margins, lgb_oof_margins=lgb_oof_margins,
-        xgb_oof_labels=xgb_oof_labels, xgb_oof_idx=xgb_oof_idx, lgb_oof_idx=lgb_oof_idx,
-        xgb_platt_a=xgb_platt_a, xgb_platt_b=xgb_platt_b,
-        lgb_platt_a=lgb_platt_a, lgb_platt_b=lgb_platt_b,
-        xgb_model=xgb_model, xgb_dholdout=xgb_dholdout, lgb_model=lgb_model_final,
-        X_holdout=X_holdout, y_holdout=y_holdout,
-        X_test=X_test, y_test=y_test, xgb_test_probs=xgb_test_probs,
+        xgb_oof_margins=xgb_oof_margins,
+        lgb_oof_margins=lgb_oof_margins,
+        xgb_oof_labels=xgb_oof_labels,
+        xgb_oof_idx=xgb_oof_idx,
+        lgb_oof_idx=lgb_oof_idx,
+        xgb_platt_a=xgb_platt_a,
+        xgb_platt_b=xgb_platt_b,
+        lgb_platt_a=lgb_platt_a,
+        lgb_platt_b=lgb_platt_b,
+        xgb_model=xgb_model,
+        xgb_dholdout=xgb_dholdout,
+        lgb_model=lgb_model_final,
+        X_holdout=X_holdout,
+        y_holdout=y_holdout,
+        X_test=X_test,
+        y_test=y_test,
+        xgb_test_probs=xgb_test_probs,
         log=log,
     )
 
@@ -338,17 +401,19 @@ def run_lightgbm_stage(*,
     log(f"   XGB weight: {ens_weight_xgb} | LGB weight: {ens_weight_lgb}")
     log(f"   XGB only:   acc={xgb_accuracy*100:.1f}% | AUC={xgb_auc:.4f}")
     log(f"   LGB only:   acc={lgb_acc*100:.1f}% | AUC={lgb_auc:.4f}")
-    log(f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f} | ECE={ens_calibration['ece']:.4f}")
+    log(
+        f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f} | ECE={ens_calibration['ece']:.4f}"
+    )
 
     # --- Export LightGBM model ---
-    log(f"\n   Exporting LightGBM model...")
+    log("\n   Exporting LightGBM model...")
     lgb_dump = lgb_model_final.dump_model()
 
     # Compute init_score for browser inference
     lgb_init_score = compute_init_score(y_train, w_train)
 
     # C2: Use len(sliced_trees) for num_trees to avoid off-by-one
-    sliced_tree_info = lgb_dump['tree_info'][:lgb_n_trees]
+    sliced_tree_info = lgb_dump["tree_info"][:lgb_n_trees]
     lgb_browser = build_lgb_browser_model(
         sliced_tree_info,
         feature_cols=feature_cols,
@@ -362,11 +427,11 @@ def run_lightgbm_stage(*,
         calibration=lgb_calibration,
         cv_auc=lgb_cv_auc,
         cv_acc=lgb_cv_acc,
-        ensemble_weights={'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
+        ensemble_weights={"xgb": ens_weight_xgb, "lgb": ens_weight_lgb},
     )
 
-    lgb_path = os.path.join(output_dir, 'lightgbm_model.json')
-    with open(lgb_path, 'w') as f:
+    lgb_path = os.path.join(output_dir, "lightgbm_model.json")
+    with open(lgb_path, "w") as f:
         json.dump(lgb_browser, f)
     lgb_mb = os.path.getsize(lgb_path) / 1024 / 1024
     log(f"   LGB model: {lgb_path} ({lgb_mb:.1f} MB)")
@@ -378,36 +443,36 @@ def run_lightgbm_stage(*,
     # in build_norm_export's payload) while leaving the caller's dict untouched.
     norm_with_ensemble = {
         **norm,
-        'ensemble_weights': {'xgb': ens_weight_xgb, 'lgb': ens_weight_lgb},
-        'ensemble_metrics': {
-            'accuracy': round(ens_acc, 4),
-            'auc': round(ens_auc_final, 4),
-            'logloss': round(ens_logloss, 4),
-            'brier': round(ens_brier, 4),
-            'calibration_ece': safe_round(ens_calibration['ece']),
-            'calibration_mce': safe_round(ens_calibration['mce']),
-            'weight_source': sweep_label,
-            'test_samples': int(len(y_test)),
-            'holdout_samples': int(len(y_holdout)) if y_holdout is not None else 0,
-            'strict_holdout': bool(strict_holdout),
+        "ensemble_weights": {"xgb": ens_weight_xgb, "lgb": ens_weight_lgb},
+        "ensemble_metrics": {
+            "accuracy": round(ens_acc, 4),
+            "auc": round(ens_auc_final, 4),
+            "logloss": round(ens_logloss, 4),
+            "brier": round(ens_brier, 4),
+            "calibration_ece": safe_round(ens_calibration["ece"]),
+            "calibration_mce": safe_round(ens_calibration["mce"]),
+            "weight_source": sweep_label,
+            "test_samples": len(y_test),
+            "holdout_samples": len(y_holdout) if y_holdout is not None else 0,
+            "strict_holdout": bool(strict_holdout),
         },
-        'lgb_platt_a': lgb_platt_a,
-        'lgb_platt_b': lgb_platt_b,
-        'lgb_platt_on_logits': lgb_platt_on_logits,
+        "lgb_platt_a": lgb_platt_a,
+        "lgb_platt_b": lgb_platt_b,
+        "lgb_platt_on_logits": lgb_platt_on_logits,
     }
 
-    with open(os.path.join(output_dir, 'norm_browser.json'), 'w') as f:
+    with open(os.path.join(output_dir, "norm_browser.json"), "w") as f:
         json.dump(norm_with_ensemble, f, indent=2)
-    log(f"   Updated norm_browser.json with ensemble weights")
+    log("   Updated norm_browser.json with ensemble weights")
 
     # --- Verify browser inference consistency ---
-    log(f"\n   Verifying LGB browser inference...")
+    log("\n   Verifying LGB browser inference...")
     max_diff = verify_browser_inference(lgb_model_final, sliced_tree_info, lgb_init_score, X_test)
     log(f"   Max raw score diff (model vs manual): {max_diff:.8f}")
     if max_diff > 0.01:
-        log(f"   [WARN] Large inference discrepancy! Browser predictions may differ.")
+        log("   [WARN] Large inference discrepancy! Browser predictions may differ.")
     else:
-        log(f"   [OK] Browser inference verified")
+        log("   [OK] Browser inference verified")
 
     return LightGbmStageResult(
         accuracy=lgb_acc,

@@ -39,7 +39,9 @@ class TestSelectThreshold:
         assert 0.55 <= choice.threshold <= 0.85
         assert choice.score > 0
 
-    def test_falls_back_to_default_when_no_candidate_qualifies(self, rng: np.random.Generator) -> None:
+    def test_falls_back_to_default_when_no_candidate_qualifies(
+        self, rng: np.random.Generator
+    ) -> None:
         # Fewer rows than min_high_conf => nothing may be selected.
         probs, labels, preds = _confident(10, True, rng)
         choice = select_threshold(probs, labels, preds, min_high_conf=50)
@@ -84,7 +86,9 @@ class TestSelectPhaseThresholds:
                 assert 0.02 <= r.min_edge <= 0.2
                 assert 0.52 <= r.min_prob <= 0.65
 
-    def test_sparse_phase_is_not_selected_and_keeps_defaults(self, rng: np.random.Generator) -> None:
+    def test_sparse_phase_is_not_selected_and_keeps_defaults(
+        self, rng: np.random.Generator
+    ) -> None:
         # Only EARLY rows present => other phases must report unselected defaults
         # rather than fitting an entry rule to a handful of samples.
         probs, labels, minutes, market = self._phase_inputs(rng, n=400)
@@ -148,7 +152,7 @@ class TestSelectEnsembleWeights:
         n = 800
         labels = (rng.uniform(size=n) < 0.5).astype(int)
         strong = np.clip(labels + rng.normal(0, 0.15, size=n), 0.01, 0.99)  # informative
-        noise = rng.uniform(size=n)                                         # useless
+        noise = rng.uniform(size=n)  # useless
         assert select_ensemble_weights(strong, noise, labels).weight_xgb > 0.6
         assert select_ensemble_weights(noise, strong, labels).weight_xgb < 0.4
 

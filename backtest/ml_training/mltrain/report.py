@@ -15,27 +15,29 @@ import json
 from mltrain.export import XgbEvalMetrics
 
 
-def build_training_report(metrics: XgbEvalMetrics,
-                          *,
-                          use_optuna: bool,
-                          tune_trials: int,
-                          winner: str,
-                          threshold: float,
-                          n_trees: int,
-                          feature_cols: list[str],
-                          feature_cols_orig: list[str],
-                          engineered_features: list[str],
-                          platt_a: float,
-                          platt_b: float,
-                          pruned_features: list[str],
-                          zero_features: list[str],
-                          pre_excluded_features: list[str],
-                          recency_enabled: bool,
-                          recency_halflife: int,
-                          cv_folds: int,
-                          num_boost_round: int,
-                          early_stopping: int,
-                          params: dict[str, object]) -> list[str]:
+def build_training_report(
+    metrics: XgbEvalMetrics,
+    *,
+    use_optuna: bool,
+    tune_trials: int,
+    winner: str,
+    threshold: float,
+    n_trees: int,
+    feature_cols: list[str],
+    feature_cols_orig: list[str],
+    engineered_features: list[str],
+    platt_a: float,
+    platt_b: float,
+    pruned_features: list[str],
+    zero_features: list[str],
+    pre_excluded_features: list[str],
+    recency_enabled: bool,
+    recency_halflife: int,
+    cv_folds: int,
+    num_boost_round: int,
+    early_stopping: int,
+    params: dict[str, object],
+) -> list[str]:
     """Build training_report.txt as a list of lines (no trailing newline).
 
     The "Overfit gaps" line substitutes 0 for a missing test-holdout gap so the
@@ -43,7 +45,7 @@ def build_training_report(metrics: XgbEvalMetrics,
     same case as null instead, which is what the deploy gates check.
     """
     return [
-        f"=== XGBoost v9 Training Report ===",
+        "=== XGBoost v9 Training Report ===",
         f"Method: {'Optuna (' + str(tune_trials) + ' trials)' if use_optuna else 'Grid search (8 configs)'}",
         f"Winner: {winner}",
         f"Accuracy: {metrics.accuracy*100:.2f}% | AUC: {metrics.auc:.4f}",
@@ -58,6 +60,6 @@ def build_training_report(metrics: XgbEvalMetrics,
         f"Pre-excluded: {', '.join(pre_excluded_features) if pre_excluded_features else 'none'}",
         f"Recency: {'half-life=' + str(recency_halflife) + 'd' if recency_enabled else 'off'}",
         f"CV folds: {cv_folds} | Boost rounds: {num_boost_round} | Early stopping: {early_stopping}",
-        f"",
+        "",
         f"Params: {json.dumps({k:v for k,v in params.items() if k not in ['objective','eval_metric','tree_method','seed']}, indent=2)}",
     ]

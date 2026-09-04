@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  typescript:
+    name: TypeScript (typecheck, tests, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  python-ml:
+    name: ML pipeline (lint, format, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backtest/ml_training
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt ruff black
+      - name: Lint
+        run: python -m ruff check mltrain/ tests/ trainXGBoost_v3.py
+      - name: Format check
+        run: python -m black --check mltrain/ tests/ trainXGBoost_v3.py
+      - name: Tests with coverage
+        # The training modules gate real-money model deploys — keep them covered.
+        run: python -m pytest tests/ -q --cov=mltrain --cov-report=term-missing --cov-fail-under=90

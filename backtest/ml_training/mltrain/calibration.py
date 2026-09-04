@@ -34,7 +34,7 @@ import xgboost as xgb
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, roc_auc_score
 
-MIN_OOF_MARGINS = 100        # below this the fit is noise; ship the identity
+MIN_OOF_MARGINS = 100  # below this the fit is noise; ship the identity
 AUC_REGRESSION_TOLERANCE = 0.005  # AUC drop that disables the calibrator
 
 
@@ -49,6 +49,7 @@ class CalibrationResult:
     `eval_label` names where the keep/revert decision was taken ("holdout" or
     "test") for the exported validation block.
     """
+
     a: float
     b: float
     on_logits: bool
@@ -60,16 +61,18 @@ class CalibrationResult:
     holdout_auc: float | None
 
 
-def calibrate_platt(model: xgb.Booster,
-                    *,
-                    oof_margins: np.ndarray,
-                    oof_labels: np.ndarray,
-                    dtest: xgb.DMatrix,
-                    y_test: np.ndarray,
-                    y_prob: np.ndarray,
-                    dholdout: xgb.DMatrix | None,
-                    y_holdout: np.ndarray | None,
-                    log: Callable[..., None] = print) -> CalibrationResult:
+def calibrate_platt(
+    model: xgb.Booster,
+    *,
+    oof_margins: np.ndarray,
+    oof_labels: np.ndarray,
+    dtest: xgb.DMatrix,
+    y_test: np.ndarray,
+    y_prob: np.ndarray,
+    dholdout: xgb.DMatrix | None,
+    y_holdout: np.ndarray | None,
+    log: Callable[..., None] = print,
+) -> CalibrationResult:
     """Fit sigmoid(A*logit + B) on OOF margins, then keep it only if AUC holds.
 
     Args:
@@ -92,13 +95,13 @@ def calibrate_platt(model: xgb.Booster,
     # This is the correct way: sigmoid(A*logit + B) gives properly calibrated probs
     platt_a, platt_b = 1.0, 0.0  # defaults (identity)
     platt_on_logits = True  # flag for browser inference
-    eval_label = 'test'  # where calibration was evaluated (overwritten below when holdout is used)
+    eval_label = "test"  # where calibration was evaluated (overwritten below when holdout is used)
     fitted = False
     kept = False
 
     if len(oof_margins) > MIN_OOF_MARGINS:
         fitted = True
-        lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
+        lr = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
         lr.fit(oof_margins.reshape(-1, 1), oof_labels)
         platt_a = float(lr.coef_[0][0])
         platt_b = float(lr.intercept_[0])
@@ -134,7 +137,7 @@ def calibrate_platt(model: xgb.Booster,
             platt_a, platt_b = 1.0, 0.0
             y_prob_final = y_prob
         else:
-            log(f"   [OK] Platt-on-logits calibration active")
+            log("   [OK] Platt-on-logits calibration active")
             kept = True
             y_prob_final = y_prob_calibrated  # calibrated test probs for final eval
     else:
@@ -155,12 +158,18 @@ def calibrate_platt(model: xgb.Booster,
         final_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * final_margin_ho + platt_b)))
         final_holdout_acc = float(accuracy_score(y_holdout, (final_prob_ho >= 0.5).astype(int)))
         final_holdout_auc = float(roc_auc_score(y_holdout, final_prob_ho))
-        log(f"   Final holdout (final model + final Platt): "
-            f"acc={final_holdout_acc*100:.1f}% | AUC={final_holdout_auc:.4f}")
+        log(
+            f"   Final holdout (final model + final Platt): "
+            f"acc={final_holdout_acc*100:.1f}% | AUC={final_holdout_auc:.4f}"
+        )
 
     return CalibrationResult(
-        a=platt_a, b=platt_b, on_logits=platt_on_logits,
-        fitted=fitted, kept=kept, eval_label=eval_label,
+        a=platt_a,
+        b=platt_b,
+        on_logits=platt_on_logits,
+        fitted=fitted,
+        kept=kept,
+        eval_label=eval_label,
         probabilities=y_prob_final,
         holdout_accuracy=final_holdout_acc,
         holdout_auc=final_holdout_auc,

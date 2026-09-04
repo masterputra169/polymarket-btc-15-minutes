@@ -39,6 +39,7 @@ class SearchResult:
     recomputes both against the winner anyway). `n_trials` is None on the grid
     path, where there are no trials — only the 8 fixed configs.
     """
+
     config: Mapping[str, float]
     name: str
     cv_auc: float
@@ -46,16 +47,19 @@ class SearchResult:
     n_trials: int | None
 
 
-def search_hyperparameters(X_train: np.ndarray, y_train: np.ndarray,
-                           w_train: np.ndarray | None,
-                           *,
-                           cv_fn: Callable[..., tuple],
-                           feat_weights: np.ndarray | None,
-                           use_optuna: bool,
-                           n_trials: int,
-                           seed: int,
-                           n_folds: int,
-                           log: Callable[..., None] = print) -> SearchResult:
+def search_hyperparameters(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None,
+    *,
+    cv_fn: Callable[..., tuple],
+    feat_weights: np.ndarray | None,
+    use_optuna: bool,
+    n_trials: int,
+    seed: int,
+    n_folds: int,
+    log: Callable[..., None] = print,
+) -> SearchResult:
     """Pick the XGBoost hyperparameters, by Optuna when available or by grid.
 
     Args:
@@ -87,14 +91,14 @@ def search_hyperparameters(X_train: np.ndarray, y_train: np.ndarray,
 
         def objective(trial) -> float:
             cfg = {
-                'max_depth': trial.suggest_int('max_depth', 3, 7),
-                'learning_rate': trial.suggest_float('learning_rate', 0.008, 0.2, log=True),
-                'subsample': trial.suggest_float('subsample', 0.6, 0.95),
-                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 0.95),
-                'min_child_weight': trial.suggest_int('min_child_weight', 2, 15),
-                'gamma': trial.suggest_float('gamma', 0.0, 0.5),
-                'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 2.0, log=True),
-                'reg_lambda': trial.suggest_float('reg_lambda', 0.3, 6.0),
+                "max_depth": trial.suggest_int("max_depth", 3, 7),
+                "learning_rate": trial.suggest_float("learning_rate", 0.008, 0.2, log=True),
+                "subsample": trial.suggest_float("subsample", 0.6, 0.95),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 0.95),
+                "min_child_weight": trial.suggest_int("min_child_weight", 2, 15),
+                "gamma": trial.suggest_float("gamma", 0.0, 0.5),
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 2.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 0.3, 6.0),
             }
             cv_auc, _ = cv_fn(X_train, y_train, cfg, w_train, feat_weights=feat_weights)
             if np.isnan(cv_auc) or cv_auc == 0:
@@ -102,12 +106,12 @@ def search_hyperparameters(X_train: np.ndarray, y_train: np.ndarray,
             return cv_auc
 
         study = optuna.create_study(
-            direction='maximize',
+            direction="maximize",
             sampler=optuna.samplers.TPESampler(seed=seed),
         )
 
         # Seed with 8 hand-tuned configs so Optuna starts smart
-        for name, cfg in configs.items():
+        for cfg in configs.values():
             study.enqueue_trial({key: cfg[key] for key in SEED_CONFIG_KEYS})
 
         study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
@@ -115,17 +119,27 @@ def search_hyperparameters(X_train: np.ndarray, y_train: np.ndarray,
         best_cfg = study.best_trial.params
         best_cfg_name = f"Optuna_trial_{study.best_trial.number}"
         log(f"   Best trial #{study.best_trial.number}: CV AUC = {study.best_value:.4f}")
-        log(f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in best_cfg.items()})}")
+        log(
+            f"   Params: {json.dumps({k: round(v,4) if isinstance(v,float) else v for k,v in best_cfg.items()})}"
+        )
 
         # Show top 5 trials
-        log(f"\n   Top 5 trials:")
-        trials_sorted = sorted(study.trials, key=lambda t: t.value if t.value is not None else 0, reverse=True)
+        log("\n   Top 5 trials:")
+        trials_sorted = sorted(
+            study.trials, key=lambda t: t.value if t.value is not None else 0, reverse=True
+        )
         for t in trials_sorted[:5]:
-            log(f"     #{t.number}: AUC={t.value:.4f} | depth={t.params.get('max_depth')} lr={t.params.get('learning_rate',0):.4f} lambda={t.params.get('reg_lambda',0):.2f}")
+            log(
+                f"     #{t.number}: AUC={t.value:.4f} | depth={t.params.get('max_depth')} lr={t.params.get('learning_rate',0):.4f} lambda={t.params.get('reg_lambda',0):.2f}"
+            )
 
-        return SearchResult(config=best_cfg, name=best_cfg_name,
-                            cv_auc=float(study.best_value), cv_acc=None,
-                            n_trials=len(study.trials))
+        return SearchResult(
+            config=best_cfg,
+            name=best_cfg_name,
+            cv_auc=float(study.best_value),
+            cv_acc=None,
+            n_trials=len(study.trials),
+        )
 
     # --- Grid Search (8 fixed configs) ---
     log(f"[5/8] Training 8 configs with {n_folds}-fold walk-forward CV...")
@@ -133,15 +147,18 @@ def search_hyperparameters(X_train: np.ndarray, y_train: np.ndarray,
     cv_results = {}
     for name, cfg in configs.items():
         cv_auc, cv_acc = cv_fn(X_train, y_train, cfg, w_train, feat_weights=feat_weights)
-        cv_results[name] = {'auc': cv_auc, 'acc': cv_acc}
+        cv_results[name] = {"auc": cv_auc, "acc": cv_acc}
         log(f"   {name}: CV acc={cv_acc*100:.1f}% | CV AUC={cv_auc:.4f}")
 
     # Pick best by CV AUC
-    best_cfg_name = max(cv_results, key=lambda n: cv_results[n]['auc'])
+    best_cfg_name = max(cv_results, key=lambda n: cv_results[n]["auc"])
     best_cfg = configs[best_cfg_name]
     log(f"\n   >>> Best config: {best_cfg_name} (CV AUC={cv_results[best_cfg_name]['auc']:.4f})")
 
-    return SearchResult(config=best_cfg, name=best_cfg_name,
-                        cv_auc=cv_results[best_cfg_name]['auc'],
-                        cv_acc=cv_results[best_cfg_name]['acc'],
-                        n_trials=None)
+    return SearchResult(
+        config=best_cfg,
+        name=best_cfg_name,
+        cv_auc=cv_results[best_cfg_name]["auc"],
+        cv_acc=cv_results[best_cfg_name]["acc"],
+        n_trials=None,
+    )

@@ -26,9 +26,9 @@ import numpy as np
 # Regime name -> the one-hot base feature that marks it. Order fixes the order
 # of the trainer's per-regime report lines.
 REGIME_FEATURES: tuple[tuple[str, str], ...] = (
-    ('trending', 'regime_trending'),
-    ('mean_rev', 'regime_mean_reverting'),
-    ('moderate', 'regime_moderate'),
+    ("trending", "regime_trending"),
+    ("mean_rev", "regime_mean_reverting"),
+    ("moderate", "regime_moderate"),
 )
 
 
@@ -40,6 +40,7 @@ class SessionWeighting:
     the factor every weight was divided by, so a value far from 1.0 means the
     session mix shifted the effective sample count before renormalisation.
     """
+
     weights: np.ndarray
     n_us: int
     n_overlap: int
@@ -79,8 +80,9 @@ def recency_weights(n_train: int, *, days: int, halflife: int) -> np.ndarray:
     return recency_weight.astype(np.float32)
 
 
-def apply_session_weights(w_train: np.ndarray | None, X_train: np.ndarray,
-                          fi: dict[str, int]) -> SessionWeighting:
+def apply_session_weights(
+    w_train: np.ndarray | None, X_train: np.ndarray, fi: dict[str, int]
+) -> SessionWeighting:
     """Multiply per-session factors into `w_train`, then renormalise to mean 1.0.
 
     `w_train` is copied, never mutated: the caller's recency array stays intact
@@ -98,9 +100,9 @@ def apply_session_weights(w_train: np.ndarray | None, X_train: np.ndarray,
     else:
         w_train = w_train.copy()
     # Feature indices from fi lookup (X_orig columns = same indices in X since engineered appended)
-    sess_us_idx  = fi.get('session_us')       # index 22
-    sess_ov_idx  = fi.get('session_overlap')  # index 23
-    sess_asia_idx = fi.get('session_asia')    # index 20
+    sess_us_idx = fi.get("session_us")  # index 22
+    sess_ov_idx = fi.get("session_overlap")  # index 23
+    sess_asia_idx = fi.get("session_asia")  # index 20
     n_us = n_ov = n_asia = 0
     if sess_us_idx is not None:
         us_mask = X_train[:, sess_us_idx] > 0.5
@@ -126,13 +128,16 @@ def apply_session_weights(w_train: np.ndarray | None, X_train: np.ndarray,
     )
 
 
-def build_sample_weights(X_train: np.ndarray, fi: dict[str, int],
-                         *,
-                         use_recency: bool,
-                         days: int,
-                         halflife: int,
-                         use_session: bool,
-                         log: Callable[[str], None] = print) -> np.ndarray | None:
+def build_sample_weights(
+    X_train: np.ndarray,
+    fi: dict[str, int],
+    *,
+    use_recency: bool,
+    days: int,
+    halflife: int,
+    use_session: bool,
+    log: Callable[[str], None] = print,
+) -> np.ndarray | None:
     """Compose the enabled weighting schemes, or None when both are off.
 
     None (rather than an array of ones) is deliberate: XGBoost/LightGBM skip
@@ -144,12 +149,14 @@ def build_sample_weights(X_train: np.ndarray, fi: dict[str, int],
     if use_recency:
         w_train = recency_weights(len(X_train), days=days, halflife=halflife)
         log(f"   Recency weighting: half-life={halflife}d")
-        log(f"     Oldest sample weight: {w_train[0]:.3f} | Newest: {w_train[-1]:.3f} | Mean: {w_train.mean():.3f}")
+        log(
+            f"     Oldest sample weight: {w_train[0]:.3f} | Newest: {w_train[-1]:.3f} | Mean: {w_train.mean():.3f}"
+        )
 
     if use_session:
         sw = apply_session_weights(w_train, X_train, fi)
         w_train = sw.weights
-        log(f"   Session weighting applied:")
+        log("   Session weighting applied:")
         log(f"     US ×1.5       : {sw.n_us:,} samples")
         log(f"     Overlap ×1.3  : {sw.n_overlap:,} samples")
         log(f"     Asia ×0.8     : {sw.n_asia:,} samples")
@@ -158,10 +165,12 @@ def build_sample_weights(X_train: np.ndarray, fi: dict[str, int],
     return w_train
 
 
-def build_feature_weights(feature_cols: list[str],
-                          exclude_feature_names: Sequence[str],
-                          *,
-                          log: Callable[[str], None] = print) -> np.ndarray:
+def build_feature_weights(
+    feature_cols: list[str],
+    exclude_feature_names: Sequence[str],
+    *,
+    log: Callable[[str], None] = print,
+) -> np.ndarray:
     """Per-feature split weights: 0.0 excludes a column from every tree.
 
     Note these only take effect when `colsample_bytree < 1.0`; every caller

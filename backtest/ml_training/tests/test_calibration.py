@@ -56,18 +56,27 @@ def _build(*, oof_sign: float, n_oof: int = 200, with_holdout: bool = True):
     y_prob = 1.0 / (1.0 + np.exp(-test_margins))
 
     return dict(
-        model=model, oof_margins=oof_margins, oof_labels=oof_labels,
-        dtest=dtest, y_test=y_test, y_prob=y_prob,
+        model=model,
+        oof_margins=oof_margins,
+        oof_labels=oof_labels,
+        dtest=dtest,
+        y_test=y_test,
+        y_prob=y_prob,
         dholdout=dholdout if with_holdout else None,
         y_holdout=y_holdout if with_holdout else None,
     )
 
 
 def _run(**overrides):
-    kw = _build(**{k: overrides.pop(k) for k in list(overrides)
-                   if k in ('oof_sign', 'n_oof', 'with_holdout')})
+    kw = _build(
+        **{
+            k: overrides.pop(k)
+            for k in list(overrides)
+            if k in ("oof_sign", "n_oof", "with_holdout")
+        }
+    )
     kw.update(overrides)
-    model = kw.pop('model')
+    model = kw.pop("model")
     return calibrate_platt(model, log=lambda *a, **k: None, **kw)
 
 
@@ -77,7 +86,7 @@ class TestFittedAndKept:
         assert result.fitted is True and result.kept is True
         assert result.a > 0
         assert result.on_logits is True
-        assert result.eval_label == 'holdout'
+        assert result.eval_label == "holdout"
 
     def test_shipped_probabilities_use_the_fitted_transform(self) -> None:
         result = _run(oof_sign=1.0)
@@ -92,7 +101,7 @@ class TestFittedAndKept:
 
     def test_decision_falls_back_to_test_without_a_holdout(self) -> None:
         result = _run(oof_sign=1.0, with_holdout=False)
-        assert result.eval_label == 'test'
+        assert result.eval_label == "test"
         assert result.holdout_accuracy is None
         assert result.holdout_auc is None
 
@@ -105,8 +114,8 @@ class TestRevertRule:
 
     def test_reverted_run_ships_the_raw_probabilities(self) -> None:
         built = _build(oof_sign=-1.0)
-        raw = built['y_prob']
-        model = built.pop('model')
+        raw = built["y_prob"]
+        model = built.pop("model")
         result = calibrate_platt(model, log=lambda *a, **k: None, **built)
         assert result.probabilities is raw
 
@@ -121,7 +130,7 @@ class TestSkippedFit:
         result = _run(oof_sign=1.0, n_oof=MIN_OOF_MARGINS)
         assert result.fitted is False and result.kept is False
         assert (result.a, result.b) == (1.0, 0.0)
-        assert result.eval_label == 'test', "no decision was taken"
+        assert result.eval_label == "test", "no decision was taken"
 
     def test_skipped_fit_still_reports_final_holdout_metrics(self) -> None:
         result = _run(oof_sign=1.0, n_oof=MIN_OOF_MARGINS)
@@ -130,6 +139,6 @@ class TestSkippedFit:
     def test_logs_the_skip_reason(self) -> None:
         lines: list[str] = []
         built = _build(oof_sign=1.0, n_oof=MIN_OOF_MARGINS)
-        model = built.pop('model')
+        model = built.pop("model")
         calibrate_platt(model, log=lines.append, **built)
-        assert any('skipping calibration' in line for line in lines)
+        assert any("skipping calibration" in line for line in lines)

@@ -45,6 +45,7 @@ class PruningResult:
     `test_probs` carries the pruned model's test predictions when it was kept
     (None otherwise, meaning the caller's existing `y_prob` still applies).
     """
+
     model: xgb.Booster
     pruned_features: list[str]
     pruned_model_kept: bool
@@ -58,29 +59,31 @@ class PruningResult:
     baseline_auc: float | None
 
 
-def evaluate_pruning(model: xgb.Booster,
-                     *,
-                     feature_cols: Sequence[str],
-                     cv_fn: Callable[..., tuple],
-                     X_train: np.ndarray,
-                     y_train: np.ndarray,
-                     w_train: np.ndarray | None,
-                     best_cfg: Mapping[str, float],
-                     feat_weights: np.ndarray | None,
-                     pre_exclude_fw: np.ndarray,
-                     has_pre_excluded: bool,
-                     final_params: Mapping[str, object],
-                     X_final_train: np.ndarray,
-                     y_final_train: np.ndarray,
-                     w_train_final: np.ndarray | None,
-                     num_boost_round: int,
-                     early_stopping: int,
-                     dtest: xgb.DMatrix,
-                     y_test: np.ndarray,
-                     dholdout: xgb.DMatrix | None,
-                     y_holdout: np.ndarray | None,
-                     initial_auc: float,
-                     log: Callable[..., None] = print) -> PruningResult:
+def evaluate_pruning(
+    model: xgb.Booster,
+    *,
+    feature_cols: Sequence[str],
+    cv_fn: Callable[..., tuple],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None,
+    best_cfg: Mapping[str, float],
+    feat_weights: np.ndarray | None,
+    pre_exclude_fw: np.ndarray,
+    has_pre_excluded: bool,
+    final_params: Mapping[str, object],
+    X_final_train: np.ndarray,
+    y_final_train: np.ndarray,
+    w_train_final: np.ndarray | None,
+    num_boost_round: int,
+    early_stopping: int,
+    dtest: xgb.DMatrix,
+    y_test: np.ndarray,
+    dholdout: xgb.DMatrix | None,
+    y_holdout: np.ndarray | None,
+    initial_auc: float,
+    log: Callable[..., None] = print,
+) -> PruningResult:
     """Prune low-gain features, retrain, and keep the retrain only if it holds up.
 
     Args:
@@ -106,13 +109,13 @@ def evaluate_pruning(model: xgb.Booster,
     Returns:
         PruningResult; see its docstring for the keep/reject semantics.
     """
-    importance = model.get_score(importance_type='gain')
+    importance = model.get_score(importance_type="gain")
     total_gain = sum(importance.values())
 
     # Identify low-importance features
     pruned_features: list[str] = []
     pruned_model_kept = False  # True only when the soft-pruned retrain replaces `model`
-    combined_fw = None         # pre-exclude + soft-pruning feature weights (set on retrain)
+    combined_fw = None  # pre-exclude + soft-pruning feature weights (set on retrain)
     feature_weights = np.ones(len(feature_cols), dtype=np.float32)
 
     # Stability filter (ML4T ch8/11): single-model gain is noisy, so a feature is
@@ -120,8 +123,7 @@ def evaluate_pruning(model: xgb.Booster,
     # Prevents pruning on noise and feature churn between retrains.
     log("   Computing per-fold importances for stability check...")
     _, _, fold_importances = cv_fn(
-        X_train, y_train, best_cfg, w_train, return_importances=True,
-        feat_weights=feat_weights
+        X_train, y_train, best_cfg, w_train, return_importances=True, feat_weights=feat_weights
     )
     fold_fracs: dict[str, list[float]] = {feat: [] for feat in feature_cols}
     for imp in fold_importances:
@@ -142,12 +144,18 @@ def evaluate_pruning(model: xgb.Booster,
                 rescued_by_stability.append(feat)
 
     log(f"   Total features: {len(feature_cols)}")
-    log(f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain in final model AND all {len(fold_importances)} folds): {len(pruned_features)}")
+    log(
+        f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain in final model AND all {len(fold_importances)} folds): {len(pruned_features)}"
+    )
     if rescued_by_stability:
-        log(f"   Rescued by fold stability (weak in final model, strong in >=1 fold): {len(rescued_by_stability)}"
-            f" — {', '.join(rescued_by_stability[:10])}{'...' if len(rescued_by_stability) > 10 else ''}")
+        log(
+            f"   Rescued by fold stability (weak in final model, strong in >=1 fold): {len(rescued_by_stability)}"
+            f" — {', '.join(rescued_by_stability[:10])}{'...' if len(rescued_by_stability) > 10 else ''}"
+        )
     if pruned_features:
-        log(f"   Pruned list: {', '.join(pruned_features[:15])}{'...' if len(pruned_features) > 15 else ''}")
+        log(
+            f"   Pruned list: {', '.join(pruned_features[:15])}{'...' if len(pruned_features) > 15 else ''}"
+        )
 
     eval_set_name = None
     pruned_acc = None
@@ -161,8 +169,8 @@ def evaluate_pruning(model: xgb.Booster,
 
         # Need colsample_bytree < 1.0 for feature_weights to take effect
         retrain_params = dict(final_params)
-        if retrain_params.get('colsample_bytree', 1.0) >= 1.0:
-            retrain_params['colsample_bytree'] = 0.95
+        if retrain_params.get("colsample_bytree", 1.0) >= 1.0:
+            retrain_params["colsample_bytree"] = 0.95
 
         # Combine pre-exclude weights with soft-pruning weights
         combined_fw = feature_weights.copy()
@@ -171,20 +179,26 @@ def evaluate_pruning(model: xgb.Booster,
         # Audit fix (May 2026 P6 follow-up): use X_final_train / y_final_train (which
         # respect strict-holdout). Previously used X_train_full unconditionally → weight
         # dimension mismatch when strict_holdout excluded holdout from final train.
-        dtrain_fw = xgb.DMatrix(X_final_train, label=y_final_train, weight=w_train_final, feature_names=list(feature_cols))
+        dtrain_fw = xgb.DMatrix(
+            X_final_train,
+            label=y_final_train,
+            weight=w_train_final,
+            feature_names=list(feature_cols),
+        )
         dtrain_fw.feature_weights = combined_fw
 
         # Early stop on holdout for pruned model too (audit fix M-prune)
         if dholdout is not None:
-            prune_early_stop_set = (dholdout, 'holdout')
+            prune_early_stop_set = (dholdout, "holdout")
         else:
-            prune_early_stop_set = (dtest, 'eval')
+            prune_early_stop_set = (dtest, "eval")
 
         ev2 = {}
         model_pruned = xgb.train(
-            retrain_params, dtrain_fw,
+            retrain_params,
+            dtrain_fw,
             num_boost_round=num_boost_round,
-            evals=[(dtrain_fw, 'train'), prune_early_stop_set],
+            evals=[(dtrain_fw, "train"), prune_early_stop_set],
             evals_result=ev2,
             early_stopping_rounds=early_stopping,
             verbose_eval=False,
@@ -201,7 +215,9 @@ def evaluate_pruning(model: xgb.Booster,
             pruned_acc = accuracy_score(y_test, (y_prob_pruned_eval >= 0.5).astype(int))
             pruned_auc = roc_auc_score(y_test, y_prob_pruned_eval)
             eval_set_name = "test"
-        log(f"   Pruned model ({eval_set_name}): acc={pruned_acc*100:.1f}% | AUC={pruned_auc:.4f} | trees={model_pruned.best_iteration+1}")
+        log(
+            f"   Pruned model ({eval_set_name}): acc={pruned_acc*100:.1f}% | AUC={pruned_auc:.4f} | trees={model_pruned.best_iteration+1}"
+        )
 
         # Compare on same eval set (holdout if available, test otherwise)
         if dholdout is not None:
@@ -217,7 +233,9 @@ def evaluate_pruning(model: xgb.Booster,
             pruned_model_kept = True
             test_probs = model_pruned.predict(dtest)  # always keep test predictions for final eval
         else:
-            log(f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})")
+            log(
+                f"   [NO]Keeping original (pruned AUC {pruned_auc:.4f} < original {initial_eval_auc:.4f})"
+            )
             pruned_features = []  # reset since we're not using pruned model
     else:
         # The >=50% guard skipped the retrain, so nothing was actually pruned.
@@ -225,7 +243,7 @@ def evaluate_pruning(model: xgb.Booster,
         # `pruned_features` is exported into xgboost_model.json and must describe
         # the artifact that ships, never a pruning that was only contemplated.
         pruned_features = []
-        log(f"   No features pruned (all above threshold or too many would be pruned)")
+        log("   No features pruned (all above threshold or too many would be pruned)")
 
     return PruningResult(
         model=model,

@@ -19,8 +19,16 @@ FAST_KW = dict(seed=42, num_boost_round=20, early_stopping=5)
 
 
 def _run(X, y, cols, embargo, n_folds=DEFAULT_N_CV_FOLDS):
-    return walk_forward_cv(X, y, FAST_CFG, n_folds=n_folds, return_preds=True,
-                           feature_cols=cols, embargo=embargo, **FAST_KW)
+    return walk_forward_cv(
+        X,
+        y,
+        FAST_CFG,
+        n_folds=n_folds,
+        return_preds=True,
+        feature_cols=cols,
+        embargo=embargo,
+        **FAST_KW,
+    )
 
 
 class TestEmbargo:
@@ -83,8 +91,9 @@ class TestReturnShapes:
 
     def test_importances_returned_per_fold(self, separable_dataset) -> None:
         X, y, cols = separable_dataset
-        out = walk_forward_cv(X, y, FAST_CFG, return_importances=True,
-                              feature_cols=cols, embargo=8, **FAST_KW)
+        out = walk_forward_cv(
+            X, y, FAST_CFG, return_importances=True, feature_cols=cols, embargo=8, **FAST_KW
+        )
         _, _, fold_importances = out
         assert len(fold_importances) == DEFAULT_N_CV_FOLDS
         assert all(isinstance(d, dict) for d in fold_importances)

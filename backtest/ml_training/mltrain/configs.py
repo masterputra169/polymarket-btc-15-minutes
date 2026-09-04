@@ -27,54 +27,118 @@ EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
 # --- 8 Seed Configurations ---
-_SEED_CONFIGS: Mapping[str, Mapping[str, float]] = MappingProxyType({
-    'A_balanced': MappingProxyType({
-        'max_depth': 5, 'learning_rate': 0.05, 'subsample': 0.8,
-        'colsample_bytree': 0.8, 'min_child_weight': 5, 'gamma': 0.1,
-        'reg_alpha': 0.1, 'reg_lambda': 1.0,
-    }),
-    'B_deeper': MappingProxyType({
-        'max_depth': 7, 'learning_rate': 0.03, 'subsample': 0.75,
-        'colsample_bytree': 0.7, 'min_child_weight': 3, 'gamma': 0.05,
-        'reg_alpha': 0.05, 'reg_lambda': 0.8,
-    }),
-    'C_wider': MappingProxyType({
-        'max_depth': 5, 'learning_rate': 0.08, 'subsample': 0.85,
-        'colsample_bytree': 0.9, 'min_child_weight': 7, 'gamma': 0.15,
-        'reg_alpha': 0.2, 'reg_lambda': 1.5,
-    }),
-    'D_shallow_fast': MappingProxyType({
-        'max_depth': 4, 'learning_rate': 0.10, 'subsample': 0.9,
-        'colsample_bytree': 0.85, 'min_child_weight': 10, 'gamma': 0.2,
-        'reg_alpha': 0.3, 'reg_lambda': 2.0,
-    }),
-    'E_deep_slow': MappingProxyType({
-        'max_depth': 6, 'learning_rate': 0.02, 'subsample': 0.7,
-        'colsample_bytree': 0.75, 'min_child_weight': 4, 'gamma': 0.08,
-        'reg_alpha': 0.1, 'reg_lambda': 1.2,
-    }),
-    'F_aggressive': MappingProxyType({
-        'max_depth': 5, 'learning_rate': 0.12, 'subsample': 0.85,
-        'colsample_bytree': 0.95, 'min_child_weight': 5, 'gamma': 0.05,
-        'reg_alpha': 0.05, 'reg_lambda': 0.5,
-    }),
-    'G_regularized': MappingProxyType({
-        'max_depth': 5, 'learning_rate': 0.06, 'subsample': 0.8,
-        'colsample_bytree': 0.8, 'min_child_weight': 8, 'gamma': 0.25,
-        'reg_alpha': 0.5, 'reg_lambda': 3.0,
-    }),
-    'H_wide_shallow': MappingProxyType({
-        'max_depth': 3, 'learning_rate': 0.15, 'subsample': 0.9,
-        'colsample_bytree': 0.95, 'min_child_weight': 12, 'gamma': 0.3,
-        'reg_alpha': 0.4, 'reg_lambda': 2.5,
-    }),
-})
+_SEED_CONFIGS: Mapping[str, Mapping[str, float]] = MappingProxyType(
+    {
+        "A_balanced": MappingProxyType(
+            {
+                "max_depth": 5,
+                "learning_rate": 0.05,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "min_child_weight": 5,
+                "gamma": 0.1,
+                "reg_alpha": 0.1,
+                "reg_lambda": 1.0,
+            }
+        ),
+        "B_deeper": MappingProxyType(
+            {
+                "max_depth": 7,
+                "learning_rate": 0.03,
+                "subsample": 0.75,
+                "colsample_bytree": 0.7,
+                "min_child_weight": 3,
+                "gamma": 0.05,
+                "reg_alpha": 0.05,
+                "reg_lambda": 0.8,
+            }
+        ),
+        "C_wider": MappingProxyType(
+            {
+                "max_depth": 5,
+                "learning_rate": 0.08,
+                "subsample": 0.85,
+                "colsample_bytree": 0.9,
+                "min_child_weight": 7,
+                "gamma": 0.15,
+                "reg_alpha": 0.2,
+                "reg_lambda": 1.5,
+            }
+        ),
+        "D_shallow_fast": MappingProxyType(
+            {
+                "max_depth": 4,
+                "learning_rate": 0.10,
+                "subsample": 0.9,
+                "colsample_bytree": 0.85,
+                "min_child_weight": 10,
+                "gamma": 0.2,
+                "reg_alpha": 0.3,
+                "reg_lambda": 2.0,
+            }
+        ),
+        "E_deep_slow": MappingProxyType(
+            {
+                "max_depth": 6,
+                "learning_rate": 0.02,
+                "subsample": 0.7,
+                "colsample_bytree": 0.75,
+                "min_child_weight": 4,
+                "gamma": 0.08,
+                "reg_alpha": 0.1,
+                "reg_lambda": 1.2,
+            }
+        ),
+        "F_aggressive": MappingProxyType(
+            {
+                "max_depth": 5,
+                "learning_rate": 0.12,
+                "subsample": 0.85,
+                "colsample_bytree": 0.95,
+                "min_child_weight": 5,
+                "gamma": 0.05,
+                "reg_alpha": 0.05,
+                "reg_lambda": 0.5,
+            }
+        ),
+        "G_regularized": MappingProxyType(
+            {
+                "max_depth": 5,
+                "learning_rate": 0.06,
+                "subsample": 0.8,
+                "colsample_bytree": 0.8,
+                "min_child_weight": 8,
+                "gamma": 0.25,
+                "reg_alpha": 0.5,
+                "reg_lambda": 3.0,
+            }
+        ),
+        "H_wide_shallow": MappingProxyType(
+            {
+                "max_depth": 3,
+                "learning_rate": 0.15,
+                "subsample": 0.9,
+                "colsample_bytree": 0.95,
+                "min_child_weight": 12,
+                "gamma": 0.3,
+                "reg_alpha": 0.4,
+                "reg_lambda": 2.5,
+            }
+        ),
+    }
+)
 
 # The 8 hyperparameters every seed config carries; also the exact key set the
 # Optuna objective suggests, so enqueued trials line up with sampled ones.
 SEED_CONFIG_KEYS: tuple[str, ...] = (
-    'max_depth', 'learning_rate', 'subsample', 'colsample_bytree',
-    'min_child_weight', 'gamma', 'reg_alpha', 'reg_lambda',
+    "max_depth",
+    "learning_rate",
+    "subsample",
+    "colsample_bytree",
+    "min_child_weight",
+    "gamma",
+    "reg_alpha",
+    "reg_lambda",
 )
 
 

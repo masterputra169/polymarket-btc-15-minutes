@@ -23,7 +23,7 @@ from mltrain.weights import (
 
 pytestmark = pytest.mark.unit
 
-SESSION_FI = {'session_asia': 0, 'session_us': 1, 'session_overlap': 2}
+SESSION_FI = {"session_asia": 0, "session_us": 1, "session_overlap": 2}
 
 
 def _sessions(n: int = 300) -> np.ndarray:
@@ -108,26 +108,54 @@ class TestSessionWeights:
 class TestBuildSampleWeights:
     def test_returns_none_when_both_schemes_are_off(self) -> None:
         # None (not ones) so the boosters skip the weight path entirely.
-        w = build_sample_weights(_sessions(), SESSION_FI, use_recency=False, days=180,
-                                 halflife=90, use_session=False, log=lambda _: None)
+        w = build_sample_weights(
+            _sessions(),
+            SESSION_FI,
+            use_recency=False,
+            days=180,
+            halflife=90,
+            use_session=False,
+            log=lambda _: None,
+        )
         assert w is None
 
     def test_recency_only_is_not_renormalised(self) -> None:
-        w = build_sample_weights(_sessions(), SESSION_FI, use_recency=True, days=180,
-                                 halflife=90, use_session=False, log=lambda _: None)
+        w = build_sample_weights(
+            _sessions(),
+            SESSION_FI,
+            use_recency=True,
+            days=180,
+            halflife=90,
+            use_session=False,
+            log=lambda _: None,
+        )
         assert w.max() == pytest.approx(1.0, abs=1e-6)
         assert float(w.mean()) < 1.0
 
     def test_both_schemes_yield_positive_mean_one_weights(self) -> None:
-        w = build_sample_weights(_sessions(), SESSION_FI, use_recency=True, days=180,
-                                 halflife=90, use_session=True, log=lambda _: None)
+        w = build_sample_weights(
+            _sessions(),
+            SESSION_FI,
+            use_recency=True,
+            days=180,
+            halflife=90,
+            use_session=True,
+            log=lambda _: None,
+        )
         assert np.all(w > 0)
         assert float(w.mean()) == pytest.approx(1.0, abs=1e-5)
 
     def test_reports_every_session_bucket(self) -> None:
         lines: list[str] = []
-        build_sample_weights(_sessions(), SESSION_FI, use_recency=False, days=180,
-                             halflife=90, use_session=True, log=lines.append)
+        build_sample_weights(
+            _sessions(),
+            SESSION_FI,
+            use_recency=False,
+            days=180,
+            halflife=90,
+            use_session=True,
+            log=lines.append,
+        )
         joined = "\n".join(lines)
         for fragment in ("Session weighting applied", "US ", "Overlap ", "Asia ", "Normalized"):
             assert fragment in joined
@@ -136,37 +164,37 @@ class TestBuildSampleWeights:
 class TestCountRegimes:
     def test_counts_rows_flagged_per_regime(self) -> None:
         X = np.zeros((10, 3), dtype=np.float32)
-        X[:4, 0] = 1.0   # trending
+        X[:4, 0] = 1.0  # trending
         X[4:7, 1] = 1.0  # mean_rev
-        fi = {'regime_trending': 0, 'regime_mean_reverting': 1, 'regime_moderate': 2}
-        assert count_regimes(X, fi) == {'trending': 4, 'mean_rev': 3, 'moderate': 0}
+        fi = {"regime_trending": 0, "regime_mean_reverting": 1, "regime_moderate": 2}
+        assert count_regimes(X, fi) == {"trending": 4, "mean_rev": 3, "moderate": 0}
 
     def test_absent_regimes_are_skipped_not_zeroed(self) -> None:
         X = np.ones((5, 1), dtype=np.float32)
-        counts = count_regimes(X, {'regime_trending': 0})
-        assert counts == {'trending': 5}
+        counts = count_regimes(X, {"regime_trending": 0})
+        assert counts == {"trending": 5}
 
     def test_report_order_follows_the_declared_regime_order(self) -> None:
         X = np.ones((5, 3), dtype=np.float32)
-        fi = {'regime_trending': 0, 'regime_mean_reverting': 1, 'regime_moderate': 2}
+        fi = {"regime_trending": 0, "regime_mean_reverting": 1, "regime_moderate": 2}
         assert list(count_regimes(X, fi)) == [name for name, _ in REGIME_FEATURES]
 
 
 class TestBuildFeatureWeights:
     def test_defaults_to_all_ones(self) -> None:
-        fw = build_feature_weights(['a', 'b', 'c'], [], log=lambda _: None)
+        fw = build_feature_weights(["a", "b", "c"], [], log=lambda _: None)
         assert fw.dtype == np.float32
         assert np.array_equal(fw, np.ones(3, dtype=np.float32))
 
     def test_excludes_only_the_named_columns(self) -> None:
         lines: list[str] = []
-        fw = build_feature_weights(['a', 'b', 'c'], ['b'], log=lines.append)
+        fw = build_feature_weights(["a", "b", "c"], ["b"], log=lines.append)
         assert np.array_equal(fw, np.array([1.0, 0.0, 1.0], dtype=np.float32))
         assert any("Pre-excluded 1 features" in line for line in lines)
 
     def test_unknown_names_warn_and_are_not_counted(self) -> None:
         lines: list[str] = []
-        fw = build_feature_weights(['a', 'b'], ['b', 'ghost'], log=lines.append)
+        fw = build_feature_weights(["a", "b"], ["b", "ghost"], log=lines.append)
         assert np.array_equal(fw, np.array([1.0, 0.0], dtype=np.float32))
         assert any("--exclude-features 'ghost' not found" in line for line in lines)
         assert any("Pre-excluded 1 features" in line for line in lines)

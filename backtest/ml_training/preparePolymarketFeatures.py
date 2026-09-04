@@ -36,22 +36,26 @@ import csv
 import json
 import os
 import sys
-from collections import defaultdict
 
-parser = argparse.ArgumentParser(description='Prepare Polymarket features lookup')
-parser.add_argument('--data-dir', default='./polymarket_btc15m_data',
-                    help='Directory containing Polymarket CSV files')
-parser.add_argument('--output', default='./polymarket_lookup.json',
-                    help='Output JSON lookup file')
-parser.add_argument('--merge', default=None,
-                    help='Path to existing lookup JSON to merge (keeps entries not in dataset)')
+parser = argparse.ArgumentParser(description="Prepare Polymarket features lookup")
+parser.add_argument(
+    "--data-dir",
+    default="./polymarket_btc15m_data",
+    help="Directory containing Polymarket CSV files",
+)
+parser.add_argument("--output", default="./polymarket_lookup.json", help="Output JSON lookup file")
+parser.add_argument(
+    "--merge",
+    default=None,
+    help="Path to existing lookup JSON to merge (keeps entries not in dataset)",
+)
 args = parser.parse_args()
 
-MASTER_CSV = os.path.join(args.data_dir, '02_btc15m_ml_ready.csv')
-PRICE_CSV = os.path.join(args.data_dir, 'price_history.csv')
+MASTER_CSV = os.path.join(args.data_dir, "02_btc15m_ml_ready.csv")
+PRICE_CSV = os.path.join(args.data_dir, "price_history.csv")
 
 # Validate inputs
-for path, name in [(MASTER_CSV, 'Master CSV'), (PRICE_CSV, 'Price history CSV')]:
+for path, name in [(MASTER_CSV, "Master CSV"), (PRICE_CSV, "Price history CSV")]:
     if not os.path.isfile(path):
         print(f"ERROR: {name} not found at {path}")
         sys.exit(1)
@@ -62,21 +66,21 @@ for path, name in [(MASTER_CSV, 'Master CSV'), (PRICE_CSV, 'Price history CSV')]
 print("[1/3] Loading master market data...")
 
 lookup = {}
-with open(MASTER_CSV, 'r', encoding='utf-8') as f:
+with open(MASTER_CSV, encoding="utf-8") as f:
     reader = csv.DictReader(f)
     for row in reader:
-        slug_ts = row['slug_timestamp'].strip()
-        label = int(row['resolved_label'])
-        spread = float(row['spread']) if row['spread'] else 0.0
-        liquidity = float(row['liquidity']) if row['liquidity'] else 0.0
-        volume = float(row['volume']) if row['volume'] else 0.0
+        slug_ts = row["slug_timestamp"].strip()
+        label = int(row["resolved_label"])
+        spread = float(row["spread"]) if row["spread"] else 0.0
+        liquidity = float(row["liquidity"]) if row["liquidity"] else 0.0
+        volume = float(row["volume"]) if row["volume"] else 0.0
 
         lookup[slug_ts] = {
-            'label': label,
-            'spread': spread,
-            'liquidity': liquidity,
-            'volume': volume,
-            'prices': [],  # filled in step 2
+            "label": label,
+            "spread": spread,
+            "liquidity": liquidity,
+            "volume": volume,
+            "prices": [],  # filled in step 2
         }
 
 print(f"   {len(lookup):,} markets loaded")
@@ -92,19 +96,19 @@ skipped_side = 0
 skipped_range = 0
 matched = 0
 
-with open(PRICE_CSV, 'r', encoding='utf-8') as f:
+with open(PRICE_CSV, encoding="utf-8") as f:
     reader = csv.DictReader(f)
     for row in reader:
         price_count += 1
 
         # Only UP token prices
-        if row['token_side'].strip().lower() != 'up':
+        if row["token_side"].strip().lower() != "up":
             skipped_side += 1
             continue
 
         # Extract slug_timestamp from slug: "btc-updown-15m-{ts}"
-        slug = row['slug'].strip()
-        parts = slug.rsplit('-', 1)
+        slug = row["slug"].strip()
+        parts = slug.rsplit("-", 1)
         if len(parts) != 2:
             continue
         slug_ts_str = parts[1]
@@ -114,8 +118,8 @@ with open(PRICE_CSV, 'r', encoding='utf-8') as f:
 
         try:
             slug_ts_int = int(slug_ts_str)
-            obs_ts = int(row['timestamp_unix'])
-            price = float(row['price'])
+            obs_ts = int(row["timestamp_unix"])
+            price = float(row["price"])
         except (ValueError, KeyError):
             continue
 
@@ -125,19 +129,21 @@ with open(PRICE_CSV, 'r', encoding='utf-8') as f:
             skipped_range += 1
             continue
 
-        lookup[slug_ts_str]['prices'].append([secs_into, round(price, 6)])
+        lookup[slug_ts_str]["prices"].append([secs_into, round(price, 6)])
         matched += 1
 
         if price_count % 500000 == 0:
             print(f"   {price_count:,} rows processed, {matched:,} matched...")
 
-print(f"   {price_count:,} total rows | {matched:,} matched | {skipped_side:,} non-UP | {skipped_range:,} out-of-range")
+print(
+    f"   {price_count:,} total rows | {matched:,} matched | {skipped_side:,} non-UP | {skipped_range:,} out-of-range"
+)
 
 # Sort prices by time within each market
 markets_with_prices = 0
 for entry in lookup.values():
-    if entry['prices']:
-        entry['prices'].sort(key=lambda x: x[0])
+    if entry["prices"]:
+        entry["prices"].sort(key=lambda x: x[0])
         markets_with_prices += 1
 
 print(f"   {markets_with_prices:,}/{len(lookup):,} markets have price history")
@@ -147,7 +153,7 @@ print(f"   {markets_with_prices:,}/{len(lookup):,} markets have price history")
 # ============================================================
 if args.merge and os.path.isfile(args.merge):
     print(f"[3/4] Merging with existing lookup: {args.merge}")
-    with open(args.merge, 'r') as f:
+    with open(args.merge) as f:
         existing = json.load(f)
     # Add entries from existing that are NOT in the new dataset
     merged_count = 0
@@ -165,17 +171,17 @@ else:
 # ============================================================
 print("[4/4] Writing JSON lookup...")
 
-with open(args.output, 'w') as f:
-    json.dump(lookup, f, separators=(',', ':'))
+with open(args.output, "w") as f:
+    json.dump(lookup, f, separators=(",", ":"))
 
 file_size = os.path.getsize(args.output) / (1024 * 1024)
 print(f"   Saved to {args.output} ({file_size:.1f} MB)")
 
 # Summary stats
-labels = [e['label'] for e in lookup.values()]
+labels = [e["label"] for e in lookup.values()]
 up_count = sum(labels)
 dn_count = len(labels) - up_count
-avg_prices = sum(len(e['prices']) for e in lookup.values()) / max(len(lookup), 1)
+avg_prices = sum(len(e["prices"]) for e in lookup.values()) / max(len(lookup), 1)
 
 print(f"""
 ============================================

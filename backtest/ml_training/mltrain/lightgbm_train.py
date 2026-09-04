@@ -42,6 +42,7 @@ class LgbTuning:
     `params` is the best trial's suggestions merged with the fixed objective /
     metric / verbosity / bagging_freq settings, i.e. ready to hand to lgb.train.
     """
+
     params: dict[str, Any]
     best_trial: int
     best_value: float
@@ -50,6 +51,7 @@ class LgbTuning:
 @dataclass(frozen=True)
 class LgbScores:
     """Raw (uncalibrated) test scores for the LightGBM partner."""
+
     accuracy: float
     auc: float
     n_trees: int
@@ -67,6 +69,7 @@ class LgbCalibration:
     fit was discarded, because the identity transform of a raw margin is still a
     logit-space transform and the browser must treat it as one.
     """
+
     a: float
     b: float
     on_logits: bool
@@ -83,17 +86,17 @@ def default_lgb_params() -> dict[str, Any]:
     so a shared module-level constant would leak between runs.
     """
     return {
-        'objective': 'binary',
-        'metric': ['binary_logloss', 'auc'],
-        'verbosity': -1,
-        'num_leaves': 31,
-        'learning_rate': 0.05,
-        'feature_fraction': 0.8,
-        'bagging_fraction': 0.8,
-        'bagging_freq': 5,
-        'min_child_samples': 20,
-        'lambda_l1': 0.1,
-        'lambda_l2': 1.0,
+        "objective": "binary",
+        "metric": ["binary_logloss", "auc"],
+        "verbosity": -1,
+        "num_leaves": 31,
+        "learning_rate": 0.05,
+        "feature_fraction": 0.8,
+        "bagging_fraction": 0.8,
+        "bagging_freq": 5,
+        "min_child_samples": 20,
+        "lambda_l1": 0.1,
+        "lambda_l2": 1.0,
     }
 
 
@@ -106,15 +109,19 @@ def platt_probs(margins: np.ndarray, a: float, b: float) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-(a * margins + b)))
 
 
-def lgb_walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, params: dict,
-                        w_tr: np.ndarray | None = None,
-                        n_folds: int = DEFAULT_N_CV_FOLDS,
-                        return_preds: bool = False,
-                        *,
-                        feature_cols: list[str],
-                        embargo: int = 0,
-                        num_boost_round: int = LGB_BOOST_ROUND,
-                        early_stopping: int = LGB_EARLY_STOPPING) -> tuple:
+def lgb_walk_forward_cv(
+    X_tr: np.ndarray,
+    y_tr: np.ndarray,
+    params: dict,
+    w_tr: np.ndarray | None = None,
+    n_folds: int = DEFAULT_N_CV_FOLDS,
+    return_preds: bool = False,
+    *,
+    feature_cols: list[str],
+    embargo: int = 0,
+    num_boost_round: int = LGB_BOOST_ROUND,
+    early_stopping: int = LGB_EARLY_STOPPING,
+) -> tuple:
     """Walk-forward CV for LightGBM. Returns margins for Platt-on-logits.
     Also returns oof_idx (X_tr row index per OOF prediction) so the
     ensemble-weight sweep can VERIFY row alignment against the XGBoost OOF
@@ -141,16 +148,25 @@ def lgb_walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, params: dict,
         y_f_val = y_tr[val_start:val_end]
         w_f_train = w_tr[:tr_end] if w_tr is not None else None
 
-        dtrain = lgb.Dataset(X_f_train, label=y_f_train, weight=w_f_train,
-                             feature_name=feature_cols, free_raw_data=False)
-        dval = lgb.Dataset(X_f_val, label=y_f_val,
-                           feature_name=feature_cols, free_raw_data=False, reference=dtrain)
+        dtrain = lgb.Dataset(
+            X_f_train,
+            label=y_f_train,
+            weight=w_f_train,
+            feature_name=feature_cols,
+            free_raw_data=False,
+        )
+        dval = lgb.Dataset(
+            X_f_val, label=y_f_val, feature_name=feature_cols, free_raw_data=False, reference=dtrain
+        )
 
-        callbacks = [lgb.early_stopping(early_stopping, verbose=False),
-                     lgb.log_evaluation(period=0)]
+        callbacks = [
+            lgb.early_stopping(early_stopping, verbose=False),
+            lgb.log_evaluation(period=0),
+        ]
 
         model_f = lgb.train(
-            params, dtrain,
+            params,
+            dtrain,
             num_boost_round=num_boost_round,
             valid_sets=[dval],
             callbacks=callbacks,
@@ -183,22 +199,31 @@ def lgb_walk_forward_cv(X_tr: np.ndarray, y_tr: np.ndarray, params: dict,
     mean_acc = np.mean(accs) if accs else 0
 
     if return_preds:
-        return (mean_auc, mean_acc, np.array(oof_preds), np.array(oof_margins), np.array(oof_labels),
-                np.array(oof_idx, dtype=np.int64))
+        return (
+            mean_auc,
+            mean_acc,
+            np.array(oof_preds),
+            np.array(oof_margins),
+            np.array(oof_labels),
+            np.array(oof_idx, dtype=np.int64),
+        )
     return mean_auc, mean_acc
 
 
-def tune_lgb_params(X_train: np.ndarray, y_train: np.ndarray,
-                    w_train: np.ndarray | None = None,
-                    *,
-                    feature_cols: list[str],
-                    seed: int,
-                    embargo: int = 0,
-                    n_folds: int = DEFAULT_N_CV_FOLDS,
-                    n_trials: int = LGB_OPTUNA_TRIALS,
-                    num_boost_round: int = LGB_BOOST_ROUND,
-                    early_stopping: int = LGB_EARLY_STOPPING,
-                    show_progress_bar: bool = True) -> LgbTuning:
+def tune_lgb_params(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None = None,
+    *,
+    feature_cols: list[str],
+    seed: int,
+    embargo: int = 0,
+    n_folds: int = DEFAULT_N_CV_FOLDS,
+    n_trials: int = LGB_OPTUNA_TRIALS,
+    num_boost_round: int = LGB_BOOST_ROUND,
+    early_stopping: int = LGB_EARLY_STOPPING,
+    show_progress_bar: bool = True,
+) -> LgbTuning:
     """Bayesian search over the LightGBM hyperparameters, scored by embargoed CV AUC.
 
     The objective is the walk-forward CV AUC — never a holdout score — so the
@@ -215,40 +240,48 @@ def tune_lgb_params(X_train: np.ndarray, y_train: np.ndarray,
 
     def lgb_objective(trial):
         params = {
-            'objective': 'binary',
-            'metric': ['binary_logloss', 'auc'],
-            'verbosity': -1,
-            'num_leaves': trial.suggest_int('num_leaves', 15, 63),
-            'learning_rate': trial.suggest_float('learning_rate', 0.008, 0.2, log=True),
-            'feature_fraction': trial.suggest_float('feature_fraction', 0.5, 0.95),
-            'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 0.95),
-            'bagging_freq': 5,
-            'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
-            'lambda_l1': trial.suggest_float('lambda_l1', 1e-3, 2.0, log=True),
-            'lambda_l2': trial.suggest_float('lambda_l2', 0.3, 6.0),
+            "objective": "binary",
+            "metric": ["binary_logloss", "auc"],
+            "verbosity": -1,
+            "num_leaves": trial.suggest_int("num_leaves", 15, 63),
+            "learning_rate": trial.suggest_float("learning_rate", 0.008, 0.2, log=True),
+            "feature_fraction": trial.suggest_float("feature_fraction", 0.5, 0.95),
+            "bagging_fraction": trial.suggest_float("bagging_fraction", 0.6, 0.95),
+            "bagging_freq": 5,
+            "min_child_samples": trial.suggest_int("min_child_samples", 5, 50),
+            "lambda_l1": trial.suggest_float("lambda_l1", 1e-3, 2.0, log=True),
+            "lambda_l2": trial.suggest_float("lambda_l2", 0.3, 6.0),
         }
         cv_auc, _ = lgb_walk_forward_cv(
-            X_train, y_train, params, w_train, n_folds,
-            feature_cols=feature_cols, embargo=embargo,
-            num_boost_round=num_boost_round, early_stopping=early_stopping,
+            X_train,
+            y_train,
+            params,
+            w_train,
+            n_folds,
+            feature_cols=feature_cols,
+            embargo=embargo,
+            num_boost_round=num_boost_round,
+            early_stopping=early_stopping,
         )
         if np.isnan(cv_auc) or cv_auc == 0:
             return 0.5
         return cv_auc
 
     lgb_study = optuna.create_study(
-        direction='maximize',
+        direction="maximize",
         sampler=optuna.samplers.TPESampler(seed=seed),
     )
     lgb_study.optimize(lgb_objective, n_trials=n_trials, show_progress_bar=show_progress_bar)
 
     lgb_best_params = lgb_study.best_trial.params
-    lgb_best_params.update({
-        'objective': 'binary',
-        'metric': ['binary_logloss', 'auc'],
-        'verbosity': -1,
-        'bagging_freq': 5,
-    })
+    lgb_best_params.update(
+        {
+            "objective": "binary",
+            "metric": ["binary_logloss", "auc"],
+            "verbosity": -1,
+            "bagging_freq": 5,
+        }
+    )
     return LgbTuning(
         params=lgb_best_params,
         best_trial=lgb_study.best_trial.number,
@@ -256,30 +289,39 @@ def tune_lgb_params(X_train: np.ndarray, y_train: np.ndarray,
     )
 
 
-def train_final_lgb(X_train: np.ndarray, y_train: np.ndarray,
-                    w_train: np.ndarray | None,
-                    X_val: np.ndarray, y_val: np.ndarray,
-                    params: dict,
-                    *,
-                    feature_cols: list[str],
-                    num_boost_round: int = LGB_BOOST_ROUND,
-                    early_stopping: int = LGB_EARLY_STOPPING) -> lgb.Booster:
+def train_final_lgb(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    w_train: np.ndarray | None,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    params: dict,
+    *,
+    feature_cols: list[str],
+    num_boost_round: int = LGB_BOOST_ROUND,
+    early_stopping: int = LGB_EARLY_STOPPING,
+) -> lgb.Booster:
     """Fit the deployed LightGBM booster, early-stopping on `X_val`.
 
     Audit fix (May 2026 P6 follow-up): the caller respects strict-holdout for LGB
     too — under --strict-holdout the training rows are the tune subset only, and
     the holdout it early-stops on is never trained on.
     """
-    lgb_dtrain = lgb.Dataset(X_train, label=y_train, weight=w_train,
-                             feature_name=feature_cols, free_raw_data=False)
-    lgb_dval = lgb.Dataset(X_val, label=y_val,
-                           feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain)
+    lgb_dtrain = lgb.Dataset(
+        X_train, label=y_train, weight=w_train, feature_name=feature_cols, free_raw_data=False
+    )
+    lgb_dval = lgb.Dataset(
+        X_val, label=y_val, feature_name=feature_cols, free_raw_data=False, reference=lgb_dtrain
+    )
 
-    lgb_callbacks = [lgb.early_stopping(early_stopping, verbose=False),
-                     lgb.log_evaluation(period=0)]
+    lgb_callbacks = [
+        lgb.early_stopping(early_stopping, verbose=False),
+        lgb.log_evaluation(period=0),
+    ]
 
     return lgb.train(
-        params, lgb_dtrain,
+        params,
+        lgb_dtrain,
         num_boost_round=num_boost_round,
         valid_sets=[lgb_dval],
         callbacks=lgb_callbacks,
@@ -300,12 +342,17 @@ def evaluate_lgb(model: lgb.Booster, X_test: np.ndarray, y_test: np.ndarray) -> 
     )
 
 
-def fit_lgb_platt(model: lgb.Booster, X_test: np.ndarray, y_test: np.ndarray,
-                  oof_margins: np.ndarray, oof_labels: np.ndarray,
-                  *,
-                  raw_auc: float,
-                  min_oof_margins: int = 100,
-                  auc_tolerance: float = 0.005) -> LgbCalibration:
+def fit_lgb_platt(
+    model: lgb.Booster,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    oof_margins: np.ndarray,
+    oof_labels: np.ndarray,
+    *,
+    raw_auc: float,
+    min_oof_margins: int = 100,
+    auc_tolerance: float = 0.005,
+) -> LgbCalibration:
     """Fit Platt scaling on the LightGBM OOF logits (audit fix C4).
 
     Calibrating on RAW MARGINS rather than on already-sigmoided probabilities
@@ -325,10 +372,17 @@ def fit_lgb_platt(model: lgb.Booster, X_test: np.ndarray, y_test: np.ndarray,
     """
     on_logits = True
     if len(oof_margins) <= min_oof_margins:
-        return LgbCalibration(a=1.0, b=0.0, on_logits=on_logits, fitted=False, kept=False,
-                              cal_accuracy=None, cal_auc=None)
+        return LgbCalibration(
+            a=1.0,
+            b=0.0,
+            on_logits=on_logits,
+            fitted=False,
+            kept=False,
+            cal_accuracy=None,
+            cal_auc=None,
+        )
 
-    lgb_lr = LogisticRegression(C=1.0, solver='lbfgs', max_iter=1000)
+    lgb_lr = LogisticRegression(C=1.0, solver="lbfgs", max_iter=1000)
     lgb_lr.fit(oof_margins.reshape(-1, 1), oof_labels)
     platt_a = float(lgb_lr.coef_[0][0])
     platt_b = float(lgb_lr.intercept_[0])
@@ -340,7 +394,21 @@ def fit_lgb_platt(model: lgb.Booster, X_test: np.ndarray, y_test: np.ndarray,
     cal_auc = roc_auc_score(y_test, lgb_y_cal)
 
     if cal_auc < raw_auc - auc_tolerance:
-        return LgbCalibration(a=1.0, b=0.0, on_logits=on_logits, fitted=True, kept=False,
-                              cal_accuracy=cal_acc, cal_auc=cal_auc)
-    return LgbCalibration(a=platt_a, b=platt_b, on_logits=on_logits, fitted=True, kept=True,
-                          cal_accuracy=cal_acc, cal_auc=cal_auc)
+        return LgbCalibration(
+            a=1.0,
+            b=0.0,
+            on_logits=on_logits,
+            fitted=True,
+            kept=False,
+            cal_accuracy=cal_acc,
+            cal_auc=cal_auc,
+        )
+    return LgbCalibration(
+        a=platt_a,
+        b=platt_b,
+        on_logits=on_logits,
+        fitted=True,
+        kept=True,
+        cal_accuracy=cal_acc,
+        cal_auc=cal_auc,
+    )

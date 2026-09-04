@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 # Drop metadata columns (not features, just row identifiers from data generation)
-DEFAULT_METADATA_COLS: tuple[str, ...] = ('slug_timestamp',)
+DEFAULT_METADATA_COLS: tuple[str, ...] = ("slug_timestamp",)
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class TrainingData:
     `feature_cols_orig`, so appending engineered columns later cannot shift a
     base feature out from under an index.
     """
+
     X_orig: np.ndarray
     y: np.ndarray
     feature_cols_orig: list[str]
@@ -62,6 +63,7 @@ class TemporalSplit:
     used for the exported normaliser and for the legacy --no-strict-holdout
     path. `X_holdout`/`y_holdout` are None when --holdout-frac is 0.
     """
+
     X_train: np.ndarray
     y_train: np.ndarray
     X_test: np.ndarray
@@ -73,9 +75,9 @@ class TemporalSplit:
     holdout_start_idx: int | None
 
 
-def assert_chronological_unique_slugs(df: pd.DataFrame,
-                                      *,
-                                      log: Callable[[str], None] = print) -> None:
+def assert_chronological_unique_slugs(
+    df: pd.DataFrame, *, log: Callable[[str], None] = print
+) -> None:
     """Reject (or warn about) row orderings that would leak across the split.
 
     Duplicate slug_timestamps are fatal — the same market outcome appearing
@@ -85,8 +87,8 @@ def assert_chronological_unique_slugs(df: pd.DataFrame,
     """
     # Audit fix (May 2026): assert chronological + unique slug ordering BEFORE split.
     # Catches data-generation bugs that would silently leak labels across train/test.
-    if 'slug_timestamp' in df.columns:
-        slug_ts_series = pd.to_numeric(df['slug_timestamp'], errors='coerce')
+    if "slug_timestamp" in df.columns:
+        slug_ts_series = pd.to_numeric(df["slug_timestamp"], errors="coerce")
         real_mask = slug_ts_series.notna()
         n_real = int(real_mask.sum())
         if n_real > 0:
@@ -101,17 +103,21 @@ def assert_chronological_unique_slugs(df: pd.DataFrame,
             # 2. Monotonic non-decreasing: trainXGBoost X[:split] is honest only if so
             if not np.all(np.diff(real_ts) >= 0):
                 n_inversions = int((np.diff(real_ts) < 0).sum())
-                log(f"   [WARN] slug_timestamps NOT monotonic ({n_inversions} inversions) — "
-                    f"temporal split may leak. Recommend regenerate with chronological sort.")
+                log(
+                    f"   [WARN] slug_timestamps NOT monotonic ({n_inversions} inversions) — "
+                    f"temporal split may leak. Recommend regenerate with chronological sort."
+                )
             else:
                 log(f"   [OK] slug_timestamps monotonic ({n_real:,} real-labeled rows)")
 
 
-def load_training_data(path: str,
-                       *,
-                       metadata_cols: Sequence[str] = DEFAULT_METADATA_COLS,
-                       zero_features: Sequence[str] = (),
-                       log: Callable[[str], None] = print) -> TrainingData:
+def load_training_data(
+    path: str,
+    *,
+    metadata_cols: Sequence[str] = DEFAULT_METADATA_COLS,
+    zero_features: Sequence[str] = (),
+    log: Callable[[str], None] = print,
+) -> TrainingData:
     """Read the training CSV, drop metadata columns, apply --zero-features.
 
     Args:
@@ -126,9 +132,9 @@ def load_training_data(path: str,
     df = pd.read_csv(path)
     assert_chronological_unique_slugs(df, log=log)
 
-    feature_cols_orig = [c for c in df.columns if c != 'label' and c not in metadata_cols]
+    feature_cols_orig = [c for c in df.columns if c != "label" and c not in metadata_cols]
     X_orig = df[feature_cols_orig].values.astype(np.float32)
-    y = df['label'].values.astype(np.int32)
+    y = df["label"].values.astype(np.int32)
     X_orig = np.nan_to_num(X_orig, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Apply --zero-features: zero out specified columns
@@ -152,12 +158,15 @@ def load_training_data(path: str,
     )
 
 
-def temporal_split(X: np.ndarray, y: np.ndarray,
-                   *,
-                   test_size: float,
-                   holdout_frac: float,
-                   embargo: int,
-                   log: Callable[[str], None] = print) -> TemporalSplit:
+def temporal_split(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    test_size: float,
+    holdout_frac: float,
+    embargo: int,
+    log: Callable[[str], None] = print,
+) -> TemporalSplit:
     """Split chronologically into train / (tune, holdout) / test with an embargo.
 
     Args:
@@ -169,8 +178,8 @@ def temporal_split(X: np.ndarray, y: np.ndarray,
     split = int(len(X) * (1 - test_size))
     # Embargo: drop the first `embargo` test rows — their feature lookbacks overlap
     # the training window, so keeping them inflates test metrics.
-    X_train, X_test = X[:split], X[split + embargo:]
-    y_train, y_test = y[:split], y[split + embargo:]
+    X_train, X_test = X[:split], X[split + embargo :]
+    y_train, y_test = y[:split], y[split + embargo :]
     log(f"   Train: {len(X_train):,} | Test: {len(X_test):,} (embargo {embargo} rows)")
 
     # OOS holdout: reserve final portion of training data for true out-of-sample evaluation
@@ -180,14 +189,17 @@ def temporal_split(X: np.ndarray, y: np.ndarray,
     if holdout_frac > 0:
         holdout_boundary = int(len(X_train) * (1 - holdout_frac))
         holdout_start_idx = holdout_boundary + embargo
-        X_holdout = X_train[holdout_boundary + embargo:]
-        y_holdout = y_train[holdout_boundary + embargo:]
+        X_holdout = X_train[holdout_boundary + embargo :]
+        y_holdout = y_train[holdout_boundary + embargo :]
         X_tune = X_train[:holdout_boundary]
         y_tune = y_train[:holdout_boundary]
         log(f"   OOS HOLDOUT: {len(X_holdout):,} samples reserved (not used for tuning)")
         log(f"   Tune set: {len(X_tune):,} | Holdout: {len(X_holdout):,}")
         # Swap: Optuna and CV will use X_tune/y_tune instead of full X_train/y_train
-        X_train_full, y_train_full = X_train, y_train  # keep reference to full train for final model
+        X_train_full, y_train_full = (
+            X_train,
+            y_train,
+        )  # keep reference to full train for final model
         X_train, y_train = X_tune, y_tune
     else:
         X_train_full, y_train_full = X_train, y_train

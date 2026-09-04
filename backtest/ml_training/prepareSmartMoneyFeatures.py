@@ -38,11 +38,15 @@ import os
 import sys
 from collections import defaultdict
 
-parser = argparse.ArgumentParser(description='Prepare smart money flow features from top trader data')
-parser.add_argument('--input', default='./polymarket_btc15m_data/top100_trades.csv',
-                    help='Path to top100_trades.csv')
-parser.add_argument('--output', default='./smart_money_lookup.json',
-                    help='Output JSON lookup file')
+parser = argparse.ArgumentParser(
+    description="Prepare smart money flow features from top trader data"
+)
+parser.add_argument(
+    "--input",
+    default="./polymarket_btc15m_data/top100_trades.csv",
+    help="Path to top100_trades.csv",
+)
+parser.add_argument("--output", default="./smart_money_lookup.json", help="Output JSON lookup file")
 args = parser.parse_args()
 
 if not os.path.isfile(args.input):
@@ -56,31 +60,31 @@ print(f"[1/2] Processing trades from {args.input}...")
 
 # Per-market minute-bucket data
 # { slug_ts_str: { "b": [0]*15, "t": [0]*15 } }
-markets = defaultdict(lambda: {"b": [0.0]*15, "t": [0.0]*15})
+markets = defaultdict(lambda: {"b": [0.0] * 15, "t": [0.0] * 15})
 
 count = 0
 skipped = 0
 parse_errors = 0
 
-with open(args.input, 'r', encoding='utf-8') as f:
+with open(args.input, encoding="utf-8") as f:
     reader = csv.DictReader(f)
     for row in reader:
         count += 1
 
         try:
             # Extract slug_timestamp from slug: "btc-updown-15m-{ts}"
-            slug = row['slug'].strip()
-            parts = slug.rsplit('-', 1)
+            slug = row["slug"].strip()
+            parts = slug.rsplit("-", 1)
             if len(parts) != 2:
                 skipped += 1
                 continue
             slug_ts = parts[1]
 
-            trade_ts = int(row['timestamp'])
+            trade_ts = int(row["timestamp"])
             slug_ts_int = int(slug_ts)
-            size = float(row['size'])
-            side = row['side'].strip().upper()
-            outcome_idx = int(row['outcome_index'])
+            size = float(row["size"])
+            side = row["side"].strip().upper()
+            outcome_idx = int(row["outcome_index"])
         except (ValueError, KeyError):
             parse_errors += 1
             continue
@@ -97,8 +101,7 @@ with open(args.input, 'r', encoding='utf-8') as f:
         # Classify flow direction:
         # Bullish: BUY UP token (outcome_idx=0) or SELL DOWN token (outcome_idx=1)
         # Bearish: BUY DOWN token (outcome_idx=1) or SELL UP token (outcome_idx=0)
-        is_bullish = (side == 'BUY' and outcome_idx == 0) or \
-                     (side == 'SELL' and outcome_idx == 1)
+        is_bullish = (side == "BUY" and outcome_idx == 0) or (side == "SELL" and outcome_idx == 1)
 
         m = markets[slug_ts]
         m["t"][minute] += size
@@ -108,7 +111,9 @@ with open(args.input, 'r', encoding='utf-8') as f:
         if count % 1000000 == 0:
             print(f"   {count:,} trades processed ({len(markets):,} markets)...")
 
-print(f"   {count:,} trades | {len(markets):,} markets | {skipped:,} skipped | {parse_errors:,} errors")
+print(
+    f"   {count:,} trades | {len(markets):,} markets | {skipped:,} skipped | {parse_errors:,} errors"
+)
 
 # ============================================================
 # Step 2: Write compact JSON
@@ -123,8 +128,8 @@ for slug_ts, data in markets.items():
         "t": [round(v, 2) for v in data["t"]],
     }
 
-with open(args.output, 'w') as f:
-    json.dump(output, f, separators=(',', ':'))
+with open(args.output, "w") as f:
+    json.dump(output, f, separators=(",", ":"))
 
 file_size = os.path.getsize(args.output) / (1024 * 1024)
 
