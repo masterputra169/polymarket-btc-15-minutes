@@ -83,7 +83,13 @@ if [ -d "$POLY_DATA_DIR" ] && [ -f "$POLY_DATA_DIR/02_btc15m_ml_ready.csv" ]; th
   echo ""
   echo "═══ STEP 0a: Prepare Polymarket Features ═══"
   echo ""
-  $PYTHON "$SCRIPT_DIR/preparePolymarketFeatures.py" --data-dir "$POLY_DATA_DIR" --output "$POLY_LOOKUP"
+  # --merge is REQUIRED. Without it this overwrites the accumulated lookup with
+  # only what the static scrape holds: on 2026-09-04 that meant 25,870 markets
+  # (25,835 priced) replaced by 12,995 (3,384 priced). generateTrainingData
+  # silently drops priceless rows, so the corpus would collapse with no error.
+  MERGE_FLAG=""
+  [ -f "$POLY_LOOKUP" ] && MERGE_FLAG="--merge $POLY_LOOKUP"
+  $PYTHON "$SCRIPT_DIR/preparePolymarketFeatures.py" --data-dir "$POLY_DATA_DIR" --output "$POLY_LOOKUP" $MERGE_FLAG
 
   if [ -f "$POLY_LOOKUP" ]; then
     POLY_FLAG="--polymarket-lookup $POLY_LOOKUP"

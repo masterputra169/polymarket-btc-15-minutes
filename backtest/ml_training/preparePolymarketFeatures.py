@@ -29,6 +29,15 @@ Structure:
 
 Usage:
   python preparePolymarketFeatures.py --data-dir ./polymarket_btc15m_data --output ./polymarket_lookup.json
+
+WARNING: without --merge this REPLACES the output file with the static scrape in
+--data-dir. Markets discovered since that scrape (everything fetchFreshMarkets.mts
+has added) are not in it and would be dropped. Pass
+--merge <same path as --output> to keep them.
+
+This file is the ENTRYPOINT only: argparse, printing and file I/O. The lookup
+construction, price-history ingest, merge and summary live in
+mltrain/polymarket_lookup.py and are unit-tested in tests/test_polymarket_lookup.py.
 """
 
 import argparse
@@ -36,6 +45,14 @@ import csv
 import json
 import os
 import sys
+
+from mltrain.polymarket_lookup import (
+    build_market_lookup,
+    ingest_price_history,
+    merge_existing,
+    sort_price_series,
+    summarise_lookup,
+)
 
 parser = argparse.ArgumentParser(description="Prepare Polymarket features lookup")
 parser.add_argument(
@@ -65,86 +82,33 @@ for path, name in [(MASTER_CSV, "Master CSV"), (PRICE_CSV, "Price history CSV")]
 # ============================================================
 print("[1/3] Loading master market data...")
 
-lookup = {}
 with open(MASTER_CSV, encoding="utf-8") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        slug_ts = row["slug_timestamp"].strip()
-        label = int(row["resolved_label"])
-        spread = float(row["spread"]) if row["spread"] else 0.0
-        liquidity = float(row["liquidity"]) if row["liquidity"] else 0.0
-        volume = float(row["volume"]) if row["volume"] else 0.0
-
-        lookup[slug_ts] = {
-            "label": label,
-            "spread": spread,
-            "liquidity": liquidity,
-            "volume": volume,
-            "prices": [],  # filled in step 2
-        }
+    lookup = build_market_lookup(csv.DictReader(f))
 
 print(f"   {len(lookup):,} markets loaded")
+
+# Fail before writing: an empty master CSV means the scrape produced nothing,
+# and continuing would overwrite --output with "{}" (and then divide by zero in
+# the summary below). Bail out while the existing lookup is still intact.
+if not lookup:
+    print(f"ERROR: {MASTER_CSV} contained no market rows — refusing to write an empty lookup")
+    sys.exit(1)
 
 # ============================================================
 # Step 2: Load price history (UP token only)
 # ============================================================
 print("[2/3] Loading price history (UP token snapshots)...")
 
-# Group price snapshots by slug_timestamp
-price_count = 0
-skipped_side = 0
-skipped_range = 0
-matched = 0
-
 with open(PRICE_CSV, encoding="utf-8") as f:
-    reader = csv.DictReader(f)
-    for row in reader:
-        price_count += 1
-
-        # Only UP token prices
-        if row["token_side"].strip().lower() != "up":
-            skipped_side += 1
-            continue
-
-        # Extract slug_timestamp from slug: "btc-updown-15m-{ts}"
-        slug = row["slug"].strip()
-        parts = slug.rsplit("-", 1)
-        if len(parts) != 2:
-            continue
-        slug_ts_str = parts[1]
-
-        if slug_ts_str not in lookup:
-            continue
-
-        try:
-            slug_ts_int = int(slug_ts_str)
-            obs_ts = int(row["timestamp_unix"])
-            price = float(row["price"])
-        except (ValueError, KeyError):
-            continue
-
-        # secs_into_market: how many seconds after market opened
-        secs_into = obs_ts - slug_ts_int
-        if secs_into < 0 or secs_into > 900:
-            skipped_range += 1
-            continue
-
-        lookup[slug_ts_str]["prices"].append([secs_into, round(price, 6)])
-        matched += 1
-
-        if price_count % 500000 == 0:
-            print(f"   {price_count:,} rows processed, {matched:,} matched...")
+    ingest = ingest_price_history(lookup, csv.DictReader(f))
 
 print(
-    f"   {price_count:,} total rows | {matched:,} matched | {skipped_side:,} non-UP | {skipped_range:,} out-of-range"
+    f"   {ingest.rows_read:,} total rows | {ingest.matched:,} matched | "
+    f"{ingest.skipped_side:,} non-UP | {ingest.skipped_range:,} out-of-range"
 )
 
 # Sort prices by time within each market
-markets_with_prices = 0
-for entry in lookup.values():
-    if entry["prices"]:
-        entry["prices"].sort(key=lambda x: x[0])
-        markets_with_prices += 1
+markets_with_prices = sort_price_series(lookup)
 
 print(f"   {markets_with_prices:,}/{len(lookup):,} markets have price history")
 
@@ -156,11 +120,7 @@ if args.merge and os.path.isfile(args.merge):
     with open(args.merge) as f:
         existing = json.load(f)
     # Add entries from existing that are NOT in the new dataset
-    merged_count = 0
-    for key, val in existing.items():
-        if key not in lookup:
-            lookup[key] = val
-            merged_count += 1
+    merged_count = merge_existing(lookup, existing)
     print(f"   Merged {merged_count:,} entries from existing lookup (not in dataset)")
     print(f"   Total after merge: {len(lookup):,}")
 else:
@@ -177,21 +137,19 @@ with open(args.output, "w") as f:
 file_size = os.path.getsize(args.output) / (1024 * 1024)
 print(f"   Saved to {args.output} ({file_size:.1f} MB)")
 
-# Summary stats
-labels = [e["label"] for e in lookup.values()]
-up_count = sum(labels)
-dn_count = len(labels) - up_count
-avg_prices = sum(len(e["prices"]) for e in lookup.values()) / max(len(lookup), 1)
+# Summary stats. NOTE: `markets_with_prices` is the PRE-merge count, so with
+# --merge this line under-reports; `Avg prices/market` covers the merged set.
+summary = summarise_lookup(lookup)
 
 print(f"""
 ============================================
   Polymarket Lookup Ready
 ============================================
-  Markets:    {len(lookup):,}
-  UP labels:  {up_count:,} ({up_count/len(lookup)*100:.1f}%)
-  DN labels:  {dn_count:,} ({dn_count/len(lookup)*100:.1f}%)
+  Markets:    {summary.n_markets:,}
+  UP labels:  {summary.n_up:,} ({summary.n_up/summary.n_markets*100:.1f}%)
+  DN labels:  {summary.n_down:,} ({summary.n_down/summary.n_markets*100:.1f}%)
   With prices: {markets_with_prices:,}
-  Avg prices/market: {avg_prices:.1f}
+  Avg prices/market: {summary.avg_prices_per_market:.1f}
   File size:  {file_size:.1f} MB
 ============================================
 """)
