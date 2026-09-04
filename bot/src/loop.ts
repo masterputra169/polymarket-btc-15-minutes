@@ -462,6 +462,57 @@ function _recordRLOutcomeFromJournal(rlSnap) {
 }
 
 /**
+ * Build the decision-time signal block recorded in the trade journal.
+ *
+ * The FOK path writes these fields inline in `entryData` (engines/tradePipeline.ts).
+ * LIMIT and PREMARKET entries had none of them, leaving ~1/3 of the journal blind
+ * for post-hoc analysis. Field names here mirror tradePipeline's `entryData` EXACTLY
+ * so old (FOK) and new (LIMIT/PREMARKET) rows stay directly comparable.
+ *
+ * DECISION TIME, NOT FILL TIME: a LIMIT order fills on a later poll, so this block
+ * is built when the entry decision is made (order placement) and carried through
+ * limitOrderManager's state → fillData → captureEntrySnapshot. Re-sampling at fill
+ * time would silently record numbers the bot never acted on. `signalAt` stamps when
+ * the block was sampled so the placement→fill lag is visible downstream.
+ *
+ * Note: `spread` uses the UP orderbook regardless of side — matching tradePipeline's
+ * existing `spread: orderbookUp?.spread` so the field means the same thing in both.
+ */
+function buildDecisionSignalBlock({
+  mlResult, edge, ensembleUp, timeAware, mlAgreesWithRules,
+  rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
+  bb, atr, stochRsi, emaCross, volDelta, consec,
+  delta1m, delta3m, regimeInfo, marketUp, marketDown,
+  orderbookSignal, orderbookUp, smartFlowSignal,
+  signalConfirmCount, recentFlips, expectedPrice,
+}): Record<string, any> {
+  return {
+    edgeUp: edge?.edgeUp, edgeDown: edge?.edgeDown, bestEdge: edge?.bestEdge,
+    ensembleUp, ruleUp: timeAware?.adjustedUp,
+    mlProbUp: mlResult?.mlProbUp, mlConfidence: mlResult?.mlConfidence,
+    mlSide: mlResult?.mlSide, mlAgreesWithRules,
+    rsiNow, rsiSlope, macdHist: macd?.hist, macdLine: macd?.line,
+    vwapDist, vwapSlope,
+    bbPercentB: bb?.percentB, bbWidth: bb?.width, bbSqueeze: bb?.squeeze,
+    atrPct: atr?.atrPct, atrRatio: atr?.atrRatio,
+    stochK: stochRsi?.k, stochD: stochRsi?.d,
+    emaCrossSignal: emaCross?.cross, emaDistPct: emaCross?.distancePct,
+    volDeltaBuyRatio: volDelta?.buyRatio,
+    haColor: consec?.color, haCount: consec?.count,
+    delta1m, delta3m,
+    regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
+    marketUp, marketDown,
+    orderbookImbalance: orderbookSignal?.imbalance, spread: orderbookUp?.spread,
+    signalConfirmCount, recentFlips,
+    smartFlowDirection: smartFlowSignal?.direction ?? null,
+    smartFlowStrength: smartFlowSignal?.strength ?? null,
+    smartFlowWindow: smartFlowSignal?.window ?? null,
+    expectedPrice: expectedPrice ?? null,
+    signalAt: Date.now(),
+  };
+}
+
+/**
  * Single poll iteration — full analysis + trading pipeline.
  */
 export async function pollOnce() {
@@ -956,6 +1007,7 @@ export async function pollOnce() {
             });
             confirmFill();
             captureEntrySnapshot({
+              ...(fd.signalSnapshot ?? {}),   // decision-time block from placement
               side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
               priceToBeat: priceToBeat?.value, marketSlug: fd.marketSlug,
               cost: fd.price * fd.size, size: fd.size,
@@ -1750,10 +1802,29 @@ export async function pollOnce() {
           try {
             // Audit fix Tier-1 HIGH (2026-05-14): add orderId + actualCost to all recordTrade calls.
             const rcvCost = Math.round(rcvSize * rcvPrice * 100) / 100;
+            // loadEntrySnapshotFromDisk() requires side + marketSlug to restore a
+            // position after a restart. The recovery path recorded neither, so a
+            // recovery position whose bot restarted before settlement lost its
+            // snapshot entirely and was never journalled. Latent until now (no
+            // such rows exist), but it would have silently eaten a real trade.
+            const rcvSignalBlock = buildDecisionSignalBlock({
+              mlResult, edge, ensembleUp, timeAware, mlAgreesWithRules,
+              rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
+              bb, atr, stochRsi, emaCross, volDelta, consec,
+              delta1m, delta3m, regimeInfo, marketUp, marketDown,
+              orderbookSignal, orderbookUp, smartFlowSignal,
+              signalConfirmCount: getConfirmCount(), recentFlips: recentFlipCount,
+              expectedPrice: rcvPrice,
+            });
+            // Same thresholds as the shadow-capture phase at the top of the poll.
+            const rcvPhase = (timeLeftMin == null) ? 'UNKNOWN'
+              : timeLeftMin > 10 ? 'EARLY'
+              : timeLeftMin > 5 ? 'MID'
+              : timeLeftMin > 2 ? 'LATE' : 'VERY_LATE';
             if (BOT_CONFIG.dryRun) {
               recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: null, actualCost: rcvCost });
               confirmFill();
-              captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
+              captureEntrySnapshot({ ...rcvSignalBlock, side: rcvSide, tokenPrice: rcvPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: rcvCost, size: rcvSize, confidence: 'RECOVERY', phase: rcvPhase, reason: 'recovery_buy', timeLeftMin, session: getSessionName() });
               entryRegime = regimeInfo?.regime ?? null;
               notify('info', `RECOVERY BUY (dry): ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
             } else {
@@ -1762,7 +1833,7 @@ export async function pollOnce() {
               recordTrade({ side: rcvSide, tokenId: rcvTokenId, conditionId: recoveryResult.conditionId, price: rcvPrice, size: rcvSize, marketSlug, orderId: rcvOrderId, actualCost: rcvCost });
               // Audit fix Tier-1 HIGH (2026-05-14): trackOrderPlacement requires 2 args (orderId + metadata).
               if (rcvOrderId) trackOrderPlacement(rcvOrderId, { tokenId: rcvTokenId, price: rcvPrice, size: rcvSize, side: rcvSide, confirmed: false });
-              captureEntrySnapshot({ btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketUp, marketDown, ensembleUp, rsiNow, timeLeftMin, regime: regimeInfo?.regime });
+              captureEntrySnapshot({ ...rcvSignalBlock, side: rcvSide, tokenPrice: rcvPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: rcvCost, size: rcvSize, confidence: 'RECOVERY', phase: rcvPhase, reason: 'recovery_buy', timeLeftMin, session: getSessionName() });
               entryRegime = regimeInfo?.regime ?? null;
               if (!BOT_CONFIG.dryRun && rcvTokenId) {
                 updateConditionalApproval(rcvTokenId).catch(e => log.warn(`Recovery approval skip: ${e.message}`));
@@ -1969,6 +2040,18 @@ export async function pollOnce() {
                 bankroll: getAvailableBankroll(),
                 mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
                 sessionQuality: limFilterResult.sessionQuality ?? 1.0, // Fix #7: session quality scaling
+                // Journal fix: freeze the signal block AT THE ENTRY DECISION.
+                // The fill lands on a later poll — carried through fillData so the
+                // journal records what we acted on, not a re-sample at fill time.
+                signalSnapshot: buildDecisionSignalBlock({
+                  mlResult, edge, ensembleUp, timeAware, mlAgreesWithRules,
+                  rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
+                  bb, atr, stochRsi, emaCross, volDelta, consec,
+                  delta1m, delta3m, regimeInfo, marketUp, marketDown,
+                  orderbookSignal, orderbookUp, smartFlowSignal,
+                  signalConfirmCount: getConfirmCount(), recentFlips: recentFlipCount,
+                  expectedPrice: limitEval.targetPrice,
+                }),
               }, { placeLimitBuyOrder, setPendingCost });
 
               if (placeResult.placed) {
@@ -2025,6 +2108,7 @@ export async function pollOnce() {
                 entryRegime = regimeInfo?.regime ?? 'moderate';
                 recordTradeForMarket(fd.marketSlug);
                 captureEntrySnapshot({
+                  ...(fd.signalSnapshot ?? {}),   // decision-time block from placement
                   side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
                   priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
                   cost: fd.price * fd.size, size: fd.size,
@@ -2076,6 +2160,9 @@ export async function pollOnce() {
             entryRegime = regimeInfo?.regime ?? 'moderate';
             recordTradeForMarket(fd.marketSlug);
             captureEntrySnapshot({
+              // Decision-time signal block captured at placement (spread first so
+              // the fill-time facts below always win on any shared key).
+              ...(fd.signalSnapshot ?? {}),
               side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
               priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
               cost: fd.price * fd.size, size: fd.size,
@@ -2112,6 +2199,7 @@ export async function pollOnce() {
             entryRegime = regimeInfo?.regime ?? 'moderate';
             recordTradeForMarket(fd.marketSlug);
             captureEntrySnapshot({
+              ...(fd.signalSnapshot ?? {}),   // decision-time block from placement
               side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
               priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
               cost: fd.price * fd.size, size: fd.size,
@@ -2175,6 +2263,7 @@ export async function pollOnce() {
               entryRegime = regimeInfo?.regime ?? 'moderate';
               recordTradeForMarket(fd.marketSlug);
               captureEntrySnapshot({
+                ...(fd.signalSnapshot ?? {}),   // decision-time block from placement
                 side: fd.side, tokenPrice: fd.price, btcPrice: lastPrice,
                 priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
                 cost: fd.price * fd.size, size: fd.size,
@@ -2270,11 +2359,24 @@ export async function pollOnce() {
               `Strategy: BEST ENTRY (limit @ bestBid) → HOLD to settlement`
             );
 
+            // Journal fix: pre-market entries bypass the ML/edge gates but the signals
+            // ARE computed this poll — record them so post-hoc analysis isn't blind.
+            // Built here (decision time); both branches below reuse it unchanged.
+            const pmSignalBlock = buildDecisionSignalBlock({
+              mlResult, edge, ensembleUp, timeAware, mlAgreesWithRules,
+              rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
+              bb, atr, stochRsi, emaCross, volDelta, consec,
+              delta1m, delta3m, regimeInfo, marketUp, marketDown,
+              orderbookSignal, orderbookUp, smartFlowSignal,
+              signalConfirmCount: getConfirmCount(), recentFlips: recentFlipCount,
+              expectedPrice: pmPrice,
+            });
+
             if (BOT_CONFIG.dryRun) {
               // Audit fix Tier-1 HIGH (2026-05-14): add orderId + actualCost.
               recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: pmPrice, size: pmShares, marketSlug, orderId: null, actualCost: pmOrderCost });
               confirmFill();
-              captureEntrySnapshot({ side: 'UP', tokenPrice: pmPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmOrderCost, size: pmShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
+              captureEntrySnapshot({ ...pmSignalBlock, side: 'UP', tokenPrice: pmPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmOrderCost, size: pmShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long', timeLeftMin, session: getSessionName() });
               entryRegime = regimeInfo?.regime ?? null;
               onPreMarketEntry(pmPrice, marketSlug);
               preMarketEnteredThisPoll = true;
@@ -2315,7 +2417,7 @@ export async function pollOnce() {
                 // Audit fix Tier-1 HIGH (2026-05-14): add actualCost.
                 recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId, actualCost: pmLimitCost });
                 entryRegime = regimeInfo?.regime ?? null;
-                captureEntrySnapshot({ side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
+                captureEntrySnapshot({ ...pmSignalBlock, side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
                 onPreMarketEntry(limitPrice, marketSlug);
                 preMarketEnteredThisPoll = true;
                 // ERC-1155 approval for subsequent sells

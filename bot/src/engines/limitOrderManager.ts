@@ -32,6 +32,12 @@ type LimitFillData = {
   conditionId: any;
   marketSlug: any;
   orderId: any;
+  /**
+   * Decision-time signal block captured at PLACEMENT (see placeLimitOrder).
+   * Carried through the order lifecycle so the journal entry written at FILL
+   * time records the numbers the bot actually acted on, not re-sampled ones.
+   */
+  signalSnapshot?: Record<string, any> | null;
 };
 
 type MonitorLimitOrderResult = {
@@ -80,6 +86,7 @@ let state = {
   placedAt: null,          // Timestamp
   expirationTs: null,      // Unix seconds for GTD
   mlConfAtPlacement: null, // ML confidence when placed
+  signalSnapshot: null,    // Decision-time signal block for the trade journal
   cancelReason: null,      // Why cancelled (if applicable)
   lastCheckAt: 0,          // Last CLOB status check timestamp
   evalCount: 0,            // Polls spent evaluating before placement
@@ -314,6 +321,10 @@ export function evaluateLimitEntry({
  * @param {number} params.bankroll - Available bankroll
  * @param {number} params.mlConfidence - ML conf at placement
  * @param {number} [params.sessionQuality] - Session quality multiplier (1.0=US, 0.85=Asia, 0.7=Off)
+ * @param {Object|null} [params.signalSnapshot] - Decision-time signal block (ML/edge/spread/
+ *        indicators) captured by the caller at the moment the entry decision was made.
+ *        Stored verbatim and returned in fillData so the journal entry written on a LATER
+ *        poll records the numbers the bot acted on. Never re-sampled at fill time.
  * @param {Object} deps - Dependencies
  * @param {Function} deps.placeLimitBuyOrder - CLOB limit order function
  * @param {Function} deps.setPendingCost - Reserve bankroll
@@ -322,6 +333,7 @@ export function evaluateLimitEntry({
 export async function placeLimitOrder({
   side, targetPrice, tokenId, marketSlug, conditionId,
   marketEndMs, bankroll, mlConfidence, sessionQuality,
+  signalSnapshot = null,
 }, deps) {
   const cfg = BOT_CONFIG.limitOrder;
 
@@ -417,6 +429,9 @@ export async function placeLimitOrder({
       placedAt: Date.now(),
       expirationTs,
       mlConfAtPlacement: mlConfidence,
+      // Freeze the decision-time signal block for the whole order lifecycle
+      // (PLACED → MONITORING → FILLED). Journal writes happen on a later poll.
+      signalSnapshot: signalSnapshot ?? null,
       cancelReason: null,
       lastCheckAt: 0,
       evalCount: 0,
@@ -557,6 +572,7 @@ export async function monitorLimitOrder({
           conditionId: state.conditionId,
           marketSlug: state.marketSlug,
           orderId: state.orderId,
+          signalSnapshot: state.signalSnapshot ?? null,
         },
       };
     }
@@ -594,6 +610,7 @@ export async function monitorLimitOrder({
             conditionId: state.conditionId,
             marketSlug: state.marketSlug,
             orderId: state.orderId,
+            signalSnapshot: state.signalSnapshot ?? null,
           },
         };
       } else if (fillRatio > 0) {
@@ -644,6 +661,7 @@ export async function cancelLimitOrder(reason, deps): Promise<CancelLimitOrderRe
     conditionId: state.conditionId,
     marketSlug: state.marketSlug,
     orderId: state.orderId,
+    signalSnapshot: state.signalSnapshot ?? null,
   };
   const savedMarketSlug = state.marketSlug;
   state.cancelReason = reason;
@@ -842,6 +860,7 @@ export function resetLimitOrderState() {
     placedAt: null,
     expirationTs: null,
     mlConfAtPlacement: null,
+    signalSnapshot: null,
     cancelReason: null,
     lastCheckAt: 0,
     evalCount: 0,
