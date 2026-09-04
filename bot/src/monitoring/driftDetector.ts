@@ -61,6 +61,12 @@ const CFG = {
   confDrop:        envNum('DRIFT_CONF_DROP', 0.08, 0.02, 0.30),     // confidence drop
   cooldownDays:    envNum('DRIFT_COOLDOWN_DAYS', 7, 1, 30),
   autoRetrain:     process.env.DRIFT_AUTO_RETRAIN === 'true',
+  // Trades older than this cannot say anything about the CURRENT model. Without
+  // the guard the detector compared 109-day-old trades from a previous model
+  // against the freshly deployed model's baseline and reported a 16.6pp "drift"
+  // every poll — a false alarm that spams alerts and can trigger a needless
+  // retrain, while masking the real signal when it eventually appears.
+  maxTradeAgeDays: envNum('DRIFT_MAX_TRADE_AGE_DAYS', 21, 1, 365),
 };
 
 // ── CUSUM in-memory state (persisted across calls) ──
@@ -86,6 +92,8 @@ function loadBaseline() {
 // ── Load recent trades with ML accuracy data from journal ──
 function loadRecentMlTrades(windowSize) {
   const trades = [];
+  const minTs = Date.now() - CFG.maxTradeAgeDays * 86_400_000;
+  let staleSkipped = 0;
 
   try {
     if (!existsSync(BOT_CONFIG.journalFile)) return trades;
@@ -105,8 +113,13 @@ function loadRecentMlTrades(windowSize) {
         if (entry.entry?.dryRun) continue;
         if (mlWasRight == null) continue;
 
+        // Skip trades older than the freshness window — the journal is
+        // append-only and outlives many model generations.
+        const ts = entry._ts ?? entry.entry?.enteredAt ?? 0;
+        if (ts && ts < minTs) { staleSkipped++; continue; }
+
         trades.unshift({
-          ts:          entry._ts ?? entry.entry?.enteredAt ?? 0,
+          ts,
           mlWasRight:  mlWasRight === true,
           mlConf:      mlConf,
           outcome:     entry.analysis?.outcome,
@@ -115,6 +128,13 @@ function loadRecentMlTrades(windowSize) {
     }
   } catch (err) {
     log.warn(`Failed to load journal for drift check: ${err.message}`);
+  }
+
+  if (staleSkipped > 0 && trades.length === 0) {
+    log.info(
+      `Drift check skipped: journal has no trades newer than ${CFG.maxTradeAgeDays}d ` +
+      `(${staleSkipped} older entries ignored). Waiting for live trades on the current model.`
+    );
   }
 
   return trades;
