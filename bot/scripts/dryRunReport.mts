@@ -110,6 +110,49 @@ function pct(v: number | null): string {
   return v == null ? '   n/a' : `${v.toFixed(1)}%`;
 }
 
+/**
+ * PTB source health over the window.
+ *
+ * The PTB-source gate blocks entries with no ML or edge override, so a degraded
+ * source is the one failure that turns an observation period into silence. When
+ * the report shows zero trades, this line says whether the market was quiet or
+ * the bot was structurally unable to enter.
+ */
+function ptbHealth(sinceMs: number): { total: number; exact: number; bySource: Record<string, number> } | null {
+  const p = resolve(ROOT, 'bot', 'data', 'ptb_health.jsonl');
+  if (!existsSync(p)) return null;
+  let total = 0, exact = 0;
+  const bySource: Record<string, number> = {};
+  for (const line of readFileSync(p, 'utf-8').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let e: any;
+    try { e = JSON.parse(trimmed); } catch { continue; }   // torn line — skip
+    if (!e.to || e.to < sinceMs) continue;
+    total += e.total || 0;
+    exact += e.exact || 0;
+    for (const [src, n] of Object.entries(e.bySource || {})) bySource[src] = (bySource[src] || 0) + (n as number);
+  }
+  return total ? { total, exact, bySource } : null;
+}
+
+function printPtbHealth(sinceMs: number): void {
+  const h = ptbHealth(sinceMs);
+  console.log(`\n  ${'-'.repeat(60)}`);
+  if (!h) {
+    console.log('  PTB source health: no data yet (bot/data/ptb_health.jsonl empty —');
+    console.log('                     needs a bot running the ptbHealth instrumentation)');
+    return;
+  }
+  const okPct = (h.exact / h.total) * 100;
+  const verdict = okPct >= 95 ? 'healthy'
+    : okPct >= 80 ? 'degraded — some entries were blocked at the PTB gate'
+    : 'BROKEN — the PTB gate is blocking most entries, trades cannot happen';
+  console.log(`  PTB source health: ${okPct.toFixed(1)}% exact of ${h.total.toLocaleString()} evaluations — ${verdict}`);
+  const sorted = Object.entries(h.bySource).sort((a, b) => b[1] - a[1]);
+  console.log(`    ${sorted.map(([s, n]) => `${s}=${((n / h.total) * 100).toFixed(1)}%`).join('  ')}`);
+}
+
 function main(): void {
   const args = parseArgs();
   const journalPath = typeof args.journal === 'string'
@@ -127,6 +170,7 @@ function main(): void {
       window: args.all ? 'all' : `${days}d`,
       dryRun: summarise(dry),
       live: summarise(live),
+      ptb: ptbHealth(sinceMs),
       benchmark: LIVE_BENCHMARK,
     }, null, 2));
     return;
@@ -141,7 +185,9 @@ function main(): void {
   if (all.length === 0) {
     console.log('\n  No journal entries in this window.');
     console.log('  If the bot is running, filters are blocking every entry —');
-    console.log('  check the live log for the "Filtered:" lines to see which.\n');
+    console.log('  check the live log for the "Filtered:" lines to see which.');
+    printPtbHealth(sinceMs);
+    console.log('');
     return;
   }
 
@@ -166,6 +212,8 @@ function main(): void {
       }
     }
   }
+
+  printPtbHealth(sinceMs);
 
   const d = summarise(dry);
   console.log(`\n  ${'-'.repeat(60)}`);

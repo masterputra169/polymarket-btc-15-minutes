@@ -28,6 +28,7 @@
 import { TRADE_FILTERS } from '../../../src/config.ts';
 import { BOT_CONFIG } from '../config.ts';
 import { envNum } from '../utils/env.ts';
+import { recordPtbSource } from '../monitoring/ptbHealth.ts';
 import { createLogger } from '../logger.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
@@ -194,6 +195,9 @@ export function applyTradeFilters({
   // Re-widening this list is a money-losing regression — see
   // tradeFilters.ptbSource.test.js.
   const EXACT_PTB_TRUST = ['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'];
+  // Durable health record. This gate has no override, so a degrading PTB source
+  // silently produces zero entries — see bot/src/monitoring/ptbHealth.ts.
+  recordPtbSource(ptbSource);
   if (!EXACT_PTB_TRUST.includes(ptbSource)) {
     const label = ptbSource ? `'${ptbSource}' not exact` : 'unknown/missing';
     reasons.push(`PTB source ${label} — entry BLOCKED (Lapis0 safety: Polymarket gamma removed 2026-05-16; need exact scheduled_ws/data_streams PTB)`);

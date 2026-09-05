@@ -54,6 +54,7 @@ import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } 
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime } from './src/loop.ts';
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.ts';
 import { initRuntimeIntegrations, recordRuntimeEvent, shutdownRuntimeIntegrations } from './src/services/runtimeIntegrations.ts';
+import { flush as flushPtbHealth } from './src/monitoring/ptbHealth.ts';
 import { startReportServer, stopReportServer } from './src/services/reportServer.ts';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.ts';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.ts';
@@ -337,6 +338,8 @@ async function main() {
     stopMonitor();
     stopDailySummary();
     try { await shutdownDataStreams(); } catch { /* ignore */ }
+    // Persist the partial PTB-health window so a restart does not lose it.
+    try { flushPtbHealth(); } catch { /* ignore */ }
 
     // Cancel open orders (live mode only)
     if (!BOT_CONFIG.dryRun) {
