@@ -27,12 +27,37 @@
 
 import { TRADE_FILTERS } from '../../../src/config.ts';
 import { BOT_CONFIG } from '../config.ts';
+import { envNum } from '../utils/env.ts';
 import { createLogger } from '../logger.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
 import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.ts';
 
 const log = createLogger('Filter');
+
+// Dry-run-only entry-price cap override.
+//
+// In DRY_RUN the point of the run is evidence, and the 68c hard cap is by far
+// the biggest single gate: over 2h of live polling it was the sole blocker on
+// 4,824 of 7,559 one-rule-away polls, and the bot took zero entries in 46,629
+// polls. A filter set that admits nothing produces nothing to measure, and the
+// go-live decision needs >=30 resolved dry-run trades to compare against the
+// 52% benchmark.
+//
+// Deliberately gated on BOT_CONFIG.dryRun so it can never loosen a live bot:
+// with real money at stake the cap stays 68c no matter what the env says. The
+// override only ever RAISES the cap (0.68 floor), so a typo cannot tighten the
+// live path either. Cleared automatically the moment DRY_RUN goes false.
+const DRY_RUN_HARD_ENTRY_CAP = BOT_CONFIG.dryRun
+  ? (process.env.DRY_RUN_HARD_ENTRY_CAP != null
+      ? envNum(process.env.DRY_RUN_HARD_ENTRY_CAP, 0.68, 0.68, 0.95)
+      : null)
+  : null;
+
+if (DRY_RUN_HARD_ENTRY_CAP != null) {
+  log.warn(`DRY-RUN ONLY: entry-price hard cap raised 68c -> ${(DRY_RUN_HARD_ENTRY_CAP * 100).toFixed(0)}c ` +
+           'to collect entries for the go-live comparison. Has no effect when DRY_RUN=false.');
+}
 
 // Module state for cooldown tracking
 let lastLossTimestamp = 0;
@@ -206,16 +231,17 @@ export function applyTradeFilters({
   // v4: Data shows >75c entries: 70% WR, -$3.48 PnL. Tightened caps.
   // BASE_HARD_CAP: 68c normal, TRENDING_HARD_CAP: 72c (was 75c) with ML ≥80%.
   // ULTRA ML bypass: ML ≥90% can go up to 75c (v16 ≥90% = near-certain).
-  const BASE_HARD_CAP = 0.68;
-  const TRENDING_HARD_CAP = 0.72;   // v4: 0.75→0.72 — >75c is negative EV bucket
-  const ULTRA_ML_CAP = 0.75;        // v4: only ML ≥90% can reach 75c
+  const BASE_HARD_CAP = DRY_RUN_HARD_ENTRY_CAP ?? 0.68;
+  const TRENDING_HARD_CAP = Math.max(0.72, BASE_HARD_CAP);   // v4: 0.75→0.72 — >75c is negative EV bucket
+  const ULTRA_ML_CAP = Math.max(0.75, BASE_HARD_CAP);        // v4: only ML ≥90% can reach 75c
   const trendingPremium = regime === 'trending' && mlConfidence != null && mlConfidence >= 0.80;
   const ultraMl = mlConfidence != null && mlConfidence >= 0.90;
   const HARD_ENTRY_CAP = ultraMl ? ULTRA_ML_CAP : (trendingPremium ? TRENDING_HARD_CAP : BASE_HARD_CAP);
   if (marketPrice != null && marketPrice > HARD_ENTRY_CAP) {
     const trendTag = trendingPremium ? ' [trending premium active]' : '';
     const mlTag = ultraMl ? ' [ultra ML active]' : '';
-    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR)${trendTag}${mlTag}`);
+    const dryTag = DRY_RUN_HARD_ENTRY_CAP != null ? ' [dry-run cap]' : '';
+    reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR)${trendTag}${mlTag}${dryTag}`);
   } else if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
     // Soft cap bypass: ML ≥85% OR trending + ML ≥80%
     const mlBypass = mlConfidence != null && (mlConfidence >= 0.85 || trendingPremium);
