@@ -19,8 +19,10 @@ The bot listens on `::` (IPv6 + IPv4) so the frontend's nginx can reach it
 over Railway's private network; `PORT=3101` points Railway's healthcheck at
 the report API's unauthenticated `/health`. The frontend proxies `/ws` and
 `/api/reports` to `bot.railway.internal`, re-resolving the hostname per
-request (`docker/nginx-resolver.envsh` + `docker/nginx.conf.template`), so a
-bot redeploy with a new private IP never strands the dashboard.
+request (the nginx image's own `15-local-resolvers.envsh` exports
+`NGINX_LOCAL_RESOLVERS`, used by `docker/nginx.conf.template`), so a bot
+redeploy with a new private IP never strands the dashboard. nginx listens on
+`[::]:80` as well as `80`: Railway reaches containers over IPv6.
 
 ## Variables
 

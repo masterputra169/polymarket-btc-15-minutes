@@ -34,9 +34,12 @@ Variables on `bot`: everything in `bot/.env` (copied by CLI, never printed),
    `restartPolicyType: ON_FAILURE` restarts it. Same code path protects the
    local Docker stack and PM2.
 4. nginx resolves the bot hostname per request through the resolver found in
-   `/etc/resolv.conf` at container start (`docker/nginx-resolver.envsh`), so
-   a bot redeploy with a new private IP does not leave the dashboard on a
-   stale address. The same template serves compose (`BOT_HOST=bot`).
+   `/etc/resolv.conf` at container start (the nginx image's built-in
+   `15-local-resolvers.envsh`, enabled by `NGINX_ENTRYPOINT_LOCAL_RESOLVERS`),
+   so a bot redeploy with a new private IP does not leave the dashboard on a
+   stale address. The same template serves compose (`BOT_HOST=bot`). Learned
+   the hard way: a custom `.envsh` uploaded from Windows lacks the exec bit
+   and is skipped, and an IPv4-only `listen` gets 502 from Railway's edge.
 
 ## Out of scope for this stage
 
