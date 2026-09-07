@@ -42,8 +42,14 @@ printed) plus:
 | `TZ` | `Asia/Jakarta` | log timestamps |
 
 `frontend`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.frontend`, `VITE_BOT_WS_URL=/ws`,
-`VITE_BOT_STATUS_TOKEN=<same as bot STATUS_AUTH_TOKEN>`, `BOT_HOST=bot.railway.internal`,
-`PORT=80`.
+`BOT_HOST=bot.railway.internal`, `PORT=80`. **No `VITE_BOT_STATUS_TOKEN`** on
+Railway: the dashboard domain is public, the bundle is readable by anyone, and
+the status token also authorises control commands (pause, setBankroll,
+sellPosition, forceSettle). Instead, each operator opens the dashboard once
+with `?botStatusToken=<STATUS_AUTH_TOKEN of the bot service>`; the frontend
+stores it in that browser's localStorage and every later visit uses it.
+Visitors without the token see an empty dashboard and the bot closes their
+socket with 1008. Rotate `STATUS_AUTH_TOKEN` on the bot service to revoke.
 
 ## Deploy
 
