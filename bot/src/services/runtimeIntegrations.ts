@@ -2,7 +2,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { createLogger } from '../logger.ts';
 import { envInt } from '../utils/env.ts';
-import { SCHEMA_STATEMENTS } from './postgresSchema.ts';
+import { SCHEMA_STATEMENTS, loadInitSql } from './postgresSchema.ts';
 import type { PgModule, PgPool } from './pgTypes.ts';
 
 const require = createRequire(import.meta.url);
@@ -68,6 +68,19 @@ async function ensurePostgresSchema(pool: PgPool) {
   for (const statement of SCHEMA_STATEMENTS) {
     await pool.query(statement);
   }
+  // Analytics views (and indexes) from docker/postgres/init — a managed
+  // Postgres never ran them, and the report API reads the views. Each file is
+  // one multi-statement query; a failure is logged, not fatal: trading does
+  // not depend on reports.
+  const initFiles = loadInitSql();
+  for (const [i, sql] of initFiles.entries()) {
+    try {
+      await pool.query(sql);
+    } catch (err) {
+      log.warn(`Postgres init SQL #${i + 1} failed (report views may be missing): ${(err as Error).message}`);
+    }
+  }
+  if (initFiles.length === 0) log.warn('Postgres init SQL directory not found — report API views will be missing');
 }
 
 async function initPostgres() {

@@ -6,6 +6,31 @@
  * Canonical schema. Keep docker/postgres/init/001_runtime_schema.sql in sync.
  */
 
+import { readdirSync, readFileSync, existsSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * docker/postgres/init/*.sql, in order. On compose these run once through
+ * docker-entrypoint-initdb.d; a managed Postgres (Railway) has no such hook,
+ * so the bot runs them itself at startup. Every statement in them is
+ * idempotent (IF NOT EXISTS / OR REPLACE — enforced by a test), so repeating
+ * them on each start is cheap and safe. Dockerfile.bot ships the directory;
+ * an absent directory (unusual layout) yields [] and the tables below still
+ * get created — only the analytics views for the report API would be missing.
+ */
+export const INIT_SQL_DIR = resolve(__dirname, '..', '..', '..', 'docker', 'postgres', 'init');
+
+export function loadInitSql(dir: string = INIT_SQL_DIR): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter(f => f.toLowerCase().endsWith('.sql'))
+    .sort()
+    .map(f => readFileSync(resolve(dir, f), 'utf-8'));
+}
+
 export const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS bot_runtime_events (
     id BIGSERIAL PRIMARY KEY,

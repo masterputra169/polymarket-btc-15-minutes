@@ -13,6 +13,9 @@ COPY src ./src
 COPY bot ./bot
 COPY public/ml ./public/ml
 COPY tsconfig*.json ./
+# Postgres bootstrap SQL: the bot applies these itself on a managed database
+# (see postgresSchema.loadInitSql); compose also feeds them to initdb.
+COPY docker/postgres/init ./docker/postgres/init
 
 # Only the two directories the bot writes to need to belong to `node`; both are
 # bind-mounted at runtime anyway, so this is really just for a mount-less run.
