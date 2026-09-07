@@ -14,7 +14,13 @@ COPY bot ./bot
 COPY public/ml ./public/ml
 COPY tsconfig*.json ./
 
-RUN mkdir -p /app/bot/data && chown -R node:node /app
+# Only the two directories the bot writes to need to belong to `node`; both are
+# bind-mounted at runtime anyway, so this is really just for a mount-less run.
+# The previous `chown -R node:node /app` walked both node_modules trees, which
+# made this the slowest layer in the build and killed it twice on a 20GB host
+# for want of memory. Everything else is read-only at runtime and world-readable
+# as COPY leaves it.
+RUN mkdir -p /app/bot/data && chown node:node /app/bot/data /app/public/ml
 
 USER node
 EXPOSE 3099
