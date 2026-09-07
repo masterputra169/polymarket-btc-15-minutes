@@ -49,6 +49,18 @@ function getETNow() {
 }
 
 /**
+ * Minimum time the current market must have left before a pre-market entry.
+ * Same floor as the regular entry path (MIN_TIME_LEFT_FOR_ENTRY in loop.ts).
+ *
+ * Measured 2026-09-04 (state.json): the entry fired at 13:00:00.564Z into the
+ * 12:45–13:00 market that had closed half a second earlier, bought UP at 0.115
+ * (already lost) and was settled as a LOSS 12 seconds later. The 09:00 ET window
+ * opens exactly on a market boundary, so the first poll of the window can still
+ * be holding the previous market's slug.
+ */
+export const PREMARKET_MIN_TIME_LEFT_MIN = 0.5;
+
+/**
  * Check if pre-market LONG entry conditions are met.
  *
  * @param {Object} params
@@ -56,13 +68,17 @@ function getETNow() {
  * @param {number} params.bankroll - Current bankroll
  * @param {boolean} params.settlementPending - Whether settlement is in progress
  * @param {number} params.marketUpPrice - Current UP token price
+ * @param {number|null} params.timeLeftMin - Minutes left in the CURRENT market (null = unknown)
  * @param {Object} params.config - preMarketLong config from BOT_CONFIG
  * @returns {{ shouldEnter: boolean, reason: string }}
  */
-export function checkPreMarketEntry({ hasPosition, bankroll, settlementPending, marketUpPrice, config }) {
+export function checkPreMarketEntry({ hasPosition, bankroll, settlementPending, marketUpPrice, timeLeftMin, config }) {
   if (process.env.PREMARKET_LONG_ENABLED !== 'true') return { shouldEnter: false, reason: 'disabled' };
   if (hasPosition) return { shouldEnter: false, reason: 'has_position' };
   if (settlementPending) return { shouldEnter: false, reason: 'settlement_pending' };
+  if (timeLeftMin == null || !Number.isFinite(timeLeftMin) || timeLeftMin < PREMARKET_MIN_TIME_LEFT_MIN) {
+    return { shouldEnter: false, reason: `market_expiring (timeLeft=${timeLeftMin ?? 'null'}min < ${PREMARKET_MIN_TIME_LEFT_MIN}min)` };
+  }
   if (bankroll < 2) return { shouldEnter: false, reason: 'low_bankroll' };
   if (marketUpPrice > config.maxEntryPrice) {
     return { shouldEnter: false, reason: `price_too_high (${(marketUpPrice * 100).toFixed(0)}c > ${(config.maxEntryPrice * 100).toFixed(0)}c)` };

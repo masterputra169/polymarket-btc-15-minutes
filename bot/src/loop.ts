@@ -2340,6 +2340,7 @@ export async function pollOnce() {
         bankroll,
         settlementPending,
         marketUpPrice: marketUp,
+        timeLeftMin,             // refuses the market that just closed at the 09:00 boundary
         config: BOT_CONFIG.preMarketLong,
       });
 
@@ -2502,6 +2503,7 @@ export async function pollOnce() {
           setPendingCost,
           placeBuyOrder,
           recordTrade,
+          confirmFill,             // dry-run simulated fills; live fills are confirmed by the fill tracker
           trackOrderPlacement,
           recordTradeForMarket: (slug) => { recordTradeForMarket(slug); setMarketTradeCounts(exportMarketTradeCounts()); },
           captureEntrySnapshot,

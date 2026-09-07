@@ -150,6 +150,9 @@ export function loadEntrySnapshotFromDisk() {
 export function captureEntrySnapshot(data) {
   entrySnapshot = {
     ...data,
+    // Stamped at decision time so a simulated row can never pass as real money:
+    // dryRunReport, driftDetector and the reconciler all key on this flag.
+    dryRun: BOT_CONFIG.dryRun === true,
     enteredAt: Date.now(),
   };
   // RC1 Fix: persist to disk — survives bot restarts
@@ -165,7 +168,9 @@ export function captureEntrySnapshot(data) {
 
 /**
  * Write a complete journal entry (entry + exit + analysis) to JSONL file.
- * Skipped in DRY_RUN mode. Sends Telegram alert for every real trade.
+ * DRY_RUN rows are written too (flagged entry.dryRun) — they are the only
+ * evidence a dry run produces — but never mirrored to Postgres, which is the
+ * record of real trades. Sends a Telegram alert for every row.
  */
 export function writeJournalEntry({ outcome, pnl, exitData }) {
   // RC1 Fix: if in-memory snapshot was lost (bot restart), try loading from disk
@@ -177,12 +182,11 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
     return;
   }
 
-  // DRY_RUN: skip file write and Telegram — no real trade happened
-  if (BOT_CONFIG.dryRun) {
-    log.debug(`DRY RUN — journal skipped (${outcome})`);
-    entrySnapshot = null;
-    return;
-  }
+  // Measured 2026-09-07: five days of DRY_RUN and an empty journal, because this
+  // function used to return early here. The dry run's whole output is this row.
+  // The flag stamped at entry is authoritative: a bot restarted in DRY_RUN with a
+  // real position still open must still mirror that real trade when it settles.
+  const isDryRun = entrySnapshot.dryRun === true;
 
   const exit = {
     ...exitData,
@@ -203,14 +207,16 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     appendFileSync(BOT_CONFIG.journalFile, JSON.stringify(record) + '\n');
     log.info(
-      `Journal: ${outcome} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl?.toFixed(2) ?? '?'} | ` +
+      `Journal${isDryRun ? ' [DRY]' : ''}: ${outcome} | P&L: ${pnl >= 0 ? '+' : ''}$${pnl?.toFixed(2) ?? '?'} | ` +
       `${entrySnapshot.side} | edge=${((entrySnapshot.bestEdge ?? 0) * 100).toFixed(1)}%`
     );
   } catch (err) {
     log.warn(`Journal write failed: ${err.message}`);
   }
 
-  mirrorTradeJournalRecord(record).catch(e => log.debug(`PostgreSQL journal mirror skipped: ${e.message}`));
+  if (!isDryRun) {
+    mirrorTradeJournalRecord(record).catch(e => log.debug(`PostgreSQL journal mirror skipped: ${e.message}`));
+  }
 
   // Update cache
   if (recentCache === null) recentCache = [];
@@ -270,7 +276,7 @@ async function _sendTradeAlert(record) {
   const todayStr = `${_dailyCount}/${MAX_MARKETS_PER_DAY}`;
 
   const lines = [
-    `${emoji} <b>${outcomeLabel}</b> | ${side === 'UP' ? '↑ UP' : '↓ DOWN'}${meBoost ? ' 🧠 ME↑' : ''}`,
+    `${emoji} <b>${outcomeLabel}</b>${entry?.dryRun ? ' [DRY]' : ''} | ${side === 'UP' ? '↑ UP' : '↓ DOWN'}${meBoost ? ' 🧠 ME↑' : ''}`,
     ``,
     `💰 P&amp;L: <b>${pnlStr}</b>`,
     bankrollStr != null ? `🏦 Bankroll: <b>${bankrollStr}</b>` : null,

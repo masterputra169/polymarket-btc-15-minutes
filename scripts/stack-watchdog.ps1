@@ -13,6 +13,12 @@
     1. If the Docker engine does not answer, force-restart Docker Desktop
        (kill stale processes, shut down the WSL VM, cold start) and wait.
     2. If the bot container is not running, bring the stack up.
+    3. If the bot container is running but BLIND — no completed poll in
+       $StaleMinutes minutes, judged from bot/data/ptb_health.jsonl by
+       bot/scripts/botLiveness.mts — restart the container; if that did not
+       cure it within the last 30 minutes, restart Docker Desktop instead.
+       Measured 2026-09-06: 11.8 hours of "Up" with every poll timing out,
+       invisible to checks 1 and 2.
 
   It deliberately runs `docker compose up -d` with NO override file, so the
   bot's mode comes from DRY_RUN in bot/.env and the watchdog can never flip a
@@ -38,6 +44,14 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogFile = Join-Path $RepoRoot 'bot\data\watchdog.log'
 $DockerExe = 'A:\Docker\Docker\frontend\Docker Desktop.exe'
+$LivenessScript = Join-Path $RepoRoot 'bot\scripts\botLiveness.mts'
+$StateFile = Join-Path $RepoRoot 'bot\data\watchdog_state.json'
+# No completed poll for this long while the container runs = alive but blind.
+$StaleMinutes = 10
+# A container younger than this has not had time to write its first rollup.
+$GraceMinutes = 5
+# A second blind verdict this soon after a container restart escalates to Docker.
+$EscalateWithinMinutes = 30
 
 function Write-Log {
     param([string]$Message)
@@ -58,6 +72,54 @@ function Test-BotRunning {
         $names = & docker ps --filter 'name=polymarket-bot' --format '{{.Names}}' 2>$null
         return $LASTEXITCODE -eq 0 -and $names -contains 'polymarket-bot'
     } catch { return $false }
+}
+
+function Get-BotUptimeMinutes {
+    try {
+        $started = & docker inspect --format '{{.State.StartedAt}}' polymarket-bot 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $started) { return $null }
+        # Docker prints nanoseconds; .NET parses at most 7 fractional digits.
+        $clean = [regex]::Replace([string]$started, '\.\d+Z$', 'Z')
+        $startedAt = [DateTime]::Parse($clean, $null, [Globalization.DateTimeStyles]::AdjustToUniversal)
+        return ((Get-Date).ToUniversalTime() - $startedAt).TotalMinutes
+    } catch { return $null }
+}
+
+function Get-BotLiveness {
+    # Code: 0 fresh, 2 stale, 3 no data. Anything else means the check itself
+    # failed — treated as fresh, so a broken check can never cause a restart.
+    try {
+        $out = & node $LivenessScript --stale-min $StaleMinutes 2>$null
+        $detail = if ($out) { [string]($out | Select-Object -Last 1) } else { '' }
+        return @{ Code = $LASTEXITCODE; Detail = $detail }
+    } catch { return @{ Code = -1; Detail = $_.Exception.Message } }
+}
+
+function Read-WatchdogState {
+    try {
+        if (Test-Path $StateFile) { return Get-Content $StateFile -Raw | ConvertFrom-Json }
+    } catch { }
+    return $null
+}
+
+function Get-StateValue($State, [string]$Name) {
+    # StrictMode throws on a missing property; the state file may predate a key.
+    if ($null -eq $State) { return $null }
+    $prop = $State.PSObject.Properties[$Name]
+    if ($null -eq $prop) { return $null }
+    return $prop.Value
+}
+
+function Write-WatchdogState([hashtable]$State) {
+    try { $State | ConvertTo-Json -Compress | Set-Content -Path $StateFile } catch { }
+}
+
+function Restart-BotContainer {
+    Push-Location $RepoRoot
+    try {
+        & docker compose restart bot 2>&1 | Out-Null
+        return $LASTEXITCODE -eq 0
+    } finally { Pop-Location }
 }
 
 function Restart-DockerDesktop {
@@ -110,7 +172,8 @@ $engineUp = Test-DockerEngine
 
 if ($WhatIfOnly) {
     $botUp = if ($engineUp) { Test-BotRunning } else { $false }
-    Write-Log "CHECK ONLY - engine up: $engineUp | bot running: $botUp"
+    $live = if ($botUp) { Get-BotLiveness } else { @{ Code = -1; Detail = 'n/a' } }
+    Write-Log "CHECK ONLY - engine up: $engineUp | bot running: $botUp | liveness: $($live.Code) $($live.Detail)"
     exit 0
 }
 
@@ -119,8 +182,36 @@ if (-not $engineUp) {
 }
 
 if (Test-BotRunning) {
-    # Healthy: stay silent so the log records interventions, not heartbeats.
-    exit 0
+    $uptime = Get-BotUptimeMinutes
+    if ($uptime -ne $null -and $uptime -lt $GraceMinutes) { exit 0 }
+
+    $live = Get-BotLiveness
+    if ($live.Code -ne 2 -and $live.Code -ne 3) {
+        # Fresh, or the check itself could not run: stay silent so the log
+        # records interventions, not heartbeats.
+        exit 0
+    }
+
+    # Alive but blind. First try the cheap fix; escalate if it already failed once.
+    $state = Read-WatchdogState
+    $lastBotRestart = [DateTime]::MinValue
+    $lastBotRestartRaw = Get-StateValue $state 'lastBotRestart'
+    if ($lastBotRestartRaw) {
+        try { $lastBotRestart = [DateTime]::Parse([string]$lastBotRestartRaw) } catch { }
+    }
+    $now = Get-Date
+    if (($now - $lastBotRestart).TotalMinutes -lt $EscalateWithinMinutes) {
+        Write-Log "Bot still blind after container restart at $($lastBotRestart.ToString('s')) - $($live.Detail) - restarting Docker Desktop"
+        if (-not (Restart-DockerDesktop)) { exit 1 }
+        Write-WatchdogState @{ lastBotRestart = $now.ToString('o'); lastDockerRestart = $now.ToString('o') }
+        if (Start-Stack) { exit 0 } else { exit 1 }
+    }
+
+    Write-Log "Bot running but blind - $($live.Detail) - restarting the bot container"
+    Write-WatchdogState @{ lastBotRestart = $now.ToString('o'); lastDockerRestart = (Get-StateValue $state 'lastDockerRestart') }
+    if (Restart-BotContainer) { Write-Log 'Bot container restarted'; exit 0 }
+    Write-Log 'docker compose restart bot failed'
+    exit 1
 }
 
 if (Start-Stack) { exit 0 } else { exit 1 }

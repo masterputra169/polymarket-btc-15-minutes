@@ -123,6 +123,8 @@ Dev server proxies to avoid CORS:
 | `trade_journal.jsonl` | JSONL | All trades with full details |
 | `verified_journal.jsonl` | JSONL | On-chain verified trades from CLOB |
 | `feedback.json` | JSON | Rolling accuracy stats per regime |
+| `ptb_health.jsonl` | JSONL | 1-min rollups of the PTB source mix; also the liveness heartbeat the stack watchdog reads |
+| `watchdog_state.json` | JSON | Last container / Docker restart the watchdog performed (escalation memory) |
 
 ### Edge Engine (`src/engines/edge.ts`)
 
@@ -146,6 +148,8 @@ Phase-based decision with regime-adaptive thresholds:
 - **`envNum()`/`envInt()` pattern**: All bot config uses bounded parsing — never raw `parseInt(process.env.X)`.
 - **Sell lock**: `positionTracker.acquireSellLock()` prevents cut-loss/take-profit/manual-sell race conditions (45s timeout).
 - **Anti-loop protection**: `limitOrderManager.ts` tracks attempts per market slug (max 2) and enforces 60s cancel cooldown.
+- **DRY_RUN simulates fills**: the directional path books a position at the quoted price and runs settlement / cut-loss / journal exactly like live; journal rows carry `entry.dryRun: true`, never reach the Postgres mirror, and are what `npm run report:dryrun` scores. No order reaches the CLOB (client is not even initialised in dry run).
+- **Watchdog liveness**: `scripts/stack-watchdog.ps1` (scheduled every 10 min) also runs `bot/scripts/botLiveness.mts`; a container that is "Up" but has not completed a poll in 10 min gets restarted, and Docker Desktop is restarted if that did not help within 30 min.
 - **Dynamic fee** (Mar 30, 2026): `polyFeeRate(p) = 0.072 * p * (1-p)` — Crypto category, max 1.80% at p=0.50. Maker rebate: 20% (limit orders effective ~0.0576 × p × (1−p)). `@polymarket/clob-client` v4 auto-handles `feeRateBps` in signing.
 
 ### Environment Notes

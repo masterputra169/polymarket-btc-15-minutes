@@ -109,8 +109,9 @@ function loadRecentMlTrades(windowSize) {
         const mlWasRight = entry.analysis?.mlWasRight;
         const mlConf     = entry.entry?.mlConfidence ?? null;
 
-        // Skip DRY_RUN and trades without ML data
-        if (entry.entry?.dryRun) continue;
+        // Dry-run rows count: the question is whether the model's prediction
+        // matched the market, and that is the same whether money moved or not.
+        // Skipping them left a dry-run bot with no drift guard at all.
         if (mlWasRight == null) continue;
 
         // Skip trades older than the freshness window — the journal is
@@ -133,7 +134,7 @@ function loadRecentMlTrades(windowSize) {
   if (staleSkipped > 0 && trades.length === 0) {
     log.info(
       `Drift check skipped: journal has no trades newer than ${CFG.maxTradeAgeDays}d ` +
-      `(${staleSkipped} older entries ignored). Waiting for live trades on the current model.`
+      `(${staleSkipped} older entries ignored). Waiting for trades on the current model.`
     );
   }
 

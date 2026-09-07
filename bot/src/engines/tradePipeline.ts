@@ -582,14 +582,33 @@ export async function executeDirectionalTrade({
   };
 
   if (dryRun) {
-    deps.setPendingCost(0);
-    deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
-    // H8: Don't call recordTradeForMarket in dry-run — inflates counter, blocks real entries
+    // Simulate the fill at the quoted price and book it through the same hooks
+    // the live path uses, so settlement, cut-loss and the journal run unchanged
+    // and the dry run yields resolved trades to judge. Until 2026-09-07 this
+    // branch only logged "Would BUY": five days of dry run, zero trades measured.
+    // No order reaches the CLOB. The per-market / hourly counters are kept in
+    // step with live on purpose — a simulation that could re-enter a market the
+    // live bot may not would overstate what going live can do.
     log.info(
-      `[DRY RUN] Would BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${(shares * betMarketPrice).toFixed(2)} | ` +
+      `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${orderCost.toFixed(2)} (simulated fill) | ` +
       `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
       `Conf: ${rec.confidence}${flowTag}${smartFlowTag} | ${betSizing.rationale}`
     );
+    deps.setPendingCost(0);
+    deps.recordTrade({
+      side: betSide, tokenId,
+      conditionId: currentConditionId,
+      price: betMarketPrice, size: shares,
+      marketSlug, orderId: null, actualCost: orderCost,
+    });
+    deps.confirmFill?.();
+    deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
+    deps.recordTradeForMarket(marketSlug);
+    deps.recordTradeTimestamp?.();
+    entryData.actualPrice = betMarketPrice;
+    entryData.slippagePct = 0;
+    entryData.avgSlippage = getAvgSlippage();
+    deps.captureEntrySnapshot(entryData);
     // Record prediction for accuracy tracking
     try {
       deps.recordPrediction({
