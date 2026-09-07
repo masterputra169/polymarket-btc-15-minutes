@@ -1,8 +1,0 @@
-#!/bin/sh
-# Sourced by the nginx image entrypoint (*.envsh files run before the envsubst
-# step). Exports RESOLVER for docker/nginx.conf.template: the DNS server this
-# container was given, which is Docker's embedded DNS on compose and Railway's
-# private DNS on Railway. IPv6 addresses need brackets in nginx's resolver.
-ns="$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null)"
-case "$ns" in *:*) ns="[$ns]" ;; esac
-export RESOLVER="${RESOLVER:-${ns:-127.0.0.11}}"

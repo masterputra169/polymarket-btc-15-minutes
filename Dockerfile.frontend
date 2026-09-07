@@ -24,11 +24,14 @@ FROM nginx:1.27-alpine
 # The image's entrypoint renders /etc/nginx/templates/*.template with envsubst,
 # substituting only the names matched by NGINX_ENVSUBST_FILTER so nginx's own
 # $variables survive. BOT_HOST defaults to the compose service name; Railway
-# overrides it with bot.railway.internal. RESOLVER is derived at start.
-ENV NGINX_ENVSUBST_FILTER='^(BOT_HOST|RESOLVER)$' \
+# overrides it with bot.railway.internal. NGINX_ENTRYPOINT_LOCAL_RESOLVERS makes
+# the image's own 15-local-resolvers.envsh export NGINX_LOCAL_RESOLVERS from
+# /etc/resolv.conf (a custom .envsh would need the exec bit, which an upload
+# from Windows does not carry — that crashed the first Railway deploy).
+ENV NGINX_ENVSUBST_FILTER='^(BOT_HOST|NGINX_LOCAL_RESOLVERS)$' \
+    NGINX_ENTRYPOINT_LOCAL_RESOLVERS=true \
     BOT_HOST=bot
 COPY docker/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY docker/nginx-resolver.envsh /docker-entrypoint.d/15-resolver.envsh
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

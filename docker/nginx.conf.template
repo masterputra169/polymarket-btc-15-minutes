@@ -1,26 +1,31 @@
 # Rendered by the nginx image's envsubst step into /etc/nginx/conf.d/default.conf
-# (see Dockerfile.frontend). Only ${BOT_HOST} and ${RESOLVER} are substituted
-# (NGINX_ENVSUBST_FILTER); every other $variable below is nginx's own.
+# (see Dockerfile.frontend). Only ${BOT_HOST} and ${NGINX_LOCAL_RESOLVERS} are
+# substituted (NGINX_ENVSUBST_FILTER); every other $variable below is nginx's own.
 #
 #   BOT_HOST  - where the bot lives: `bot` on docker-compose,
 #               `bot.railway.internal` on Railway private networking.
-#   RESOLVER  - the DNS server nginx must ask at request time, read from
-#               /etc/resolv.conf at container start (docker/nginx-resolver.envsh).
-#               Needed because the bot's private IP changes on every redeploy;
-#               a static proxy_pass would keep the stale address until nginx
-#               itself restarted.
+#   NGINX_LOCAL_RESOLVERS - the DNS server(s) nginx must ask at request time,
+#               exported by the image's own /docker-entrypoint.d/15-local-resolvers.envsh
+#               (enabled with NGINX_ENTRYPOINT_LOCAL_RESOLVERS=true) from
+#               /etc/resolv.conf, IPv6 already bracketed. Needed because the
+#               bot's private IP changes on every redeploy; a static proxy_pass
+#               would keep the stale address until nginx itself restarted.
 
 # Rate limit for the report API: 10 req/s per client IP, small burst absorbed.
 limit_req_zone $binary_remote_addr zone=reports:1m rate=10r/s;
 
 server {
+  # Both families: Railway's edge and private network reach the container over
+  # IPv6 (a v4-only listener answers "Application failed to respond" with 502);
+  # compose and local curl use IPv4.
   listen 80;
+  listen [::]:80;
   server_name _;
 
   root /usr/share/nginx/html;
   index index.html;
 
-  resolver ${RESOLVER} valid=10s ipv6=on;
+  resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=on;
 
   # --- Security headers (inherited by all locations below; a location-level
   # --- add_header would suppress inheritance, so keep add_header here only).
