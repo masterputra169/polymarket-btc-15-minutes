@@ -12,10 +12,13 @@
  * that lands near 52% means the retrain did not fix the decay.
  *
  * Usage:
- *   node bot/scripts/dryRunReport.mts [--days 1] [--journal <path>] [--all]
- *     --days N    look back N days (default 1)
- *     --all       ignore --days and report the whole journal
- *     --json      emit JSON instead of a table (for piping)
+ *   node bot/scripts/dryRunReport.mts [--days 1] [--journal <path>] [--ptb-health <path>] [--all]
+ *     --days N          look back N days (default 1)
+ *     --all             ignore --days and report the whole journal
+ *     --journal P       journal file (default bot/data/trade_journal.jsonl)
+ *     --ptb-health P    PTB health rollups (default bot/data/ptb_health.jsonl) —
+ *                       pass the file pulled from Railway together with its journal
+ *     --json            emit JSON instead of a table (for piping)
  */
 
 import { readFileSync, existsSync } from 'fs';
@@ -118,8 +121,10 @@ function pct(v: number | null): string {
  * the report shows zero trades, this line says whether the market was quiet or
  * the bot was structurally unable to enter.
  */
+let ptbHealthPath = resolve(ROOT, 'bot', 'data', 'ptb_health.jsonl');
+
 function ptbHealth(sinceMs: number): { total: number; exact: number; bySource: Record<string, number> } | null {
-  const p = resolve(ROOT, 'bot', 'data', 'ptb_health.jsonl');
+  const p = ptbHealthPath;
   if (!existsSync(p)) return null;
   let total = 0, exact = 0;
   const bySource: Record<string, number> = {};
@@ -158,6 +163,7 @@ function main(): void {
   const journalPath = typeof args.journal === 'string'
     ? args.journal
     : resolve(ROOT, 'bot', 'data', 'trade_journal.jsonl');
+  if (typeof args['ptb-health'] === 'string') ptbHealthPath = resolve(args['ptb-health']);
   const days = args.all ? Infinity : Number(args.days ?? 1);
   const sinceMs = args.all ? 0 : Date.now() - days * 86_400_000;
 

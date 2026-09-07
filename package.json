@@ -25,7 +25,8 @@
     "typecheck:frontend": "tsc -p tsconfig.frontend.json",
     "typecheck:bot": "tsc -p tsconfig.bot.json",
     "typecheck:bot:core": "tsc -p tsconfig.bot.core.json",
-    "typecheck:scripts": "tsc -p tsconfig.scripts.json"
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "report:dryrun:railway": "node bot/scripts/railwayDryRunReport.mts --days 7"
   },
   "dependencies": {
     "react": "^19.2.4",

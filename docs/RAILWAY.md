@@ -69,8 +69,13 @@ became `C:/Program Files/Git/ws`).
 railway logs --service bot | grep -E 'Mode:|loaded|Liveness|Loop\] #'
 curl -s https://frontend-production-d0bf1.up.railway.app/health           # ok
 curl -s https://frontend-production-d0bf1.up.railway.app/api/health/report  # {"ok":true,...}
-npm run report:dryrun                                                     # once the journal fills
+npm run report:dryrun:railway    # pulls the volume's journal + PTB health over railway ssh, then scores it
 ```
+
+Dry-run rows never reach the Postgres mirror, so the dashboard's report API
+does not show them; `report:dryrun:railway` is the go-live evidence for the
+Railway bot (copies land in `bot/data/railway/`). Telegram still gets every
+`[DRY]` settlement and the daily summary.
 
 Liveness: the bot exits 1 after 10 minutes without a completed poll (5 min
 grace after start, `LIVENESS_STALE_MIN` / `LIVENESS_GRACE_MIN`,
