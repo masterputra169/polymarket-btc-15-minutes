@@ -106,14 +106,16 @@ export function startReportServer() {
         return;
       }
 
-      if (!isAuthorized(req, url)) {
-        writeJson(res, 401, { ok: false, error: 'unauthorized' });
+      // Liveness probe, deliberately outside auth and outside Postgres: platform
+      // healthchecks (Railway) cannot send a token, and a DB hiccup must not
+      // make the supervisor kill an otherwise healthy bot. Reveals nothing.
+      if (url.pathname === '/health') {
+        writeJson(res, 200, { ok: true, service: 'report-api', ts: new Date().toISOString() });
         return;
       }
 
-      if (url.pathname === '/health') {
-        await pool.query('SELECT 1');
-        writeJson(res, 200, { ok: true, service: 'report-api', ts: new Date().toISOString() });
+      if (!isAuthorized(req, url)) {
+        writeJson(res, 401, { ok: false, error: 'unauthorized' });
         return;
       }
 

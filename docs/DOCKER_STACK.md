@@ -290,3 +290,10 @@ The bot's mode comes from `DRY_RUN` in `bot/.env`, which Compose loads via
 it can never flip a live bot into dry-run or a dry-run bot into live. To go
 live: set `DRY_RUN=false` in `bot/.env`, then `docker compose up -d bot`.
 Never run the Docker bot and the PM2 bot at the same time — same wallet.
+
+### Pausing the watchdog
+
+Create `bot/data/watchdog.paused` and the scheduled task exits without doing
+anything — needed whenever the bot is meant to be stopped on this machine
+(for example while it runs on Railway, see `docs/RAILWAY.md`), otherwise the
+watchdog would bring a second copy up against the same wallet.

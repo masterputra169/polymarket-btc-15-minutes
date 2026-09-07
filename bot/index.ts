@@ -55,6 +55,7 @@ import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegi
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.ts';
 import { initRuntimeIntegrations, recordRuntimeEvent, shutdownRuntimeIntegrations } from './src/services/runtimeIntegrations.ts';
 import { flush as flushPtbHealth } from './src/monitoring/ptbHealth.ts';
+import { startLivenessWatch, stopLivenessWatch } from './src/monitoring/processLiveness.ts';
 import { startReportServer, stopReportServer } from './src/services/reportServer.ts';
 import { loadPositions, startPolling as startPositionPolling, stopPolling as stopPositionPolling, getMergedPositions, closePosition } from './src/trading/positionManager.ts';
 import { loadTrackedTraders, fullScan, getTrackedTraders, getDiscoveredTraders, addTrackedTrader, removeTrackedTrader, simulateTrader } from './src/discovery/traderDiscovery.ts';
@@ -284,6 +285,9 @@ async function main() {
 
   await pollOnce();
   const intervalId = setInterval(pollOnce, POLL_MS);
+  // Exit non-zero if polls stop completing (alive but blind) so the supervisor
+  // restarts us — the only watchdog available on a hosted platform.
+  startLivenessWatch();
 
   // 6b. AI analysis interval (runs alongside poll loop)
   let aiIntervalId = null;
@@ -320,6 +324,7 @@ async function main() {
 
     log.info(`\n${signal} received — shutting down gracefully...`);
     clearInterval(intervalId);
+    stopLivenessWatch();
     if (aiIntervalId) clearInterval(aiIntervalId);
     if (macroIntervalId) clearInterval(macroIntervalId);
 

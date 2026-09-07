@@ -45,6 +45,10 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogFile = Join-Path $RepoRoot 'bot\data\watchdog.log'
 $DockerExe = 'A:\Docker\Docker\frontend\Docker Desktop.exe'
 $LivenessScript = Join-Path $RepoRoot 'bot\scripts\botLiveness.mts'
+# Presence of this file silences the watchdog entirely: used while the bot is
+# deliberately stopped on this machine (e.g. it runs on Railway instead) so the
+# watchdog does not resurrect a second copy against the same wallet.
+$PauseFile = Join-Path $RepoRoot 'bot\data\watchdog.paused'
 $StateFile = Join-Path $RepoRoot 'bot\data\watchdog_state.json'
 # No completed poll for this long while the container runs = alive but blind.
 $StaleMinutes = 10
@@ -168,6 +172,11 @@ function Start-Stack {
 }
 
 # --- main ---------------------------------------------------------------
+if (Test-Path $PauseFile) {
+    if ($WhatIfOnly) { Write-Log "CHECK ONLY - paused by $PauseFile" }
+    exit 0
+}
+
 $engineUp = Test-DockerEngine
 
 if ($WhatIfOnly) {

@@ -1,0 +1,12 @@
+# Not needed to build either image (see .dockerignore); keeps `railway up`
+# uploads small. bot/data and .env files are already excluded by .gitignore.
+backtest/
+docs/
+math/
+insight polymarket/
+monte carlo/
+public/ml/backups/
+public/ml/v16_locked/
+public/ml_v19_staging/
+.backtest_cache/
+*.log

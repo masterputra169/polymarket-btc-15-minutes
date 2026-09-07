@@ -209,6 +209,7 @@ import { broadcast } from './statusServer.ts';
 
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
+import { beatLiveness } from './monitoring/processLiveness.ts';
 
 // Live Polymarket data logger
 import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.ts';
@@ -2571,6 +2572,9 @@ export async function pollOnce() {
       `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
       `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} ${mcTag} | ${srcTag}`
     );
+    // A poll that reached its summary line saw prices, the market and the model:
+    // that is the heartbeat the in-process liveness watch (index.ts) waits for.
+    beatLiveness();
 
     // ── 13. Compute narratives + broadcast full state to dashboard ──
     const macdLabel = macd === null ? '-' : macd.hist < 0
