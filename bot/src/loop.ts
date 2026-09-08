@@ -601,6 +601,11 @@ export async function pollOnce() {
           cbLastLogMs = now;
         }
         broadcast({ halted: true, haltReason: haltCheck.reason, cooldownRemainMin: Math.ceil((cooldownMs - elapsed) / 60_000), ts: now, bankroll: getBankroll(), stats: getStats() });
+        // A halted bot is paused by policy, not blind: keep the liveness heartbeat
+        // going or the watch exits the process every 5 min, each restart resets the
+        // in-memory cooldown, and after 10 restarts Railway stops the service
+        // (measured 2026-09-08 02:13–03:09Z: crash loop, then down for 3+ hours).
+        beatLiveness();
         return;
       }
     } else {

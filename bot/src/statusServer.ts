@@ -43,6 +43,7 @@ let lastBroadcastMs = 0;
 // Bot control callbacks — set via registerBotControl() to avoid circular imports
 let _pauseBot = null;
 let _resumeBot = null;
+let _resetDailyBaseline = null; // operator: lift a daily-loss halt caused by a stale baseline
 let _resetEntryRegime = null;
 
 // Position manager callbacks
@@ -100,10 +101,11 @@ function requestToken(req) {
 /**
  * Register pause/resume callbacks from loop.ts (called by index.ts).
  */
-export function registerBotControl(pauseFn, resumeFn, resetEntryRegimeFn) {
+export function registerBotControl(pauseFn, resumeFn, resetEntryRegimeFn, resetDailyBaselineFn = null) {
   _pauseBot = pauseFn;
   _resumeBot = resumeFn;
   _resetEntryRegime = resetEntryRegimeFn ?? null;
+  _resetDailyBaseline = resetDailyBaselineFn ?? null;
 }
 
 /**
@@ -211,6 +213,17 @@ export function startStatusServer() {
           if (now - lastBotControlMs < BOT_CONTROL_COOLDOWN_MS) return;
           lastBotControlMs = now;
           _resumeBot();
+        } else if (msg.type === 'resetDailyBaseline') {
+          // Operator escape hatch for a daily-loss halt whose baseline is wrong
+          // (e.g. a corrected settlement from a previous day). Token-gated like
+          // every control command; the loop lifts the halt on its next poll.
+          const now = Date.now();
+          if (now - lastBotControlMs < BOT_CONTROL_COOLDOWN_MS) { respond('resetDailyBaseline', { ok: false, error: 'rate_limited' }); return; }
+          lastBotControlMs = now;
+          if (!_resetDailyBaseline) { respond('resetDailyBaseline', { ok: false, error: 'not_registered' }); return; }
+          log.warn(`Operator reset of the daily baseline requested from ${req?.socket?.remoteAddress || 'unknown'}`);
+          _resetDailyBaseline();
+          respond('resetDailyBaseline', { ok: true });
 
         // ── Position Manager commands ──
         } else if (msg.type === 'getPositions' && _getPositions) {

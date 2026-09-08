@@ -44,7 +44,7 @@ import { setLogLevel, log } from './src/logger.ts';
 import { loadMLModelFromDisk } from './src/adapters/mlLoader.ts';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.ts';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
-import { loadState, saveState as savePositionState, getStats, getCurrentPosition } from './src/trading/positionTracker.ts';
+import { loadState, saveState as savePositionState, getStats, getCurrentPosition, resetDailyBaseline } from './src/trading/positionTracker.ts';
 import { initClobClient, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.ts';
@@ -270,7 +270,7 @@ async function main() {
 
   // W2: Register ALL callbacks BEFORE starting server — prevents race where
   // dashboard connects and sends commands before callbacks are set
-  registerBotControl(pauseBot, resumeBot, resetEntryRegime);
+  registerBotControl(pauseBot, resumeBot, resetEntryRegime, resetDailyBaseline);
   registerPositionManager({ getPositions: () => getMergedPositions(getCurrentPosition()), closePosition });
   registerTraderDiscovery({
     scan: fullScan,
