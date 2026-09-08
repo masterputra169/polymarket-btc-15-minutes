@@ -16,6 +16,7 @@
 import { createLogger } from '../logger.ts';
 import { envNum } from '../utils/env.ts';
 import { flush as flushPtbHealth } from './ptbHealth.ts';
+import { notify } from './notifier.ts';
 
 const log = createLogger('Liveness');
 
@@ -61,6 +62,60 @@ const EXIT_ON_STALE = (process.env.LIVENESS_EXIT_ENABLED ?? 'true').toLowerCase(
 
 const instance = createProcessLiveness({ staleMs: STALE_MIN * 60_000, graceMs: GRACE_MIN * 60_000 });
 let timer: ReturnType<typeof setInterval> | null = null;
+let exiting = false;
+
+/** How long the exit waits for the Telegram alert before giving up on it. */
+const NOTIFY_TIMEOUT_MS = 5000;
+
+export interface StaleDeps {
+  exitEnabled: boolean;
+  staleMin: number;
+  notify: (level: 'critical' | 'warn' | 'info', message: string, opts?: { key?: string }) => Promise<unknown>;
+  flush: () => void;
+  exit: (code: number) => void;
+  notifyTimeoutMs?: number;
+}
+
+const defaultStaleDeps = (): StaleDeps => ({
+  exitEnabled: EXIT_ON_STALE,
+  staleMin: STALE_MIN,
+  notify,
+  flush: flushPtbHealth,
+  exit: (code) => process.exit(code),
+  notifyTimeoutMs: NOTIFY_TIMEOUT_MS,
+});
+
+/**
+ * The stale verdict's consequence: tell the operator (Telegram, bounded wait),
+ * persist the partial PTB-health window, exit 1 for the supervisor. Without
+ * the alert a crash loop that exhausts the supervisor's retries goes unnoticed
+ * (2026-09-08: Railway stopped the service at 03:09Z, nothing in Telegram).
+ */
+export async function handleStale(v: ProcessLivenessVerdict, deps: StaleDeps = defaultStaleDeps()): Promise<void> {
+  const age = v.ageMs == null ? 'no poll completed since start' : `${(v.ageMs / 60_000).toFixed(1)} min since last completed poll`;
+  if (!deps.exitEnabled) {
+    log.warn(`Bot is alive but blind (${age}); LIVENESS_EXIT_ENABLED=false so not exiting`);
+    return;
+  }
+  log.error(`Bot is alive but blind (${age}, threshold ${deps.staleMin} min) — exiting 1 so the supervisor restarts it`);
+
+  const message =
+    `LIVENESS EXIT: bot is alive but blind (${age}, threshold ${deps.staleMin} min) — exiting so the supervisor restarts it. ` +
+    `If this repeats, the supervisor may stop the service after its retry limit: check railway logs / pm2 logs.`;
+  const timeoutMs = deps.notifyTimeoutMs ?? NOTIFY_TIMEOUT_MS;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<void>(resolve => { timeoutHandle = setTimeout(resolve, timeoutMs); });
+  try {
+    await Promise.race([deps.notify('critical', message, { key: 'liveness:exit' }), timeout]);
+  } catch (err) {
+    log.warn(`Liveness exit alert failed: ${err.message}`);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+
+  try { deps.flush(); } catch { /* best effort */ }
+  deps.exit(1);
+}
 
 /** loop.ts: a poll got all the way to the summary line and broadcast. */
 export function beatLiveness(): void {
@@ -81,14 +136,11 @@ export function startLivenessWatch(): void {
   timer = setInterval(() => {
     const v = instance.verdict();
     if (v.status !== 'stale') return;
-    const age = v.ageMs == null ? 'no poll completed since start' : `${(v.ageMs / 60_000).toFixed(1)} min since last completed poll`;
-    if (!EXIT_ON_STALE) {
-      log.warn(`Bot is alive but blind (${age}); LIVENESS_EXIT_ENABLED=false so not exiting`);
-      return;
+    if (EXIT_ON_STALE) {
+      if (exiting) return; // alert + exit already in flight
+      exiting = true;
     }
-    log.error(`Bot is alive but blind (${age}, threshold ${STALE_MIN} min) — exiting 1 so the supervisor restarts it`);
-    try { flushPtbHealth(); } catch { /* best effort */ }
-    process.exit(1);
+    void handleStale(v);
   }, CHECK_MS);
   timer.unref?.();
   log.info(`Liveness watch: exit after ${STALE_MIN} min without a completed poll (grace ${GRACE_MIN} min, check every ${CHECK_MS / 1000}s)`);
