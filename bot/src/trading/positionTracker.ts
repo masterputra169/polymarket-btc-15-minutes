@@ -936,9 +936,15 @@ export function adjustBankrollForReconciliation({ delta, reason, slug }) {
  * consecutiveLosses is corrected by ±1 (an approximation: the exact streak at
  * the time cannot be rebuilt), erring on the side of halting sooner.
  * `adjustBankroll=false` for live rows: their money is reconciled on-chain.
+ * `settledAtMs`: when the corrected trade settled before the current trading
+ * day began, the daily baseline moves with the bankroll so the daily-loss
+ * circuit breaker keeps measuring today's trades only (2026-09-08: a restart
+ * opened a new UTC day at $59.44, the sweep then corrected yesterday's row by
+ * -10.88 and the bot halted for 240 min on "Daily loss -18.3%").
  */
-export function correctSettlement({ delta, wasWin, nowWin, slug, reason, adjustBankroll = true }: {
-  delta: number; wasWin: boolean; nowWin: boolean; slug: string; reason: string; adjustBankroll?: boolean;
+export function correctSettlement({ delta, wasWin, nowWin, slug, reason, adjustBankroll = true, settledAtMs = null }: {
+  delta: number; wasWin: boolean; nowWin: boolean; slug: string; reason: string;
+  adjustBankroll?: boolean; settledAtMs?: number | null;
 }): boolean {
   if (!Number.isFinite(delta)) {
     log.error(`Settlement correction REJECTED for ${slug}: delta=${delta} is not finite`);
@@ -951,9 +957,12 @@ export function correctSettlement({ delta, wasWin, nowWin, slug, reason, adjustB
     return false;
   }
   const prev = state.bankroll;
+  const prevSoD = state.startOfDayBankroll;
   if (adjustBankroll) {
     state.bankroll = roundMoney(state.bankroll + delta);
     if (state.bankroll > state.peakBankroll) state.peakBankroll = state.bankroll;
+    const settledBeforeToday = Number.isFinite(settledAtMs) && (settledAtMs as number) < state.dayStartMs;
+    if (settledBeforeToday) state.startOfDayBankroll = roundMoney(state.startOfDayBankroll + delta);
   }
   if (wasWin && !nowWin) {
     state.wins = Math.max(0, state.wins - 1);
@@ -964,7 +973,10 @@ export function correctSettlement({ delta, wasWin, nowWin, slug, reason, adjustB
     state.wins++;
     state.consecutiveLosses = Math.max(0, state.consecutiveLosses - 1);
   }
-  auditLog({ type: 'SETTLEMENT_CORRECTED', prev, next: state.bankroll, delta: adjustBankroll ? delta : 0, wasWin, nowWin, reason, slug });
+  auditLog({
+    type: 'SETTLEMENT_CORRECTED', prev, next: state.bankroll, delta: adjustBankroll ? delta : 0,
+    prevSoD, nextSoD: state.startOfDayBankroll, settledAtMs, wasWin, nowWin, reason, slug,
+  });
   log.warn(`Settlement corrected (${reason}) for ${slug}: ${wasWin ? 'WIN' : 'LOSS'} → ${nowWin ? 'WIN' : 'LOSS'} | bankroll $${prev.toFixed(2)} → $${state.bankroll.toFixed(2)}${adjustBankroll ? ` (${delta >= 0 ? '+' : ''}$${delta.toFixed(2)})` : ' (bankroll left to on-chain reconcile)'}`);
   saveState();
   return true;

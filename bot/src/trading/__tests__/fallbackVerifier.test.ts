@@ -140,6 +140,7 @@ describe('verifyFallbackSettlement', () => {
     expect(update(PREMARKET_ROW).analysis).toMatchObject({ outcome: 'LOSS', pnl: -4.01 });
     expect(correctSettlement).toHaveBeenCalledWith(expect.objectContaining({
       delta: -10.88, wasWin: true, nowWin: false, slug: SLUG, adjustBankroll: true,
+      settledAtMs: PREMARKET_ROW.exit.exitedAt,
     }));
     expect(notify).toHaveBeenCalledTimes(1);
     expect(mirrorTradeJournalRecord).not.toHaveBeenCalled();

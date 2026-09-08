@@ -59,6 +59,29 @@ describe('correctSettlement', () => {
     expect(getStats().consecutiveLosses).toBe(2);
   });
 
+  test('a correction of a trade settled before today keeps daily P&L attributable to today', () => {
+    // Measured 2026-09-08 02:03Z on Railway: the restart opened a new UTC day
+    // with baseline $59.44, then the sweep corrected yesterday's PREMARKET row
+    // by -10.88 → "Daily loss -18.3%" → circuit breaker, 240 min halt, on a
+    // trade that had nothing to do with today.
+    _resetForTest({ bankroll: 59.44, startOfDayBankroll: 59.44, wins: 17, losses: 5 }); // dayStartMs = now
+    correctSettlement({
+      delta: -10.88, wasWin: true, nowWin: false, slug: 's', reason: 'gamma_oracle',
+      settledAtMs: Date.now() - 6 * 60 * 60 * 1000,
+    });
+    expect(getBankroll()).toBe(48.56);
+    expect(getStats().dailyPnL).toBe(0);
+  });
+
+  test("a correction of a trade settled today does count toward today's P&L", () => {
+    _resetForTest({ bankroll: 59.44, startOfDayBankroll: 59.44, wins: 17, losses: 5 });
+    correctSettlement({
+      delta: -10.88, wasWin: true, nowWin: false, slug: 's', reason: 'gamma_oracle',
+      settledAtMs: Date.now(),
+    });
+    expect(getStats().dailyPnL).toBe(-10.88);
+  });
+
   test('rejects a non-finite delta without touching state', () => {
     expect(correctSettlement({ delta: NaN, wasWin: true, nowWin: false, slug: 's', reason: 'x' })).toBe(false);
     expect(getBankroll()).toBe(59.44);

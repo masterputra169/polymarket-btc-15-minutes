@@ -142,6 +142,7 @@ export async function verifyFallbackSettlement(
     delta: applied.delta, wasWin: applied.wasWin, nowWin: applied.nowWin,
     slug: marketSlug, reason: `fallback_verified:${resolved.source}`,
     adjustBankroll: isDryRun,
+    settledAtMs: row.exit?.exitedAt ?? row._ts ?? null, // so a stale correction does not read as today's loss
   });
   notify('warn', describeCorrection(marketSlug, applied, resolved), { key: `fallback-corrected:${marketSlug}` })
     .catch(e => log.debug(`Notify correction: ${e.message}`));
