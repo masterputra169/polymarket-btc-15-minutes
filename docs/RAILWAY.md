@@ -83,6 +83,15 @@ does not show them; `report:dryrun:railway` is the go-live evidence for the
 Railway bot (copies land in `bot/data/railway/`). Telegram still gets every
 `[DRY]` settlement and the daily summary.
 
+Read the `settlement source` line of that report before trusting the win
+rate. Settlements booked from `price_fallback` (Chainlink spot vs PTB, used
+whenever the market switch aborts the oracle retries) are provisional until the
+bot has verified them against Polymarket's resolution: the verifier runs on a
+backoff after each such settlement and sweeps the journal at startup, and
+corrects the row, the dry-run bankroll and the W/L counters when they differ
+(2026-09-07: one PREMARKET row flipped WIN +6.87 → LOSS −4.01). "unverified"
+rows can still move; "corrected" rows already did.
+
 Liveness: the bot exits 1 after 10 minutes without a completed poll (5 min
 grace after start, `LIVENESS_STALE_MIN` / `LIVENESS_GRACE_MIN`,
 `LIVENESS_EXIT_ENABLED=false` to only log) and Railway restarts it. This is

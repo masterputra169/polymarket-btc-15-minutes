@@ -928,6 +928,48 @@ export function adjustBankrollForReconciliation({ delta, reason, slug }) {
   saveState();
 }
 
+/**
+ * Apply a verified market resolution to a settlement that was booked from a
+ * provisional source (fallbackVerifier). Unlike adjustBankrollForReconciliation
+ * this also moves the counters the circuit breakers read — wins/losses and
+ * consecutiveLosses — because they were set from the same wrong outcome.
+ * consecutiveLosses is corrected by ±1 (an approximation: the exact streak at
+ * the time cannot be rebuilt), erring on the side of halting sooner.
+ * `adjustBankroll=false` for live rows: their money is reconciled on-chain.
+ */
+export function correctSettlement({ delta, wasWin, nowWin, slug, reason, adjustBankroll = true }: {
+  delta: number; wasWin: boolean; nowWin: boolean; slug: string; reason: string; adjustBankroll?: boolean;
+}): boolean {
+  if (!Number.isFinite(delta)) {
+    log.error(`Settlement correction REJECTED for ${slug}: delta=${delta} is not finite`);
+    return false;
+  }
+  if (!assertBankrollOk('correctSettlement')) return false;
+  if (adjustBankroll && state.bankroll > 0 && Math.abs(delta) > state.bankroll * 0.50) {
+    log.error(`Settlement correction REJECTED: |delta|=$${Math.abs(delta).toFixed(2)} > 50% of bankroll $${state.bankroll.toFixed(2)} — likely data error`);
+    auditLog({ type: 'CORRECTION_REJECTED', delta, bankroll: state.bankroll, reason: 'delta_exceeds_50pct', slug });
+    return false;
+  }
+  const prev = state.bankroll;
+  if (adjustBankroll) {
+    state.bankroll = roundMoney(state.bankroll + delta);
+    if (state.bankroll > state.peakBankroll) state.peakBankroll = state.bankroll;
+  }
+  if (wasWin && !nowWin) {
+    state.wins = Math.max(0, state.wins - 1);
+    state.losses++;
+    state.consecutiveLosses++;
+  } else if (!wasWin && nowWin) {
+    state.losses = Math.max(0, state.losses - 1);
+    state.wins++;
+    state.consecutiveLosses = Math.max(0, state.consecutiveLosses - 1);
+  }
+  auditLog({ type: 'SETTLEMENT_CORRECTED', prev, next: state.bankroll, delta: adjustBankroll ? delta : 0, wasWin, nowWin, reason, slug });
+  log.warn(`Settlement corrected (${reason}) for ${slug}: ${wasWin ? 'WIN' : 'LOSS'} → ${nowWin ? 'WIN' : 'LOSS'} | bankroll $${prev.toFixed(2)} → $${state.bankroll.toFixed(2)}${adjustBankroll ? ` (${delta >= 0 ? '+' : ''}$${delta.toFixed(2)})` : ' (bankroll left to on-chain reconcile)'}`);
+  saveState();
+  return true;
+}
+
 export function setBankroll(value) {
   if (!Number.isFinite(value) || value < 0) {
     log.warn(`Invalid bankroll value: ${value} — ignored (must be >= 0)`);

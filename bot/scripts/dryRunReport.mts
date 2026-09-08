@@ -56,6 +56,12 @@ type Trade = {
   session: string | null;
   price: number | null;
   mlProbUp: number | null;
+  /** How the result was decided: 'oracle' | 'gamma_oracle' | 'price_fallback' | null */
+  source: string | null;
+  /** price_fallback rows only: re-checked against Polymarket's resolution */
+  verified: boolean;
+  /** price_fallback rows only: Polymarket disagreed and the row was corrected */
+  corrected: boolean;
 };
 
 function loadTrades(journalPath: string, sinceMs: number): Trade[] {
@@ -79,9 +85,44 @@ function loadTrades(journalPath: string, sinceMs: number): Trade[] {
       session: e.entry?.session ?? null,
       price: Number(e.entry?.tokenPrice) || null,
       mlProbUp: Number(e.entry?.mlProbUp) || null,
+      source: e.exit?.source ?? null,
+      verified: e.exit?.verifiedAt != null,
+      corrected: e.exit?.correctedFrom != null,
     });
   }
   return trades.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * Where the WIN/LOSS labels came from. price_fallback (Chainlink spot vs PTB at
+ * expiry) is provisional: Polymarket resolves on a 60s TWAP, and on 2026-09-07
+ * one Railway row flipped WIN→LOSS once verified (+6.87 → −4.01). Unverified
+ * fallback rows mean the win rate above may still move.
+ */
+function provenance(trades: Trade[]) {
+  const resolved = trades.filter(t => t.win !== null);
+  const fallback = resolved.filter(t => t.source === 'price_fallback');
+  return {
+    resolved: resolved.length,
+    oracle: resolved.filter(t => t.source === 'oracle' || t.source === 'gamma_oracle').length,
+    fallback: fallback.length,
+    fallbackVerified: fallback.filter(t => t.verified && !t.corrected).length,
+    fallbackCorrected: fallback.filter(t => t.corrected).length,
+    fallbackUnverified: fallback.filter(t => !t.verified).length,
+  };
+}
+
+function printProvenance(trades: Trade[]): void {
+  const p = provenance(trades);
+  if (p.resolved === 0) return;
+  console.log(`\n    settlement source: ${p.oracle} oracle | ${p.fallback} price_fallback ` +
+              `(${p.fallbackVerified} verified, ${p.fallbackCorrected} corrected, ${p.fallbackUnverified} unverified)`);
+  if (p.fallbackUnverified > 0) {
+    console.log(`    ⚠ ${p.fallbackUnverified} result(s) are provisional — not yet checked against Polymarket's resolution`);
+  }
+  if (p.fallbackCorrected > 0) {
+    console.log(`    ⚠ ${p.fallbackCorrected} result(s) were corrected after Polymarket resolved the other way`);
+  }
 }
 
 function summarise(trades: Trade[]) {
@@ -174,8 +215,8 @@ function main(): void {
   if (args.json) {
     console.log(JSON.stringify({
       window: args.all ? 'all' : `${days}d`,
-      dryRun: summarise(dry),
-      live: summarise(live),
+      dryRun: { ...summarise(dry), provenance: provenance(dry) },
+      live: { ...summarise(live), provenance: provenance(live) },
       ptb: ptbHealth(sinceMs),
       benchmark: LIVE_BENCHMARK,
     }, null, 2));
@@ -217,6 +258,7 @@ function main(): void {
                     `WR ${pct(g.winRate)}  PnL ${g.pnl >= 0 ? '+' : ''}${g.pnl.toFixed(2)}`);
       }
     }
+    printProvenance(set);
   }
 
   printPtbHealth(sinceMs);

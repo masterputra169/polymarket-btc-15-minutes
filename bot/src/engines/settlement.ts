@@ -12,6 +12,8 @@ import { createLogger } from '../logger.ts';
 import { CONFIG } from '../config.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { polyFeeRate } from '../../../src/config.ts';
+import { fetchGammaMarketBySlug, outcomeFromMarket } from './marketResolution.ts';
+import { computeSettlementPnl, isProvisionalSource } from './settlementMath.ts';
 
 const log = createLogger('Settlement');
 
@@ -102,52 +104,19 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
       log.warn('Oracle (CLOB): retries exhausted — trying Gamma API oracle');
 
       // ── Gamma API as secondary oracle ──
-      // Gamma API often has market resolution data even when CLOB is lagging.
-      // Query by conditionId → check closed + outcomePrices (1.00 = winner, 0.00 = loser).
+      // Gamma often has the resolution while the CLOB is still lagging. Looked up
+      // by slug via /markets/slug/<slug> — the ?slug= list form returns [] for the
+      // 15-minute markets (measured 2026-09-08), so it never resolved anything.
       if (pos.marketSlug) {
-        try {
-          const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(pos.marketSlug)}`;
-          const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(8000) });
-          if (gammaRes.ok) {
-            const gammaData = await gammaRes.json();
-            const gm = Array.isArray(gammaData) ? gammaData[0] : gammaData;
-
-            if (gm?.closed === true) {
-              // Try tokens array first (same format as CLOB)
-              const tokens = Array.isArray(gm.tokens) ? gm.tokens : [];
-              const winner = tokens.find(t => t.winner === true);
-              if (winner) {
-                const outcome = winner.outcome.toUpperCase();
-                const won = pos.side === outcome;
-                log.info(`Oracle (Gamma tokens): ${outcome} — ${won ? 'WIN' : 'LOSS'}`);
-                return { won, outcome, source: 'gamma_oracle' };
-              }
-
-              // Try outcomePrices: ["1", "0"] or ["0", "1"] — winner has price ~1.00
-              const rawOutcomes = gm.outcomes;
-              const rawPrices = gm.outcomePrices;
-              const outcomes = Array.isArray(rawOutcomes) ? rawOutcomes
-                : (typeof rawOutcomes === 'string' ? (() => { try { return JSON.parse(rawOutcomes); } catch { return []; } })() : []);
-              const prices = Array.isArray(rawPrices) ? rawPrices
-                : (typeof rawPrices === 'string' ? (() => { try { return JSON.parse(rawPrices); } catch { return []; } })() : []);
-
-              for (let i = 0; i < outcomes.length; i++) {
-                if (parseFloat(prices[i]) > 0.99) {
-                  const outcome = String(outcomes[i]).toUpperCase();
-                  const won = pos.side === outcome;
-                  log.info(`Oracle (Gamma outcomePrices): ${outcome} — ${won ? 'WIN' : 'LOSS'}`);
-                  return { won, outcome, source: 'gamma_oracle' };
-                }
-              }
-
-              log.warn('Gamma API: market closed but no winner found in tokens/outcomePrices');
-            } else {
-              log.debug(`Gamma API: market not closed yet (closed=${gm?.closed})`);
-            }
-          }
-        } catch (err) {
-          log.debug(`Gamma API oracle failed: ${err.message}`);
+        const gm = await fetchGammaMarketBySlug(pos.marketSlug);
+        const outcome = outcomeFromMarket(gm);
+        if (outcome) {
+          const won = pos.side === outcome;
+          log.info(`Oracle (Gamma): ${outcome} — ${won ? 'WIN' : 'LOSS'}`);
+          return { won, outcome, source: 'gamma_oracle' };
         }
+        if (gm?.closed === true) log.warn('Gamma API: market closed but no winner found in tokens/outcomePrices');
+        else log.debug(`Gamma API: market not closed yet (closed=${gm?.closed})`);
       }
 
       log.warn('Oracle (CLOB + Gamma): both exhausted — falling back to BTC price comparison');
@@ -202,17 +171,8 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
   }
 
   // FINTECH: Round P&L to cents. Subtract Polymarket fee on profit (matches positionTracker math).
-  // Mar-30-2026: dynamic fee 0.072×p×(1-p); falls back to 2% if entry price unavailable.
-  const POLY_FEE_RATE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
-    ? polyFeeRate(pos.price) : 0.02;
-  let pnl;
-  if (won) {
-    const grossProfit = Math.max(0, pos.size - pos.cost);
-    const fee = Math.round(grossProfit * POLY_FEE_RATE * 100) / 100;
-    pnl = Math.round((pos.size - pos.cost - fee) * 100) / 100;
-  } else {
-    pnl = Math.round(-pos.cost * 100) / 100;
-  }
+  // Shared with the fallback verifier so a later correction re-books the same numbers.
+  const pnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
   _lastSettlementSource = source; // RC5: track for fast reconcile trigger
   log.info(`Position ${context} — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
   actions.settleTrade(won);
@@ -228,6 +188,12 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
   actions.clearEntrySnapshot(); // Deletes disk file; memory already cleared by writeJournalEntry
   if (!won) actions.recordLoss();
   if (outcome) actions.settlePrediction(pos.marketSlug, outcome);
+  // A price_fallback / unknown result is provisional: hand the market to the
+  // fallback verifier, which re-checks it against the real resolution and
+  // corrects the journal row (and, in dry run, the bankroll) if Polymarket disagreed.
+  if (isProvisionalSource(source) && pos.marketSlug) {
+    actions.onFallbackSettled?.({ marketSlug: pos.marketSlug, conditionId: conditionId ?? null });
+  }
   // Note: Telegram notification handled by tradeJournal._sendTradeAlert (called inside writeJournalEntry above).
   // Removed duplicate notifyTrade here — journal sends richer format with bankroll + MetEngine info.
   return { won, pnl, outcome, source };
@@ -372,18 +338,8 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, oracleCondId, btcPrice, null, opts);
     log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
-    // H7: Apply Polymarket fee on profit consistently (matches settleRegularPosition)
-    // Mar-30-2026: dynamic 0.072×p×(1-p); falls back to 2% if entry price unavailable.
-    const POLY_FEE_RATE_STALE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
-      ? polyFeeRate(pos.price) : 0.02;
-    let stalePnl;
-    if (won) {
-      const grossProfit = Math.max(0, pos.size - pos.cost);
-      const fee = Math.round(grossProfit * POLY_FEE_RATE_STALE * 100) / 100;
-      stalePnl = Math.round((pos.size - pos.cost - fee) * 100) / 100;
-    } else {
-      stalePnl = Math.round(-pos.cost * 100) / 100;
-    }
+    // H7: same fee math as settleRegularPosition (shared with the fallback verifier).
+    const stalePnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
     // Fix: writeJournalEntry BEFORE clearEntrySnapshot (same bug as settleRegularPosition).
@@ -395,6 +351,11 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     actions.clearEntrySnapshot(); // Deletes disk file; memory already cleared by writeJournalEntry
     if (!won) actions.recordLoss();
     if (outcome) actions.settlePrediction(pos.marketSlug, outcome);
+    // No PTB for a stale position, so an unresolved oracle books it as an evidence-free
+    // LOSS ('unknown'): provisional, hand it to the verifier like price_fallback.
+    if (isProvisionalSource(source) && pos.marketSlug) {
+      actions.onFallbackSettled?.({ marketSlug: pos.marketSlug, conditionId: oracleCondId });
+    }
     actions.setLastSettled(pos.marketSlug, Date.now());
     return;
   }
@@ -411,54 +372,44 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
 
   // Fill confirmed but no conditionId — try Gamma API lookup by slug
   log.warn('Stale position has no conditionId but fill confirmed — attempting Gamma API lookup');
-  let fetchedConditionId = null;
-  try {
-    const gammaUrl = `https://gamma-api.polymarket.com/markets?slug=${encodeURIComponent(pos.marketSlug)}`;
-    const gammaRes = await fetch(gammaUrl, { signal: AbortSignal.timeout(5000) });
-    if (gammaRes.ok) {
-      const gammaMarkets = await gammaRes.json();
-      fetchedConditionId = gammaMarkets?.[0]?.conditionId ?? gammaMarkets?.[0]?.condition_id ?? null;
-      if (fetchedConditionId) log.info(`Gamma API found conditionId for stale position: ${fetchedConditionId}`);
-    }
-  } catch (err) {
-    log.debug(`Gamma API lookup failed for stale position: ${err.message}`);
-  }
+  const gammaMarket = await fetchGammaMarketBySlug(pos.marketSlug, { timeoutMs: 5000 });
+  const fetchedConditionId = gammaMarket?.conditionId ?? gammaMarket?.condition_id ?? null;
+  if (fetchedConditionId) log.info(`Gamma API found conditionId for stale position: ${fetchedConditionId}`);
 
   if (fetchedConditionId) {
     const oraclePrice = deps.getOraclePrice();
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, fetchedConditionId, btcPrice, null, opts);
-    // H7: Apply 2% fee consistently (matches settleRegularPosition)
-    let gammaPnl;
-    if (won) {
-      const gp = Math.max(0, pos.size - pos.cost);
-      const gFee = Math.round(gp * 0.02 * 100) / 100;
-      gammaPnl = Math.round((pos.size - pos.cost - gFee) * 100) / 100;
-    } else {
-      gammaPnl = Math.round(-pos.cost * 100) / 100;
-    }
+    // H7: same fee math as settleRegularPosition (shared with the fallback verifier).
+    const gammaPnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
     log.info(`Stale position (Gamma lookup) settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
-    actions.clearEntrySnapshot();
+    // writeJournalEntry BEFORE clearEntrySnapshot — the journal reads the in-memory
+    // snapshot, so clearing first silently dropped the row (same bug as settleRegularPosition).
     actions.writeJournalEntry({
       outcome: won ? 'WIN' : 'LOSS',
       pnl: gammaPnl,
       exitData: { outcome, source, staleRecovery: true, reason: 'gamma_lookup' },
     });
+    actions.clearEntrySnapshot();
     if (!won) actions.recordLoss();
     if (outcome) actions.settlePrediction(pos.marketSlug, outcome);
+    if (isProvisionalSource(source) && pos.marketSlug) {
+      actions.onFallbackSettled?.({ marketSlug: pos.marketSlug, conditionId: fetchedConditionId });
+    }
   } else {
     // Truly no conditionId available → settle as LOSS (conservative)
     log.warn('Stale position: Gamma API lookup failed — settling as LOSS (conservative)');
     actions.settleTrade(false);
     actions.invalidateUsdcSync();
-    actions.clearEntrySnapshot();
     actions.writeJournalEntry({
       outcome: 'LOSS', pnl: Math.round(-pos.cost * 100) / 100,
-      exitData: { staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
+      exitData: { outcome: null, source: 'unknown', staleRecovery: true, reason: 'no_conditionId_fill_confirmed' },
     });
+    actions.clearEntrySnapshot();
     actions.recordLoss();
+    if (pos.marketSlug) actions.onFallbackSettled?.({ marketSlug: pos.marketSlug, conditionId: null });
   }
   actions.setLastSettled(pos.marketSlug, Date.now());
 }

@@ -142,3 +142,11 @@ describe('executeDirectionalTrade in DRY_RUN', () => {
     expect(deps.confirmFill).not.toHaveBeenCalled(); // live fills are confirmed by the fill tracker
   });
 });
+
+describe('entry snapshot carries the market conditionId', () => {
+  test('so the fallback verifier can query the CLOB oracle by conditionId later', async () => {
+    const deps = makeDeps();
+    await executeDirectionalTrade(signal(), deps);
+    expect(deps.captureEntrySnapshot).toHaveBeenCalledWith(expect.objectContaining({ conditionId: 'cond-1' }));
+  });
+});

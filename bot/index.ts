@@ -63,6 +63,7 @@ import { startReconciler, stopReconciler } from './src/trading/journalReconciler
 import { startRedeemer, stopRedeemer } from './src/trading/redeemer.ts';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.ts';
 import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } from './src/trading/tradeJournal.ts';
+import { verifyPendingFallbacks } from './src/trading/fallbackVerifier.ts';
 
 // AI Agent modules
 import { initOpenRouter } from './src/ai/openrouterClient.ts';
@@ -202,6 +203,14 @@ async function main() {
 
   const stats = getStats();
   log.info(`Position state: bankroll=$${stats.bankroll.toFixed(2)}, trades=${stats.totalTrades}, W/L=${stats.wins}/${stats.losses}`);
+
+  // 4b. Re-check settlements that were booked from price_fallback (the market
+  // switch aborts the oracle retries at expiry) against Polymarket's real
+  // resolution, and correct the journal + dry-run bankroll where they differ.
+  // Runs in both modes; state must be loaded first (it may adjust the bankroll).
+  void verifyPendingFallbacks()
+    .then(s => { if (s.corrected > 0) log.warn(`Fallback sweep corrected ${s.corrected} settlement(s) — see journal exit.correctedFrom`); })
+    .catch(err => log.warn(`Fallback sweep failed (non-fatal): ${err.message}`));
 
   // 4a. If there's an existing open position, pre-approve its conditional token.
   // This ensures ERC1155 setApprovalForAll is set so cut-loss sells don't fail.

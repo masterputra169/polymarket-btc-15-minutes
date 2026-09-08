@@ -253,6 +253,7 @@ import {
   clearLastSettlementSource,
 } from './engines/settlement.ts';
 import { reconcileNow } from './trading/journalReconciler.ts';
+import { scheduleFallbackVerification } from './trading/fallbackVerifier.ts';
 import { triggerRedeem } from './trading/redeemer.ts';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.ts';
 import { captureForShadow } from './monitoring/shadowCapture.ts';
@@ -438,6 +439,9 @@ function makeSettlementActions() {
     notifyTrade: process.env.TELEGRAM_NOTIFY_TRADES === 'true'
       ? (msg) => notify('info', msg, { key: 'trade:settle' })
       : null,
+    // price_fallback is provisional: re-check against Polymarket's resolution
+    // once it lands and correct the journal (and dry-run bankroll) if it differs.
+    onFallbackSettled: scheduleFallbackVerification,
     _rlSnap, // RL: pre-settlement snapshot for outcome recording
   };
 }

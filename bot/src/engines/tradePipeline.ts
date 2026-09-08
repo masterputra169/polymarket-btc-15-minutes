@@ -550,6 +550,7 @@ export async function executeDirectionalTrade({
   const entryData: Record<string, any> = {
     side: betSide, tokenPrice: betMarketPrice, btcPrice: lastPrice,
     priceToBeat: priceToBeat.value, marketSlug, cost: orderCost, size: shares,
+    conditionId: currentConditionId, // lets the fallback verifier ask the CLOB oracle later
     confidence: rec.confidence, phase: rec.phase, reason: rec.reason,
     edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
     ensembleUp, ruleUp: timeAware.adjustedUp,

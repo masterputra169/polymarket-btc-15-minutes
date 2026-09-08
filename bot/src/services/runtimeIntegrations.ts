@@ -231,7 +231,10 @@ async function mirrorTradeJournalRecordImpl(record: Record<string, any>) {
     await pgPool.query(
       `INSERT INTO trade_journal_records (record_key, market_slug, side, outcome, pnl, raw)
        VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-       ON CONFLICT (record_key) DO NOTHING`,
+       ON CONFLICT (record_key) DO UPDATE SET
+         outcome = EXCLUDED.outcome,
+         pnl = EXCLUDED.pnl,
+         raw = EXCLUDED.raw`,
       [
         recordKey,
         entry.marketSlug ?? null,

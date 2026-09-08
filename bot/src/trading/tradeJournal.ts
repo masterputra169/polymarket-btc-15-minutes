@@ -7,7 +7,7 @@
  * Output: bot/data/trade_journal.jsonl (append-only, one JSON object per line)
  */
 
-import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
@@ -341,6 +341,73 @@ export function getRecentJournal(n = 5) {
     recentCache = [];
     return [];
   }
+}
+
+/**
+ * Every journal row, oldest first. Torn (partially written) lines are skipped.
+ */
+export function readJournalRows(): Record<string, any>[] {
+  try {
+    if (!existsSync(BOT_CONFIG.journalFile)) return [];
+    return readFileSync(BOT_CONFIG.journalFile, 'utf-8')
+      .split('\n')
+      .map(line => line.trim())
+      .filter(Boolean)
+      .map(line => { try { return JSON.parse(line); } catch { return null; } })
+      .filter(Boolean);
+  } catch (err) {
+    log.warn(`Journal read failed: ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Replace the first row matching `match` with `update(row)`. The file is
+ * rewritten atomically (temp file + rename) and the recent-rows cache dropped.
+ * Used by the fallback verifier to correct a settlement after the fact.
+ * Returns false (and writes nothing) when no row matches.
+ */
+export function rewriteJournalRow(
+  match: (row: Record<string, any>) => boolean,
+  update: (row: Record<string, any>) => Record<string, any>,
+): boolean {
+  let lines: string[];
+  try {
+    if (!existsSync(BOT_CONFIG.journalFile)) return false;
+    lines = readFileSync(BOT_CONFIG.journalFile, 'utf-8').split('\n');
+  } catch (err) {
+    log.warn(`Journal read failed: ${err.message}`);
+    return false;
+  }
+
+  let replaced = false;
+  const out = lines.map(line => {
+    if (replaced) return line;
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    let row: Record<string, any>;
+    try { row = JSON.parse(trimmed); } catch { return line; }
+    if (!match(row)) return line;
+    replaced = true;
+    return JSON.stringify(update(row));
+  });
+  if (!replaced) return false;
+
+  try {
+    const tmp = `${BOT_CONFIG.journalFile}.tmp`;
+    writeFileSync(tmp, out.join('\n'));
+    renameSync(tmp, BOT_CONFIG.journalFile);
+  } catch (err) {
+    log.warn(`Journal rewrite failed: ${err.message}`);
+    return false;
+  }
+  recentCache = null;
+  return true;
+}
+
+/** Test hook: forget the recent-rows cache. */
+export function _resetJournalCacheForTest(): void {
+  recentCache = null;
 }
 
 /**
