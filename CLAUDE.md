@@ -144,6 +144,7 @@ Phase-based decision with regime-adaptive thresholds:
 ### Key Patterns
 
 - **App.tsx data slicing**: Every panel gets a `useMemo` slice with granular dependency arrays. Adding new data to a panel = add to its useMemo + dependency array.
+- **Server clock, not browser clock**: durations shown against a bot timestamp (`settlementMs`, `enteredAt`, `placedAt`, `data.ts`) go through `src/hooks/serverClock.ts` — a module-level offset (`serverTs - localNow`) that `useBotData` refreshes from every snapshot's `ts`. Panels call `serverNow()` or `useServerNow(intervalMs)`; `useCountdown`/`useClock` already do. Raw `Date.now()` is correct only where both sides of the subtraction are browser-local (feedback store, stream heartbeats, fetch backoffs). Added 2026-09-09 after an operator PC ran 36 min slow and then exactly 12 h fast, which pinned every countdown at 0 and made ages read 43200s.
 - **Bot .env loading**: `--env-file=./bot/.env` in PM2 ecosystem config loads env BEFORE ES module imports (prevents hoisting bug where `BOT_CONFIG` reads empty `process.env`).
 - **`envNum()`/`envInt()` pattern**: All bot config uses bounded parsing — never raw `parseInt(process.env.X)`.
 - **Sell lock**: `positionTracker.acquireSellLock()` prevents cut-loss/take-profit/manual-sell race conditions (45s timeout).

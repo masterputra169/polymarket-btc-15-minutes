@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { buildBotWsUrl } from './botWsUrl.ts';
+import { setServerClockOffset } from './serverClock.ts';
 
 /**
  * useBotData — Pure display-layer hook (memory-optimized).
@@ -73,6 +74,11 @@ export function useBotData() {
       }
       return; // Don't update main data state for responses
     }
+
+    // Learn how far this browser's clock is from the bot's before anything
+    // renders a duration against it. Every countdown and "Xs ago" on the
+    // dashboard is computed through this offset.
+    setServerClockOffset(msg.ts);
 
     // Track Binance price for tick animation
     const newPrice = msg.lastPrice ?? msg.btcPrice;

@@ -1,4 +1,5 @@
 import React, { memo, useState, useCallback, useEffect, useRef } from 'react';
+import { serverNow } from '../hooks/serverClock.ts';
 
 const fmt = (n, d = 2) => n != null && Number.isFinite(n) ? n.toFixed(d) : '-';
 const fmtUsd = (n) => n != null && Number.isFinite(n) ? `$${n.toFixed(2)}` : '-';
@@ -84,7 +85,7 @@ function PositionPanel({ data, sendBotCommand }) {
     const tick = () => {
       const lu = lastUpdateRef.current;
       if (!lu) { setAgoText(''); return; }
-      const s = Math.round((Date.now() - lu) / 1000);
+      const s = Math.round((serverNow() - lu) / 1000);
       setAgoText(s < 2 ? 'just now' : `${s}s ago`);
     };
     tick();
@@ -136,7 +137,7 @@ function PositionPanel({ data, sendBotCommand }) {
 
   // Time held for bot position
   const timeHeld = botPosition?.enteredAt
-    ? Math.round((Date.now() - botPosition.enteredAt) / 1000)
+    ? Math.round((serverNow() - botPosition.enteredAt) / 1000)
     : null;
   const timeHeldText = timeHeld != null
     ? (timeHeld < 60 ? `${timeHeld}s` : `${Math.floor(timeHeld / 60)}m ${timeHeld % 60}s`)

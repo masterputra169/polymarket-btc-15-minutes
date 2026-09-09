@@ -1,6 +1,7 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo, useState } from 'react';
+import { useServerNow } from '../hooks/useServerNow.ts';
 
-const TABS = ['overview', 'hourly', 'events', 'equity'];
+const TABS =['overview', 'hourly', 'events', 'equity'];
 const TAB_LABELS = { overview: 'Overview', hourly: 'Hourly', events: 'Events', equity: 'Equity' };
 
 // ─────────────── Helpers ───────────────
@@ -126,12 +127,9 @@ function StatBox({ label, value, color, sub }: any) {
 function OverviewTab({ data }: any) {
   const { patterns, sessions, dayOfWeek, sources, computedAt, actualPnl } = data;
 
-  // Live-ticking "Updated Xs ago" — re-renders every 5s independently
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(id);
-  }, []);
+  // Live-ticking "Updated Xs ago" — re-renders every 5s independently.
+  // `computedAt` is a bot timestamp, so the age must use the bot's clock.
+  const now = useServerNow(5000);
 
   if (!patterns || patterns.totalTrades === 0) {
     return <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.78rem' }}>No trade data</div>;

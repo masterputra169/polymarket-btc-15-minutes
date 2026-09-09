@@ -1,4 +1,5 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
+import { serverNow } from '../hooks/serverClock.ts';
 
 const fmt = (n, d = 2) => n != null && Number.isFinite(n) ? n.toFixed(d) : '-';
 
@@ -20,7 +21,7 @@ function LimitOrderPanel({ data }) {
     const tick = () => {
       const pa = placedAtRef.current;
       if (!pa) { setElapsed(0); return; }
-      setElapsed(Math.round((Date.now() - pa) / 1000));
+      setElapsed(Math.round((serverNow() - pa) / 1000));
     };
     tick();
     const id = setInterval(tick, 1000);

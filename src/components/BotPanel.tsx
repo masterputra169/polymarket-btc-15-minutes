@@ -1,5 +1,6 @@
-import React, { memo, useState, useEffect } from 'react';
+import React, { memo } from 'react';
 import { ML_CONFIDENCE } from '../config.ts';
+import { useServerNow } from '../hooks/useServerNow.ts';
 
 /**
  * BotPanel — Full-width dashboard card showing real-time bot status.
@@ -42,12 +43,9 @@ const colHeaderStyle = {
 };
 
 function BotPanel({ connected, data }) {
-  // Local 2s ticker for "Xs ago" and MetEngine age — avoids re-render every 50ms poll
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 2000);
-    return () => clearInterval(id);
-  }, []);
+  // 2s ticker for "Xs ago" and MetEngine age — avoids re-render every 50ms poll.
+  // Runs on the bot's clock: these ages are measured against bot timestamps.
+  const now = useServerNow(2000);
 
   // Offline state
   if (!connected || !data) {
