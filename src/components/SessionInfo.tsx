@@ -1,9 +1,16 @@
 import React, { memo } from 'react';
 import { fmtEtTime, getBtcSession } from '../utils.ts';
-import { useClock } from '../hooks/useClock.ts';
+import { useClock, useLocalClock } from '../hooks/useClock.ts';
+import { useServerClockOffset } from '../hooks/useServerNow.ts';
+import { formatClockSkew } from '../hooks/clockOffset.ts';
 
 function SessionInfo() {
+  // ET time and the session describe the market, so they run on the bot's
+  // clock. "Local" means this machine, so it stays on the browser's — keeping
+  // the two apart is what lets an operator see their PC clock is wrong.
   const now = useClock(1000);
+  const localNow = useLocalClock(1000);
+  const skew = formatClockSkew(useServerClockOffset());
 
   const etTime = fmtEtTime(now);
   const session = getBtcSession(now);
@@ -43,8 +50,17 @@ function SessionInfo() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <span style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>Local</span>
           <span style={{ fontWeight: 500, fontSize: '0.85rem' }}>
-            {now.toLocaleTimeString('en-US', { hour12: false })}
+            {localNow.toLocaleTimeString('en-US', { hour12: false })}
           </span>
+          {skew && (
+            <span
+              className="c-yellow"
+              title="This browser's clock disagrees with the bot. The dashboard corrects for it, but fix the PC clock."
+              style={{ fontWeight: 600, fontSize: '0.72rem' }}
+            >
+              ⚠ {skew}
+            </span>
+          )}
         </div>
       </div>
     </div>

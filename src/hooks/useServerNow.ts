@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { serverNow, subscribeServerClock } from './serverClock.ts';
+import { serverNow, subscribeServerClock, getServerClockOffset } from './serverClock.ts';
 
 /**
  * Ticking "now" on the bot's clock rather than the browser's.
@@ -23,4 +23,22 @@ export function useServerNow(intervalMs = 1000): number {
   }, [intervalMs]);
 
   return now;
+}
+
+/**
+ * How far this browser's clock is from the bot's, in ms (server minus local).
+ *
+ * Re-renders only when the offset itself moves, so a panel can surface a wrong
+ * PC clock without ticking every second.
+ */
+export function useServerClockOffset(): number {
+  const [offsetMs, setOffsetMs] = useState(() => getServerClockOffset());
+
+  useEffect(() => {
+    const sync = () => setOffsetMs(getServerClockOffset());
+    sync(); // an offset may have landed between mount and this effect
+    return subscribeServerClock(sync);
+  }, []);
+
+  return offsetMs;
 }
