@@ -8,9 +8,11 @@
  * live benchmark because nothing was ever measured.
  *
  * Invariants under test:
- *   1. In dry run the pipeline records a position at the quoted price and size,
- *      confirms the (simulated) fill and captures the entry snapshot — the same
- *      hooks the live path uses, so settlement / cut-loss / journal run unchanged.
+ *   1. In dry run the pipeline records a position, confirms the (simulated)
+ *      fill and captures the entry snapshot — the same hooks the live path
+ *      uses, so settlement / cut-loss / journal run unchanged. The fill PRICE
+ *      is the live submit price, not the quote (see tradePipeline.dryRunFill
+ *      .test.ts, 2026-09-20); this file only pins that the hooks fire.
  *   2. No order ever reaches the CLOB in dry run.
  *   3. The live path is untouched: with dryRun=false the order is placed.
  */
@@ -58,7 +60,7 @@ function signal(overrides: Record<string, any> = {}) {
     stochRsi: { k: 60, d: 55 }, emaCross: { cross: 'bull', distancePct: 0.05 },
     volDelta: { buyRatio: 0.55 }, consec: { color: 'green', count: 2 },
     delta1m: 5, delta3m: 12,
-    orderbookSignal: { imbalance: 0.1 }, orderbookUp: { spread: 0.01 },
+    orderbookSignal: { imbalance: 0.1 }, orderbookUp: { spread: 0.01 }, orderbookDown: null,
     marketUp: 0.6, marketDown: 0.4, obFlow: null,
     smartFlowSignal: null, mcResult: null,
     dryRun: true,
@@ -100,21 +102,22 @@ function makeDeps(overrides: Record<string, any> = {}) {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('executeDirectionalTrade in DRY_RUN', () => {
-  test('records a simulated position at the quoted price instead of only logging', async () => {
+  test('records a simulated position instead of only logging', async () => {
     const deps = makeDeps();
     const executed = await executeDirectionalTrade(signal(), deps);
 
     expect(executed).toBe(true);
-    // HIGH confidence bumps to the 6-share FOK minimum: 6 × 0.60 = $3.60.
+    // HIGH confidence bumps to the 6-share FOK minimum. Booked at the live
+    // submit price fokBuyPrice(0.60, spread 0.01) = 0.605 → 6 × 0.605 = $3.63.
     expect(deps.recordTrade).toHaveBeenCalledTimes(1);
     expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
       side: 'UP', tokenId: 'tok-up', conditionId: 'cond-1',
-      price: 0.6, size: 6, marketSlug: SLUG, orderId: null, actualCost: 3.6,
+      price: 0.605, size: 6, marketSlug: SLUG, orderId: null, actualCost: 3.63,
     }));
     expect(deps.confirmFill).toHaveBeenCalledTimes(1);
     expect(deps.captureEntrySnapshot).toHaveBeenCalledWith(expect.objectContaining({
-      side: 'UP', tokenPrice: 0.6, size: 6, cost: 3.6, marketSlug: SLUG,
-      mlProbUp: 0.9, mlConfidence: 0.9, actualPrice: 0.6,
+      side: 'UP', tokenPrice: 0.605, size: 6, cost: 3.63, marketSlug: SLUG,
+      mlProbUp: 0.9, mlConfidence: 0.9, actualPrice: 0.605, expectedPrice: 0.6,
     }));
     // Same bookkeeping as a live fill, so the simulation obeys the same limits.
     expect(deps.recordTradeForMarket).toHaveBeenCalledWith(SLUG);

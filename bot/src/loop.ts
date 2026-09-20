@@ -2501,7 +2501,7 @@ export async function pollOnce() {
           tiltMarketsLeft, tiltMlConfMin: TILT_ML_CONF_MIN,
           rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
           bb, atr, stochRsi, emaCross, volDelta,
-          consec, delta1m, delta3m, orderbookSignal, orderbookUp,
+          consec, delta1m, delta3m, orderbookSignal, orderbookUp, orderbookDown,
           marketUp, marketDown, obFlow,
           smartFlowSignal,
           mcResult,

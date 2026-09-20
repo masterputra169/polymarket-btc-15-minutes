@@ -12,9 +12,15 @@
  * that lands near 52% means the retrain did not fix the decay.
  *
  * Usage:
- *   node bot/scripts/dryRunReport.mts [--days 1] [--journal <path>] [--ptb-health <path>] [--all]
- *     --days N          look back N days (default 1)
- *     --all             ignore --days and report the whole journal
+ *   node bot/scripts/dryRunReport.mts [--days 1 | --since <t> [--until <t>] | --all]
+ *                                       [--journal <path>] [--ptb-health <path>] [--json]
+ *     --days N          look back N days (default 1) — ROLLING, moves as you run it
+ *     --since <t>       fixed lower bound, ISO-8601 or epoch ms. Use this for any
+ *                       number quoted as evidence; --days silently rescores as
+ *                       time passes (2026-09-20: same journal, 85.7% at --days 1
+ *                       and 66.1% at --days 14). Overrides --days.
+ *     --until <t>       fixed upper bound, same formats
+ *     --all             ignore the above and report the whole journal
  *     --journal P       journal file (default bot/data/trade_journal.jsonl)
  *     --ptb-health P    PTB health rollups (default bot/data/ptb_health.jsonl) —
  *                       pass the file pulled from Railway together with its journal
@@ -22,6 +28,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
+import { resolveWindow, inWindow } from './reportWindow.mts';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -64,7 +71,7 @@ type Trade = {
   corrected: boolean;
 };
 
-function loadTrades(journalPath: string, sinceMs: number): Trade[] {
+function loadTrades(journalPath: string, sinceMs: number, untilMs: number = Infinity): Trade[] {
   if (!existsSync(journalPath)) return [];
   const trades: Trade[] = [];
   for (const line of readFileSync(journalPath, 'utf-8').split('\n')) {
@@ -73,7 +80,7 @@ function loadTrades(journalPath: string, sinceMs: number): Trade[] {
     let e: any;
     try { e = JSON.parse(trimmed); } catch { continue; }  // torn line — skip
     const ts = e._ts ?? e.entry?.enteredAt ?? 0;
-    if (!ts || ts < sinceMs) continue;
+    if (!ts || !inWindow(ts, { sinceMs, untilMs })) continue;
     const outcome = e.analysis?.outcome;
     trades.push({
       ts,
@@ -164,7 +171,7 @@ function pct(v: number | null): string {
  */
 let ptbHealthPath = resolve(ROOT, 'bot', 'data', 'ptb_health.jsonl');
 
-function ptbHealth(sinceMs: number): { total: number; exact: number; bySource: Record<string, number> } | null {
+function ptbHealth(sinceMs: number, untilMs: number = Infinity): { total: number; exact: number; bySource: Record<string, number> } | null {
   const p = ptbHealthPath;
   if (!existsSync(p)) return null;
   let total = 0, exact = 0;
@@ -174,7 +181,7 @@ function ptbHealth(sinceMs: number): { total: number; exact: number; bySource: R
     if (!trimmed) continue;
     let e: any;
     try { e = JSON.parse(trimmed); } catch { continue; }   // torn line — skip
-    if (!e.to || e.to < sinceMs) continue;
+    if (!e.to || !inWindow(e.to, { sinceMs, untilMs })) continue;
     total += e.total || 0;
     exact += e.exact || 0;
     for (const [src, n] of Object.entries(e.bySource || {})) bySource[src] = (bySource[src] || 0) + (n as number);
@@ -182,8 +189,8 @@ function ptbHealth(sinceMs: number): { total: number; exact: number; bySource: R
   return total ? { total, exact, bySource } : null;
 }
 
-function printPtbHealth(sinceMs: number): void {
-  const h = ptbHealth(sinceMs);
+function printPtbHealth(sinceMs: number, untilMs: number = Infinity): void {
+  const h = ptbHealth(sinceMs, untilMs);
   console.log(`\n  ${'-'.repeat(60)}`);
   if (!h) {
     console.log('  PTB source health: no data yet (bot/data/ptb_health.jsonl empty —');
@@ -205,25 +212,24 @@ function main(): void {
     ? args.journal
     : resolve(ROOT, 'bot', 'data', 'trade_journal.jsonl');
   if (typeof args['ptb-health'] === 'string') ptbHealthPath = resolve(args['ptb-health']);
-  const days = args.all ? Infinity : Number(args.days ?? 1);
-  const sinceMs = args.all ? 0 : Date.now() - days * 86_400_000;
+  const win = resolveWindow(args);
 
-  const all = loadTrades(journalPath, sinceMs);
+  const all = loadTrades(journalPath, win.sinceMs, win.untilMs);
   const dry = all.filter(t => t.dryRun);
   const live = all.filter(t => !t.dryRun);
 
   if (args.json) {
     console.log(JSON.stringify({
-      window: args.all ? 'all' : `${days}d`,
+      window: win.tag,
       dryRun: { ...summarise(dry), provenance: provenance(dry) },
       live: { ...summarise(live), provenance: provenance(live) },
-      ptb: ptbHealth(sinceMs),
+      ptb: ptbHealth(win.sinceMs, win.untilMs),
       benchmark: LIVE_BENCHMARK,
     }, null, 2));
     return;
   }
 
-  const window = args.all ? 'entire journal' : `last ${days} day(s)`;
+  const window = win.label;
   console.log(`\n${'='.repeat(64)}`);
   console.log(`  Dry-run report — ${window}`);
   console.log(`  Journal: ${journalPath}`);
@@ -233,7 +239,7 @@ function main(): void {
     console.log('\n  No journal entries in this window.');
     console.log('  If the bot is running, filters are blocking every entry —');
     console.log('  check the live log for the "Filtered:" lines to see which.');
-    printPtbHealth(sinceMs);
+    printPtbHealth(win.sinceMs, win.untilMs);
     console.log('');
     return;
   }
@@ -261,7 +267,7 @@ function main(): void {
     printProvenance(set);
   }
 
-  printPtbHealth(sinceMs);
+  printPtbHealth(win.sinceMs, win.untilMs);
 
   const d = summarise(dry);
   console.log(`\n  ${'-'.repeat(60)}`);
@@ -279,4 +285,13 @@ function main(): void {
   console.log('');
 }
 
-main();
+try {
+  main();
+} catch (err) {
+  // A bad window is operator error, not a crash — print the one line that says
+  // how to fix it, not a stack trace through the date parser.
+  console.error(`
+  ${err instanceof Error ? err.message : String(err)}
+`);
+  process.exit(2);
+}

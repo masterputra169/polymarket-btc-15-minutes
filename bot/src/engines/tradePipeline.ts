@@ -97,7 +97,7 @@ export async function executeArbitrage({
 
   const budgetShares = Math.floor(arbBudget / arb.totalCost);
   const liqShares = Number.isFinite(minAskLiq) && minAskLiq > 0
-    ? Math.floor(minAskLiq) // askLiquidity is in dollar terms (top 5 levels)
+    ? Math.floor(minAskLiq) // askLiquidity sums book `size` over the top 5 levels — SHARES, not dollars
     : budgetShares;
   const arbShares = Math.min(budgetShares, liqShares);
 
@@ -251,7 +251,7 @@ export async function executeDirectionalTrade({
   // Indicators for entry data
   rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
   bb, atr, stochRsi, emaCross, volDelta,
-  consec, delta1m, delta3m, orderbookSignal, orderbookUp,
+  consec, delta1m, delta3m, orderbookSignal, orderbookUp, orderbookDown,
   marketUp, marketDown, obFlow,
   // Smart money flow
   smartFlowSignal,
@@ -583,15 +583,63 @@ export async function executeDirectionalTrade({
   };
 
   if (dryRun) {
-    // Simulate the fill at the quoted price and book it through the same hooks
-    // the live path uses, so settlement, cut-loss and the journal run unchanged
-    // and the dry run yields resolved trades to judge. Until 2026-09-07 this
-    // branch only logged "Would BUY": five days of dry run, zero trades measured.
-    // No order reaches the CLOB. The per-market / hourly counters are kept in
-    // step with live on purpose — a simulation that could re-enter a market the
-    // live bot may not would overstate what going live can do.
+    // Simulate the fill and book it through the same hooks the live path uses,
+    // so settlement, cut-loss and the journal run unchanged and the dry run
+    // yields resolved trades to judge. Until 2026-09-07 this branch only logged
+    // "Would BUY": five days of dry run, zero trades measured. No order reaches
+    // the CLOB. The per-market / hourly counters are kept in step with live on
+    // purpose — a simulation that could re-enter a market the live bot may not
+    // would overstate what going live can do.
+    //
+    // 2026-09-20: it used to book at betMarketPrice with slippagePct hard-coded
+    // to 0 — the optimistic bound, assuming the whole size filled at top of book
+    // and the book never moved. All 378 Railway dry-run rows carry that
+    // assumption. The measured edge is +3.2pp over breakeven with ~3.2c of
+    // slippage tolerance, so a systematically free fill is a material part of
+    // the go-live number, not a rounding detail. It now charges exactly what the
+    // live path submits (same fokBuyPrice, same spread input), which is the
+    // worst price the bot would itself accept — the simulation can never be
+    // better than the real order, and never invents a penalty the bot would
+    // have refused.
+    // Price mirrors live exactly, including live's use of orderbookUp?.spread on
+    // a DOWN bet. That is a pre-existing inconsistency in the live order path;
+    // "fixing" it only here would make the simulation diverge from the order the
+    // bot actually sends, which is the one thing this branch must not do.
+    const dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+    const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
+
+    // FOK is all-or-nothing: if the resting ask side cannot absorb the order the
+    // real one is rejected outright.
+    //
+    // Two things this has to get right. askLiquidity sums the book's `size` over
+    // the top 5 levels (src/data/polymarket.ts) — SHARES, not dollars — so it is
+    // compared against `shares`, not against the order's cost; a token is worth
+    // < $1, so comparing dollars to it is always the more permissive reading.
+    // And UP/DOWN are separate tokens with independent books, so the gate reads
+    // the book of the side actually being traded: letting the UP book decide
+    // whether a DOWN order fills is noise, not an approximation.
+    //
+    // null/0 depth means the fetch failed. Treating "unknown" as "empty" would
+    // silently halve the sample instead of measuring anything.
+    const betBook = betSide === 'UP' ? orderbookUp : orderbookDown;
+    const askLiqShares = betBook?.askLiquidity;
+    if (Number.isFinite(askLiqShares) && askLiqShares > 0 && shares > askLiqShares) {
+      log.info(
+        `[DRY RUN] FOK rejected: ${shares} ${betSide} shares @ $${dryFillPrice.toFixed(3)} ` +
+        `> ${Number(askLiqShares).toFixed(0)} shares resting on the ask — a live FOK would not fill`
+      );
+      deps.setPendingCost(0);
+      return false;
+    }
+
+    const drySlippagePct = betMarketPrice > 0
+      ? ((dryFillPrice - betMarketPrice) / betMarketPrice) * 100
+      : 0;
+    recordSlippage(drySlippagePct);
+
     log.info(
-      `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${betMarketPrice.toFixed(3)} = $${orderCost.toFixed(2)} (simulated fill) | ` +
+      `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${dryFillPrice.toFixed(3)} = $${dryFillCost.toFixed(2)} ` +
+      `(simulated fill; quote $${betMarketPrice.toFixed(3)}, slip ${drySlippagePct.toFixed(2)}%) | ` +
       `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
       `Conf: ${rec.confidence}${flowTag}${smartFlowTag} | ${betSizing.rationale}`
     );
@@ -599,15 +647,21 @@ export async function executeDirectionalTrade({
     deps.recordTrade({
       side: betSide, tokenId,
       conditionId: currentConditionId,
-      price: betMarketPrice, size: shares,
-      marketSlug, orderId: null, actualCost: orderCost,
+      price: dryFillPrice, size: shares,
+      marketSlug, orderId: null, actualCost: dryFillCost,
     });
     deps.confirmFill?.();
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     deps.recordTradeForMarket(marketSlug);
     deps.recordTradeTimestamp?.();
-    entryData.actualPrice = betMarketPrice;
-    entryData.slippagePct = 0;
+    // Settlement math keys on tokenPrice/cost, so those carry the fill. The
+    // quote stays in expectedPrice: both eras of dry-run rows remain scoreable
+    // from the journal alone, without a flag to flip.
+    entryData.tokenPrice = dryFillPrice;
+    entryData.cost = dryFillCost;
+    entryData.actualPrice = dryFillPrice;
+    entryData.slippagePct = drySlippagePct;
+    entryData.fillModel = 'fok_limit';
     entryData.avgSlippage = getAvgSlippage();
     deps.captureEntrySnapshot(entryData);
     // Record prediction for accuracy tracking
