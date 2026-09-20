@@ -75,7 +75,7 @@ Two systems: a **React dashboard** (frontend) and a **Node.js trading bot** (bot
 - `limitOrderManager.ts` — Passive GTD order lifecycle: IDLE → PLACED → MONITORING → FILLED/CANCELLED. Anti-loop: max 2 attempts per market slug, 60s cancel cooldown
 - `monteCarlo.ts` — GBM risk simulation (1000 paths), bypassed when ML >= 85%
 - `settlement.ts` — Oracle query (7 retries), fallback to BTC price comparison, AbortController on market switch
-- `preMarketLong.ts` — 09:00-09:15 EST weekdays, always UP, 5% risk, 1/day
+- `preMarketLong.ts` — 09:00-09:15 EST weekdays, always UP, `PREMARKET_LONG_RISK_PCT` of bankroll (0.10 in deployed env, ~8x a normal trade), 1/day. **Disabled 2026-09-20** (`PREMARKET_LONG_ENABLED=false`): 10 Railway dry-run trades, 30% WR, -19.88 — 2.6% of trades, nearly all of the book's profit.
 
 #### Bot Trading (`bot/src/trading/`)
 - `positionTracker.ts` — Bankroll, position state, sell lock (45s timeout), mark-to-market, audit log
@@ -86,8 +86,8 @@ Two systems: a **React dashboard** (frontend) and a **Node.js trading bot** (bot
 - `journalReconciler.ts` — On-chain trade verification against CLOB API
 
 #### Bot Safety (`bot/src/safety/`)
-- `tradeFilters.ts` — 15 filters: ML confidence, spreads, time windows, session quality, VPIN, blackout hours
-- `guards.ts` — Circuit breaker: max daily loss, max consecutive losses, 4hr cooldown
+- `tradeFilters.ts` — 15 filters: ML confidence, spreads, time windows, session quality, VPIN, blackout hours. Filter 0 is `BLOCKED_SESSIONS` (comma-separated, read once at module load): a hard gate placed ahead of every bypass in the module, because high-edge / oracle-lag / ML-confidence bypasses relax *signal* thresholds and a session we chose not to trade is not one.
+- `guards.ts` — Circuit breaker: max daily loss, max consecutive losses, 4hr cooldown. The daily baseline it measures against rolls over via `positionTracker.rolloverDayIfNeeded()`, called from the poll loop — **not** only from `loadState()`. Before 2026-09-20 it rolled only at process start, so a bot up for 9.5 days was feeding a multi-day P&L to a per-day threshold.
 
 #### Bot Monitoring (`bot/src/monitoring/`)
 - `notifier.ts` — Telegram + Discord alerts (rate-limited)

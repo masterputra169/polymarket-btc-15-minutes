@@ -40,6 +40,9 @@ printed) plus:
 | `RAILWAY_DOCKERFILE_PATH` | `Dockerfile.bot` | monorepo: two images from one repo |
 | `POLYMARKET_DOH_ENABLED` | `false` | no ISP DNS block on Railway |
 | `TZ` | `Asia/Jakarta` | log timestamps |
+| `PREMARKET_LONG_ENABLED` | `false` | 2026-09-20: 10 dry-run trades, 30% WR, -19.88 on 8x the normal stake |
+| `BLOCKED_SESSIONS` | `Europe` | 2026-09-20: 123 trades, 55.6%/58.3% WR wk1/wk2 — under breakeven both weeks, -17.05 |
+| `RL_ENABLED` | `false` | deployed weights output a constant action; their own metadata says `improved=false` |
 
 `frontend`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.frontend`, `VITE_BOT_WS_URL=/ws`,
 `BOT_HOST=bot.railway.internal`, `PORT=80`. **No `VITE_BOT_STATUS_TOKEN`** on

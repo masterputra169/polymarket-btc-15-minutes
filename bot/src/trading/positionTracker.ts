@@ -197,21 +197,7 @@ export function loadState() {
       }
 
       // Reset daily P&L if new day (UTC-based for consistency)
-      const dayMs = 24 * 60 * 60 * 1000;
-      const now = Date.now();
-      const todayStartUtc = now - (now % dayMs);
-      const stateDay = state.dayStartMs - (state.dayStartMs % dayMs);
-      if (todayStartUtc > stateDay) {
-        // If there's an open position, bankroll has already been reduced by pos.cost.
-        // Add it back so daily P&L baseline reflects true account value.
-        const openCost = (state.currentPosition && !state.currentPosition.settled)
-          ? (state.currentPosition.cost ?? 0) : 0;
-        state.startOfDayBankroll = roundMoney(state.bankroll + openCost);
-        state.dayStartMs = now;
-        // H4 FIX: Do NOT reset consecutiveLosses on midnight — circuit breaker must persist
-        // across days. Resetting at midnight allowed bypassing the 5-consecutive-loss halt.
-        log.info(`New trading day (UTC) — daily stats reset (baseline $${state.startOfDayBankroll.toFixed(2)}${openCost > 0 ? `, incl $${openCost.toFixed(2)} open` : ''})`);
-      }
+      rolloverDayIfNeeded();
 
       // Ensure peakBankroll is at least current bankroll (handles upgrades from older state files)
       if (!Number.isFinite(state.peakBankroll) || state.peakBankroll < state.bankroll) {
@@ -874,6 +860,51 @@ export function getConsecutiveLosses() {
 }
 
 /**
+ * Roll the daily-loss baseline over when the UTC day has advanced.
+ *
+ * Must be called from the poll loop, not only from loadState(). This used to
+ * live inside loadState() alone, which meant a process that stayed up never
+ * rolled over: on 2026-09-20 the Railway bot still carried a dayStartMs from
+ * 2026-09-10T17:15Z, so shouldHalt() was comparing 9.5 days of P&L against a
+ * "max daily loss" threshold. Cheap enough to call every poll — two integer
+ * divisions and an early return on the same-day path.
+ *
+ * MUST NOT run while a circuit-breaker cooldown is active. shouldHalt() is
+ * stateless — it re-derives the halt from dailyPnLPct on every poll — so
+ * rebasing the baseline mid-cooldown reads as "recovered" and the loop resumes
+ * trading immediately, skipping the remaining cooldown and the deliberate
+ * resetDailyBaseline() path that notifies the operator. While halted the
+ * cooldown owns the baseline; it sets a fresh one when it expires.
+ *
+ * @param haltActive true while a circuit-breaker cooldown is running
+ * @returns true if the baseline moved (caller should persist state)
+ */
+export function rolloverDayIfNeeded({ haltActive = false }: { haltActive?: boolean } = {}): boolean {
+  if (haltActive) return false;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const todayStartUtc = now - (now % dayMs);
+  const stateDay = state.dayStartMs - (state.dayStartMs % dayMs);
+  if (todayStartUtc <= stateDay) return false;
+
+  // If there's an open position, bankroll has already been reduced by pos.cost.
+  // Add it back so daily P&L baseline reflects true account value.
+  const openCost = (state.currentPosition && !state.currentPosition.settled)
+    ? (state.currentPosition.cost ?? 0) : 0;
+  const prevSoD = state.startOfDayBankroll;
+  state.startOfDayBankroll = roundMoney(state.bankroll + openCost);
+  state.dayStartMs = now;
+  // H4 FIX: Do NOT reset consecutiveLosses on midnight — circuit breaker must persist
+  // across days. Resetting at midnight allowed bypassing the 5-consecutive-loss halt.
+  auditLog({
+    type: 'DAY_ROLLOVER', prevSoD, nextSoD: state.startOfDayBankroll,
+    bankroll: state.bankroll, openCost, daysSinceLastRollover: (now - stateDay) / dayMs,
+  });
+  log.info(`New trading day (UTC) — daily stats reset (baseline $${prevSoD.toFixed(2)}→$${state.startOfDayBankroll.toFixed(2)}${openCost > 0 ? `, incl $${openCost.toFixed(2)} open` : ''})`);
+  return true;
+}
+
+/**
  * Reset daily baseline after circuit breaker cooldown.
  * Resets startOfDayBankroll + peakBankroll to current values so the bot can resume.
  */
@@ -1075,7 +1106,7 @@ export function _resetForTest(overrides: Partial<TrackerState> = {}) {
     bankroll: overrides.bankroll ?? 100,
     peakBankroll: overrides.peakBankroll ?? (overrides.bankroll ?? 100),
     startOfDayBankroll: overrides.startOfDayBankroll ?? (overrides.bankroll ?? 100),
-    dayStartMs: Date.now(),
+    dayStartMs: overrides.dayStartMs ?? Date.now(),
     currentPosition: overrides.currentPosition ?? null,
     pendingCost: overrides.pendingCost ?? 0,
     consecutiveLosses: overrides.consecutiveLosses ?? 0,
@@ -1107,6 +1138,8 @@ export function getStats() {
     cutLosses: state.cutLossCount || 0, // L4: pre-computed counter instead of scanning trades[]
     winRate: (state.wins + state.losses) > 0 ? state.wins / (state.wins + state.losses) : 0,
     consecutiveLosses: state.consecutiveLosses,
+    startOfDayBankroll: state.startOfDayBankroll, // baseline shouldHalt() measures the daily loss against
+    dayStartMs: state.dayStartMs,                 // when that baseline was last rolled over (UTC day)
     dailyPnL: getDailyPnL(),
     dailyPnLPct: getDailyPnLPct(),
     drawdownPct: getDrawdownPct(),

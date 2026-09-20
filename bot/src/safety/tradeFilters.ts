@@ -92,10 +92,33 @@ function getSpreadBaseline() {
 const SESSION_QUALITY = {
   'US':           1.0,
   'EU/US Overlap': 0.85,  // v4: 1.0→0.85 — data: 69% WR (worst session), reduce bet sizing
-  'Europe':       1.0,    // 86% WR — best session, no penalty
+  'Europe':       0.70,   // 2026-09-20: 123 Railway dry-run trades, 55.6% WR wk1 / 58.3% wk2,
+                          // -17.05 total — below its own breakeven both weeks. The old "86% WR,
+                          // best session" note dates from a pre-v16 era. Usually blocked outright
+                          // via BLOCKED_SESSIONS; this value only applies if it is unblocked.
   'Asia':         0.70,   // 77% WR — tighten significantly (was 0.85)
   'Off-hours':    0.60,   // further tightened
 };
+
+/**
+ * Sessions we have decided not to trade at all, from env (comma-separated,
+ * matched case-insensitively against getSessionName()).
+ *
+ * Read once at module load: the value is operational config, and re-parsing it
+ * on every poll would let a mid-flight env edit change behaviour between the
+ * filter check and the order. Restart the bot to change it.
+ *
+ * Scope: this gates applyTradeFilters() only. engines/preMarketLong.ts never
+ * calls it, so blocking 'EU/US Overlap' would NOT stop the 09:00-09:15 ET
+ * premarket long, which falls inside that window — disable that strategy with
+ * PREMARKET_LONG_ENABLED instead.
+ */
+const BLOCKED_SESSIONS = new Set(
+  (process.env.BLOCKED_SESSIONS ?? '')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 /**
  * Run all trade filters. Returns { pass: boolean, reasons: string[], sessionQuality: number }
@@ -123,6 +146,15 @@ export function applyTradeFilters({
   ptbSource,       // PTB source tier ('data_streams'|'polymarket_gamma'|'polymarket_page'|'polymarket_page_prev'|'scheduled_ws'|'chainlink_round'|'polymarket_page_approx'|'oracle'|'pending'|null)
 }: Record<string, any>) {
   const reasons = [];
+
+  // 0. Blocked session — hard gate, evaluated before every bypass below.
+  // The bypasses in this module (high edge, oracle-lag, ML high-confidence) relax
+  // SIGNAL thresholds. A session we have decided not to trade is not a signal
+  // threshold, so none of them may unblock it.
+  if (BLOCKED_SESSIONS.size > 0 && typeof session === 'string' && session
+      && BLOCKED_SESSIONS.has(session.toLowerCase())) {
+    reasons.push(`${session} session blocked (BLOCKED_SESSIONS)`);
+  }
 
   // Oracle Lag Sniper bypass — concept from JonathanPetersonn/oracle-lag-sniper (60.7% OOS WR).
   // When PTB is EXACT (data_streams or polymarket_gamma) AND we have ≥5min for repricing

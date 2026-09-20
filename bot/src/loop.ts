@@ -122,6 +122,7 @@ import {
   getBankroll,
   getAvailableBankroll,
   getDailyPnLPct,
+  rolloverDayIfNeeded,
   getConsecutiveLosses,
   getStats,
   getCurrentPosition,
@@ -550,6 +551,12 @@ export async function pollOnce() {
       importTradeTimestamps(getTradeTimestamps()); // M2 audit fix: restore hourly trade limit across restart
     }
     // ── 1. Circuit Breaker ──
+    // Roll the daily baseline FIRST: shouldHalt() reads getDailyPnLPct() against
+    // startOfDayBankroll, and that baseline used to move only on process start.
+    // A bot up for days was feeding the "max daily loss" gate a multi-day P&L.
+    // Suppressed while a cooldown is running — see rolloverDayIfNeeded(): a
+    // rebase mid-halt would read as "recovered" and resume trading early.
+    if (rolloverDayIfNeeded({ haltActive: cbHaltStartMs > 0 })) savePositionState();
     // Audit v2 H4: Reset consecutiveLosses after 4hr inactivity — stale streak from different
     // regime is not informative. lastLossTimestamp tracks when the streak started.
     {
