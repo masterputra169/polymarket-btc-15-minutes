@@ -1,5 +1,6 @@
 import React, { useMemo, useEffect, useRef, memo } from 'react';
 import { useBotData } from './hooks/useBotData.ts';
+import { describeClobSource } from './components/clobSourceLabel.ts';
 import { useCountdown } from './hooks/useCountdown.ts';
 import { initLoggerDB, shouldLog, logSnapshot } from './data/polymarketLogger.ts';
 import { recordPrediction, autoSettle, loadHistory, onMarketSwitch, getSignalPerfStats, computeOverallCRPS } from './engines/feedback.ts';
@@ -19,8 +20,9 @@ import SessionInfo from './components/SessionInfo.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
-const StatusPill = memo(function StatusPill({ connected, label }) {
-  const dotCls = connected ? '' : 'status-dot--error';
+const StatusPill = memo(function StatusPill({ connected, label, dotClass }) {
+  // dotClass wins when given — some signals have a third, amber state.
+  const dotCls = dotClass ?? (connected ? '' : 'status-dot--error');
   return (
     <span className="status-pill">
       <span className={`status-dot ${dotCls}`} style={{ width: 6, height: 6 }} />
@@ -32,6 +34,15 @@ const StatusPill = memo(function StatusPill({ connected, label }) {
 export default function App() {
   // ═══ Single data source: bot via WebSocket ═══
   const { data, loading, error, setBankroll, sendBotCommand, botConnected, binancePrice, binancePrevPrice } = useBotData();
+
+  // One verdict for the header pill and the Polymarket panel — they used to
+  // read different signals and could contradict each other on screen.
+  const clobLabel = useMemo(
+    () => describeClobSource(data ?? {}),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [data?.clobStatus, data?.clobDownReason, data?.clobSource,
+      Math.round((data?.clobQuietMs ?? 0) / 1000)],
+  );
 
   const botPaused = data?.paused === true;
 
@@ -274,7 +285,9 @@ export default function App() {
       orderbookDown: data.orderbookDown,
       orderbookSignal: data.orderbookSignal,
       clobSource: data.clobSource,
-      clobWsConnected: data.clobWsConnected,
+      clobStatus: data.clobStatus,
+      clobQuietMs: data.clobQuietMs,
+      clobDownReason: data.clobDownReason,
       priceToBeat: data.priceToBeat,
       marketQuestion: data.marketQuestion,
       settlementLeftMin: smoothTimeLeft ?? data.settlementLeftMin,
@@ -285,7 +298,8 @@ export default function App() {
     data?.orderbookUp?.bestBid, data?.orderbookUp?.bestAsk, data?.orderbookUp?.spread,
     data?.orderbookDown?.bestBid, data?.orderbookDown?.bestAsk,
     data?.orderbookSignal?.imbalance, data?.orderbookSignal?.signal,
-    data?.clobSource, data?.clobWsConnected,
+    data?.clobSource, data?.clobStatus, data?.clobDownReason,
+    Math.round((data?.clobQuietMs ?? 0) / 1000),
     data?.priceToBeat, data?.marketQuestion, smoothTimeLeft, data?.settlementLeftMin,
   ]);
 
@@ -473,7 +487,7 @@ export default function App() {
         <div className="app-header__status">
           <StatusPill connected={data?.binanceConnected ?? false} label="Binance" />
           <StatusPill connected={chainlinkConnected} label={`CL:${chainlinkResolved.source}`} />
-          <StatusPill connected={data?.clobWsConnected ?? false} label={`CLOB ${data?.clobWsConnected ? 'WS' : 'REST'}`} />
+          <StatusPill connected label={clobLabel.short} dotClass={clobLabel.dotClass} />
           <StatusPill connected={mlStatus === 'ready'} label="ML" />
           <StatusPill connected={botConnected} label="Bot" />
           {/* Bot START/STOP control */}
@@ -542,7 +556,7 @@ export default function App() {
           <TAIndicators data={taData} />
 
           {/* Row 3: Polymarket + Edge */}
-          <PolymarketPanel data={polyData} clobWsConnected={data?.clobWsConnected ?? false} />
+          <PolymarketPanel data={polyData} />
           <EdgePanel data={edgeData} />
 
           {/* Row 4: ML Engine (full width) */}

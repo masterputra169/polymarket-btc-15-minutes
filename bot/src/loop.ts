@@ -38,10 +38,11 @@ import {
   getUpPrice as getClobUpPrice,
   getDownPrice as getClobDownPrice,
   getOrderbook as getClobOrderbook,
-  getLastUpdate as getClobLastUpdate,
+  getFeedHealth as getClobFeedHealth,
   isClobConnected,
   setTokenIds,
 } from './streams/clobWs.ts';
+import { evaluateClobFeed } from './streams/clobFreshness.ts';
 import {
   getPrice as getPolyLivePrice,
   isConnected as isPolyLiveConnected,
@@ -1253,8 +1254,9 @@ export async function pollOnce() {
       return;
     }
 
-    const clobLastUpdate = getClobLastUpdate();
-    const clobStale = clobLastUpdate ? (now - clobLastUpdate > 15_000) : true;
+    // Is the CLOB book good enough to price off? A quiet book is NOT a stale
+    // one — see clobFreshness.ts for why conflating the two was expensive.
+    const clobFeed = evaluateClobFeed(getClobFeedHealth());
 
     // Get smart flow signal from PREVIOUS poll cycle (point-in-time correct for ML features)
     const smartFlowSignalForML = getSmartFlowSignal();
@@ -1273,7 +1275,7 @@ export async function pollOnce() {
 
     const sig = computeSignals({
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
-      clobConnected: isClobConnected(), clobStale,
+      clobUsable: clobFeed.usable,
       getClobUpPrice, getClobDownPrice, getClobOrderbook,
       feedbackStats, timeLeftMin,
       candleWindowMinutes: CONFIG.candleWindowMinutes,
@@ -2574,7 +2576,9 @@ export async function pollOnce() {
     const mcTag = mcResult ? `MC:${(mcResult.pUp * 100).toFixed(0)}%` : '';
     const clSrc = chainlinkResolved.source === 'polymarket_ws' ? 'PolyWS'
       : chainlinkResolved.source === 'chainlink_wss' ? 'CLWSS' : 'RPC';
-    const srcTag = `${isBinanceConnected() ? 'WS' : 'REST'}+${useClobWs ? 'WS' : 'REST'}+CL:${clSrc}`;
+    // WSq = usable but quiet: the link is proven alive, no quote has moved.
+    const clobTag = clobFeed.status === 'live' ? 'WS' : clobFeed.status === 'quiet' ? 'WSq' : 'REST';
+    const srcTag = `${isBinanceConnected() ? 'WS' : 'REST'}+${clobTag}+CL:${clSrc}`;
 
     const _pollMs = (performance.now() - _pollStart).toFixed(0);
     const stabTag = `Stab:${getConfirmCount()}/${SIGNAL_CONFIRM_POLLS}${recentFlipCount > 0 ? ` F${recentFlipCount}` : ''}`;
@@ -2634,6 +2638,9 @@ export async function pollOnce() {
       settlementMs, settlementLeftMin,
       orderbookUp, orderbookDown,
       clobSource: useClobWs ? 'WebSocket' : 'REST',
+      clobStatus: clobFeed.status,
+      clobQuietMs: Number.isFinite(clobFeed.quietMs) ? clobFeed.quietMs : null,
+      clobDownReason: clobFeed.reason,
       clobWsConnected: isClobConnected(),
       priceToBeat: priceToBeat.value, marketQuestion,
 

@@ -41,8 +41,7 @@ export function resetMarketUpHistory() {
  * @param {Object} params.priceToBeat - { slug, value, updatedAt, source }
  * @param {string} params.marketSlug - Current market slug
  * @param {number} params.now - Current timestamp
- * @param {boolean} params.clobConnected - Whether CLOB WS is connected
- * @param {boolean} params.clobStale - Whether CLOB WS data is stale
+ * @param {boolean} params.clobUsable - Whether the CLOB WS feed may be priced off (see clobFreshness.ts)
  * @param {Function} params.getClobUpPrice - Get CLOB WS UP price
  * @param {Function} params.getClobDownPrice - Get CLOB WS DOWN price
  * @param {Function} params.getClobOrderbook - Get CLOB WS orderbook
@@ -57,7 +56,7 @@ export function resetMarketUpHistory() {
  */
 export function computeSignals({
   klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
-  clobConnected, clobStale, getClobUpPrice, getClobDownPrice, getClobOrderbook,
+  clobUsable, getClobUpPrice, getClobDownPrice, getClobOrderbook,
   feedbackStats, timeLeftMin, candleWindowMinutes,
   getMLPrediction, fundingRate, smartFlowSignal, oraclePrice,
 }) {
@@ -91,7 +90,10 @@ export function computeSignals({
   // scheduled_ws / chainlink_round: locked in — never overwritten by subsequent polls
 
   // ── Market prices: WS (instant) → REST (fallback) ──
-  const useClobWs = clobConnected && !clobStale;
+  // The freshness judgement is made in clobFreshness.ts and handed in decided.
+  // Note what the fallback costs: poly.prices is a 30s Gamma cache, so every
+  // false here trades a live book for strictly older data.
+  const useClobWs = clobUsable === true;
   const marketUp = useClobWs ? (getClobUpPrice() ?? poly.prices.up) : poly.prices.up;
   const marketDown = useClobWs ? (getClobDownPrice() ?? poly.prices.down) : poly.prices.down;
 
