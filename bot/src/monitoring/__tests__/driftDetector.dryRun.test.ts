@@ -19,6 +19,7 @@ vi.mock('fs', () => ({
   existsSync: vi.fn((p: any) => String(p) === JOURNAL_PATH),
   appendFileSync: vi.fn(),
   mkdirSync: vi.fn(),
+  statSync: vi.fn(() => { throw new Error('no model file'); }),
 }));
 vi.mock('child_process', () => ({ execSync: vi.fn(), spawn: vi.fn() }));
 vi.mock('../../logger.ts', () => ({
@@ -27,7 +28,7 @@ vi.mock('../../logger.ts', () => ({
 vi.mock('../notifier.ts', () => ({ notify: vi.fn(() => Promise.resolve()) }));
 vi.mock('../../config.ts', () => ({ BOT_CONFIG: { journalFile: JOURNAL_PATH } }));
 
-import { readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { checkDrift, resetDriftState } from '../driftDetector.ts';
 
 /** `n` recent dry-run rows, the model right on every one. */
@@ -56,5 +57,27 @@ describe('checkDrift with a dry-run journal', () => {
     expect(result.status).not.toBe('insufficient_data');
     expect(result.trades).toBe(50);
     expect(result.accuracy).toBe(100);
+  });
+});
+
+/**
+ * 2026-09-24: a model trained on a different feature pipeline replaced one
+ * whose trades filled the last 21 days of the journal. Those trades say how
+ * the OLD model did; scored against the new model's baseline they read as
+ * drift and would alert for weeks. Only trades made since the deployed model
+ * file was written count.
+ */
+describe('only trades made with the deployed model count', () => {
+  test('trades from before the model file was written are ignored', () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() - 10.5 * 60_000 } as any);
+    const result = checkDrift();
+    expect(result.status).toBe('insufficient_data');
+    expect(result.trades ?? 0).toBeLessThanOrEqual(10);
+  });
+
+  test('an old model file does not narrow the window', () => {
+    vi.mocked(statSync).mockReturnValue({ mtimeMs: Date.now() - 60 * 86_400_000 } as any);
+    const result = checkDrift();
+    expect(result.trades).toBe(50);
   });
 });

@@ -263,6 +263,7 @@ MAX_CONSECUTIVE_LOSSES=7              # Halt after 7 straight losses
 MAX_DRAWDOWN_PCT=25                   # Halt at 25% drawdown from peak
 CB_COOLDOWN_MS=14400000               # 4h cooldown after a circuit-breaker halt
 MAX_BET_AMOUNT_USD=2.50               # Hard cap per trade
+KELLY_PROB_SHRINK=0.5                 # Kelly sizes on price + shrink × (model − price); 1 = trust the model fully
 ```
 
 ### Session gate and strategy toggles
@@ -429,6 +430,8 @@ npm run report:dryrun:railway          # pull the Railway volume's journal, last
 # Evidence: ALWAYS pin the window. Rolling windows silently rescore as time passes.
 node bot/scripts/dryRunReport.mts --since 2026-09-21T08:27:00Z [--until <t>] [--json]
 ```
+
+Each report also prints **ML vs market** for the dry-run and live sets (premarket excluded): the edge the model claimed on the side it bought, the edge that was realised, their ratio, and the model's Brier score against the token price at entry. The ratio is the `KELLY_PROB_SHRINK` the results support once there are at least 100 rows. On the pipeline-v1 model's 438 Railway trades: claimed +24.0pp, realised +4.3pp, ratio 0.18, and the price predicted better than the model (skill −19%).
 
 Rolling windows mislead. On 2026-09-20 the same unchanged journal read 85.7% WR over `--days 1` and 66.1% over `--days 14`. The evaluation window also restarts whenever a change alters *which* trades are taken, because rows from either side of such a change are not one sample. `bot/scripts/reportWindow.mts` handles the boundaries.
 
@@ -602,11 +605,46 @@ Read from `public/ml/norm_browser.json` → `ensemble_metrics`:
 
 > Earlier headline numbers (84.07% accuracy, 94.12% holdout) predate the embargo and OOF-selection fixes and were measured on a reused holdout. They are **not comparable**.
 
-**Features:** BTC returns and momentum over several horizons, RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, EMA cross, StochRSI, volume delta, funding rate, Polymarket token price / spread / time-to-settlement / book imbalance, and the regime. Inference in `src/engines/Mlpredictor.ts` is iterative tree traversal over `Float64Array` buffers.
+The deployed model above is **feature pipeline v1**: its rows carried a 60-second look-ahead, and the market price at the same instant predicts better than it does (see [One feature builder](#one-feature-builder-feature-pipeline-v2)).
+
+### Candidate model (pipeline v2) — trained 2026-09-24, awaiting deploy
+
+Trained on the fixed pipeline and stored in `backtest/ml_training/candidates/20260924_pipeline_v2/`. It passes every gate but has **not** been deployed yet.
+
+| Metric | Value |
+|--------|-------|
+| Data | 14,607 markets, 2026-03-28 → 2026-09-23, all real labels |
+| Accuracy / AUC (test) | 76.9% / 0.854 |
+| Calibration ECE | 0.022 (XGBoost), 0.034 (ensemble) |
+| Ensemble weights | XGBoost 0.75 · LightGBM 0.25 (OOF CV) |
+| **Brier skill vs same-instant market** | **+7.0%** (test, n = 2,176) |
+| Skill vs a market given up to 60 s of look-ahead | −2.1% (3,728 unseen rows) |
+| Deploy gate | all checks pass; relative checks skipped (pipeline v1 → v2) |
+
+Read the two skill rows together. The lookup records token prices about once a minute, so "the price at the instant" is up to 60 s stale (flatters the model), and interpolating it reads up to 60 s ahead (flatters the market). Live prices are fresh, so live skill should land between −2.1% and +7.0%: roughly market-level, not a proven edge. The pipeline-v1 model fails the same test even with its own look-ahead, and scored −19% live. The dry run's **ML vs market** report is the measurement that settles it.
+
+**Features:** BTC distance from the price to beat, returns and momentum over several horizons, RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, EMA cross, StochRSI, volume delta, the rule engine's probability and edge, the Polymarket token price at the instant and its 60 s change, time to settlement, session, and the regime. Order book, spread and funding rate are held neutral in pipeline v2 because no historical source exists for them. Inference in `src/engines/Mlpredictor.ts` is iterative tree traversal over `Float64Array` buffers.
+
+### One feature builder (feature pipeline v2)
+
+Training rows and live predictions are built by **the same code**: `src/engines/ml/featureInputs.ts` (`buildMlFeatureInputs`, a pure function of a snapshot of what is known at one instant). Offline, `trainingRow.ts` builds that snapshot at a 1-minute candle close from Binance candles and the market's recorded token prices. Live, `signalComputation.ts` builds it from the bot's own feeds.
+
+Why it matters: until 2026-09-23 the training generator re-implemented every feature by hand and had drifted from the live code:
+
+- a 60-second BTC look-ahead (candle close used, candle open timestamped);
+- a fake price-to-beat (the close 15 candles back instead of the window start);
+- market features from the window-open token price, while live passed the current price;
+- a different rule engine, indicator parameters and regime logic.
+
+The resulting model reported 78% / AUC 0.87, yet the market price at the same instant predicted better (Brier 0.143 vs 0.147), and in the dry run it claimed 88% while winning 68%.
+
+Rules that keep a row honest: every candle in the row has closed by the instant; the price to beat is the open of the window's first candle from the same Binance feed as the current price; the token price is the last print at or before the instant (no interpolation). Inputs that no offline source has (order book, feedback stats, live signal modifiers, funding rate) are neutral on **both** sides.
+
+The model records `feature_pipeline` in `norm_browser.json`, and the bot builds features the v2 way only for a model that declares it, so code and model always ship as a matching pair.
 
 ### Training pipeline (`backtest/ml_training/`)
 
-`trainXGBoost_v3.py` is a thin entrypoint over the unit-tested `mltrain/` package: `features.py`, `cv.py` (embargoed walk-forward CV), `sweeps.py` (threshold, phase-grid and ensemble-weight selection) and `metrics.py`.
+`trainXGBoost_v3.py` is a thin entrypoint over the unit-tested `mltrain/` package: `features.py`, `cv.py` (embargoed walk-forward CV), `sweeps.py` (threshold, phase-grid and ensemble-weight selection) and `metrics.py` (including `market_skill`, the model's Brier skill against the same-instant market price). `generateTrainingData.mts` writes `training_data.meta.json` next to the CSV; the trainer refuses a sidecar that does not match its CSV.
 
 ```bash
 cd backtest/ml_training
@@ -639,7 +677,14 @@ npm run ml:retrain         # retrain + deploy if every gate passes
 npm run ml:audit           # quality audit of the deployed models
 ```
 
-`bot/src/autoRetrain.ts` **fails closed** on 10 gates: accuracy, AUC, high-confidence accuracy and coverage, ECE, the CV-test gap, the test-holdout gap, the strict-holdout flag, and relative drops. `tests/test_model_contract.py` reads those gate field names out of the TypeScript, so renaming a metric in Python fails a test instead of silently removing a gate. With `RETRAIN_REQUIRE_FRESH_DATA=true`, a retrain also fails closed when fresh Polymarket data cannot be fetched.
+The gate lives in `bot/src/retrainGate.ts` (pure and unit-tested) and **fails closed** on:
+
+- accuracy and AUC floors;
+- **market skill**: the ensemble must predict the resolution better than the Polymarket price at the same instant (`brier_skill_vs_market` > `RETRAIN_MIN_MARKET_SKILL`, default 0);
+- high-confidence accuracy and coverage, ECE, the CV-test gap, the test-holdout gap and the strict-holdout flag;
+- relative accuracy/AUC drops against the deployed model. These are skipped, with the reason logged, across a feature-pipeline change, because the old numbers were measured on rows with the look-ahead.
+
+`tests/test_model_contract.py` reads the gate field names out of `retrainGate.ts` and asserts the trainer exports every one of them, so renaming a metric in Python fails a test instead of silently removing a gate. With `RETRAIN_REQUIRE_FRESH_DATA=true`, a retrain also fails closed when fresh Polymarket data cannot be fetched.
 
 ---
 
@@ -807,6 +852,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-09-24 | **ML fix**: training and live features now come from one builder (feature pipeline v2). This removes the 60 s look-ahead, the fake price-to-beat and the window-open market price. New deploy gate: the model must beat the same-instant market price. Kelly sizes on a probability shrunk toward the price (`KELLY_PROB_SHRINK`). The dry-run report shows claimed vs realised edge. Drift detection only counts trades made by the deployed model. A pipeline-v2 model is trained and passes the gate, awaiting deploy. |
 | 2026-09-23 | Telegram alerts gain a **🌐 View Web** button (below View Market and View Profile) that opens the dashboard. Configurable with `DASHBOARD_URL`. |
 | 2026-09-23 | CI installs the bot package too (the TypeScript job had failed on every push without it) and runs on Node 25. MIT `LICENSE` file added. |
 | 2026-09-23 | **Breakeven margin**: `breakevenMargin.ts` solves breakeven from the settlement math, and the dashboard shows margin vs breakeven (lifetime + realistic fills). The fallback sweep reports rows past its 7-day window as `agedOut`. An out-of-range `DRY_RUN_HARD_ENTRY_CAP` is refused and logged. `BLOCKED_SESSIONS` logs what it parsed and warns on unknown names. |

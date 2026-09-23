@@ -28,7 +28,7 @@
  *   DRIFT_AUTO_RETRAIN=false     Set true to auto-trigger retrain
  */
 
-import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync, statSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { execSync, spawn } from 'child_process';
@@ -89,10 +89,24 @@ function loadBaseline() {
   return 0.8407;
 }
 
+/**
+ * When the deployed model file was written — no earlier trade was made by it.
+ * 0 when unknown, which leaves only the age window. Added 2026-09-24: a model
+ * on a new feature pipeline replaced one whose trades filled the last 21 days,
+ * and scoring those against the new baseline would have read as weeks of drift.
+ */
+function modelDeployedAtMs(): number {
+  try {
+    return statSync(resolve(ML_DIR, 'xgboost_model.json')).mtimeMs || 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ── Load recent trades with ML accuracy data from journal ──
 function loadRecentMlTrades(windowSize) {
   const trades = [];
-  const minTs = Date.now() - CFG.maxTradeAgeDays * 86_400_000;
+  const minTs = Math.max(Date.now() - CFG.maxTradeAgeDays * 86_400_000, modelDeployedAtMs());
   let staleSkipped = 0;
 
   try {
@@ -114,8 +128,8 @@ function loadRecentMlTrades(windowSize) {
         // Skipping them left a dry-run bot with no drift guard at all.
         if (mlWasRight == null) continue;
 
-        // Skip trades older than the freshness window — the journal is
-        // append-only and outlives many model generations.
+        // Skip trades older than the freshness window or the deployed model —
+        // the journal is append-only and outlives many model generations.
         const ts = entry._ts ?? entry.entry?.enteredAt ?? 0;
         if (ts && ts < minTs) { staleSkipped++; continue; }
 
