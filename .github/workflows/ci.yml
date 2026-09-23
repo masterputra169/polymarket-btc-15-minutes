@@ -14,9 +14,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # package.json engines: node >=25 (native .ts/.mts/.cts execution).
+          node-version: '25'
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            bot/package-lock.json
       - run: npm ci
+      # The bot is its own package: ethers, @polymarket/clob-client, dotenv, ...
+      # live only in bot/package.json. Without this the typecheck cannot resolve
+      # them and fails on every push.
+      - run: npm ci --prefix bot
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

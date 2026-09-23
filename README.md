@@ -697,7 +697,7 @@ npm run test:ml:cov    # with coverage
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and on every PR:
 
-- **TypeScript job**: `npm ci` → `typecheck` → `test` → `build`
+- **TypeScript job** (Node 25): `npm ci` → `npm ci --prefix bot` → `typecheck` → `test` → `build`. The bot is a separate package, so both installs are required.
 - **ML job**: `ruff` → `black --check` → `pytest` with `--cov-fail-under=90` for `mltrain`
 
 ---
@@ -792,6 +792,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-09-23 | CI installs the bot package too (the TypeScript job had failed on every push without it) and runs on Node 25. MIT `LICENSE` file added. |
 | 2026-09-23 | **Breakeven margin**: `breakevenMargin.ts` solves breakeven from the settlement math, and the dashboard shows margin vs breakeven (lifetime + realistic fills). The fallback sweep reports rows past its 7-day window as `agedOut`. An out-of-range `DRY_RUN_HARD_ENTRY_CAP` is refused and logged. `BLOCKED_SESSIONS` logs what it parsed and warns on unknown names. |
 | 2026-09-21 | **CLOB freshness**: a quiet book is no longer treated as stale, and make-before-break socket replacement keeps the feed up through rollovers. |
 | 2026-09-20 | Dry-run fills are charged at the live FOK limit (`fillModel: 'fok_limit'`), and reports can pin their window with `--since` / `--until`. |
@@ -826,4 +827,4 @@ This software is for **educational and personal use only**. Trading prediction m
 
 ## License
 
-MIT License.
+Released under the [MIT License](LICENSE).
