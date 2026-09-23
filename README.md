@@ -595,7 +595,9 @@ Read from `public/ml/norm_browser.json` → `ensemble_metrics`:
 | Evaluation | 1,903 test + 1,343 strict-holdout samples |
 | Features | 79 (54 base + 25 engineered) |
 | Calibration | Platt scaling on logits |
-| Training window | 180 days |
+| Training window | 180 days: 12,787 markets, 2026-03-08 → 2026-09-04 UTC |
+| Labels | 100% real Polymarket outcomes (no simulated labels) |
+| Trained / deployed | 2026-09-05. Retraining is manual. |
 
 > Earlier headline numbers (84.07% accuracy, 94.12% holdout) predate the embargo and OOF-selection fixes and were measured on a reused holdout. They are **not comparable**.
 
