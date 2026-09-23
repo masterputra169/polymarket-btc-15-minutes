@@ -12,6 +12,7 @@ import {
   computeSignals, resetMarketUpHistory, recordMarketUp, marketUpAtOrBefore, windowStartMs,
 } from '../signalComputation.ts';
 import { buildMlFeatureInputs } from '../../../../src/engines/ml/featureInputs.ts';
+import { aggregate5m, CANDLES_5M } from '../../../../src/engines/ml/trainingRow.ts';
 
 const MIN = 60_000;
 const WINDOW_START = Date.UTC(2026, 8, 23, 12, 0, 0);
@@ -53,7 +54,8 @@ describe('feature pipeline v2', () => {
     run(2, cap);
     const [marketState, ruleForBlend, , opts] = cap.args!;
     const expected = buildMlFeatureInputs({
-      candles1m: k1, candles5m: k5, lastPrice: 81_010,
+      // 5m from this poll's 1m slice, as training builds them — not the cached 5m fetch.
+      candles1m: k1, candles5m: aggregate5m(k1).slice(-CANDLES_5M), lastPrice: 81_010,
       windowOpenPrice: k1.find(c => c.openTime === WINDOW_START)!.open,
       minutesLeft: (WINDOW_START + 15 * MIN - NOW) / MIN, nowMs: NOW,
       marketUp: 0.61, marketUpLag: 0.55, fundingRate: null,

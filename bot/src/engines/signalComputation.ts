@@ -18,6 +18,7 @@ import { getSignalModifiers } from '../adapters/signalPerfStore.ts';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
 import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS } from '../../../src/engines/ml/featureInputs.ts';
+import { aggregate5m, CANDLES_5M } from '../../../src/engines/ml/trainingRow.ts';
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -290,11 +291,14 @@ export function computeSignals({
    * history, and a rule probability with neutral live-only inputs. The live
    * rule probability (with modifiers) is still what the ML output is blended
    * with; only the feature vector changes.
+   *
+   * 5m candles are aggregated from this poll's 1m candles, exactly as training
+   * does, not taken from the separately cached 5m fetch (up to 10s staler).
    */
   function predictWithSharedBuilder() {
     const inputs = buildMlFeatureInputs({
       candles1m: klines1m,
-      candles5m: klines5m ?? [],
+      candles5m: aggregate5m(klines1m).slice(-CANDLES_5M),
       lastPrice,
       windowOpenPrice: candleOpenAt(klines1m, windowStartMs(marketSlug, now, timeLeftMin)),
       minutesLeft: timeLeftMin,
