@@ -8,6 +8,7 @@
 import { readFileSync, existsSync, statSync } from 'fs';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
+import { marginReport } from './breakevenMargin.ts';
 
 const log = createLogger('JournalAnalytics');
 
@@ -86,6 +87,7 @@ function emptyAnalytics() {
     equityCurve: [],
     events: [],
     patterns: { totalTrades: 0, totalPnl: 0, overallWr: 0 },
+    margin: marginReport([]),
     computedAt: Date.now(),
   };
 }
@@ -177,6 +179,11 @@ function computeAnalytics() {
     equityCurve,
     events,
     patterns,
+    // Win rate against what the book actually had to beat. `patterns.overallWr`
+    // alone reads as a verdict and is not one: at a 63c average entry, 66.6% is
+    // +3.0pp, and most of those rows were booked at the quote rather than at a
+    // realistic fill. `margin.realistic` is the decision-grade view.
+    margin: marginReport(realTrades),
     actualPnl,
     sources: {
       journal: journalReal.length,

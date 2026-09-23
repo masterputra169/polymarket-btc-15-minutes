@@ -223,8 +223,61 @@ describe('verifyPendingFallbacks (startup sweep)', () => {
 
     const summary = await verifyPendingFallbacks({ now: NOW, maxAgeMs: 7 * 86_400_000 });
 
-    expect(summary).toEqual({ checked: 2, confirmed: 1, corrected: 1, pending: 0 });
+    // ancientRow is 30 days old: skipped, and now counted rather than vanishing.
+    // oracleRow / verifiedRow / cutRow are excluded for not being unverified
+    // fallback rows at all, so they are not "aged out" either.
+    expect(summary).toEqual({ checked: 2, confirmed: 1, corrected: 1, pending: 0, agedOut: 1 });
     const slugs = vi.mocked(fetchResolvedOutcome).mock.calls.map(c => c[0].marketSlug);
     expect(slugs).toEqual([SLUG, LOSS_ROW.entry.marketSlug]);
+  });
+});
+
+/**
+ * Rows that age out of the startup sweep.
+ *
+ * CLAUDE.md says rows still unresolved after the retry ladder "self-heal on the
+ * next deploy". That is only true inside DEFAULT_SWEEP_MAX_AGE_MS. On
+ * 2026-09-22 the Railway journal still carried three price_fallback rows from
+ * 09-09 — 13 days old, so outside the 7-day window, and skipped by every sweep
+ * since. They had survived at least two redeploys while the report kept calling
+ * them "provisional", with nothing anywhere saying they would never be retried.
+ *
+ * The sweep cannot fix them (the APIs no longer answer for markets that old),
+ * so the fix is not a wider window — it is refusing to be silent about them.
+ */
+describe('verifyPendingFallbacks — rows that age out of the window', () => {
+  const OLD_ROW = {
+    _ts: NOW - (13 * 24 * 60 * 60 * 1000),
+    entry: { marketSlug: 'btc-updown-15m-1788980400', side: 'UP', tokenPrice: 0.5, cost: 1, size: 2, dryRun: true },
+    exit: { outcome: 'DOWN', source: 'price_fallback', exitedAt: NOW - (13 * 24 * 60 * 60 * 1000) },
+    analysis: { outcome: 'LOSS', pnl: -1.39 },
+  };
+
+  test('an aged-out row is not checked — the sweep window still bounds the work', async () => {
+    vi.mocked(readJournalRows).mockReturnValue([OLD_ROW]);
+    const summary = await verifyPendingFallbacks({ now: NOW });
+    expect(summary.checked).toBe(0);
+    expect(fetchResolvedOutcome).not.toHaveBeenCalled();
+  });
+
+  test('but it is counted, so "everything self-heals" stops being assumed', async () => {
+    vi.mocked(readJournalRows).mockReturnValue([OLD_ROW]);
+    const summary = await verifyPendingFallbacks({ now: NOW });
+    expect(summary.agedOut).toBe(1);
+  });
+
+  test('a row inside the window is still swept as before', async () => {
+    vi.mocked(readJournalRows).mockReturnValue([PREMARKET_ROW]);
+    const summary = await verifyPendingFallbacks({ now: NOW });
+    expect(summary.checked).toBe(1);
+    expect(summary.agedOut).toBe(0);
+  });
+
+  test('the two groups are reported separately rather than merged into "pending"', async () => {
+    vi.mocked(readJournalRows).mockReturnValue([PREMARKET_ROW, OLD_ROW]);
+    const summary = await verifyPendingFallbacks({ now: NOW });
+    expect(summary.checked).toBe(1);
+    expect(summary.pending).toBe(1);   // the in-window row, still unresolved
+    expect(summary.agedOut).toBe(1);   // the 13-day-old one, never retried again
   });
 });

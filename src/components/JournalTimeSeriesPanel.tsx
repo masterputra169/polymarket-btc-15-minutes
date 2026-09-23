@@ -124,8 +124,30 @@ function StatBox({ label, value, color, sub }: any) {
 
 // ─────────────── Tab: Overview ───────────────
 
+/** A margin reads as good or bad on its own sign, not against a 50% midpoint. */
+function marginColor(pp: number | null | undefined) {
+  if (pp == null) return undefined;
+  if (pp >= 3) return 'var(--green-mid)';
+  if (pp > 0) return 'var(--text-primary)';
+  return 'var(--red-mid)';
+}
+
+const ppStr = (pp: number | null | undefined) =>
+  pp == null ? '—' : `${pp >= 0 ? '+' : ''}${pp.toFixed(1)}pp`;
+
+/**
+ * Below this many realistic-fill trades the margin is labelled as too small to
+ * read. n = (1.96·0.5 / 0.05)² ≈ 385 — a 95% interval narrow enough to separate
+ * a ~5pp margin from zero, which is roughly where the realistic slice sits.
+ *
+ * It is the loose bar, not the real one: confirming a thin ~2.5pp edge at 80%
+ * power needs ~2,280 trades. This threshold only stops a 30-trade reading from
+ * being presented as a finding.
+ */
+const MIN_REALISTIC_SAMPLE = 385;
+
 function OverviewTab({ data }: any) {
-  const { patterns, sessions, dayOfWeek, sources, computedAt, actualPnl } = data;
+  const { patterns, sessions, dayOfWeek, sources, computedAt, actualPnl, margin } = data;
 
   // Live-ticking "Updated Xs ago" — re-renders every 5s independently.
   // `computedAt` is a bot timestamp, so the age must use the bot's clock.
@@ -173,7 +195,22 @@ function OverviewTab({ data }: any) {
       {/* Summary Stats — matched to polymarketscan layout */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
         <StatBox label="Trades" value={p.totalTrades} />
-        <StatBox label="Win Rate" value={`${p.overallWr}%`} color={wrColor(p.overallWr)} />
+        <StatBox
+          label="Win Rate"
+          value={`${p.overallWr}%`}
+          color={wrColor(p.overallWr)}
+          sub={margin?.lifetime?.breakevenPct != null
+            ? `need ${margin.lifetime.breakevenPct.toFixed(1)}%`
+            : undefined}
+        />
+        {/* The win rate alone is not a verdict: at a 63c average entry, 66.6%
+            is only +3.0pp. This box is the one to read. */}
+        <StatBox
+          label="Margin"
+          value={ppStr(margin?.lifetime?.marginPp)}
+          color={marginColor(margin?.lifetime?.marginPp)}
+          sub="vs breakeven"
+        />
         <StatBox label="Total P&L" value={pnlStr(p.totalPnl)} color={pnlColor(p.totalPnl)} />
         <StatBox
           label="Streak"
@@ -181,6 +218,36 @@ function OverviewTab({ data }: any) {
           color={streak?.type === 'win' ? 'var(--green-mid)' : streak?.type === 'loss' ? 'var(--red-mid)' : undefined}
         />
       </div>
+
+      {/* Decision-grade slice: only rows whose entry price reflects a fill a
+          live order would actually have got. Everything above blends those with
+          dry-run rows booked at the quote, which is the optimistic bound. */}
+      {margin?.realistic && (
+        <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+          <StatBox
+            label="Realistic fills"
+            value={margin.realistic.trades}
+            sub="fok_limit only"
+          />
+          <StatBox
+            label="WR (realistic)"
+            value={margin.realistic.winRatePct != null ? `${margin.realistic.winRatePct.toFixed(1)}%` : '—'}
+            color={margin.realistic.winRatePct != null ? wrColor(margin.realistic.winRatePct) : undefined}
+            sub={margin.realistic.breakevenPct != null
+              ? `need ${margin.realistic.breakevenPct.toFixed(1)}%`
+              : undefined}
+          />
+          <StatBox
+            label="Margin (realistic)"
+            value={ppStr(margin.realistic.marginPp)}
+            color={marginColor(margin.realistic.marginPp)}
+            sub={margin.realistic.trades < MIN_REALISTIC_SAMPLE
+              ? `n too small (<${MIN_REALISTIC_SAMPLE})`
+              : 'vs breakeven'}
+          />
+          <StatBox label="P&L (realistic)" value={pnlStr(margin.realistic.pnl)} color={pnlColor(margin.realistic.pnl)} />
+        </div>
+      )}
 
       {/* Polymarketscan-style aggregate metrics */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -575,6 +642,19 @@ export default memo(JournalTimeSeriesPanel, (prev, next) => {
     a.patterns?.currentStreak?.count === b.patterns?.currentStreak?.count &&
     a.sources?.total === b.sources?.total &&
     a.events?.length === b.events?.length &&
-    a.equityCurve?.length === b.equityCurve?.length
+    a.equityCurve?.length === b.equityCurve?.length &&
+    // Margin moves independently of the win rate — a book can hold its WR while
+    // the average entry price drifts and the margin closes, which is exactly the
+    // case this panel exists to make visible. Every rendered margin field is
+    // listed: `pnl` especially, because journalAnalytics overwrites analysis.pnl
+    // from the verified on-chain journal and only rewrites `outcome` when the
+    // sign flips — so P&L can move while every count and rate stays identical.
+    a.margin?.lifetime?.marginPp === b.margin?.lifetime?.marginPp &&
+    a.margin?.lifetime?.breakevenPct === b.margin?.lifetime?.breakevenPct &&
+    a.margin?.realistic?.trades === b.margin?.realistic?.trades &&
+    a.margin?.realistic?.marginPp === b.margin?.realistic?.marginPp &&
+    a.margin?.realistic?.winRatePct === b.margin?.realistic?.winRatePct &&
+    a.margin?.realistic?.breakevenPct === b.margin?.realistic?.breakevenPct &&
+    a.margin?.realistic?.pnl === b.margin?.realistic?.pnl
   );
 });

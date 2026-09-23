@@ -371,6 +371,7 @@ export default function App() {
       events: ja.events,
       sources: ja.sources,
       actualPnl: ja.actualPnl,
+      margin: ja.margin,
       computedAt: ja.computedAt,
     };
   }, [
@@ -378,6 +379,20 @@ export default function App() {
     data?.journalAnalytics?.patterns?.totalPnl,
     data?.journalAnalytics?.patterns?.overallWr,
     data?.journalAnalytics?.patterns?.currentStreak?.count,
+    // Every margin field the panel renders needs its own dep. `pnl` in
+    // particular moves on its own: journalAnalytics overwrites analysis.pnl from
+    // the verified on-chain journal and only rewrites `outcome` when the sign
+    // flips, so a correction can change P&L while trades / winRate / breakeven /
+    // marginPp all stay put. Keying on marginPp alone froze the figure on screen.
+    // Comparing `margin` by reference is not an option: the snapshot is fresh
+    // JSON every poll, so that would re-render this panel ~20x/second.
+    data?.journalAnalytics?.margin?.lifetime?.marginPp,
+    data?.journalAnalytics?.margin?.lifetime?.breakevenPct,
+    data?.journalAnalytics?.margin?.realistic?.trades,
+    data?.journalAnalytics?.margin?.realistic?.marginPp,
+    data?.journalAnalytics?.margin?.realistic?.winRatePct,
+    data?.journalAnalytics?.margin?.realistic?.breakevenPct,
+    data?.journalAnalytics?.margin?.realistic?.pnl,
     data?.journalAnalytics?.sources?.total,
     data?.journalAnalytics?.events?.length,
     data?.journalAnalytics?.equityCurve?.length,

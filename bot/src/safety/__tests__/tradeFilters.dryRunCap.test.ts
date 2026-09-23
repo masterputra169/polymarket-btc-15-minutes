@@ -10,21 +10,32 @@
  * it MUST be impossible for it to loosen a live bot. With DRY_RUN=false the cap
  * stays 68c no matter what DRY_RUN_HARD_ENTRY_CAP says. It must also only ever
  * RAISE the cap, so a bad value cannot tighten the live path by a side door.
+ *
+ * 2026-09-22 — the bounds themselves were re-examined against 410 resolved
+ * dry-run rows and left alone; see the comment in tradeFilters.ts for why the
+ * apparent "expensive entries lose" effect does not survive the correct
+ * breakeven formula. What DID change is the failure mode: envNum() silently
+ * returns its default for an out-of-range value, so an operator who set 0.99
+ * would see a bot capped at 68c with nothing anywhere saying why. Out-of-range
+ * and unparseable values are now refused out loud and reported.
  */
 
-import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, test, expect, afterEach, vi } from 'vitest';
 
 const ORIGINAL_ENV = { ...process.env };
 
 /** Load a fresh copy of the filter module under a specific env. */
-async function loadFilters(env: Record<string, string | undefined>) {
+async function loadModule(env: Record<string, string | undefined>) {
   vi.resetModules();
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
-  const mod = await import('../tradeFilters.ts');
-  return mod.applyTradeFilters;
+  return import('../tradeFilters.ts');
+}
+
+async function loadFilters(env: Record<string, string | undefined>) {
+  return (await loadModule(env)).applyTradeFilters;
 }
 
 /**
@@ -123,5 +134,46 @@ describe('dry-run entry-price cap override', () => {
     const hits = capReason(applyTradeFilters(baseInput()).reasons);
     expect(hits).toHaveLength(1);
     expect(hits[0]).toContain('68c hard cap');
+  });
+});
+
+describe('a refused override is refused out loud, not silently', () => {
+  test('an in-range value is applied and reports no refusal', async () => {
+    const mod = await loadModule({ DRY_RUN: 'true', DRY_RUN_HARD_ENTRY_CAP: '0.75' });
+    expect(mod.getDryRunEntryCap()).toBe(0.75);
+    expect(mod.getDryRunEntryCapRefusal()).toBeNull();
+  });
+
+  test('a value above the ceiling is refused, and says so', async () => {
+    const mod = await loadModule({ DRY_RUN: 'true', DRY_RUN_HARD_ENTRY_CAP: '0.99' });
+    expect(mod.getDryRunEntryCap()).toBeNull();
+    const refusal = mod.getDryRunEntryCapRefusal();
+    expect(refusal).not.toBeNull();
+    expect(refusal).toContain('0.99');
+    expect(refusal).toContain('68c');
+  });
+
+  test('a value below the floor is refused rather than quietly tightening the cap', async () => {
+    const mod = await loadModule({ DRY_RUN: 'true', DRY_RUN_HARD_ENTRY_CAP: '0.40' });
+    expect(mod.getDryRunEntryCap()).toBeNull();
+    expect(mod.getDryRunEntryCapRefusal()).toContain('0.40');
+  });
+
+  test('an unparseable value is refused and named, not treated as unset', async () => {
+    const mod = await loadModule({ DRY_RUN: 'true', DRY_RUN_HARD_ENTRY_CAP: 'seventy' });
+    expect(mod.getDryRunEntryCap()).toBeNull();
+    expect(mod.getDryRunEntryCapRefusal()).toContain('seventy');
+  });
+
+  test('unset is not a refusal — there is nothing to explain', async () => {
+    const mod = await loadModule({ DRY_RUN: 'true', DRY_RUN_HARD_ENTRY_CAP: undefined });
+    expect(mod.getDryRunEntryCap()).toBeNull();
+    expect(mod.getDryRunEntryCapRefusal()).toBeNull();
+  });
+
+  test('a live bot never reports a refusal — the override is not its business', async () => {
+    const mod = await loadModule({ DRY_RUN: 'false', DRY_RUN_HARD_ENTRY_CAP: '0.99' });
+    expect(mod.getDryRunEntryCap()).toBeNull();
+    expect(mod.getDryRunEntryCapRefusal()).toBeNull();
   });
 });

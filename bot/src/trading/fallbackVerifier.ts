@@ -181,13 +181,26 @@ export function scheduleFallbackVerification({ marketSlug, conditionId }: { mark
 /**
  * Startup sweep: verify every unverified price_fallback row from the last
  * `maxAgeMs`. Sequential, so a long journal does not hammer the APIs.
+ *
+ * Rows older than the window are counted as `agedOut` rather than quietly
+ * dropped. They are past saving — the CLOB and Gamma lookups stop answering for
+ * markets that old — but leaving them uncounted made "unresolved rows self-heal
+ * on the next deploy" look unconditionally true. It is not: on 2026-09-22 three
+ * rows from 09-09 had sat provisional through two redeploys, outside the 7-day
+ * window and therefore never retried, while the report still described them as
+ * awaiting verification. A number that never moves should say so.
  */
 export async function verifyPendingFallbacks(
   { now = Date.now(), maxAgeMs = DEFAULT_SWEEP_MAX_AGE_MS }: { now?: number; maxAgeMs?: number } = {},
-): Promise<{ checked: number; confirmed: number; corrected: number; pending: number }> {
-  const candidates = readJournalRows().filter(r =>
-    isUnverifiedFallbackRow(r) && (now - (r._ts ?? 0)) <= maxAgeMs && !inFlight.has(r.entry?.marketSlug));
-  const summary = { checked: 0, confirmed: 0, corrected: 0, pending: 0 };
+): Promise<{ checked: number; confirmed: number; corrected: number; pending: number; agedOut: number }> {
+  const unverified = readJournalRows().filter(r =>
+    isUnverifiedFallbackRow(r) && !inFlight.has(r.entry?.marketSlug));
+  const withinWindow = (r: { _ts?: number }) => (now - (r._ts ?? 0)) <= maxAgeMs;
+
+  const candidates = unverified.filter(withinWindow);
+  const agedOutRows = unverified.filter(r => !withinWindow(r));
+
+  const summary = { checked: 0, confirmed: 0, corrected: 0, pending: 0, agedOut: agedOutRows.length };
   for (const row of candidates) {
     summary.checked++;
     let status: VerifyStatus = 'pending';
@@ -202,6 +215,15 @@ export async function verifyPendingFallbacks(
   }
   if (summary.checked > 0) {
     log.info(`Fallback sweep: ${summary.checked} checked, ${summary.confirmed} confirmed, ${summary.corrected} corrected, ${summary.pending} still pending`);
+  }
+  if (summary.agedOut > 0) {
+    const days = Math.round(maxAgeMs / (24 * 60 * 60 * 1000));
+    const slugs = agedOutRows.slice(0, 5).map(r => r.entry?.marketSlug).filter(Boolean);
+    log.warn(
+      `Fallback sweep: ${summary.agedOut} row(s) are older than the ${days}-day window and will never be ` +
+      `retried — their settlement stays provisional permanently. ${slugs.join(', ')}` +
+      `${summary.agedOut > slugs.length ? ` (+${summary.agedOut - slugs.length} more)` : ''}`,
+    );
   }
   return summary;
 }

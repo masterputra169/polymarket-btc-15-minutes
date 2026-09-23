@@ -27,7 +27,6 @@
 
 import { TRADE_FILTERS } from '../../../src/config.ts';
 import { BOT_CONFIG } from '../config.ts';
-import { envNum } from '../utils/env.ts';
 import { recordPtbSource } from '../monitoring/ptbHealth.ts';
 import { createLogger } from '../logger.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
@@ -49,15 +48,89 @@ const log = createLogger('Filter');
 // with real money at stake the cap stays 68c no matter what the env says. The
 // override only ever RAISES the cap (0.68 floor), so a typo cannot tighten the
 // live path either. Cleared automatically the moment DRY_RUN goes false.
-const DRY_RUN_HARD_ENTRY_CAP = BOT_CONFIG.dryRun
-  ? (process.env.DRY_RUN_HARD_ENTRY_CAP != null
-      ? envNum(process.env.DRY_RUN_HARD_ENTRY_CAP, 0.68, 0.68, 0.95)
-      : null)
-  : null;
+//
+// 2026-09-22 — the ceiling was examined and deliberately NOT tightened. Recorded
+// here because the tempting version of this analysis is wrong in a way that is
+// easy to repeat.
+//
+// Scoring 410 resolved Railway dry-run rows by entry price looks at first like
+// "expensive entries lose", which argues for dropping the ceiling to 0.72. It
+// does not survive using the bot's own settlement math. The fee is charged on
+// the winning PROFIT, not on the cost (engines/settlementMath.ts), so breakeven
+// is p / ((1-p)(1-r) + p), not the p + r(p) that a cost-side fee would give —
+// about 1.0-1.3pp lower across the traded range. With the correct denominator:
+//
+//     0.50-0.575  n= 71  WR 63.4%  breakeven 55.7%   +7.7pp   PnL  +5.42
+//     0.575-0.65  n=180  WR 64.4%  breakeven 61.4%   +3.0pp   PnL +12.88
+//     0.65-0.68   n= 27  WR 63.0%  breakeven 66.6%   -3.7pp   PnL  -1.95
+//     0.68-0.72   n= 58  WR 77.6%  breakeven 70.4%   +7.2pp   PnL  +7.56
+//     0.72+       n= 65  WR 73.8%  breakeven 73.8%   +0.0pp   PnL  -0.10
+//
+// The band above 0.72 is not a loser, it is exactly breakeven, and its per-week
+// split is +2.0pp / -2.0pp — noise. The series is not monotone either (0.65-0.68
+// negative, then 0.68-0.72 the best in the book), which is what a price effect
+// that does not really exist looks like. Tightening here would have been fitting
+// to 65 trades under a formula that was itself wrong.
+//
+// The genuinely large historical leak, ML<45% at -19.88 over 10 trades, is the
+// premarket long, and it was disabled on 2026-09-20 (PREMARKET_LONG_ENABLED).
+//
+// So the bound stays where it was. Anything that moves it should come from the
+// clean fok_limit window, which is still far too small to carry the decision —
+// see trading/breakevenMargin.ts for the number to watch.
+const DRY_RUN_ENTRY_CAP_FLOOR = 0.68;
+const DRY_RUN_ENTRY_CAP_CEILING = 0.95;
+
+/**
+ * Resolve the dry-run cap override, separating "not set" from "set to something
+ * we refuse". envNum() is deliberately not used here: it returns its default for
+ * an out-of-range value, which would leave an operator who set 0.75 staring at a
+ * bot capped at 68c with nothing anywhere saying why. The bounds are still
+ * enforced — just loudly.
+ */
+function resolveDryRunEntryCap(): { cap: number | null; refusal: string | null } {
+  if (!BOT_CONFIG.dryRun) return { cap: null, refusal: null };
+
+  const raw = process.env.DRY_RUN_HARD_ENTRY_CAP;
+  if (raw == null) return { cap: null, refusal: null };
+
+  const floorC = `${(DRY_RUN_ENTRY_CAP_FLOOR * 100).toFixed(0)}c`;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return {
+      cap: null,
+      refusal: `DRY_RUN_HARD_ENTRY_CAP="${raw}" is not a number — ignored, entry cap stays ${floorC}.`,
+    };
+  }
+  if (parsed < DRY_RUN_ENTRY_CAP_FLOOR || parsed > DRY_RUN_ENTRY_CAP_CEILING) {
+    return {
+      cap: null,
+      refusal:
+        `DRY_RUN_HARD_ENTRY_CAP=${raw} is outside ${DRY_RUN_ENTRY_CAP_FLOOR}-${DRY_RUN_ENTRY_CAP_CEILING} ` +
+        `— ignored, entry cap stays ${floorC}.`,
+    };
+  }
+  return { cap: parsed, refusal: null };
+}
+
+const { cap: DRY_RUN_HARD_ENTRY_CAP, refusal: DRY_RUN_ENTRY_CAP_REFUSAL } = resolveDryRunEntryCap();
+
+/** The dry-run entry cap actually in force, or null when none applies. Test seam. */
+export function getDryRunEntryCap(): number | null {
+  return DRY_RUN_HARD_ENTRY_CAP;
+}
+
+/** Why a configured override was not applied, or null when there is nothing to explain. */
+export function getDryRunEntryCapRefusal(): string | null {
+  return DRY_RUN_ENTRY_CAP_REFUSAL;
+}
 
 if (DRY_RUN_HARD_ENTRY_CAP != null) {
   log.warn(`DRY-RUN ONLY: entry-price hard cap raised 68c -> ${(DRY_RUN_HARD_ENTRY_CAP * 100).toFixed(0)}c ` +
            'to collect entries for the go-live comparison. Has no effect when DRY_RUN=false.');
+}
+if (DRY_RUN_ENTRY_CAP_REFUSAL != null) {
+  log.warn(`REFUSED: ${DRY_RUN_ENTRY_CAP_REFUSAL}`);
 }
 
 // Module state for cooldown tracking
@@ -119,6 +192,29 @@ const BLOCKED_SESSIONS = new Set(
     .map(s => s.trim().toLowerCase())
     .filter(Boolean),
 );
+
+// Say what was parsed, at load, every time.
+//
+// 2026-09-20 this var was set on Railway but not present in the running
+// container, and nothing in the logs distinguished "Europe is blocked" from
+// "Europe simply had no qualifying signal" — the only available evidence was an
+// absence of trades, which proves nothing. The set is operational config, not a
+// secret (the values are session names), so printing it costs nothing and makes
+// the gate verifiable from `railway logs` alone.
+const SESSION_NAMES = Object.keys(SESSION_QUALITY);
+if (BLOCKED_SESSIONS.size > 0) {
+  const parsed = [...BLOCKED_SESSIONS];
+  log.warn(`BLOCKED_SESSIONS active: [${parsed.join(', ')}] — these sessions will not trade at all.`);
+  // A name that matches nothing silently blocks nothing. 'EU/US Overlap' in
+  // particular is a distinct session from 'Europe' and must be spelled in full.
+  const unknown = parsed.filter(p => !SESSION_NAMES.some(n => n.toLowerCase() === p));
+  if (unknown.length > 0) {
+    log.warn(`BLOCKED_SESSIONS contains ${unknown.length} name(s) matching no known session: ` +
+             `[${unknown.join(', ')}]. Known sessions: [${SESSION_NAMES.join(', ')}]. These entries block nothing.`);
+  }
+} else {
+  log.info('BLOCKED_SESSIONS not set — every session is tradeable.');
+}
 
 /**
  * Run all trade filters. Returns { pass: boolean, reasons: string[], sessionQuality: number }
