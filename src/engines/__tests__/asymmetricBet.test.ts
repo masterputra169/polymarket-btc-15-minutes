@@ -485,3 +485,49 @@ describe('multiplier chain', () => {
     }
   });
 });
+
+// ────────────────────────────────────────────
+// Probability shrink toward the market (2026-09-23)
+// ────────────────────────────────────────────
+//
+// Over 438 dry-run trades the deployed model claimed 88% and won 68%, against
+// a market price implying 64%: the realised edge was about 1/5 of the claimed
+// one. Kelly sizes on the probability it is given, so an overconfident model
+// oversizes every bet. probShrinkToMarket pulls the probability Kelly sees
+// back toward the price: p = price + shrink * (model - price).
+
+describe('probShrinkToMarket', () => {
+  it('defaults to 1 — callers that do not pass it are unchanged', () => {
+    const a = computeBetSizing(makeParams());
+    const b = computeBetSizing(makeParams({ probShrinkToMarket: 1 }));
+    expect(b.betAmount).toBe(a.betAmount);
+    expect(b.kellyProb).toBeCloseTo(0.65, 12);
+  });
+
+  it('halves the claimed edge that Kelly sizes on', () => {
+    const r = computeBetSizing(makeParams({ probShrinkToMarket: 0.5 }));
+    expect(r.kellyProb).toBeCloseTo(0.575, 12); // 0.50 + 0.5 * (0.65 - 0.50)
+  });
+
+  it('a smaller shrink never produces a larger bet', () => {
+    const full = computeBetSizing(makeParams({ probShrinkToMarket: 1 }));
+    const half = computeBetSizing(makeParams({ probShrinkToMarket: 0.5 }));
+    expect(half.rawKelly).toBeLessThan(full.rawKelly);
+    expect(half.betAmount).toBeLessThanOrEqual(full.betAmount);
+  });
+
+  it('shrink 0 means "the market is right" — no edge, no bet', () => {
+    const r = computeBetSizing(makeParams({ probShrinkToMarket: 0 }));
+    expect(r.shouldBet).toBe(false);
+  });
+
+  it('an out-of-range shrink is clamped to [0, 1], never amplifies', () => {
+    const r = computeBetSizing(makeParams({ probShrinkToMarket: 3 }));
+    expect(r.kellyProb).toBeCloseTo(0.65, 12);
+  });
+
+  it('a non-finite shrink is treated as 1 (unchanged), not as 0', () => {
+    const r = computeBetSizing(makeParams({ probShrinkToMarket: Number.NaN }));
+    expect(r.kellyProb).toBeCloseTo(0.65, 12);
+  });
+});

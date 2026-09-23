@@ -110,6 +110,11 @@ function riskLevel(pct) {
  * @param {Object} [params.smartFlowSignal]
  * @param {Object} [params.entryTimingScore]
  * @param {Object} [params.mcResult]
+ * @param {number} [params.probShrinkToMarket=1] - Kelly sizes on
+ *   price + shrink * (ensembleProb - price). 1 = trust the model fully; the bot
+ *   passes KELLY_PROB_SHRINK. Added 2026-09-23: over 438 dry-run trades the
+ *   model claimed 88% and won 68% against a 64% price, so full trust oversized
+ *   every bet. Clamped to [0, 1]; a non-finite value means 1.
  */
 export function computeBetSizing({
   action, side, ensembleProb, marketPrice, edge,
@@ -118,6 +123,7 @@ export function computeBetSizing({
   smartFlowSignal,   // from smartMoneyTracker { direction, strength, confidence, agreesWithSide }
   entryTimingScore,  // from smartMoneyTracker.getEntryTimingScore { score, label, inSweetSpot }
   mcResult,          // from monteCarlo.simulateBTCPaths { pUp, pDown, mcConfidence, priceEfficiency }
+  probShrinkToMarket = 1,
 }: any) {
   const noBet = {
     shouldBet: false, side: null,
@@ -131,6 +137,7 @@ export function computeBetSizing({
     executionAdj: { multiplier: 1.0, label: '-' },
     expectedValue: 0,
     rationale: '',
+    kellyProb: null as number | null,
   };
 
   // Gate 1: must be ENTER
@@ -165,7 +172,10 @@ export function computeBetSizing({
   const slippage = executionContext?.avgSlippage ?? 0.005;
   const totalCost = feeRate + spreadCost + slippage;
   const b = grossB * (1 - totalCost);    // net decimal odds after fee + spread + slippage
-  const p = ensembleProb;              // model probability of winning
+  // Probability Kelly sizes on: the model's, pulled toward the price by the
+  // shrink. Never amplified (clamped to [0, 1]); a non-finite shrink = no shrink.
+  const shrink = Number.isFinite(probShrinkToMarket) ? Math.max(0, Math.min(1, probShrinkToMarket)) : 1;
+  const p = marketPrice + shrink * (ensembleProb - marketPrice);   // probability of winning
   const q = 1 - p;
   const rawKelly = (b * p - q) / b;
 
@@ -396,5 +406,6 @@ export function computeBetSizing({
     expectedValue,
     rationale,
     kellyTune,
+    kellyProb: p,
   };
 }

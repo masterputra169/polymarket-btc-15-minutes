@@ -29,6 +29,7 @@
 
 import { readFileSync, existsSync } from 'fs';
 import { resolveWindow, inWindow } from './reportWindow.mts';
+import { edgeRealism, suggestedShrink, MIN_ROWS_FOR_SHRINK, type EdgeRow } from './edgeRealism.mts';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -69,6 +70,10 @@ type Trade = {
   verified: boolean;
   /** price_fallback rows only: Polymarket disagreed and the row was corrected */
   corrected: boolean;
+  side: string | null;
+  marketUp: number | null;
+  /** Resolved direction ('UP' | 'DOWN'), verified outcome first. */
+  resolvedUp: boolean | null;
 };
 
 function loadTrades(journalPath: string, sinceMs: number, untilMs: number = Infinity): Trade[] {
@@ -95,6 +100,12 @@ function loadTrades(journalPath: string, sinceMs: number, untilMs: number = Infi
       source: e.exit?.source ?? null,
       verified: e.exit?.verifiedAt != null,
       corrected: e.exit?.correctedFrom != null,
+      side: e.entry?.side ?? null,
+      marketUp: Number(e.entry?.marketUp) || null,
+      resolvedUp: (() => {
+        const o = e.exit?.verifiedOutcome ?? e.analysis?.actualOutcome ?? e.exit?.outcome;
+        return o === 'UP' ? true : o === 'DOWN' ? false : null;
+      })(),
     });
   }
   return trades.sort((a, b) => a.ts - b.ts);
@@ -130,6 +141,39 @@ function printProvenance(trades: Trade[]): void {
   if (p.fallbackCorrected > 0) {
     console.log(`    ⚠ ${p.fallbackCorrected} result(s) were corrected after Polymarket resolved the other way`);
   }
+}
+
+/**
+ * Claimed vs realised edge and model vs price (edgeRealism.mts). Premarket
+ * entries are excluded: they buy UP without consulting the model.
+ */
+function mlVsMarket(trades: Trade[]) {
+  const rows: EdgeRow[] = [];
+  for (const t of trades) {
+    if (t.win === null || t.confidence === 'PREMARKET') continue;
+    if ((t.side !== 'UP' && t.side !== 'DOWN') || t.resolvedUp === null) continue;
+    if (t.price == null || t.mlProbUp == null || t.marketUp == null) continue;
+    rows.push({ side: t.side, price: t.price, probUp: t.mlProbUp, marketUp: t.marketUp, upWon: t.resolvedUp });
+  }
+  const e = edgeRealism(rows);
+  return { ...e, suggestedKellyProbShrink: suggestedShrink(e) };
+}
+
+function printMlVsMarket(trades: Trade[]): void {
+  const m = mlVsMarket(trades);
+  if (m.n === 0) return;
+  const pp = (v: number | null) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
+  console.log(`
+    ML vs market (n=${m.n}, premarket excluded):`);
+  console.log(`      edge claimed ${pp(m.claimedEdgePp)} | realised ${pp(m.realisedEdgePp)}` +
+              (m.ratio != null ? ` | ratio ${m.ratio.toFixed(2)}` : ''));
+  if (m.modelBrier != null && m.marketBrier != null && m.skillVsMarket != null) {
+    console.log(`      Brier ML ${m.modelBrier.toFixed(4)} vs price ${m.marketBrier.toFixed(4)} → skill ` +
+                `${(m.skillVsMarket * 100).toFixed(1)}%${m.skillVsMarket < 0 ? ' (the price predicted better)' : ''}`);
+  }
+  console.log(m.suggestedKellyProbShrink != null
+    ? `      KELLY_PROB_SHRINK these results support: ${m.suggestedKellyProbShrink.toFixed(2)}`
+    : `      KELLY_PROB_SHRINK: need >=${MIN_ROWS_FOR_SHRINK} rows before the ratio means anything`);
 }
 
 function summarise(trades: Trade[]) {
@@ -221,8 +265,8 @@ function main(): void {
   if (args.json) {
     console.log(JSON.stringify({
       window: win.tag,
-      dryRun: { ...summarise(dry), provenance: provenance(dry) },
-      live: { ...summarise(live), provenance: provenance(live) },
+      dryRun: { ...summarise(dry), provenance: provenance(dry), mlVsMarket: mlVsMarket(dry) },
+      live: { ...summarise(live), provenance: provenance(live), mlVsMarket: mlVsMarket(live) },
       ptb: ptbHealth(win.sinceMs, win.untilMs),
       benchmark: LIVE_BENCHMARK,
     }, null, 2));
@@ -265,6 +309,7 @@ function main(): void {
       }
     }
     printProvenance(set);
+    printMlVsMarket(set);
   }
 
   printPtbHealth(win.sinceMs, win.untilMs);
