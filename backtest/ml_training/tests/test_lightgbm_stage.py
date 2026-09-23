@@ -66,6 +66,11 @@ ENSEMBLE_METRIC_KEYS = [
     "test_samples",
     "holdout_samples",
     "strict_holdout",
+    # 2026-09-23: skill against the market price at the same instant (deploy gate).
+    "market_brier",
+    "brier_skill_vs_market",
+    "logloss_skill_vs_market",
+    "market_skill_samples",
 ]
 
 

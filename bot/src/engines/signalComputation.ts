@@ -17,14 +17,76 @@ import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.ts';
 import { getSignalModifiers } from '../adapters/signalPerfStore.ts';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
+import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS } from '../../../src/engines/ml/featureInputs.ts';
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
+
+// ── Timestamped UP-price history (feature pipeline v2) ──
+// market_price_momentum has to mean "change over the last 60s" here exactly as
+// it does in training. The ring buffer above counts polls, which at the 50ms
+// poll interval is 0.6s. One market at a time: a new slug starts a new history.
+const marketUpTimed: { slug: string | null; points: Array<{ t: number; p: number }> } = { slug: null, points: [] };
+const MARKET_HISTORY_KEEP_MS = MARKET_MOMENTUM_WINDOW_MS + 30_000;
+const MARKET_HISTORY_MIN_STEP_MS = 1_000;
 
 export function resetMarketUpHistory() {
   marketUpHistory.buf.fill(0);
   marketUpHistory.idx = 0;
   marketUpHistory.count = 0;
+  marketUpTimed.slug = null;
+  marketUpTimed.points = [];
+}
+
+/** Record the UP price seen at `t` for `slug` (at most one point per second). */
+export function recordMarketUp(slug: string | null | undefined, t: number, p: number | null | undefined): void {
+  if (p == null || !Number.isFinite(p) || !Number.isFinite(t)) return;
+  if ((slug ?? null) !== marketUpTimed.slug) {
+    marketUpTimed.slug = slug ?? null;
+    marketUpTimed.points = [];
+  }
+  const pts = marketUpTimed.points;
+  const last = pts[pts.length - 1];
+  if (last && t - last.t < MARKET_HISTORY_MIN_STEP_MS) {
+    pts[pts.length - 1] = { t: last.t, p };  // keep the second's first timestamp, latest price
+  } else {
+    pts.push({ t, p });
+  }
+  const cutoff = t - MARKET_HISTORY_KEEP_MS;
+  while (pts.length > 1 && pts[1].t <= cutoff) pts.shift();
+}
+
+/** Last recorded UP price at or before `t` in the current market, or null. */
+export function marketUpAtOrBefore(t: number): number | null {
+  let found: number | null = null;
+  for (const pt of marketUpTimed.points) {
+    if (pt.t > t) break;
+    found = pt.p;
+  }
+  return found;
+}
+
+/**
+ * Start of the market window, epoch ms: from the slug's timestamp suffix
+ * (btc-updown-15m-<unix>), else derived from the time left.
+ */
+export function windowStartMs(marketSlug: string | null | undefined, now: number, timeLeftMin: number | null): number | null {
+  const m = /-(\d{9,11})$/.exec(marketSlug ?? '');
+  if (m) return Number(m[1]) * 1000;
+  if (timeLeftMin != null && Number.isFinite(timeLeftMin)) {
+    return Math.round((now + timeLeftMin * 60_000 - 15 * 60_000) / 60_000) * 60_000;
+  }
+  return null;
+}
+
+/** Open of the 1m candle that starts at `startMs`, or null if it is not in the fetch. */
+function candleOpenAt(klines: Array<{ openTime?: number; open: number }> | null | undefined, startMs: number | null): number | null {
+  if (startMs == null || !Array.isArray(klines)) return null;
+  for (let i = klines.length - 1; i >= 0; i--) {
+    if (klines[i].openTime === startMs) return klines[i].open;
+    if ((klines[i].openTime ?? Infinity) < startMs) break;
+  }
+  return null;
 }
 
 /**
@@ -52,6 +114,8 @@ export function resetMarketUpHistory() {
  * @param {number|null} params.fundingRate - Funding rate (null if blocked)
  * @param {Object|null} [params.smartFlowSignal] - Smart-money flow signal {direction, strength, ...} or null
  * @param {number|null} params.oraclePrice - Live Chainlink price (PolyLive WS → same source as resolution)
+ * @param {number} [params.featurePipeline=1] - Feature pipeline of the loaded model; >= 2 builds the ML
+ *   features through featureInputs.ts, the same builder the training rows came from.
  * @returns {Object} All computed signal data
  */
 export function computeSignals({
@@ -59,7 +123,8 @@ export function computeSignals({
   clobUsable, getClobUpPrice, getClobDownPrice, getClobOrderbook,
   feedbackStats, timeLeftMin, candleWindowMinutes,
   getMLPrediction, fundingRate, smartFlowSignal, oraclePrice,
-}) {
+  featurePipeline = 1,
+}: any) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
   const {
@@ -115,6 +180,8 @@ export function computeSignals({
   // ── Orderbook flow tracking ──
   recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookDown);
   const obFlow = getOrderbookFlow();
+
+  recordMarketUp(marketSlug, now, marketUp);
 
   // ── Market price momentum (ring buffer) ──
   // M18: Ring buffer uses fixed candle count (12 polls), not time-based.
@@ -186,7 +253,9 @@ export function computeSignals({
 
   // ── ML prediction ──
   const session = getSessionName();
-  const mlResult = getMLPrediction({
+  const mlResult = featurePipeline >= 2
+    ? predictWithSharedBuilder()
+    : getMLPrediction({
     price: lastPrice, priceToBeat: updatedPriceToBeat.value,
     rsi: rsiNow, rsiSlope, macd, vwap: vwapNow, vwapSlope,
     heikenColor: consec.color, heikenCount: consec.count,
@@ -213,6 +282,30 @@ export function computeSignals({
     momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
     smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
   }, timeAware.adjustedUp, regimeInfo.regime);
+
+  /**
+   * Feature pipeline v2: the model was trained on rows from featureInputs.ts,
+   * so it is fed from the same builder: Binance window-open as the price to
+   * beat (not the Chainlink PTB), the token price 60s ago from the timestamped
+   * history, and a rule probability with neutral live-only inputs. The live
+   * rule probability (with modifiers) is still what the ML output is blended
+   * with; only the feature vector changes.
+   */
+  function predictWithSharedBuilder() {
+    const inputs = buildMlFeatureInputs({
+      candles1m: klines1m,
+      candles5m: klines5m ?? [],
+      lastPrice,
+      windowOpenPrice: candleOpenAt(klines1m, windowStartMs(marketSlug, now, timeLeftMin)),
+      minutesLeft: timeLeftMin,
+      nowMs: now,
+      marketUp,
+      marketUpLag: marketUpAtOrBefore(now - MARKET_MOMENTUM_WINDOW_MS),
+      fundingRate,
+    });
+    return getMLPrediction(inputs.marketState, timeAware.adjustedUp, regimeInfo.regime,
+      { featureRuleProbUp: inputs.ruleProbUp });
+  }
 
   // ── Monte Carlo simulation (independent probability from GBM price paths) ──
   const mcResult = simulateBTCPaths({

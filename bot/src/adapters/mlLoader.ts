@@ -24,6 +24,7 @@ export {
   predictML,
   getTrainedSignalModifiers,
   getCalibratedPhaseThresholds,
+  getFeaturePipeline,
 } from '../../../src/engines/Mlpredictor.ts';
 
 import { setEnsembleWeights, setCalibratedParams } from '../../../src/engines/Mlpredictor.ts';
@@ -49,6 +50,11 @@ export function loadMLModelFromDisk() {
     const baseCount = numFeatures - S.ENGINEERED_FEATURES;
     if (baseCount >= 54 && baseCount <= 59) setBaseFeatureCount(baseCount);
 
+    // A model trained on the shared feature builder says so; anything else is
+    // fed the legacy way it was trained on. Never guess upward.
+    const featurePipeline = Number.isInteger(rawNorm.feature_pipeline) && rawNorm.feature_pipeline >= 1
+      ? rawNorm.feature_pipeline : 1;
+
     S.setState({
       modelVersion: version,
       modelNumFeatures: numFeatures,
@@ -57,7 +63,9 @@ export function loadMLModelFromDisk() {
       plattA: rawModel.platt_a ?? 1.0,
       plattB: rawModel.platt_b ?? 0.0,
       plattOnLogits: rawModel.platt_on_logits ?? false,
+      featurePipeline,
     });
+    log.info(`Feature pipeline: v${featurePipeline}${featurePipeline >= 2 ? ' (shared live/training builder)' : ' (legacy)'}`);
 
     // Build feature name → index lookup
     if (rawModel.feature_names && rawModel.feature_names.length > 0) {

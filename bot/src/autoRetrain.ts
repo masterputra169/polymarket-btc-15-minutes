@@ -29,6 +29,7 @@ import { fileURLToPath } from 'url';
 import { createLogger } from './logger.ts';
 import { notify } from './monitoring/notifier.ts';
 import { resetDriftState } from './monitoring/driftDetector.ts';
+import { qualityGate as runQualityGate, type ModelMetrics } from './retrainGate.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const log = createLogger('AutoRetrain');
@@ -75,6 +76,8 @@ const CFG = {
   maxAccDrop:     envNum('RETRAIN_MAX_ACC_DROP', 0.02, 0, 0.20),
   maxAucDrop:     envNum('RETRAIN_MAX_AUC_DROP', 0.01, 0, 0.10),
   requireStrictHoldout: process.env.RETRAIN_REQUIRE_STRICT_HOLDOUT !== 'false',
+  // The model must beat the Polymarket price at the same instant (Brier skill > this).
+  minMarketSkill: envNum('RETRAIN_MIN_MARKET_SKILL', 0, -1, 1),
 };
 
 // ── CLI args ──
@@ -131,8 +134,18 @@ function logEntry(entry) {
 }
 
 // ── Read current model metrics ──
+/** norm_browser.json feature_pipeline in `dir`; 1 (legacy) when absent or unreadable. */
+function readFeaturePipeline(dir: string): number {
+  try {
+    const v = JSON.parse(readFileSync(resolve(dir, 'norm_browser.json'), 'utf-8')).feature_pipeline;
+    return Number.isInteger(v) && v >= 1 ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 function readCurrentMetrics() {
-  const result = { xgb: null, lgb: null, ensemble: null };
+  const result: ModelMetrics = { xgb: null, lgb: null, ensemble: null };
 
   for (const [key, file] of [['xgb', 'xgboost_model.json'], ['lgb', 'lightgbm_model.json']]) {
     const p = resolve(ML_DIR, file);
@@ -157,9 +170,14 @@ function readCurrentMetrics() {
       auc: w.xgb * result.xgb.auc + w.lgb * result.lgb.auc,
     };
   } else if (result.xgb) {
-    result.ensemble = { accuracy: result.xgb.accuracy, auc: result.xgb.auc };
+    result.ensemble = {
+      accuracy: result.xgb.accuracy,
+      auc: result.xgb.auc,
+      brier_skill_vs_market: result.xgb.brier_skill_vs_market,
+    };
   }
 
+  result.featurePipeline = readFeaturePipeline(ML_DIR);
   return result;
 }
 
@@ -169,7 +187,7 @@ function readNewMetrics() {
 }
 
 function readMetricsFrom(dir) {
-  const result = { xgb: null, lgb: null, ensemble: null };
+  const result: ModelMetrics = { xgb: null, lgb: null, ensemble: null };
 
   for (const [key, file] of [['xgb', 'xgboost_model.json'], ['lgb', 'lightgbm_model.json']]) {
     const p = resolve(dir, file);
@@ -193,101 +211,20 @@ function readMetricsFrom(dir) {
       auc: w.xgb * result.xgb.auc + w.lgb * result.lgb.auc,
     };
   } else if (result.xgb) {
-    result.ensemble = { accuracy: result.xgb.accuracy, auc: result.xgb.auc };
+    result.ensemble = {
+      accuracy: result.xgb.accuracy,
+      auc: result.xgb.auc,
+      brier_skill_vs_market: result.xgb.brier_skill_vs_market,
+    };
   }
 
+  result.featurePipeline = readFeaturePipeline(dir);
   return result;
 }
 
-// ── Quality Gate ──
-function isFiniteNumber(value) {
-  return typeof value === 'number' && Number.isFinite(value);
-}
-
-function pctDetail(value, threshold, op = '>=') {
-  if (!isFiniteNumber(value)) return 'missing';
-  return `${(value * 100).toFixed(2)}% ${op} ${(threshold * 100).toFixed(2)}%`;
-}
-
+// ── Quality Gate ── (pure logic lives in retrainGate.ts, where it is unit-tested)
 function qualityGate(current, fresh) {
-  const checks = [];
-  const ens = fresh.ensemble;
-  const audit = fresh.xgb || {};
-  if (!ens) return { pass: false, checks: [{ name: 'no_metrics', pass: false, detail: 'No ensemble metrics in trained model' }] };
-
-  // Absolute floors
-  checks.push({
-    name: 'abs_accuracy',
-    pass: ens.accuracy >= CFG.minAccuracy,
-    detail: `${(ens.accuracy * 100).toFixed(2)}% >= ${(CFG.minAccuracy * 100).toFixed(0)}%`,
-  });
-  checks.push({
-    name: 'abs_auc',
-    pass: ens.auc >= CFG.minAuc,
-    detail: `${ens.auc.toFixed(4)} >= ${CFG.minAuc.toFixed(2)}`,
-  });
-  checks.push({
-    name: 'high_conf_accuracy',
-    pass: isFiniteNumber(audit.high_conf_accuracy) && audit.high_conf_accuracy >= CFG.minHighConfAccuracy,
-    detail: pctDetail(audit.high_conf_accuracy, CFG.minHighConfAccuracy),
-  });
-  checks.push({
-    name: 'high_conf_coverage',
-    pass: isFiniteNumber(audit.high_conf_ratio)
-      && audit.high_conf_ratio >= CFG.minHighConfCoverage
-      && audit.high_conf_ratio <= CFG.maxHighConfCoverage,
-    detail: isFiniteNumber(audit.high_conf_ratio)
-      ? `${audit.high_conf_ratio.toFixed(2)}% between ${CFG.minHighConfCoverage.toFixed(0)}%-${CFG.maxHighConfCoverage.toFixed(0)}%`
-      : 'missing',
-  });
-  checks.push({
-    name: 'calibration_ece',
-    pass: isFiniteNumber(audit.calibration_ece) && audit.calibration_ece <= CFG.maxCalibrationEce,
-    detail: isFiniteNumber(audit.calibration_ece)
-      ? `${audit.calibration_ece.toFixed(4)} <= ${CFG.maxCalibrationEce.toFixed(4)}`
-      : 'missing',
-  });
-  checks.push({
-    name: 'cv_test_acc_gap',
-    pass: isFiniteNumber(audit.cv_test_acc_gap) && audit.cv_test_acc_gap <= CFG.maxCvTestAccGap,
-    detail: isFiniteNumber(audit.cv_test_acc_gap)
-      ? `${(audit.cv_test_acc_gap * 100).toFixed(2)}pp <= ${(CFG.maxCvTestAccGap * 100).toFixed(2)}pp`
-      : 'missing',
-  });
-  checks.push({
-    name: 'test_holdout_acc_gap',
-    pass: isFiniteNumber(audit.test_holdout_acc_gap) && audit.test_holdout_acc_gap <= CFG.maxTestHoldoutAccGap,
-    detail: isFiniteNumber(audit.test_holdout_acc_gap)
-      ? `${(audit.test_holdout_acc_gap * 100).toFixed(2)}pp <= ${(CFG.maxTestHoldoutAccGap * 100).toFixed(2)}pp`
-      : 'missing',
-  });
-  if (CFG.requireStrictHoldout) {
-    checks.push({
-      name: 'strict_holdout',
-      pass: audit.validation?.strict_holdout === true,
-      detail: audit.validation?.strict_holdout === true ? 'enabled' : 'missing/disabled',
-    });
-  }
-
-  // Relative checks (vs current deployed model)
-  if (current.ensemble) {
-    const accDrop = current.ensemble.accuracy - ens.accuracy;
-    const aucDrop = current.ensemble.auc - ens.auc;
-    checks.push({
-      name: 'rel_accuracy',
-      pass: accDrop <= CFG.maxAccDrop,
-      detail: `drop ${(accDrop * 100).toFixed(2)}pp <= ${(CFG.maxAccDrop * 100).toFixed(0)}pp`,
-    });
-    checks.push({
-      name: 'rel_auc',
-      pass: aucDrop <= CFG.maxAucDrop,
-      detail: `drop ${(aucDrop * 10000).toFixed(0)}bp <= ${(CFG.maxAucDrop * 10000).toFixed(0)}bp`,
-    });
-  } else {
-    checks.push({ name: 'rel_skip', pass: true, detail: 'No current model to compare' });
-  }
-
-  return { pass: checks.every(c => c.pass), checks };
+  return runQualityGate(current, fresh, CFG);
 }
 
 // ── Backup & Deploy ──

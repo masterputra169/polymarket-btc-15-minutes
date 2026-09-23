@@ -198,6 +198,10 @@ class TestMetricsBlock:
             "holdout_samples",
             "confidence_buckets",
             "calibration_bins",
+            "market_brier",
+            "brier_skill_vs_market",
+            "logloss_skill_vs_market",
+            "market_skill_samples",
         ]
 
     def test_rounding_matches_the_gates_the_bot_compares_against(self) -> None:
@@ -338,6 +342,7 @@ class TestNormExport:
             "train_samples",
             "holdout_frac",
             "holdout_start_idx",
+            "feature_pipeline",
         ]
 
     def test_every_engineered_feature_has_a_written_down_spec(self) -> None:

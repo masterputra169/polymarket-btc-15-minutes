@@ -20,7 +20,10 @@ pytestmark = pytest.mark.contract
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ML_DIR = REPO_ROOT / "public" / "ml"
-AUTORETRAIN_TS = REPO_ROOT / "bot" / "src" / "autoRetrain.ts"
+# The gate logic moved out of autoRetrain.ts (which starts a scheduler on
+# import) into a pure, unit-tested module; the field names live there now.
+GATE_TS = REPO_ROOT / "bot" / "src" / "retrainGate.ts"
+EXPORT_PY = Path(__file__).resolve().parents[1] / "mltrain" / "export.py"
 
 # Fields the browser predictor (src/engines/Mlpredictor.ts) needs to rebuild the model.
 INFERENCE_FIELDS = ("feature_names", "optimal_threshold", "platt_a", "platt_b")
@@ -34,15 +37,23 @@ def _load(name: str) -> dict:
 
 
 def _gate_fields() -> set[str]:
-    """Metric names autoRetrain.ts reads off the model's `metrics` block."""
-    if not AUTORETRAIN_TS.exists():
-        pytest.skip("autoRetrain.ts not found")
-    src = AUTORETRAIN_TS.read_text(encoding="utf-8")
+    """Metric names retrainGate.ts reads off the model's `metrics` block."""
+    if not GATE_TS.exists():
+        pytest.skip("retrainGate.ts not found")
+    src = GATE_TS.read_text(encoding="utf-8")
     # `audit` is the fresh xgb metrics object; `ens` is the weighted ensemble.
     fields = set(re.findall(r"\baudit\.([a-z_]+)", src))
     fields |= set(re.findall(r"\bens\.([a-z_]+)", src))
     fields.discard("validation")  # nested object, asserted separately
     return fields
+
+
+def _trainer_metric_keys() -> set[str]:
+    """Keys build_metrics_block() writes, read from mltrain/export.py's source."""
+    src = EXPORT_PY.read_text(encoding="utf-8")
+    start = src.index("def build_metrics_block")
+    end = src.index("\ndef ", start + 1)
+    return set(re.findall(r'"([a-z_]+)":', src[start:end]))
 
 
 class TestGateContract:
@@ -51,15 +62,24 @@ class TestGateContract:
         # assertion in this class would pass vacuously.
         assert len(_gate_fields()) >= 5
 
+    def test_every_gate_metric_is_exported_by_the_trainer(self) -> None:
+        # The rename guard: a gate field the trainer does not write can never pass.
+        missing = sorted(_gate_fields() - _trainer_metric_keys())
+        assert not missing, f"deploy gates read fields the trainer does not export: {missing}"
+
     def test_every_gate_metric_exists_in_xgboost_model(self) -> None:
+        # A gate added after the deployed model was trained may be absent from it
+        # (e.g. brier_skill_vs_market, 2026-09-23) — but only if the trainer now
+        # exports it, so the next retrain carries it. Anything else is drift.
         metrics = _load("xgboost_model.json").get("metrics", {})
-        missing = sorted(f for f in _gate_fields() if f not in metrics)
-        assert not missing, f"deploy gates read fields the trainer no longer exports: {missing}"
+        missing = {f for f in _gate_fields() if f not in metrics}
+        drifted = sorted(missing - _trainer_metric_keys())
+        assert not drifted, f"deploy gates read fields the trainer no longer exports: {drifted}"
 
     def test_gate_metrics_are_finite_numbers(self) -> None:
         # autoRetrain's isFiniteNumber() check turns NaN/null into a failed gate.
         metrics = _load("xgboost_model.json").get("metrics", {})
-        for field in sorted(_gate_fields()):
+        for field in sorted(f for f in _gate_fields() if f in metrics):
             value = metrics.get(field)
             assert isinstance(value, (int, float)), f"{field} is {value!r}, not numeric"
             assert value == value and abs(value) != float("inf"), f"{field} is not finite"

@@ -23,6 +23,7 @@ export interface MlStateUpdates {
   plattOnLogits?: boolean;
   lastMlSide?: string | null;
   lastMlProbUp?: number;
+  featurePipeline?: number;
 }
 
 /** Called by model loader when norm_browser.json reveals actual base feature count. */
@@ -45,6 +46,12 @@ export let featureNameToIdx: Map<string, number> | null = null;
 export let plattA = 1.0;
 export let plattB = 0.0;
 export let plattOnLogits = false; // v9: Platt applied to raw logits (not post-sigmoid)
+/**
+ * How the loaded model's features were built (norm_browser.json `feature_pipeline`).
+ * 1 = legacy hand-mirrored generator; 2 = shared builder in featureInputs.ts.
+ * The live bot must feed a model features built the way it was trained.
+ */
+export let featurePipeline = 1;
 
 // Hysteresis state — prevents mlSide flip-flop at uncertain prices
 export let lastMlSide: string | null = null;
@@ -73,4 +80,5 @@ export function setState(updates: MlStateUpdates): void {
   if ('plattOnLogits' in updates) plattOnLogits = updates.plattOnLogits;
   if ('lastMlSide' in updates) lastMlSide = updates.lastMlSide;
   if ('lastMlProbUp' in updates) lastMlProbUp = updates.lastMlProbUp;
+  if ('featurePipeline' in updates) featurePipeline = updates.featurePipeline;
 }

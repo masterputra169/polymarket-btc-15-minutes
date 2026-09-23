@@ -203,3 +203,55 @@ class TestTemporalSplit:
         assert f"Test: {len(s.X_test):,}" in lines[0]
         assert f"{len(s.X_holdout):,} samples reserved" in lines[1]
         assert f"Tune set: {len(s.X_train):,}" in lines[2]
+
+
+class TestLoadFeaturePipeline:
+    """training_data.meta.json -> feature_pipeline stamped into norm_browser.json.
+
+    The bot feeds a model through the shared live/training builder only when
+    the model says its rows came from it, so this value must be right. A stale
+    sidecar next to a regenerated CSV must fail loudly, not relabel a model.
+    """
+
+    def _write(self, tmp_path, meta: dict | None, n_rows: int = 3):
+        import json
+
+        csv = tmp_path / "training_data.csv"
+        csv.write_text(
+            "a,b,slug_timestamp,label\n" + "\n".join(f"0,0,{i},1" for i in range(n_rows))
+        )
+        if meta is not None:
+            (tmp_path / "training_data.meta.json").write_text(json.dumps(meta))
+        return str(csv)
+
+    def test_no_sidecar_means_the_legacy_pipeline(self, tmp_path) -> None:
+        from mltrain.data import load_feature_pipeline
+
+        assert load_feature_pipeline(self._write(tmp_path, None), ["a", "b"], n_rows=3) == 1
+
+    def test_reads_the_pipeline_from_a_matching_sidecar(self, tmp_path) -> None:
+        from mltrain.data import load_feature_pipeline
+
+        meta = {"feature_pipeline": 2, "rows": 3, "feature_names": ["a", "b"]}
+        assert load_feature_pipeline(self._write(tmp_path, meta), ["a", "b"], n_rows=3) == 2
+
+    def test_a_sidecar_for_other_columns_is_refused(self, tmp_path) -> None:
+        from mltrain.data import load_feature_pipeline
+
+        meta = {"feature_pipeline": 2, "rows": 3, "feature_names": ["a", "c"]}
+        with pytest.raises(ValueError, match="feature"):
+            load_feature_pipeline(self._write(tmp_path, meta), ["a", "b"], n_rows=3)
+
+    def test_a_sidecar_for_another_run_is_refused(self, tmp_path) -> None:
+        from mltrain.data import load_feature_pipeline
+
+        meta = {"feature_pipeline": 2, "rows": 99, "feature_names": ["a", "b"]}
+        with pytest.raises(ValueError, match="rows"):
+            load_feature_pipeline(self._write(tmp_path, meta), ["a", "b"], n_rows=3)
+
+    def test_a_nonsense_version_is_refused(self, tmp_path) -> None:
+        from mltrain.data import load_feature_pipeline
+
+        meta = {"feature_pipeline": "two", "rows": 3}
+        with pytest.raises(ValueError, match="feature_pipeline"):
+            load_feature_pipeline(self._write(tmp_path, meta), ["a", "b"], n_rows=3)

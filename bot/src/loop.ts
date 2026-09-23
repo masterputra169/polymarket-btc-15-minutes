@@ -74,7 +74,7 @@ import {
 } from './adapters/chainlinkDataStreams.ts';
 
 // ML (loaded from disk)
-import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds } from './adapters/mlLoader.ts';
+import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds, getFeaturePipeline } from './adapters/mlLoader.ts';
 import { resetHysteresis } from '../../src/engines/ml/state.ts';
 
 // Feedback (JSON file persistence)
@@ -1282,6 +1282,7 @@ export async function pollOnce() {
       getMLPrediction, fundingRate,
       smartFlowSignal: smartFlowSignalForML,
       oraclePrice: getPolyLivePrice() || getChainlinkWssPrice(),
+      featurePipeline: getFeaturePipeline(),
     });
 
     // Update priceToBeat from signal computation
@@ -1914,6 +1915,7 @@ export async function pollOnce() {
       smartFlowSignal,
       entryTimingScore,
       mcResult,
+      probShrinkToMarket: BOT_CONFIG.kellyProbShrink,
     });
 
     // ── 9. Feedback tracking (stale cleanup) ──

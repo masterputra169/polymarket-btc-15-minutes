@@ -41,6 +41,7 @@ type NormBrowserJson = {
   };
   signal_modifiers?: Record<string, number>;
   phase_thresholds?: Record<string, any>;
+  feature_pipeline?: number;
 };
 
 // Audit v4 M10: Current regime for adaptive hysteresis band
@@ -160,6 +161,9 @@ export async function loadMLModel(
     try {
       const normResp = await fetch('/ml/norm_browser.json');
       const norm = await normResp.json() as NormBrowserJson;
+      S.setState({
+        featurePipeline: Number.isInteger(norm.feature_pipeline) && norm.feature_pipeline >= 1 ? norm.feature_pipeline : 1,
+      });
       if (norm.ensemble_weights) {
         ensembleWeightXgb = norm.ensemble_weights.xgb ?? 0.5;
         ensembleWeightLgb = norm.ensemble_weights.lgb ?? 0.5;
@@ -224,6 +228,7 @@ export function unloadMLModel() {
     plattA: 1.0,
     plattB: 0.0,
     plattOnLogits: false,
+    featurePipeline: 1,
   });
   ensembleWeightXgb = 0.5;
   ensembleWeightLgb = 0.5;
@@ -295,7 +300,18 @@ export { ensemblePrediction } from './ml/ensemble.ts';
 /**
  * Full Pipeline: Extract -> Engineer -> Predict -> Ensemble
  */
-export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any) {
+/** Feature pipeline of the loaded model (see state.ts `featurePipeline`). */
+export function getFeaturePipeline(): number {
+  return S.featurePipeline;
+}
+
+/**
+ * @param ruleProbUp - the live rule probability, blended with the ML output.
+ * @param opts.featureRuleProbUp - the rule probability that goes INTO the
+ *   feature vector, when it must be built differently from the blend input
+ *   (feature pipeline v2 builds it with neutral live-only inputs, as training does).
+ */
+export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, opts: { featureRuleProbUp?: number } = {}) {
   // Audit v4 M10: Update regime for adaptive hysteresis before prediction
   if (regime) currentRegime = regime;
 
@@ -313,10 +329,11 @@ export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any) 
     };
   }
 
+  const featureRuleProbUp = Number.isFinite(opts.featureRuleProbUp) ? opts.featureRuleProbUp : ruleProbUp;
   extractLiveFeaturesInPlace({
     ...marketState,
-    ruleProbUp,
-    ruleConfidence: Math.abs(ruleProbUp - 0.5) * 2,
+    ruleProbUp: featureRuleProbUp,
+    ruleConfidence: Math.abs(featureRuleProbUp - 0.5) * 2,
   });
 
   // H5: Get data quality score from feature extraction

@@ -201,6 +201,13 @@ class XgbEvalMetrics:
     test_samples: int
     holdout_samples: int
     confidence_buckets: list[dict[str, object]]
+    # Skill against the Polymarket price at the same instant (see
+    # metrics.market_skill). Optional so older call sites keep working; the
+    # deploy gate treats a missing value as a failure.
+    market_brier: float | None = None
+    brier_skill_vs_market: float | None = None
+    logloss_skill_vs_market: float | None = None
+    market_skill_samples: int = 0
 
 
 def compute_signal_modifiers(importance: dict[str, float]) -> dict[str, float]:
@@ -270,6 +277,10 @@ def build_metrics_block(metrics: XgbEvalMetrics) -> dict:
         "holdout_samples": metrics.holdout_samples,
         "confidence_buckets": metrics.confidence_buckets,
         "calibration_bins": metrics.calibration["bins"],
+        "market_brier": safe_round(metrics.market_brier),
+        "brier_skill_vs_market": safe_round(metrics.brier_skill_vs_market),
+        "logloss_skill_vs_market": safe_round(metrics.logloss_skill_vs_market),
+        "market_skill_samples": metrics.market_skill_samples,
     }
 
 
@@ -361,8 +372,13 @@ def build_norm_export(
     phase_thresholds: dict[str, dict[str, float]] | None,
     holdout_frac: float | None,
     holdout_start_idx: int | None,
+    feature_pipeline: int = 1,
 ) -> dict:
     """Assemble norm_browser.json: the z-score normaliser plus inference config.
+
+    `feature_pipeline` records how the training rows were built (from the
+    generator's training_data.meta.json). The bot feeds the model through the
+    shared live/training builder only when it is >= 2.
 
     Means/stds come from the FULL training block (not the tune subset), so the
     normaliser the browser applies matches the distribution the deployed model
@@ -396,4 +412,5 @@ def build_norm_export(
         "train_samples": len(X_train_full),
         "holdout_frac": holdout_frac,
         "holdout_start_idx": holdout_start_idx,
+        "feature_pipeline": int(feature_pipeline),
     }

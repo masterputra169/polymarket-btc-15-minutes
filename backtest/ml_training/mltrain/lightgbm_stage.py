@@ -51,7 +51,7 @@ from mltrain.lightgbm_train import (
     train_final_lgb,
     tune_lgb_params,
 )
-from mltrain.metrics import calibration_summary, safe_round
+from mltrain.metrics import calibration_summary, market_skill, safe_round
 from mltrain.sweeps import align_oof_predictions, select_ensemble_weights
 
 
@@ -396,6 +396,14 @@ def run_lightgbm_stage(
     ens_logloss = log_loss(y_test, ens_prob_final)
     ens_brier = brier_score_loss(y_test, ens_prob_final)
     ens_calibration = calibration_summary(y_test, ens_prob_final)
+    # The number the deploy gate actually needs: does the blend beat the market
+    # price at the same instant? (market_yes_price is that price from feature
+    # pipeline v2 on; on older CSVs it is the window-open price.)
+    ens_skill = (
+        market_skill(y_test, ens_prob_final, X_test[:, feature_cols.index("market_yes_price")])
+        if "market_yes_price" in feature_cols
+        else None
+    )
 
     log(f"\n   === Ensemble Results (weights from {sweep_label}) ===")
     log(f"   XGB weight: {ens_weight_xgb} | LGB weight: {ens_weight_lgb}")
@@ -404,6 +412,11 @@ def run_lightgbm_stage(
     log(
         f"   Ensemble:   acc={ens_acc*100:.1f}% | AUC={ens_auc_final:.4f} | ECE={ens_calibration['ece']:.4f}"
     )
+    if ens_skill and ens_skill["n"]:
+        log(
+            f"   vs market:  Brier model={ens_skill['model_brier']:.4f} market={ens_skill['market_brier']:.4f}"
+            f" | skill={ens_skill['brier_skill_vs_market']:+.4f} (n={ens_skill['n']})"
+        )
 
     # --- Export LightGBM model ---
     log("\n   Exporting LightGBM model...")
@@ -455,6 +468,14 @@ def run_lightgbm_stage(
             "test_samples": len(y_test),
             "holdout_samples": len(y_holdout) if y_holdout is not None else 0,
             "strict_holdout": bool(strict_holdout),
+            "market_brier": safe_round(ens_skill["market_brier"]) if ens_skill else None,
+            "brier_skill_vs_market": (
+                safe_round(ens_skill["brier_skill_vs_market"]) if ens_skill else None
+            ),
+            "logloss_skill_vs_market": (
+                safe_round(ens_skill["logloss_skill_vs_market"]) if ens_skill else None
+            ),
+            "market_skill_samples": ens_skill["n"] if ens_skill else 0,
         },
         "lgb_platt_a": lgb_platt_a,
         "lgb_platt_b": lgb_platt_b,

@@ -215,3 +215,34 @@ def temporal_split(
         y_holdout=y_holdout,
         holdout_start_idx=holdout_start_idx,
     )
+
+
+def load_feature_pipeline(csv_path: str, feature_cols: Sequence[str], *, n_rows: int) -> int:
+    """Feature pipeline the CSV rows were built with, from `<csv>.meta.json`.
+
+    generateTrainingData.mts writes the sidecar next to the CSV. No sidecar
+    means the legacy hand-mirrored generator: pipeline 1. The value ends up in
+    norm_browser.json, where it decides how the live bot builds the model's
+    features, so a sidecar that does not describe THIS csv (different columns
+    or row count, e.g. left over from another run) is an error, not a guess.
+    """
+    import json
+    import os
+    import re
+
+    meta_path = re.sub(r"\.csv$", "", csv_path, flags=re.IGNORECASE) + ".meta.json"
+    if not os.path.exists(meta_path):
+        return 1
+    with open(meta_path, encoding="utf-8") as f:
+        meta = json.load(f)
+
+    version = meta.get("feature_pipeline", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ValueError(f"{meta_path}: feature_pipeline must be an integer >= 1, got {version!r}")
+    names = meta.get("feature_names")
+    if names is not None and list(names) != list(feature_cols):
+        raise ValueError(f"{meta_path}: feature names do not match the CSV header — stale sidecar?")
+    rows = meta.get("rows")
+    if rows is not None and int(rows) != int(n_rows):
+        raise ValueError(f"{meta_path}: says {rows} rows, CSV has {n_rows} — stale sidecar?")
+    return version

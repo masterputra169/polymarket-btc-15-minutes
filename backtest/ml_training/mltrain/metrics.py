@@ -137,3 +137,55 @@ def confidence_bucket_summary(y_true: np.ndarray, y_prob: np.ndarray) -> list[di
         )
 
     return rows
+
+
+def market_skill(
+    y_true: np.ndarray, model_prob: np.ndarray, market_prob: np.ndarray
+) -> dict[str, float | int | None]:
+    """Score the model against the Polymarket price at the same instant.
+
+    Skill = 1 - model_loss / market_loss. Positive means the model predicts the
+    resolution better than the market already does; zero means it adds
+    nothing; negative means betting on its disagreements with the market loses.
+
+    Accuracy and AUC cannot answer that question. The model deployed on
+    2026-09-05 reported 78% / AUC 0.87, while the market price at the moment
+    each row described scored better (Brier 0.143 vs 0.147).
+
+    Rows whose market price is missing (NaN, or <= 0 / >= 1, which no live
+    quote is) are dropped rather than scored as a coin flip.
+    """
+    y = np.asarray(y_true, dtype=float)
+    p = np.asarray(model_prob, dtype=float)
+    m = np.asarray(market_prob, dtype=float)
+    ok = np.isfinite(m) & (m > 0.0) & (m < 1.0) & np.isfinite(p)
+    n = int(ok.sum())
+    if n == 0:
+        return {
+            "n": 0,
+            "model_brier": None,
+            "market_brier": None,
+            "brier_skill_vs_market": None,
+            "model_logloss": None,
+            "market_logloss": None,
+            "logloss_skill_vs_market": None,
+        }
+    y, p, m = y[ok], p[ok], m[ok]
+    eps = 1e-6
+
+    def logloss(q: np.ndarray) -> float:
+        q = np.clip(q, eps, 1 - eps)
+        return float(-np.mean(y * np.log(q) + (1 - y) * np.log(1 - q)))
+
+    model_brier = float(np.mean((p - y) ** 2))
+    market_brier = float(np.mean((m - y) ** 2))
+    model_ll, market_ll = logloss(p), logloss(m)
+    return {
+        "n": n,
+        "model_brier": model_brier,
+        "market_brier": market_brier,
+        "brier_skill_vs_market": 1.0 - model_brier / market_brier if market_brier > 0 else None,
+        "model_logloss": model_ll,
+        "market_logloss": market_ll,
+        "logloss_skill_vs_market": 1.0 - model_ll / market_ll if market_ll > 0 else None,
+    }

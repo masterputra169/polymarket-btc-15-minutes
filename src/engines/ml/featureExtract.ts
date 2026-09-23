@@ -122,6 +122,10 @@ export function extractLiveFeaturesInPlace({
   momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   fundingRate,
   smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
+  // The instant being described. Live omits it (now); the training generator
+  // passes the row's observation time so hour_sin/hour_cos are not stamped
+  // with the moment the generator happened to run.
+  nowMs,
 }: any) {
   // H5: Track fallback usage — each key indicator group that falls back increments this.
   // We track the 18 "primary data" features (not session/regime one-hots or time/clock).
@@ -229,7 +233,7 @@ export function extractLiveFeaturesInPlace({
   // bb_squeeze_intensity: Bollinger squeeze intensity [0,1]
   featureBuf[41] = Math.max(0, Math.min(1, bbSqueezeIntensity ?? 0));
 
-  const now = new Date();
+  const now = new Date(Number.isFinite(nowMs) ? nowMs : Date.now());
   const hourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;
   featureBuf[42] = Math.sin(hourUTC / 24 * 2 * Math.PI);
   featureBuf[43] = Math.cos(hourUTC / 24 * 2 * Math.PI);

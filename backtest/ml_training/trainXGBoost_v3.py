@@ -30,7 +30,7 @@ import warnings
 
 import numpy as np
 
-from mltrain.data import load_training_data, temporal_split
+from mltrain.data import load_feature_pipeline, load_training_data, temporal_split
 from mltrain.features import engineer_features
 from mltrain.weights import build_feature_weights, build_sample_weights, count_regimes
 
@@ -161,6 +161,10 @@ print("[1/8] Loading data...")
 # CSV read, metadata-column drop, leakage assertions and --zero-features live in
 # mltrain/data.py (importable + unit-tested); this owns only the run summary.
 data = load_training_data(args.input, zero_features=zero_feature_names)
+# How the rows were built (generateTrainingData.mts writes <input>.meta.json).
+# Absent = the legacy hand-mirrored generator = pipeline 1.
+feature_pipeline = load_feature_pipeline(args.input, data.feature_cols_orig, n_rows=data.n_rows)
+print(f"   Feature pipeline: v{feature_pipeline}")
 X_orig = data.X_orig
 y = data.y
 feature_cols_orig = data.feature_cols_orig
@@ -250,7 +254,7 @@ from mltrain.export import (
     compute_signal_modifiers,
     dump_browser_trees,
 )
-from mltrain.metrics import calibration_summary, confidence_bucket_summary
+from mltrain.metrics import calibration_summary, confidence_bucket_summary, market_skill
 from mltrain.pruning import evaluate_pruning
 from mltrain.report import build_training_report
 from mltrain.sweeps import select_phase_thresholds, select_threshold
@@ -523,6 +527,16 @@ test_holdout_acc_gap = (
 )
 test_holdout_auc_gap = float(auc - final_holdout_auc) if final_holdout_auc is not None else None
 confidence_buckets = confidence_bucket_summary(y_test, y_prob_final)
+xgb_skill = (
+    market_skill(y_test, y_prob_final, X_test[:, feature_cols.index("market_yes_price")])
+    if "market_yes_price" in feature_cols
+    else None
+)
+if xgb_skill and xgb_skill["n"]:
+    print(
+        f"   vs market: Brier model={xgb_skill['model_brier']:.4f} market={xgb_skill['market_brier']:.4f}"
+        f" | skill={xgb_skill['brier_skill_vs_market']:+.4f} (n={xgb_skill['n']})"
+    )
 
 print(f"""
    ====================================
@@ -733,6 +747,10 @@ xgb_metrics = XgbEvalMetrics(
     test_samples=len(y_test),
     holdout_samples=export_holdout_samples,
     confidence_buckets=confidence_buckets,
+    market_brier=xgb_skill["market_brier"] if xgb_skill else None,
+    brier_skill_vs_market=xgb_skill["brier_skill_vs_market"] if xgb_skill else None,
+    logloss_skill_vs_market=xgb_skill["logloss_skill_vs_market"] if xgb_skill else None,
+    market_skill_samples=xgb_skill["n"] if xgb_skill else 0,
 )
 
 browser_model = build_browser_model(
@@ -786,6 +804,7 @@ norm = build_norm_export(
     phase_thresholds=calibrated_phase_thresholds,
     holdout_frac=export_holdout_frac,
     holdout_start_idx=holdout_start_idx,
+    feature_pipeline=feature_pipeline,
 )
 
 with open(os.path.join(args.output_dir, "norm_browser.json"), "w") as f:

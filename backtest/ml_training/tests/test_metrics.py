@@ -91,3 +91,60 @@ class TestConfidenceBucketSummary:
         y_true = np.array([1, 1, 1])
         rows = confidence_bucket_summary(y_true, y_prob)
         assert sum(r["count"] for r in rows) == 2
+
+
+class TestMarketSkill:
+    """The deploy bar a model has to clear: the market's own price at the same instant.
+
+    2026-09-23: the deployed model reported 78% accuracy and AUC 0.87, yet the
+    Polymarket price at the moment it described predicted better (Brier 0.143
+    vs 0.147), and live it claimed 88% while winning 68%. Accuracy and AUC
+    cannot see that. Skill against the market can.
+    """
+
+    def test_a_model_that_is_the_market_has_zero_skill(self) -> None:
+        from mltrain.metrics import market_skill
+
+        rng = np.random.default_rng(0)
+        mkt = rng.uniform(0.2, 0.8, 500)
+        y = (rng.uniform(0, 1, 500) < mkt).astype(int)
+        s = market_skill(y, mkt, mkt)
+        assert s["brier_skill_vs_market"] == pytest.approx(0.0, abs=1e-12)
+        assert s["market_brier"] == pytest.approx(s["model_brier"])
+
+    def test_a_better_model_has_positive_skill(self) -> None:
+        from mltrain.metrics import market_skill
+
+        rng = np.random.default_rng(1)
+        truth = rng.uniform(0.05, 0.95, 4000)
+        y = (rng.uniform(0, 1, 4000) < truth).astype(int)
+        noisy_market = np.clip(truth + rng.normal(0, 0.2, 4000), 0.02, 0.98)
+        s = market_skill(y, truth, noisy_market)
+        assert s["brier_skill_vs_market"] > 0
+        assert s["logloss_skill_vs_market"] > 0
+
+    def test_a_worse_model_has_negative_skill(self) -> None:
+        from mltrain.metrics import market_skill
+
+        rng = np.random.default_rng(2)
+        truth = rng.uniform(0.05, 0.95, 4000)
+        y = (rng.uniform(0, 1, 4000) < truth).astype(int)
+        overconfident = np.where(truth > 0.5, 0.97, 0.03)
+        s = market_skill(y, overconfident, truth)
+        assert s["brier_skill_vs_market"] < 0
+
+    def test_rows_without_a_market_price_are_dropped_not_scored_as_half(self) -> None:
+        from mltrain.metrics import market_skill
+
+        y = np.array([1, 0, 1, 0])
+        model = np.array([0.9, 0.1, 0.9, 0.1])
+        mkt = np.array([0.6, 0.4, np.nan, 0.0])  # 0.0 = missing, never a real quote
+        s = market_skill(y, model, mkt)
+        assert s["n"] == 2
+
+    def test_empty_input_returns_none_values(self) -> None:
+        from mltrain.metrics import market_skill
+
+        s = market_skill(np.array([]), np.array([]), np.array([]))
+        assert s["n"] == 0
+        assert s["brier_skill_vs_market"] is None
