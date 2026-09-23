@@ -100,7 +100,7 @@ Two systems: a **React dashboard** (frontend) and a **Node.js trading bot** (bot
 - `guards.ts` — Circuit breaker: max daily loss, max consecutive losses, 4hr cooldown. The daily baseline it measures against rolls over via `positionTracker.rolloverDayIfNeeded()`, called from the poll loop — **not** only from `loadState()`. Before 2026-09-20 it rolled only at process start, so a bot up for 9.5 days was feeding a multi-day P&L to a per-day threshold.
 
 #### Bot Monitoring (`bot/src/monitoring/`)
-- `notifier.ts` — Telegram + Discord alerts (rate-limited)
+- `notifier.ts` — Telegram + Discord alerts (rate-limited). Telegram messages get inline buttons: `🔗 View Market` (lifted from an `<a href>` in the text), `📊 View Profile`, `🌐 View Web` (`DASHBOARD_URL`, default the Railway dashboard). The web link never carries `botStatusToken` (it authorises control RPCs and messages get forwarded), and an unusable `DASHBOARD_URL` drops only that button, because Telegram 400s the whole message on one bad button URL.
 - `perfMonitor.ts` — Win rate tracking, daily P&L monitoring
 
 ### Vite Proxy Setup

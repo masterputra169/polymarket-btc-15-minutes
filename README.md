@@ -302,6 +302,7 @@ TELEGRAM_BOT_TOKEN=                   # from @BotFather
 TELEGRAM_CHAT_ID=
 TELEGRAM_NOTIFY_TRADES=true
 DISCORD_WEBHOOK_URL=                  # optional
+DASHBOARD_URL=https://frontend-production-d0bf1.up.railway.app   # "View Web" button (this is the default)
 ```
 
 ### Optional integrations
@@ -656,7 +657,19 @@ npm run ml:audit           # quality audit of the deployed models
 | Cut-loss triggered, concept drift | Warning |
 | Circuit-breaker halt, liveness exit | Critical |
 
-Alerts are rate-limited.
+Alerts are rate-limited. Every Telegram message carries inline buttons:
+
+```
+┌──────────────────────┐
+│   🔗 View Market     │   ← when the alert concerns a market
+├──────────────────────┤
+│   📊 View Profile    │   ← wallet on polymarketscan
+├──────────────────────┤
+│   🌐 View Web        │   ← the dashboard (DASHBOARD_URL)
+└──────────────────────┘
+```
+
+The View Web link never includes the status token. The first time you open the dashboard in a browser (including Telegram's in-app browser), log in once with `?botStatusToken=<token>`.
 
 ### Status WebSocket (`:3099`)
 
@@ -794,6 +807,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-09-23 | Telegram alerts gain a **🌐 View Web** button (below View Market and View Profile) that opens the dashboard. Configurable with `DASHBOARD_URL`. |
 | 2026-09-23 | CI installs the bot package too (the TypeScript job had failed on every push without it) and runs on Node 25. MIT `LICENSE` file added. |
 | 2026-09-23 | **Breakeven margin**: `breakevenMargin.ts` solves breakeven from the settlement math, and the dashboard shows margin vs breakeven (lifetime + realistic fills). The fallback sweep reports rows past its 7-day window as `agedOut`. An out-of-range `DRY_RUN_HARD_ENTRY_CAP` is refused and logged. `BLOCKED_SESSIONS` logs what it parsed and warns on unknown names. |
 | 2026-09-21 | **CLOB freshness**: a quiet book is no longer treated as stale, and make-before-break socket replacement keeps the feed up through rollovers. |

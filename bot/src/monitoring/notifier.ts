@@ -49,23 +49,59 @@ export async function notify(level: 'critical' | 'warn' | 'info', message: strin
 }
 
 const PROFILE_URL = 'https://polymarketscan.org/address/0x2f8b9af5a465e2bdd5f9b541c3878bc64659b472';
+const DEFAULT_DASHBOARD_URL = 'https://frontend-production-d0bf1.up.railway.app';
+
+interface InlineButton { text: string; url: string }
+export interface InlineKeyboard { inline_keyboard: InlineButton[][] }
+
+let warnedDashboardValue: string | null = null;
 
 /**
- * Extract inline buttons from <a href="...">Label</a> tags in text,
- * and always append a "View Profile" button row.
- * Returns { cleanText, inlineKeyboard }.
+ * Link for the "View Web" button: DASHBOARD_URL, else the Railway dashboard.
+ * Null when the value is unusable, so the button is dropped instead of the
+ * alert — Telegram rejects the whole sendMessage (400) if any inline button
+ * carries an invalid URL. A bare host is taken as https.
+ *
+ * Never append ?botStatusToken= here. That token also authorises control
+ * commands (pause, setBankroll, sellPosition, forceSettle), and a Telegram
+ * message can be forwarded. A browser that has logged in once keeps the token
+ * in its own localStorage.
+ *
+ * Read at send time, not at import — same env-hoisting reason as sendTelegram.
  */
-function extractInlineButton(text) {
+function dashboardUrl(): string | null {
+  const raw = (process.env.DASHBOARD_URL ?? '').trim() || DEFAULT_DASHBOARD_URL;
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
+  try {
+    const { protocol, hostname } = new URL(candidate);
+    // A dotless host is a typo or `localhost` — nothing a phone can open.
+    if ((protocol === 'https:' || protocol === 'http:') && hostname.includes('.')) return candidate;
+  } catch {
+    // fall through to the refusal below
+  }
+  if (warnedDashboardValue !== raw) {
+    warnedDashboardValue = raw;
+    log.warn(`DASHBOARD_URL="${raw}" is not a usable http(s) URL — Telegram "View Web" button omitted.`);
+  }
+  return null;
+}
+
+/**
+ * Extract the inline button from an <a href="...">Label</a> tag in text, then
+ * append the fixed rows: "View Profile", and "View Web" below it.
+ */
+export function extractInlineButton(text: string): { cleanText: string; inlineKeyboard: InlineKeyboard } {
   const linkRe = /\n?<a href="([^"]+)">([^<]+)<\/a>/;
   const match = text.match(linkRe);
-  const buttons = [];
+  const buttons: InlineButton[][] = [];
   let cleanText = text;
   if (match) {
     cleanText = text.replace(linkRe, '').trimEnd();
     buttons.push([{ text: `🔗 ${match[2]}`, url: match[1] }]);
   }
-  // Always add profile button
   buttons.push([{ text: '📊 View Profile', url: PROFILE_URL }]);
+  const webUrl = dashboardUrl();
+  if (webUrl) buttons.push([{ text: '🌐 View Web', url: webUrl }]);
   return { cleanText, inlineKeyboard: { inline_keyboard: buttons } };
 }
 
