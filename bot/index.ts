@@ -47,11 +47,12 @@ import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/sig
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition, resetDailyBaseline } from './src/trading/positionTracker.ts';
 import { initClobClient, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
-import { connect as connectBinanceWs, disconnect as disconnectBinanceWs } from './src/streams/binanceWs.ts';
+import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.ts';
-import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs } from './src/streams/polymarketLiveWs.ts';
-import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss } from './src/streams/chainlinkWss.ts';
-import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime } from './src/loop.ts';
+import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs, getPrice as getPolyLiveWsPrice } from './src/streams/polymarketLiveWs.ts';
+import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss, getPrice as getChainlinkWssPrice } from './src/streams/chainlinkWss.ts';
+import { startMarketTape, stopMarketTape } from './src/tape/marketTape.ts';
+import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime, getPriceToBeatForTape } from './src/loop.ts';
 import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.ts';
 import { initRuntimeIntegrations, recordRuntimeEvent, shutdownRuntimeIntegrations } from './src/services/runtimeIntegrations.ts';
 import { flush as flushPtbHealth } from './src/monitoring/ptbHealth.ts';
@@ -289,6 +290,21 @@ async function main() {
   log.info(`Starting poll loop (every ${POLL_MS}ms)...`);
   log.info('-'.repeat(60));
 
+  // 5d. Market tape: 1 Hz book + trades + BTC feeds for future training data.
+  // Own CLOB socket and total entry points — it cannot affect trading.
+  startMarketTape({
+    getContext: () => {
+      const ptb = getPriceToBeatForTape();
+      return {
+        btc: getBinanceWsPrice(),
+        chainlink: getChainlinkWssPrice(),
+        polyLive: getPolyLiveWsPrice(),
+        ptb: ptb.value,
+        ptbSource: ptb.source,
+      };
+    },
+  });
+
   // Small delay for WS to connect before first poll
   await new Promise(r => setTimeout(r, 500));
 
@@ -342,6 +358,7 @@ async function main() {
     disconnectClobWs();
     disconnectPolyLiveWs();
     disconnectChainlinkWss();
+    stopMarketTape();
 
     // Stop status server + position polling + reconciler + redeemer + monitor + daily summary
     stopStatusServer();

@@ -100,6 +100,42 @@ grace after start, `LIVENESS_STALE_MIN` / `LIVENESS_GRACE_MIN`,
 `LIVENESS_EXIT_ENABLED=false` to only log) and Railway restarts it. This is
 the platform equivalent of `scripts/stack-watchdog.ps1`.
 
+## Market tape (second-resolution training data)
+
+The bot records a 1 Hz tape of the Polymarket book (top 10 levels of both
+tokens), every trade print, BTC from Binance / Chainlink / Polymarket live, and
+its PTB (`bot/src/tape/`). Hourly gzip files are written to
+`/app/bot/data/tape/` and, once an S3-compatible bucket is configured, uploaded
+and deleted from the volume. A simulated tape with random level sizes (the
+worst case for compression) came to ~700 KB/hour, i.e. at most ~17 MB/day or
+~0.5 GB/month; the first day of real data settles the number (`npm run
+tape:pull` prints it).
+
+Without a bucket, files stay on the 4.6 GB volume under `TAPE_MAX_LOCAL_MB`
+(default 1500, oldest deleted first), and writing stops outright below
+`TAPE_MIN_FREE_MB` free (default 500) — `state.json` and the journal share the
+volume, so the tape always loses before they do.
+
+**Bucket: Cloudflare R2** (10 GB free, $0.015/GB-month after, no egress fees,
+so pulling the tape to a PC for training costs nothing). Any S3-compatible
+store works by changing the variables (Backblaze B2, AWS S3, MinIO).
+
+1. Cloudflare dashboard → R2 → *Create bucket* `polybtc15-tape` (location: automatic).
+2. R2 → *Manage API tokens* → *Create API token*: permission **Object Read & Write**,
+   scoped to that bucket only. Copy the Access Key ID, Secret Access Key and the
+   S3 endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+3. Railway → `bot` → Variables (the dashboard, so the secret never passes through a shell history):
+   `TAPE_S3_ENDPOINT`, `TAPE_S3_BUCKET=polybtc15-tape`, `TAPE_S3_ACCESS_KEY_ID`,
+   `TAPE_S3_SECRET_ACCESS_KEY`. Saving redeploys; files recorded before that are
+   uploaded by the new process on startup.
+4. Same four values in the local, gitignored `bot/.env` for `npm run tape:pull`.
+
+Verify: `railway logs --service bot | grep -E 'Market tape|Tape '` shows the
+destination at startup, `Tape <hour>Z: N snapshots (x% with a live book)` every
+hour and `Tape uploaded ...` after each upload. A half-set configuration logs
+`S3 config incomplete — missing ...` and records locally. On the volume:
+`railway ssh --service bot -- node /app/bot/scripts/tapePull.mts --stats-only --out /app/bot/data/tape`.
+
 ## Going live
 
 1. Make sure nothing else trades the wallet: the local Docker bot must be

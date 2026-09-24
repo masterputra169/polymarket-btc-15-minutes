@@ -43,6 +43,7 @@ import {
   setTokenIds,
 } from './streams/clobWs.ts';
 import { evaluateClobFeed } from './streams/clobFreshness.ts';
+import { setTapeMarket } from './tape/marketTape.ts';
 import {
   getPrice as getPolyLivePrice,
   isConnected as isPolyLiveConnected,
@@ -297,6 +298,12 @@ let paused = false;
 export function pauseBot(source = 'dashboard') { paused = true; log.info(`Bot PAUSED (${source})`); }
 export function resumeBot(source = 'dashboard') { paused = false; log.info(`Bot RESUMED (${source})`); }
 export function isPaused() { return paused; }
+
+/** The PTB the bot holds for the current market (null during a switch) — read by the market tape. */
+export function getPriceToBeatForTape(): { value: number | null; source: string | null } {
+  if (!priceToBeat.slug || priceToBeat.slug !== currentMarketSlug) return { value: null, source: null };
+  return { value: priceToBeat.value, source: priceToBeat.source };
+}
 
 // ── Position callback (injected from index.ts to avoid circular imports) ──
 let _getPositionsSummary: null | ((position?: unknown) => unknown) = null;
@@ -1231,6 +1238,19 @@ export async function pollOnce() {
     if (poly.tokens && !tokenIdsNotified) {
       setTokenIds(poly.tokens.upTokenId, poly.tokens.downTokenId);
       tokenIdsNotified = true;
+    }
+    // Market tape (own socket, never throws): a no-op unless the market changed.
+    if (poly.tokens?.upTokenId && poly.tokens?.downTokenId && marketSlug) {
+      const startMs = poly.market?.eventStartTime ? new Date(poly.market.eventStartTime).getTime() : NaN;
+      const endMs = poly.market?.endDate ? new Date(poly.market.endDate).getTime() : NaN;
+      setTapeMarket({
+        slug: marketSlug,
+        conditionId: poly.market?.conditionId ?? null,
+        upTokenId: poly.tokens.upTokenId,
+        downTokenId: poly.tokens.downTokenId,
+        startMs: Number.isFinite(startMs) ? startMs : null,
+        endMs: Number.isFinite(endMs) ? endMs : null,
+      });
     }
 
     // ── 5. Compute all signals ──

@@ -27,7 +27,8 @@
     "typecheck:bot:core": "tsc -p tsconfig.bot.core.json",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "report:dryrun:railway": "node bot/scripts/railwayDryRunReport.mts --days 7",
-    "ml:registry": "node bot/scripts/mlRegistry.mts"
+    "ml:registry": "node bot/scripts/mlRegistry.mts",
+    "tape:pull": "node bot/scripts/tapePull.mts"
   },
   "dependencies": {
     "react": "^19.2.4",

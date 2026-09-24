@@ -29,6 +29,7 @@ npm run test:ml       # pytest suite for the training modules
 npm run test:ml:cov   # same, with coverage (mltrain must stay >=90% — CI fails under it)
 pip install -r backtest/ml_training/requirements-dev.txt   # pytest + pytest-cov
 npm run ml:retrain:dry                # retrain without deploying; ml:retrain deploys if all gates pass
+npm run tape:pull                     # download the market tape from the bucket + per-day coverage (--stats-only, --since)
 ```
 
 TypeScript-first codebase. Source files use `.ts`, `.tsx`, `.mts`, and `.cts`; run `npm run typecheck` before shipping.
@@ -76,6 +77,9 @@ Two systems: a **React dashboard** (frontend) and a **Node.js trading bot** (bot
 - `clobWs.ts` — Polymarket CLOB market channel. Two sockets can be live at once: `ws` serves data, `pending` is a replacement that is promoted only once it delivers a quote for the current tokens (make-before-break). Used at every 15-min rollover, for the 25s quiet re-verify and for the silent-link path — so changing subscription never blanks the feed. Two invariants worth knowing before editing: **only the serving socket's frames set `lastMsgMs`** (a standby's handshake and PONGs refreshing it would disguise a black-holed `ws` — which never fires `close` — as alive for up to the 60s ceiling), and **replacement retries go through `scheduleReplacement()`**, an exponential backoff capped at 60s, because a market that accepts the subscription but never sends a book otherwise reconnects every 8s forever against the same host that places orders.
 - `clobFreshness.ts` — `evaluateClobFeed()`, the pure verdict the bot prices off. Separates "link alive" (any frame, PONG included) from "quotes current" (book / price_change). Returns `live` | `quiet` | `down`.
 - `binanceWs.ts`, `chainlinkWss.ts`, `polymarketLiveWs.ts` — BTC price, oracle round, live oracle price.
+
+#### Market tape (`bot/src/tape/`, added 2026-09-24)
+1 Hz record of the book (top `TAPE_DEPTH`=10 levels of both tokens), every `last_trade_price`, BTC from the three feeds and the bot's PTB — the second-resolution history training lacks (the lookup prints ~1/min, orderbook features are neutral for want of history). `marketTape.ts` orchestrates; `clobTapeSocket.ts` is its **own** CLOB socket and L2 book (`bookState.ts`, resynced when the rebuilt top disagrees with the server's `best_bid`/`best_ask`); `tapeWriter.ts` appends one gzip member per minute to `bot/data/tape/YYYY-MM-DD/HH-<bootId>.jsonl.gz`; `s3Store.ts` uploads finished hours (aws4fetch SigV4, path-style; Cloudflare R2 intended) and the file is deleted once stored. Invariants: **every entry point is total** (errors counted, never thrown — the loop calls `setTapeMarket` each poll and a dry-run window must not change), **the tape loses to state.json** (stops writing under `TAPE_MIN_FREE_MB`, evicts its own oldest finished files over `TAPE_MAX_LOCAL_MB`), **a restart never overwrites** (one file per process per hour; lines are routed by `max(t, highest t seen)` so a clock step back cannot reopen an uploaded hour), and **TAPE_S3_* are read only here**, never into `BOT_CONFIG`. `npm run tape:pull` downloads to `backtest/ml_training/tape/` and prints per-day coverage. Setup: docs/RAILWAY.md.
 
 #### Bot Engines (`bot/src/engines/`)
 - `signalComputation.ts` — Computes all indicators + ML + arbitrage + smart flow per poll. Takes `clobUsable` already decided; it does not judge freshness itself. Takes `featurePipeline` (the loaded model's, from `loop.ts`): for v2 it builds the ML features through `src/engines/ml/featureInputs.ts` (Binance window-open as PTB, token price 60s ago from a timestamped history, neutral rule inputs); for v1 it sends the exact legacy vector
@@ -143,6 +147,7 @@ Every model, its data and its history live in **`ml_registry/`** (see "Model reg
 | `feedback.json` | JSON | Rolling accuracy stats per regime |
 | `ptb_health.jsonl` | JSONL | 1-min rollups of the PTB source mix; also the liveness heartbeat the stack watchdog reads |
 | `watchdog_state.json` | JSON | Last container / Docker restart the watchdog performed (escalation memory) |
+| `tape/YYYY-MM-DD/HH-<boot>.jsonl.gz` | gzip JSONL | Market tape; only hours not yet uploaded (deleted once stored in the bucket) |
 
 ### Edge Engine (`src/engines/edge.ts`)
 

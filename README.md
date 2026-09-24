@@ -336,6 +336,12 @@ SOLANA_PRIVATE_KEY=
 # Hosts where ISP DNS black-holes polymarket.com: use DNS-over-HTTPS
 # POLYMARKET_DOH_ENABLED=true
 
+# Market tape upload (S3-compatible; Cloudflare R2 recommended). Unset = local only.
+# TAPE_S3_ENDPOINT=https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+# TAPE_S3_BUCKET=polybtc15-tape
+# TAPE_S3_ACCESS_KEY_ID=
+# TAPE_S3_SECRET_ACCESS_KEY=
+
 # Concept drift detection
 DRIFT_WINDOW=50
 DRIFT_MIN_TRADES=30
@@ -580,6 +586,16 @@ Live trades are additionally reconciled on chain (`journalReconciler.ts` → `ve
 - `down`: the book is refused (past 60 s). Only then does the bot fall back to REST.
 
 On the dashboard, `🔄 REST Poll` therefore means something is actually wrong. Replacement retries back off exponentially up to 60 s.
+
+### Market tape (training data, `bot/src/tape/`)
+
+Once a second the bot records the top 10 levels of both tokens' books, together with BTC from the three feeds and its PTB. It also records every trade print. The existing token-price history prints about once a minute, which is why the model's offline skill against the market can only be bounded (−2.1% to +6.8%). No orderbook history exists, so the orderbook features are neutral in training. The tape fills both gaps from now on.
+
+- **Isolated.** It has its own read-only CLOB socket and total entry points, so it cannot change what the bot trades.
+- **Crash-safe.** Hourly gzip files (`YYYY-MM-DD/HH-<boot>.jsonl.gz`) are appended one member per minute, so a crash loses at most a minute.
+- **Stored in the cloud.** Finished hours are uploaded to an S3-compatible bucket and removed from the volume. **Cloudflare R2** is recommended: 10 GB free, no egress fees. Setup is in [docs/RAILWAY.md](docs/RAILWAY.md#market-tape-second-resolution-training-data).
+- **Disk-safe.** Without a bucket, files stay local under `TAPE_MAX_LOCAL_MB`, and writing stops before the volume runs low.
+- **`npm run tape:pull`** downloads the tape to `backtest/ml_training/tape/` (gitignored) and prints the coverage per day: live-book seconds, the longest gap, trades and markets.
 
 ---
 
