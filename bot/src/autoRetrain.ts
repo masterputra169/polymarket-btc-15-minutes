@@ -30,6 +30,9 @@ import { createLogger } from './logger.ts';
 import { notify } from './monitoring/notifier.ts';
 import { resetDriftState } from './monitoring/driftDetector.ts';
 import { qualityGate as runQualityGate, type ModelMetrics } from './retrainGate.ts';
+import {
+  registerModel, appendEvent, renderModelsMd, ensureRegistered, journalDeployment,
+} from './modelRegistry.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const log = createLogger('AutoRetrain');
@@ -44,6 +47,8 @@ const DATA_DIR = resolve(__dirname, '..', 'data');              // bot/data/
 const LOCK_FILE = resolve(DATA_DIR, 'retrain.lock');
 const LOG_FILE = resolve(DATA_DIR, 'retrain_log.jsonl');
 const DEPLOY_MARKER = resolve(DATA_DIR, 'last_deploy.json');
+// Every trained model + its data and every deploy/rollback is kept here (tracked in git).
+const REGISTRY_DIR = resolve(ROOT, 'ml_registry');
 
 const MODEL_FILES = ['xgboost_model.json', 'lightgbm_model.json', 'norm_browser.json'];
 const RL_WEIGHTS_FILE = 'rl_agent_weights.json';
@@ -306,6 +311,13 @@ function rollback() {
     return false;
   }
   log.info(`Rolled back ${restored} model file(s)`);
+  try {
+    const id = ensureRegistered(REGISTRY_DIR, ML_DIR, 'autoRetrain rollback', 'live');
+    appendEvent(REGISTRY_DIR, { event: 'rolled_back', id, actor: 'autoRetrain' });
+    renderModelsMd(REGISTRY_DIR);
+  } catch (err) {
+    log.warn(`Rollback done, but the model registry could not record it: ${err.message}`);
+  }
   return true;
 }
 
@@ -442,6 +454,20 @@ async function runPipeline() {
     log.warn(`  RL training failed (non-fatal, ML deploy continues): ${err.message.slice(0, 200)}`);
   }
 
+  // Step 4c: Register the result — every trained model is kept with its data,
+  // whether or not it passes the gate. Fails closed: a model that cannot be
+  // recorded is not deployed.
+  const { manifest: candidate } = registerModel({
+    root: REGISTRY_DIR, sourceDir: OUTPUT_DIR, source: `autoRetrain ${tag}`, actor: 'autoRetrain',
+    status: 'candidate',
+    trainingCsv: resolve(TRAINING_DIR, 'training_data.csv'),
+    trainingMeta: resolve(TRAINING_DIR, 'training_data.meta.json'),
+    trainingReport: resolve(OUTPUT_DIR, 'training_report.txt'),
+    stampSource: true,
+    notes: [DRY_RUN ? 'dry-run retrain (not deployed by this run)' : 'retrain'],
+  });
+  log.info(`  Registered as ${candidate.id} in ml_registry/`);
+
   // Step 5: Quality gate
   log.info('Step 5/7: Quality gate...');
   const newMetrics = readNewMetrics();
@@ -450,6 +476,11 @@ async function runPipeline() {
   for (const c of gate.checks) {
     log.info(`  [${c.pass ? 'PASS' : 'FAIL'}] ${c.name}: ${c.detail}`);
   }
+  appendEvent(REGISTRY_DIR, {
+    event: 'gate', id: candidate.id, actor: 'autoRetrain', pass: gate.pass,
+    checks: gate.checks.map(c => ({ name: c.name, pass: c.pass, detail: c.detail })),
+  });
+  renderModelsMd(REGISTRY_DIR);
 
   if (!gate.pass) {
     const msg = `Retrain BLOCKED by quality gate — ${gate.checks.filter(c => !c.pass).map(c => c.name).join(', ')}`;
@@ -471,7 +502,10 @@ async function runPipeline() {
   pruneBackups(5);
 
   log.info('Step 6/7: Deploying new model...');
+  const previousId = ensureRegistered(REGISTRY_DIR, ML_DIR, 'autoRetrain', 'live');
   deployNew();
+  journalDeployment(REGISTRY_DIR, { id: candidate.id, previousId, actor: 'autoRetrain', target: ML_DIR, backupTag: tag });
+  renderModelsMd(REGISTRY_DIR);
 
   restartBot();
 

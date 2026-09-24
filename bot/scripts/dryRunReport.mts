@@ -74,6 +74,8 @@ type Trade = {
   marketUp: number | null;
   /** Resolved direction ('UP' | 'DOWN'), verified outcome first. */
   resolvedUp: boolean | null;
+  /** ml_registry id of the model that made the call; rows before 2026-09-24 carry none. */
+  model: string;
 };
 
 function loadTrades(journalPath: string, sinceMs: number, untilMs: number = Infinity): Trade[] {
@@ -101,6 +103,7 @@ function loadTrades(journalPath: string, sinceMs: number, untilMs: number = Infi
       verified: e.exit?.verifiedAt != null,
       corrected: e.exit?.correctedFrom != null,
       side: e.entry?.side ?? null,
+      model: e.entry?.modelId ?? 'pre-registry (pipeline v1)',
       marketUp: Number(e.entry?.marketUp) || null,
       resolvedUp: (() => {
         const o = e.exit?.verifiedOutcome ?? e.analysis?.actualOutcome ?? e.exit?.outcome;
@@ -160,11 +163,17 @@ function mlVsMarket(trades: Trade[]) {
 }
 
 function printMlVsMarket(trades: Trade[]): void {
+  // One section per model: the numbers only mean something for one model.
+  const byModel = groupBy(trades, 'model');
+  for (const [model, group] of byModel) printMlVsMarketFor(group, byModel.size > 1 ? model : null);
+}
+
+function printMlVsMarketFor(trades: Trade[], model: string | null): void {
   const m = mlVsMarket(trades);
   if (m.n === 0) return;
   const pp = (v: number | null) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(1)}pp`;
   console.log(`
-    ML vs market (n=${m.n}, premarket excluded):`);
+    ML vs market${model ? ` — model ${model}` : ''} (n=${m.n}, premarket excluded):`);
   console.log(`      edge claimed ${pp(m.claimedEdgePp)} | realised ${pp(m.realisedEdgePp)}` +
               (m.ratio != null ? ` | ratio ${m.ratio.toFixed(2)}` : ''));
   if (m.modelBrier != null && m.marketBrier != null && m.skillVsMarket != null) {
@@ -174,6 +183,10 @@ function printMlVsMarket(trades: Trade[]): void {
   console.log(m.suggestedKellyProbShrink != null
     ? `      KELLY_PROB_SHRINK these results support: ${m.suggestedKellyProbShrink.toFixed(2)}`
     : `      KELLY_PROB_SHRINK: need >=${MIN_ROWS_FOR_SHRINK} rows before the ratio means anything`);
+}
+
+function byModelJson(trades: Trade[]) {
+  return Object.fromEntries([...groupBy(trades, 'model')].map(([k, g]) => [k, { ...summarise(g), mlVsMarket: mlVsMarket(g) }]));
 }
 
 function summarise(trades: Trade[]) {
@@ -265,8 +278,8 @@ function main(): void {
   if (args.json) {
     console.log(JSON.stringify({
       window: win.tag,
-      dryRun: { ...summarise(dry), provenance: provenance(dry), mlVsMarket: mlVsMarket(dry) },
-      live: { ...summarise(live), provenance: provenance(live), mlVsMarket: mlVsMarket(live) },
+      dryRun: { ...summarise(dry), provenance: provenance(dry), mlVsMarket: mlVsMarket(dry), byModel: byModelJson(dry) },
+      live: { ...summarise(live), provenance: provenance(live), mlVsMarket: mlVsMarket(live), byModel: byModelJson(live) },
       ptb: ptbHealth(win.sinceMs, win.untilMs),
       benchmark: LIVE_BENCHMARK,
     }, null, 2));
@@ -298,7 +311,7 @@ function main(): void {
       console.log(`  ML context recorded on ${s.withMlContext}/${s.total} entries (${covered}%)`);
     }
 
-    for (const key of ['confidence', 'phase', 'session'] as const) {
+    for (const key of ['model', 'confidence', 'phase', 'session'] as const) {
       const groups = groupBy(set.filter(t => t.win !== null), key);
       if (groups.size <= 1) continue;
       console.log(`\n    by ${key}:`);

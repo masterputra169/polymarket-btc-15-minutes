@@ -112,3 +112,26 @@ describe('journal under DRY_RUN', () => {
     expect(mirrorTradeJournalRecord).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * 2026-09-24: every entry records which model made the call (ml_registry id and
+ * feature pipeline), so live results can be split model by model.
+ */
+describe('entry snapshots name the model', () => {
+  test('modelId and featurePipeline come from the loaded model', async () => {
+    const S = await import('../../../../src/engines/ml/state.ts');
+    S.setState({ modelId: '20260924-p2-abc123', featurePipeline: 2 });
+    captureEntrySnapshot({ side: 'UP', btcPrice: 80_000 });
+    expect(getEntrySnapshot()).toMatchObject({ modelId: '20260924-p2-abc123', featurePipeline: 2 });
+    S.setState({ modelId: null, featurePipeline: 1 });
+  });
+
+  test('a model without an id is recorded as null, not omitted', async () => {
+    const S = await import('../../../../src/engines/ml/state.ts');
+    S.setState({ modelId: null, featurePipeline: 1 });
+    captureEntrySnapshot({ side: 'DOWN', btcPrice: 80_000 });
+    const snap = getEntrySnapshot() as Record<string, unknown>;
+    expect(snap).toHaveProperty('modelId', null);
+    expect(snap).toHaveProperty('featurePipeline', 1);
+  });
+});

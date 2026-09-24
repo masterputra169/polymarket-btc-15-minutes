@@ -64,8 +64,10 @@ export function loadMLModelFromDisk() {
       plattB: rawModel.platt_b ?? 0.0,
       plattOnLogits: rawModel.platt_on_logits ?? false,
       featurePipeline,
+      modelId: typeof rawNorm.model_id === 'string' ? rawNorm.model_id : null,
     });
     log.info(`Feature pipeline: v${featurePipeline}${featurePipeline >= 2 ? ' (shared live/training builder)' : ' (legacy)'}`);
+    log.info(`Model id: ${typeof rawNorm.model_id === 'string' ? rawNorm.model_id : '(none — predates the model registry)'}`);
 
     // Build feature name → index lookup
     if (rawModel.feature_names && rawModel.feature_names.length > 0) {

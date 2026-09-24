@@ -24,6 +24,7 @@ export interface MlStateUpdates {
   lastMlSide?: string | null;
   lastMlProbUp?: number;
   featurePipeline?: number;
+  modelId?: string | null;
 }
 
 /** Called by model loader when norm_browser.json reveals actual base feature count. */
@@ -52,6 +53,8 @@ export let plattOnLogits = false; // v9: Platt applied to raw logits (not post-s
  * The live bot must feed a model features built the way it was trained.
  */
 export let featurePipeline = 1;
+/** Registry id of the loaded model (norm_browser.json `model_id`); null for models registered before the id was stamped. */
+export let modelId: string | null = null;
 
 // Hysteresis state — prevents mlSide flip-flop at uncertain prices
 export let lastMlSide: string | null = null;
@@ -81,4 +84,5 @@ export function setState(updates: MlStateUpdates): void {
   if ('lastMlSide' in updates) lastMlSide = updates.lastMlSide;
   if ('lastMlProbUp' in updates) lastMlProbUp = updates.lastMlProbUp;
   if ('featurePipeline' in updates) featurePipeline = updates.featurePipeline;
+  if ('modelId' in updates) modelId = updates.modelId;
 }

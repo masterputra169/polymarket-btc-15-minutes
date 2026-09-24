@@ -7,6 +7,7 @@
  * Output: bot/data/trade_journal.jsonl (append-only, one JSON object per line)
  */
 
+import * as MlState from '../../../src/engines/ml/state.ts';
 import { appendFileSync, readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
@@ -153,6 +154,10 @@ export function captureEntrySnapshot(data) {
     // Stamped at decision time so a simulated row can never pass as real money:
     // dryRunReport, driftDetector and the reconciler all key on this flag.
     dryRun: BOT_CONFIG.dryRun === true,
+    // Which model made the call — ml_registry/ id and feature pipeline — so
+    // live results can be compared model by model (dryRunReport "by model").
+    modelId: MlState.modelId,
+    featurePipeline: MlState.featurePipeline,
     enteredAt: Date.now(),
   };
   // RC1 Fix: persist to disk — survives bot restarts

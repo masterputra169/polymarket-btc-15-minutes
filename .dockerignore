@@ -57,3 +57,6 @@ _*.mts
 _*.py
 _*.json
 tmp_*.json
+
+# Model registry: history for comparison, not needed at runtime
+ml_registry/

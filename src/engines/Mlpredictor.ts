@@ -229,6 +229,7 @@ export function unloadMLModel() {
     plattB: 0.0,
     plattOnLogits: false,
     featurePipeline: 1,
+    modelId: null,
   });
   ensembleWeightXgb = 0.5;
   ensembleWeightLgb = 0.5;
@@ -303,6 +304,11 @@ export { ensemblePrediction } from './ml/ensemble.ts';
 /** Feature pipeline of the loaded model (see state.ts `featurePipeline`). */
 export function getFeaturePipeline(): number {
   return S.featurePipeline;
+}
+
+/** Registry id of the loaded model, or null (see ml_registry/). */
+export function getModelId(): string | null {
+  return S.modelId;
 }
 
 /**

@@ -10,3 +10,6 @@ public/ml/v16_locked/
 public/ml_v19_staging/
 .backtest_cache/
 *.log
+
+# Model registry: history for comparison, not needed at runtime
+ml_registry/
