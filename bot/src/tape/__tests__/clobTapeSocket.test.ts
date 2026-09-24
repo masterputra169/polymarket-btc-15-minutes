@@ -124,6 +124,20 @@ describe('ClobTapeSocket', () => {
     expect(sockets).toHaveLength(1);
   });
 
+  test('an empty side reported as a 0 / 1 boundary marker is not a disagreement (market near resolution)', () => {
+    liveOn();
+    last().deliver({ event_type: 'book', asset_id: 'UP', bids: [{ price: '0.99', size: '500' }], asks: [] });
+    for (const marker of ['1', '1.00', '0']) {
+      last().deliver({
+        event_type: 'price_change',
+        price_changes: [{ asset_id: 'UP', side: 'BUY', price: '0.98', size: '10', best_bid: '0.99', best_ask: marker }],
+      });
+    }
+    for (let i = 0; i < 4; i++) { vi.advanceTimersByTime(25_000); last().emit('message', 'PONG'); }
+    expect(sock.resyncs).toBe(0);
+    expect(sock.up.top(5)).toEqual({ b: [[0.99, 500], [0.98, 10]], a: [] });
+  });
+
   test('resyncs are at most one per 5 min', () => {
     liveOn();
     last().deliver(MISSING_LEVEL);

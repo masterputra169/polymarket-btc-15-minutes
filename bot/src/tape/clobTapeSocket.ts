@@ -63,12 +63,20 @@ function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** The server reports an empty side as 0; the book reports it as null. */
-function samePrice(a: number | null, b: number | null): boolean {
-  const x = a === 0 ? null : a;
-  const y = b === 0 ? null : b;
-  if (x === null || y === null) return x === y;
-  return Math.abs(x - y) < 1e-9;
+/**
+ * A server best price is information only strictly inside (0, 1). An empty
+ * side comes through as a boundary marker — seen on Railway 2026-09-24 near
+ * resolution, UP at 0.99 with no asks: read as a price it kept the book
+ * "disagreeing" until a resync. Unknown means: no prune, no disagreement.
+ */
+function inside(x: number | null): number | null {
+  return x !== null && x > 0 && x < 1 ? x : null;
+}
+
+/** Does the book's best price agree with a server best price (null = server gave none)? */
+function agrees(mine: number | null, server: number | null): boolean {
+  if (server === null) return true;
+  return mine !== null && Math.abs(mine - server) < 1e-9;
 }
 
 export class ClobTapeSocket {
@@ -276,13 +284,13 @@ export class ClobTapeSocket {
           if (!target) continue;
           target.book.applyChange(c.side, c.price, c.size, now);
           if (c.best_bid !== undefined || c.best_ask !== undefined) {
-            lastServerTop.set(target.book, { bid: num(c.best_bid), ask: num(c.best_ask) });
+            lastServerTop.set(target.book, { bid: inside(num(c.best_bid)), ask: inside(num(c.best_ask)) });
           }
         }
         for (const [book, top] of lastServerTop) {
           if (!book.valid) continue;
           this.repairs += book.prune(top.bid, top.ask, now);
-          if (samePrice(book.bestBid(), top.bid) && samePrice(book.bestAsk(), top.ask)) this.disagreeSince.delete(book);
+          if (agrees(book.bestBid(), top.bid) && agrees(book.bestAsk(), top.ask)) this.disagreeSince.delete(book);
           else if (!this.disagreeSince.has(book)) this.disagreeSince.set(book, now);
         }
         return;
