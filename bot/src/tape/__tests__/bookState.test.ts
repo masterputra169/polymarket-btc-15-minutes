@@ -44,6 +44,16 @@ describe('BookState', () => {
     expect(b.updatedMs).toBe(1);
   });
 
+  test('prune() drops levels the server top rules out and nothing else', () => {
+    const b = new BookState();
+    b.applySnapshot([{ price: '0.50', size: '1' }, { price: '0.52', size: '1' }], [{ price: '0.51', size: '1' }, { price: '0.53', size: '1' }], 1);
+    expect(b.prune(0.50, 0.53, 9)).toBe(2); // 0.52 bid and 0.51 ask were consumed
+    expect(b.top(5)).toEqual({ b: [[0.5, 1]], a: [[0.53, 1]] });
+    expect(b.updatedMs).toBe(9);
+    expect(b.prune(null, 0, 10)).toBe(0); // unknown / empty-side markers never wipe a side
+    expect(b.updatedMs).toBe(9);
+  });
+
   test('clear() makes the book invalid until the next frame', () => {
     const b = new BookState();
     expect(b.valid).toBe(false);

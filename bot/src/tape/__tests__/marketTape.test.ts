@@ -23,7 +23,7 @@ function fakeSocket() {
   const up = new BookState();
   const down = new BookState();
   return {
-    up, down, live: true, resyncs: 0,
+    up, down, live: true, resyncs: 0, repairs: 0,
     start: vi.fn(), stop: vi.fn(), setTokens: vi.fn(),
     fill() {
       up.applySnapshot([{ price: '0.55', size: '10' }], [{ price: '0.57', size: '12' }], Date.now());

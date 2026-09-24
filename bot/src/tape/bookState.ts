@@ -66,6 +66,25 @@ export class BookState {
     return true;
   }
 
+  /**
+   * Drop levels the server says cannot exist: bids above its best bid, asks
+   * below its best ask. A marketable order arrives as a `price_change` for its
+   * resting remainder, but the opposite levels it consumed get no change of
+   * their own (the next `book` frame carries them) — measured on Railway
+   * 2026-09-24: 16 of 7,760 changes, always this pattern. Returns levels removed.
+   */
+  prune(serverBestBid: number | null, serverBestAsk: number | null, nowMs: number): number {
+    let removed = 0;
+    if (serverBestBid !== null && serverBestBid > 0) {
+      for (const p of [...this.bids.keys()]) if (p > serverBestBid + 1e-9) { this.bids.delete(p); removed++; }
+    }
+    if (serverBestAsk !== null && serverBestAsk > 0) {
+      for (const p of [...this.asks.keys()]) if (p < serverBestAsk - 1e-9) { this.asks.delete(p); removed++; }
+    }
+    if (removed > 0) this.updatedMs = nowMs;
+    return removed;
+  }
+
   bestBid(): number | null {
     let best: number | null = null;
     for (const p of this.bids.keys()) if (best === null || p > best) best = p;

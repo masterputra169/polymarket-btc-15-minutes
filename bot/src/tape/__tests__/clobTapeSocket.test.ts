@@ -84,20 +84,56 @@ describe('ClobTapeSocket', () => {
     expect(sockets).toHaveLength(1);
   });
 
-  test('a book that disagrees with the server top is re-fetched, at most once per 30s', () => {
+  test('levels consumed by a marketable order are pruned locally — no reconnect', () => {
     liveOn();
-    const wrong = { event_type: 'price_change', price_changes: [{ asset_id: 'UP', side: 'BUY', price: '0.30', size: '1', best_bid: '0.56', best_ask: '0.57' }] };
-    last().deliver(wrong);
+    last().deliver({ event_type: 'book', asset_id: 'UP', bids: [{ price: '0.55', size: '10' }], asks: [{ price: '0.58', size: '7' }, { price: '0.57', size: '12' }] });
+    // A BUY at 0.57 takes the whole 0.57 ask; only its resting remainder is reported.
+    last().deliver({
+      event_type: 'price_change',
+      price_changes: [{ asset_id: 'UP', side: 'BUY', price: '0.57', size: '5', best_bid: '0.57', best_ask: '0.58' }],
+    });
+    expect(sock.up.top(5)).toEqual({ b: [[0.57, 5], [0.55, 10]], a: [[0.58, 7]] });
+    expect(sock.repairs).toBe(1);
+    expect(sock.resyncs).toBe(0);
+    expect(sockets).toHaveLength(1);
+  });
+
+  const MISSING_LEVEL = { event_type: 'price_change', price_changes: [{ asset_id: 'UP', side: 'BUY', price: '0.30', size: '1', best_bid: '0.56', best_ask: '0.57' }] };
+
+  test('a disagreement pruning cannot fix reopens only after 60s without a book frame', () => {
+    liveOn();
+    last().deliver(MISSING_LEVEL); // server knows a 0.56 bid this book never saw
+    expect(sockets).toHaveLength(1);
+    vi.advanceTimersByTime(25_000); last().emit('message', 'PONG');
+    vi.advanceTimersByTime(25_000); last().emit('message', 'PONG');
+    expect(sock.resyncs).toBe(0);
+    vi.advanceTimersByTime(15_000);
     expect(sock.resyncs).toBe(1);
-    expect(sockets).toHaveLength(2); // reopened for a fresh snapshot
-    expect(sock.up.valid).toBe(false);
+    expect(sockets).toHaveLength(2);
+    expect(events).toContain('resync');
+  });
+
+  test('a fresh book frame clears the disagreement', () => {
+    liveOn();
+    last().deliver(MISSING_LEVEL);
+    vi.advanceTimersByTime(25_000); last().emit('message', 'PONG');
+    last().deliver(BOOK_UP);
+    vi.advanceTimersByTime(25_000); last().emit('message', 'PONG');
+    vi.advanceTimersByTime(25_000); last().emit('message', 'PONG');
+    expect(sock.resyncs).toBe(0);
+    expect(sockets).toHaveLength(1);
+  });
+
+  test('resyncs are at most one per 5 min', () => {
+    liveOn();
+    last().deliver(MISSING_LEVEL);
+    for (let i = 0; i < 3; i++) { vi.advanceTimersByTime(25_000); last().emit('message', 'PONG'); }
+    expect(sock.resyncs).toBe(1);
     last().accept();
     last().deliver([BOOK_UP, BOOK_DN]);
-    last().deliver(wrong);
-    expect(sock.resyncs).toBe(1); // rate-limited
-    vi.advanceTimersByTime(31_000);
-    last().deliver(wrong);
-    expect(sock.resyncs).toBe(2);
+    last().deliver(MISSING_LEVEL);
+    for (let i = 0; i < 4; i++) { vi.advanceTimersByTime(25_000); last().emit('message', 'PONG'); }
+    expect(sock.resyncs).toBe(1); // 100s later: still inside the 5-min gap
   });
 
   test('reports trade prints for the followed tokens only', () => {

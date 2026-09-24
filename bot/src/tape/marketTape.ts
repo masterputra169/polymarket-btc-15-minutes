@@ -88,7 +88,7 @@ export interface TapeDeps {
   now?: () => number;
 }
 
-interface HourStats { snaps: number; ok: number; trades: number; resyncs: number }
+interface HourStats { snaps: number; ok: number; trades: number; resyncs: number; repairsAtStart: number }
 
 const UPLOAD_BACKOFF_MAX_MS = 60 * 60_000;
 
@@ -113,7 +113,7 @@ let state: {
 } | null = null;
 
 function freshStats(): HourStats {
-  return { snaps: 0, ok: 0, trades: 0, resyncs: 0 };
+  return { snaps: 0, ok: 0, trades: 0, resyncs: 0, repairsAtStart: state?.socket.repairs ?? 0 };
 }
 
 function round(x: number | null | undefined, dp: number): number | null {
@@ -265,7 +265,7 @@ function closeHour(next: string): void {
   if (!state) return;
   const s = state.stats;
   const pct = s.snaps ? ((s.ok / s.snaps) * 100).toFixed(1) : '0.0';
-  log.info(`Tape ${state.hour}Z: ${s.snaps} snapshots (${pct}% with a live book), ${s.trades} trades, ${s.resyncs} resyncs`);
+  log.info(`Tape ${state.hour}Z: ${s.snaps} snapshots (${pct}% with a live book), ${s.trades} trades, ${state.socket.repairs - s.repairsAtStart} book levels pruned, ${s.resyncs} resyncs`);
   state.hour = next;
   state.stats = freshStats();
   flushNow();

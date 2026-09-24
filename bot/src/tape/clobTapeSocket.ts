@@ -10,8 +10,10 @@
  * the start of a window is before any training row (those start 60s in).
  *
  * Self-checks: `price_change` frames carry the server's best bid/ask after the
- * change. If the rebuilt book disagrees, the book is re-fetched by reopening,
- * at most once per RESYNC_MIN_GAP_MS.
+ * change. Levels the server says cannot exist (consumed by a marketable order,
+ * which reports no change for them) are pruned locally — no reconnect. Only a
+ * disagreement pruning cannot fix, and that no `book` frame clears within
+ * DISAGREE_RESYNC_MS, reopens the socket, at most once per RESYNC_MIN_GAP_MS.
  */
 
 import { WebSocket } from 'ws';
@@ -29,7 +31,9 @@ const NO_BOOK_MS = 15_000;
 const CONNECT_TIMEOUT_MS = 20_000;
 const BACKOFF_MIN_MS = 1_000;
 const BACKOFF_MAX_MS = 60_000;
-const RESYNC_MIN_GAP_MS = 30_000;
+/** A disagreement pruning cannot fix must outlive this before a reopen (`book` frames arrive ~1/s). */
+const DISAGREE_RESYNC_MS = 60_000;
+const RESYNC_MIN_GAP_MS = 300_000;
 
 export interface TradeEvent {
   side: 'u' | 'd';
@@ -83,8 +87,12 @@ export class ClobTapeSocket {
   private lastResyncMs = 0;
   private readonly url: string;
   private readonly now: () => number;
+  /** When each book started disagreeing with the server in a way pruning could not fix. */
+  private disagreeSince = new Map<BookState, number>();
   connected = false;
   resyncs = 0;
+  /** Levels pruned because the server's best bid/ask ruled them out. */
+  repairs = 0;
   // Not a parameter property: Node runs this file with type stripping, which rejects them.
   private readonly opts: TapeSocketOpts;
 
@@ -123,6 +131,7 @@ export class ClobTapeSocket {
     this.tokens = { up, down };
     this.up.clear();
     this.down.clear();
+    this.disagreeSince.clear();
     this.backoffMs = 0;
     if (!this.stopped) this.reopen();
   }
@@ -150,6 +159,10 @@ export class ClobTapeSocket {
     } else if (this.subscribedMs > 0 && !(this.up.valid && this.down.valid) && now - this.subscribedMs > NO_BOOK_MS) {
       this.opts.onEvent('no_book');
       this.reconnectLater();
+    } else {
+      for (const since of this.disagreeSince.values()) {
+        if (now - since > DISAGREE_RESYNC_MS) { this.resync(); break; }
+      }
     }
   }
 
@@ -246,6 +259,7 @@ export class ClobTapeSocket {
         const target = this.bookFor(ev.asset_id);
         if (!target) return;
         target.book.applySnapshot(ev.bids, ev.asks, now);
+        this.disagreeSince.delete(target.book);
         if (this.up.valid && this.down.valid) this.backoffMs = 0;
         return;
       }
@@ -267,7 +281,9 @@ export class ClobTapeSocket {
         }
         for (const [book, top] of lastServerTop) {
           if (!book.valid) continue;
-          if (!samePrice(book.bestBid(), top.bid) || !samePrice(book.bestAsk(), top.ask)) this.resync();
+          this.repairs += book.prune(top.bid, top.ask, now);
+          if (samePrice(book.bestBid(), top.bid) && samePrice(book.bestAsk(), top.ask)) this.disagreeSince.delete(book);
+          else if (!this.disagreeSince.has(book)) this.disagreeSince.set(book, now);
         }
         return;
       }
@@ -297,9 +313,10 @@ export class ClobTapeSocket {
     if (now - this.lastResyncMs < RESYNC_MIN_GAP_MS) return;
     this.lastResyncMs = now;
     this.resyncs++;
-    this.opts.onEvent('resync', 'book disagreed with server best bid/ask');
+    this.opts.onEvent('resync', 'book disagreed with server best bid/ask for 60s');
     this.up.clear();
     this.down.clear();
+    this.disagreeSince.clear();
     this.reopen();
   }
 }
