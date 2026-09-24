@@ -1,0 +1,37 @@
+{
+  "id": "20260212-p1-52d3a9",
+  "registeredAt": "2026-09-24T01:20:00.758Z",
+  "source": "git 08ff4f9 (2026-02-12) — Deploy XGBoost v8 model (58.28% acc, AUC 0.6203)",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "52d3a9c348b327e876ca5e072a4b3422eb00c63ee14c8f00eef1d9c1b8e11ec8",
+    "norm_browser.json": "f9b35a103eb2f7c7ee14dd3b1e2a0ba7007c66ccea90efc5af6790e5dfcfadcc"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 08ff4f9:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.5828,
+      "auc": 0.6203,
+      "f1": 0.5896,
+      "logloss": 0.668,
+      "high_conf_accuracy": 0.6199,
+      "high_conf_ratio": 58.99,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.6126,
+      "cv_acc": 0.5743
+    },
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 08ff4f9 on 2026-02-12"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "id": "20260218-p1-c6f233",
+  "registeredAt": "2026-09-24T01:20:05.652Z",
+  "source": "git 03d1f60 (2026-02-18) — Full quant audit fix + ML v9 retrain with real Polymarket data",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "c6f23393ea11ac463b85d630f0708ad0082e238e51c325a635621cec0262d915",
+    "lightgbm_model.json": "c0193a326464a6dfe8b5ab8daeede3d3c0fe91b33e9e0daa0549273c462fbcea",
+    "norm_browser.json": "d3c365e2daf04d017ce36a6c10da8086bafc55ab39c3ad20bac4a1132bd5723c"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 03d1f60:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7794,
+      "auc": 0.8658,
+      "f1": 0.7769,
+      "logloss": 0.4723,
+      "high_conf_accuracy": 0.7904,
+      "high_conf_ratio": 95.16,
+      "high_conf_threshold": 0.555,
+      "cv_auc": 0.8604,
+      "cv_acc": 0.7794
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.25,
+      "lgb": 0.75
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 03d1f60 on 2026-02-18"
+  ]
+}

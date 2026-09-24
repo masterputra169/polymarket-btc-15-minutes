@@ -1,0 +1,45 @@
+{
+  "id": "20260305-p1-3a8046",
+  "registeredAt": "2026-09-24T01:20:26.132Z",
+  "source": "public/ml/*.v17_deployed.bak (local only)",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "3a804644494eefb8fd2d7a946e21aafceda2144ddbe15a1ee3b523a4a108290a",
+    "lightgbm_model.json": "c5825a46e5e46e5459edc24f5f8ffa26216b884b70207626b2ef7a79c9744749",
+    "norm_browser.json": "9349ea3954fc81497547f05285a0eadfc41c54001e64ce9714071f406e146187"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "0c19eec13f5bf9a6b3c217ea2b146626d801c488c401fd92fabe3c08cc2dd7bf",
+    "lightgbm_model.json.gz": "45d86f2c248bb2fe60b0e0845af4b0677a5c5d8218aa717a9f3f5e4619b1475f",
+    "norm_browser.json.gz": "a51752daa38a58e90911438be53437e657b5ba54450d8255071418e3ff577a43"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7662,
+      "auc": 0.8516,
+      "f1": 0.7685,
+      "logloss": 0.4777,
+      "high_conf_accuracy": 0.7814,
+      "high_conf_ratio": 93.79,
+      "high_conf_threshold": 0.555,
+      "cv_auc": 0.8593,
+      "cv_acc": 0.7772
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.25,
+      "lgb": 0.75
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "local backup \"v17_deployed\": name says deployed; never committed"
+  ]
+}

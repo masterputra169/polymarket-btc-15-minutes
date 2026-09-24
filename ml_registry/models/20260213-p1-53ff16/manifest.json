@@ -1,0 +1,41 @@
+{
+  "id": "20260213-p1-53ff16",
+  "registeredAt": "2026-09-24T01:20:02.571Z",
+  "source": "git 252e5ab (2026-02-14) — Fix 20 bugs from full codebase audit + deploy v10a ML ensemble",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "53ff16f5c3f8b73fd5c244590cf5d984a1412b4b9e3e1aca9195d14bf283afbc",
+    "lightgbm_model.json": "3a04364eed7478e170eb89425e4ffafefc9044f54bcd37e4ad400494a05b3553",
+    "norm_browser.json": "5c9a3ae3dc1d5487c2aa2655c78af413db139fdb3a7cf544161ee86f84fd8816"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 252e5ab:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.6924,
+      "auc": 0.7417,
+      "f1": 0.6929,
+      "logloss": 0.5994,
+      "high_conf_accuracy": 0.6992,
+      "high_conf_ratio": 95.94,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.7408,
+      "cv_acc": 0.6929
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.45,
+      "lgb": 0.55
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 252e5ab on 2026-02-14"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "20260213-p1-5d9dfc",
+  "registeredAt": "2026-09-24T01:20:01.620Z",
+  "source": "git e203ff7 (2026-02-13) — Deploy XGBoost v10 model + LightGBM infrastructure + data collection",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "5d9dfc5f0327ea857b9a50a1771c80296e7f26405e3d375b80559206dfcb901e",
+    "norm_browser.json": "d1d0b0b31bdd85c4d2050afb4385b29cdda8c1080e74fa442f46651564762897"
+  },
+  "storedSha256": {},
+  "artifactRef": "git e203ff7:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.587,
+      "auc": 0.6277,
+      "f1": 0.5896,
+      "logloss": 0.6651,
+      "high_conf_accuracy": 0.6284,
+      "high_conf_ratio": 58.17,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.6273,
+      "cv_acc": 0.583
+    },
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in e203ff7 on 2026-02-13"
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "20260208-p1-fe6357",
+  "registeredAt": "2026-09-24T01:19:57.946Z",
+  "source": "git 555528e (2026-02-08) — trying to make with many indicators",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "fe63575dea7eb902c8042c17f0e4d7d2dbc079da363cbdac10684413fcef44a0",
+    "norm_browser.json": "1b0e3f54eb7f896140f06432d43449cee549bcc034ae848e27aa06d4769125df"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 555528e:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.5326,
+      "auc": 0.5484,
+      "f1": 0.5252,
+      "logloss": 0.6895,
+      "high_conf_accuracy": 0.6132,
+      "high_conf_ratio": 4.63,
+      "high_conf_threshold": 0.6
+    },
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 555528e on 2026-02-08"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "id": "20260214-p1-abe10d",
+  "registeredAt": "2026-09-24T01:20:03.452Z",
+  "source": "git f0b64d9 (2026-02-14) — Sync deployed ML models with v10 training output",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "abe10d6b52b4810879c26f30099dac97d34590be7cff2636d277959ec1280b20",
+    "lightgbm_model.json": "77ecc1498552ee39eb566627bbb6f77d4694e6491f6de724a205face92e43278",
+    "norm_browser.json": "abbcc6732988920bdcdcc2b1158713324881cbc26c6af5a333e5b3d303ca2445"
+  },
+  "storedSha256": {},
+  "artifactRef": "git f0b64d9:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.6921,
+      "auc": 0.7418,
+      "f1": 0.693,
+      "logloss": 0.6007,
+      "high_conf_accuracy": 0.6991,
+      "high_conf_ratio": 96.25,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.5931,
+      "cv_acc": 0.5952
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in f0b64d9 on 2026-02-14"
+  ]
+}

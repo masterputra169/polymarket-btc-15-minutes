@@ -1,0 +1,27 @@
+{
+  "id": "20260206-p1-187cb8",
+  "registeredAt": "2026-09-24T01:19:57.101Z",
+  "source": "git 25f88b3 (2026-02-06) — commit integration with ML",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "187cb80209a8dad7e0b39421b527f50e916ee40b9f917a47505991b65fa9b00c",
+    "norm_browser.json": "b5d6cfde338d52ed4c0d2b869f42327f4f53292fef8ec89c63396ca2c0aa196c"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 25f88b3:public/ml/",
+  "metrics": {
+    "xgb": null,
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 25f88b3 on 2026-02-06"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "id": "20260209-p1-b809d5",
+  "registeredAt": "2026-09-24T01:19:58.491Z",
+  "source": "git c9a2164 (2026-02-10) — version 2 lot of data and indicators , ML confidence still low",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "b809d527b67bfa0e34558c49e4d9029ab0c7db5ea4afa919c61c1d7a88d9f870",
+    "norm_browser.json": "c331497d51438c052ef5b1de26ce364da0234a94cf41adc2f51ddc0814455a91"
+  },
+  "storedSha256": {},
+  "artifactRef": "git c9a2164:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.5987,
+      "auc": 0.64,
+      "f1": 0.597,
+      "logloss": 0.6623,
+      "high_conf_accuracy": 0.6258,
+      "high_conf_ratio": 74.09,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.6309,
+      "cv_acc": 0.5959
+    },
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in c9a2164 on 2026-02-10"
+  ]
+}

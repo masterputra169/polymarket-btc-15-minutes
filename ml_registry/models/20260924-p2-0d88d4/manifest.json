@@ -1,0 +1,85 @@
+{
+  "id": "20260924-p2-0d88d4",
+  "registeredAt": "2026-09-24T01:20:34.524Z",
+  "source": "manual retrain 2026-09-24 (autoRetrain steps 3-4 run by hand; same arguments)",
+  "featurePipeline": 2,
+  "sourceSha256": {
+    "xgboost_model.json": "0d88d452be57155f928de37d5d857f27362fd7efab8067db715c74df8426d517",
+    "lightgbm_model.json": "3281327e034bb97b21c9e8ea2d655d1eca7120115a08ccc3be348262446798e4",
+    "norm_browser.json": "b373f6c8d0bfe84af8c6e565f15ab97cf2d79b52133928a62613212068f3ff3c"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "187b1df547a3c19d9933b17a51752046101960624f9f34ee135356c118c3714b",
+    "lightgbm_model.json.gz": "7f878584b2e1e8d07ea66a795686fbd6c54a619bf799884b99e79bac80ceeb63",
+    "norm_browser.json.gz": "e7e26019d20e73cf4563aab2be4eb5300d3b0772f05b78be19f5697745bf0ee2"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7684,
+      "auc": 0.8539,
+      "f1": 0.769,
+      "logloss": 0.4702,
+      "brier": 0.1562,
+      "calibration_ece": 0.0223,
+      "calibration_mce": 0.0568,
+      "high_conf_accuracy": 0.7871,
+      "high_conf_ratio": 92.6,
+      "high_conf_count": 2015,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8562,
+      "cv_acc": 0.7642,
+      "cv_test_acc_gap": 0.0042,
+      "cv_test_auc_gap": -0.0023,
+      "holdout_accuracy": 0.7591,
+      "holdout_auc": 0.8567,
+      "test_holdout_acc_gap": 0.0093,
+      "test_holdout_auc_gap": -0.0027,
+      "test_samples": 2176,
+      "holdout_samples": 1536,
+      "market_brier": 0.1685,
+      "brier_skill_vs_market": 0.0731,
+      "logloss_skill_vs_market": 0.0579,
+      "market_skill_samples": 2176
+    },
+    "ensemble": {
+      "accuracy": 0.7688,
+      "auc": 0.8541,
+      "logloss": 0.4724,
+      "brier": 0.1567,
+      "calibration_ece": 0.0338,
+      "calibration_mce": 0.0835,
+      "weight_source": "oof_cv",
+      "test_samples": 2176,
+      "holdout_samples": 1536,
+      "strict_holdout": true,
+      "market_brier": 0.1685,
+      "brier_skill_vs_market": 0.0699,
+      "logloss_skill_vs_market": 0.0536,
+      "market_skill_samples": 2176
+    },
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": true,
+    "csvSha256": "ab1b4249aafcc0f3f4606e457ead3ea68e869146dcfe8b20c467cbd5fe98d267",
+    "csvMissingReason": null,
+    "meta": {
+      "feature_pipeline": 2,
+      "generated_at": "2026-09-23T20:48:17.225Z",
+      "days": 180,
+      "seed": 42,
+      "rows": 14607,
+      "first_slug_ts": 1774658700,
+      "last_slug_ts": 1790193600,
+      "feature_names": "(54 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "first model on feature pipeline v2 (one shared live/training feature builder)"
+  ]
+}

@@ -585,9 +585,36 @@ On the dashboard, `🔄 REST Poll` therefore means something is actually wrong. 
 
 ## ML model
 
-### Deployed ensemble
+### Live model — `20260924-p2-0d88d4` (feature pipeline v2), deployed 2026-09-24
 
-Read from `public/ml/norm_browser.json` → `ensemble_metrics`:
+Trained on the fixed pipeline; the id comes from the [model registry](#model-registry-and-journal).
+
+| Metric | Value |
+|--------|-------|
+| Data | 14,607 markets, 2026-03-28 → 2026-09-23 UTC, 100% real Polymarket labels |
+| Accuracy / AUC (test) | 76.9% / 0.854 |
+| Calibration ECE | 0.022 (XGBoost), 0.034 (ensemble) |
+| Ensemble weights | XGBoost 0.75 · LightGBM 0.25 (selected on OOF CV) |
+| Features | 79 (54 base + 25 engineered), Platt scaling on logits |
+| **Brier skill vs same-instant market** | **+7.0%** (test, n = 2,176) |
+| Skill vs a market given up to 60 s of look-ahead | −2.1% (3,728 unseen rows) |
+| Deploy gate | all checks pass; relative checks skipped (pipeline v1 → v2) |
+
+Read the two skill rows together. The lookup records token prices about once a minute, so the offline "price at the instant" can be up to 60 s stale, which flatters the model. Interpolating it reads up to 60 s ahead, which flatters the market. Live prices are fresh, so live skill should land between −2.1% and +7.0%: roughly market-level, not a proven edge. The dry run's **ML vs market** report, split by model, is the measurement that settles it.
+
+**Head to head with the previous model** (recorded as `evaluated` events in the journal):
+
+| Test | Market | New (v2) | Previous (v1) |
+|------|--------|----------|---------------|
+| 448 Railway dry-run entry instants, fresh prices (Brier) | **0.2166** | 0.2276 | 0.2583 |
+| 1,808 markets 2026-09-05 → 09-23, offline (Brier) | 0.1695 (last print) · 0.1532 (+60 s peek) | 0.1588 | 0.1708 |
+| Claimed probability on the side bought (actual win rate 67.9%) | — | 71.3% | 87.7% |
+
+The new model beats the previous one in both tests; the 95% CI for the Brier difference is [−0.047, −0.014] live and [−0.018, −0.006] offline. It is also far better calibrated. Neither model beats the market price.
+
+### Previous model — `20260905-p1-3c517d` (feature pipeline v1), retired 2026-09-24
+
+Kept for the record; its artifacts, report and data summary are in `ml_registry/models/20260905-p1-3c517d/`.
 
 | Metric | Value |
 |--------|-------|
@@ -597,31 +624,13 @@ Read from `public/ml/norm_browser.json` → `ensemble_metrics`:
 | Calibration ECE | 0.0171 |
 | Ensemble weights | XGBoost 0.60 · LightGBM 0.40 (selected on OOF CV) |
 | Evaluation | 1,903 test + 1,343 strict-holdout samples |
-| Features | 79 (54 base + 25 engineered) |
-| Calibration | Platt scaling on logits |
 | Training window | 180 days: 12,787 markets, 2026-03-08 → 2026-09-04 UTC |
-| Labels | 100% real Polymarket outcomes (no simulated labels) |
-| Trained / deployed | 2026-09-05. Retraining is manual. |
+| Trained / deployed | 2026-09-05 |
+| Live dry run (448 trades) | claimed 87.7% on the side bought, won 67.9%; Brier 0.2583 vs price 0.2166 (skill −19%) |
+
+Its offline numbers look better than the new model's because its training rows carried a 60-second look-ahead (see [One feature builder](#one-feature-builder-feature-pipeline-v2)). They are not comparable. Its training CSV was overwritten on 2026-09-24, before the registry existed.
 
 > Earlier headline numbers (84.07% accuracy, 94.12% holdout) predate the embargo and OOF-selection fixes and were measured on a reused holdout. They are **not comparable**.
-
-The deployed model above is **feature pipeline v1**: its rows carried a 60-second look-ahead, and the market price at the same instant predicts better than it does (see [One feature builder](#one-feature-builder-feature-pipeline-v2)).
-
-### Candidate model (pipeline v2) — trained 2026-09-24, awaiting deploy
-
-Trained on the fixed pipeline and stored in `backtest/ml_training/candidates/20260924_pipeline_v2/`. It passes every gate but has **not** been deployed yet.
-
-| Metric | Value |
-|--------|-------|
-| Data | 14,607 markets, 2026-03-28 → 2026-09-23, all real labels |
-| Accuracy / AUC (test) | 76.9% / 0.854 |
-| Calibration ECE | 0.022 (XGBoost), 0.034 (ensemble) |
-| Ensemble weights | XGBoost 0.75 · LightGBM 0.25 (OOF CV) |
-| **Brier skill vs same-instant market** | **+7.0%** (test, n = 2,176) |
-| Skill vs a market given up to 60 s of look-ahead | −2.1% (3,728 unseen rows) |
-| Deploy gate | all checks pass; relative checks skipped (pipeline v1 → v2) |
-
-Read the two skill rows together. The lookup records token prices about once a minute, so "the price at the instant" is up to 60 s stale (flatters the model), and interpolating it reads up to 60 s ahead (flatters the market). Live prices are fresh, so live skill should land between −2.1% and +7.0%: roughly market-level, not a proven edge. The pipeline-v1 model fails the same test even with its own look-ahead, and scored −19% live. The dry run's **ML vs market** report is the measurement that settles it.
 
 **Features:** BTC distance from the price to beat, returns and momentum over several horizons, RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, EMA cross, StochRSI, volume delta, the rule engine's probability and edge, the Polymarket token price at the instant and its 60 s change, time to settlement, session, and the regime. Order book, spread and funding rate are held neutral in pipeline v2 because no historical source exists for them. Inference in `src/engines/Mlpredictor.ts` is iterative tree traversal over `Float64Array` buffers.
 
@@ -685,6 +694,31 @@ The gate lives in `bot/src/retrainGate.ts` (pure and unit-tested) and **fails cl
 - relative accuracy/AUC drops against the deployed model. These are skipped, with the reason logged, across a feature-pipeline change, because the old numbers were measured on rows with the look-ahead.
 
 `tests/test_model_contract.py` reads the gate field names out of `retrainGate.ts` and asserts the trainer exports every one of them, so renaming a metric in Python fails a test instead of silently removing a gate. With `RETRAIN_REQUIRE_FRESH_DATA=true`, a retrain also fails closed when fresh Polymarket data cannot be fetched.
+
+### Model registry and journal
+
+Every trained model is kept, with its data, and everything that happens to it is logged, so models can be compared at any time. It lives in `ml_registry/` (tracked in git).
+
+| Path | What |
+|------|------|
+| `ml_registry/journal.jsonl` | Append-only events: `registered`, `gate`, `evaluated`, `deployed`, `retired`, `rolled_back`, `note` |
+| `ml_registry/MODELS.md` | Table of every model plus the journal, generated from the above (do not edit) |
+| `ml_registry/models/<id>/` | Gzipped `xgboost_model` / `lightgbm_model` / `norm_browser` JSON, `manifest.json` (hashes, metrics, data range), and the training CSV, meta and report |
+
+- **Ids** look like `20260924-p2-0d88d4`: date, feature pipeline and the first six hex digits of the XGBoost file's hash.
+- **Trades name their model.** The registry copy of `norm_browser.json` carries `model_id`. The bot logs it at startup and stamps every trade with `entry.modelId`, so `npm run report:dryrun*` can split win rate, P&L and "ML vs market" per model.
+- **Retraining records itself.** `autoRetrain` registers every trained model, even one that fails the gate, and journals the gate result, the deploy and any rollback. It fails closed if the model cannot be recorded.
+- **History is backfilled.** All 17 models ever deployed through git are in the registry with their real deploy dates. The February–April ones are kept as `ref: git <commit>` to keep the repo small. Four experiments that only existed as local `.bak` files are stored in full as `archived`.
+
+```bash
+npm run ml:registry -- list                        # every model, status, metrics
+npm run ml:registry -- deploy <id> --note "why"    # into public/ml (backs up what it replaces)
+npm run ml:registry -- evaluate --ids <a>,<b> --file result.json --note "what was compared"
+npm run ml:registry -- note <id> "free text"
+npm run ml:registry -- register --dir <modelDir> --csv training_data.csv --meta training_data.meta.json --report training_report.txt
+```
+
+After a deploy, commit `public/ml` and `ml_registry/` together, then run `railway up --service bot --ci`.
 
 ---
 
@@ -852,7 +886,8 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
-| 2026-09-24 | **ML fix**: training and live features now come from one builder (feature pipeline v2). This removes the 60 s look-ahead, the fake price-to-beat and the window-open market price. New deploy gate: the model must beat the same-instant market price. Kelly sizes on a probability shrunk toward the price (`KELLY_PROB_SHRINK`). The dry-run report shows claimed vs realised edge. Drift detection only counts trades made by the deployed model. A pipeline-v2 model is trained and passes the gate, awaiting deploy. |
+| 2026-09-24 | **New model live**: `20260924-p2-0d88d4` (pipeline v2) replaces `20260905-p1-3c517d`. **Model registry and journal** added: every model, its data and every gate/evaluation/deploy is kept in `ml_registry/`, and trades record which model made them. |
+| 2026-09-24 | **ML fix**: training and live features now come from one builder (feature pipeline v2). This removes the 60 s look-ahead, the fake price-to-beat and the window-open market price. New deploy gate: the model must beat the same-instant market price. Kelly sizes on a probability shrunk toward the price (`KELLY_PROB_SHRINK`). The dry-run report shows claimed vs realised edge. Drift detection only counts trades made by the deployed model. A pipeline-v2 model is trained and passes the gate. |
 | 2026-09-23 | Telegram alerts gain a **🌐 View Web** button (below View Market and View Profile) that opens the dashboard. Configurable with `DASHBOARD_URL`. |
 | 2026-09-23 | CI installs the bot package too (the TypeScript job had failed on every push without it) and runs on Node 25. MIT `LICENSE` file added. |
 | 2026-09-23 | **Breakeven margin**: `breakevenMargin.ts` solves breakeven from the settlement math, and the dashboard shows margin vs breakeven (lifetime + realistic fills). The fallback sweep reports rows past its 7-day window as `agedOut`. An out-of-range `DRY_RUN_HARD_ENTRY_CAP` is refused and logged. `BLOCKED_SESSIONS` logs what it parsed and warns on unknown names. |

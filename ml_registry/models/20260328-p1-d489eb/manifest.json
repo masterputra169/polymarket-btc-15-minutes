@@ -1,0 +1,45 @@
+{
+  "id": "20260328-p1-d489eb",
+  "registeredAt": "2026-09-24T01:20:16.961Z",
+  "source": "git df76b54 (2026-03-28) — fix: PTB accuracy - proper JSON parsing + race condition fixes",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "d489eb17851710ec8dc2cf559a7c68db7ce5b1ac402ed841f831cf50b88caf58",
+    "lightgbm_model.json": "fcea7b373d46b68c48e447293a8305d5efed160018d587ccf17c25b67c78ad09",
+    "norm_browser.json": "e06ba5a33bd3f446b8b347e819995e3a08f2bb416040faaac6b17df735fc265d"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "e9a60c61dde3ea3d4c882e91a31dc662d18f5a8e08b69790c242a62ee27af557",
+    "lightgbm_model.json.gz": "8c431d276c13ec70e55e505f1242953fec85293e911f664af835e543e2b5cf1d",
+    "norm_browser.json.gz": "0ff0948ec99db3d26beba0b962986426e49fd83e12d6a3d2b2e3155878cd27cd"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.8427,
+      "auc": 0.9248,
+      "f1": 0.8466,
+      "logloss": 0.3748,
+      "high_conf_accuracy": 0.8499,
+      "high_conf_ratio": 97.87,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8381,
+      "cv_acc": 0.7658
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in df76b54 on 2026-03-28"
+  ]
+}

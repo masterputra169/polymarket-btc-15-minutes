@@ -1,0 +1,68 @@
+{
+  "id": "20260902-p1-1aa8e3",
+  "registeredAt": "2026-09-24T01:20:22.120Z",
+  "source": "git 0190a65 (2026-09-02) — feat: deploy retrained ML models (embargoed CV, honest gates)",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "1aa8e34665b9b114b6c6277777bf068b0e1824db72379250c1a05414e1176364",
+    "lightgbm_model.json": "6fb20b97fc59718896d9922e4faede5c4d17338e386484a230496a66bdd94647",
+    "norm_browser.json": "1e93c7f077d4ea8815afedf5659bd2a78d0ae61e95eaa25d5b671c608c81be1e"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "e6bd0ef44e573a755208f8dbf83a8ee53925d25dc2e863ffc27269a5dc8f38d4",
+    "lightgbm_model.json.gz": "6b248fc15fcccbc7414cc25ac8013f4107d970d9a5b2967c59549f78a1884066",
+    "norm_browser.json.gz": "ad8b08afcb1458529e1b2f7de75952aa5a1562be615cfb932a8b8511263c09fb"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7855,
+      "auc": 0.8763,
+      "f1": 0.7808,
+      "logloss": 0.4414,
+      "brier": 0.144,
+      "calibration_ece": 0.0248,
+      "calibration_mce": 0.0743,
+      "high_conf_accuracy": 0.804,
+      "high_conf_ratio": 93.92,
+      "high_conf_count": 1760,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8707,
+      "cv_acc": 0.7867,
+      "cv_test_acc_gap": -0.0012,
+      "cv_test_auc_gap": 0.0056,
+      "holdout_accuracy": 0.7785,
+      "holdout_auc": 0.8654,
+      "test_holdout_acc_gap": 0.007,
+      "test_holdout_auc_gap": 0.0109,
+      "test_samples": 1874,
+      "holdout_samples": 1323
+    },
+    "ensemble": {
+      "accuracy": 0.785,
+      "auc": 0.8774,
+      "logloss": 0.4396,
+      "brier": 0.1434,
+      "calibration_ece": 0.0328,
+      "calibration_mce": 0.0932,
+      "weight_source": "holdout",
+      "test_samples": 1874,
+      "holdout_samples": 1323,
+      "strict_holdout": true
+    },
+    "ensembleWeights": {
+      "xgb": 0.6,
+      "lgb": 0.4
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 0190a65 on 2026-09-02"
+  ]
+}

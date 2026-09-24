@@ -1,0 +1,8 @@
+{
+  "feature_pipeline": 1,
+  "days": 180,
+  "rows": 12787,
+  "first_slug_ts": 1772998200,
+  "last_slug_ts": 1788534900,
+  "note": "reconstructed 2026-09-24 from an analysis of the CSV run on 2026-09-23, before the file was overwritten"
+}

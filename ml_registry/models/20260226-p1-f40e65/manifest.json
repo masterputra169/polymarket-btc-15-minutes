@@ -1,0 +1,41 @@
+{
+  "id": "20260226-p1-f40e65",
+  "registeredAt": "2026-09-24T01:20:09.970Z",
+  "source": "git 2e6351e (2026-02-26) — Deploy ML v13: 79.5% acc / 0.8821 AUC ensemble (beats v9 77.9% / 0.866)",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "f40e65dad749b57eb6852f7825d5cccf9596b6c64d5cc3c1c0dd2826ca1ce513",
+    "lightgbm_model.json": "dff55ca44e7bd42424a14c0d3ead492b271bbf6a0faa6cd3e23386d8b6454bb4",
+    "norm_browser.json": "6cf670259240bbcc1877bbbe7cddf5334329715144c6de9a76954e2c8df85334"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 2e6351e:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7865,
+      "auc": 0.8785,
+      "f1": 0.7946,
+      "logloss": 0.4462,
+      "high_conf_accuracy": 0.8023,
+      "high_conf_ratio": 93.88,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.609,
+      "cv_acc": 0.5831
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.45,
+      "lgb": 0.55
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 2e6351e on 2026-02-26"
+  ]
+}

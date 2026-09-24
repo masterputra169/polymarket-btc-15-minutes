@@ -1,0 +1,41 @@
+{
+  "id": "20260328-p1-2f3843",
+  "registeredAt": "2026-09-24T01:20:13.487Z",
+  "source": "git a2e09c5 (2026-03-28) — feat: ML v20 + concept drift detection + fee update + moderate Kelly sizing",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "2f38430a875b319cf7c2d4a296190343c598ecced6af25c4b2cd1c98e74355fe",
+    "lightgbm_model.json": "7d6488144a86b2782c532ca30f611767e71d2e7756bb596d6ae930bb431226bf",
+    "norm_browser.json": "5a4d01a8a0740dcd9cc62a1aeca9a386cafb7a6204158023a8616aa697192b59"
+  },
+  "storedSha256": {},
+  "artifactRef": "git a2e09c5:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.8021,
+      "auc": 0.8846,
+      "f1": 0.8043,
+      "logloss": 0.4253,
+      "high_conf_accuracy": 0.819,
+      "high_conf_ratio": 92.52,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8754,
+      "cv_acc": 0.7876
+    },
+    "ensemble": null,
+    "ensembleWeights": {
+      "xgb": 0.25,
+      "lgb": 0.75
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in a2e09c5 on 2026-03-28"
+  ]
+}

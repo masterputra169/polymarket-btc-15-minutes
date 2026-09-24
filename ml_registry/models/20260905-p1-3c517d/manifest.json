@@ -1,0 +1,76 @@
+{
+  "id": "20260905-p1-3c517d",
+  "registeredAt": "2026-09-24T01:20:23.440Z",
+  "source": "git 4763600 (2026-09-05) — feat: deploy the OOF-selected model and unblock the dry run",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "3c517d830a38c4c5e7b8fb662fc17ec7acb3a4c761dd70109598181c5392c9ff",
+    "lightgbm_model.json": "027c27708d5d180db70ed1970169efb3ba5c83f2e30d04314f840833d6401f8e",
+    "norm_browser.json": "4e6adb440fd781ad573974371cee47cc065f0f591426a2d364a62de35da21d33"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "9722e11f670a12a54a14ae5e2fe598bb1b47a65daad6e38db0737febd50e181e",
+    "lightgbm_model.json.gz": "05c7f772177997b443db73774cbe1cb0e580cc3098bb30d666ed443dee7feb33",
+    "norm_browser.json.gz": "994f17bfc04158c8189d037c52d2cf1117ff8f3d157b32078296f1280b001592"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7824,
+      "auc": 0.871,
+      "f1": 0.7793,
+      "logloss": 0.4481,
+      "brier": 0.147,
+      "calibration_ece": 0.0154,
+      "calibration_mce": 0.0563,
+      "high_conf_accuracy": 0.7998,
+      "high_conf_ratio": 93.69,
+      "high_conf_count": 1783,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8668,
+      "cv_acc": 0.7836,
+      "cv_test_acc_gap": -0.0011,
+      "cv_test_auc_gap": 0.0042,
+      "holdout_accuracy": 0.7766,
+      "holdout_auc": 0.8709,
+      "test_holdout_acc_gap": 0.0058,
+      "test_holdout_auc_gap": 0.0001,
+      "test_samples": 1903,
+      "holdout_samples": 1343
+    },
+    "ensemble": {
+      "accuracy": 0.783,
+      "auc": 0.8715,
+      "logloss": 0.4472,
+      "brier": 0.1468,
+      "calibration_ece": 0.0171,
+      "calibration_mce": 0.052,
+      "weight_source": "oof_cv",
+      "test_samples": 1903,
+      "holdout_samples": 1343,
+      "strict_holdout": true
+    },
+    "ensembleWeights": {
+      "xgb": 0.6,
+      "lgb": 0.4
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "overwritten 2026-09-24 03:48 WIB by the pipeline-v2 data generation (not preserved)",
+    "meta": {
+      "feature_pipeline": 1,
+      "days": 180,
+      "rows": 12787,
+      "first_slug_ts": 1772998200,
+      "last_slug_ts": 1788534900,
+      "note": "reconstructed 2026-09-24 from an analysis of the CSV run on 2026-09-23, before the file was overwritten"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "first deployed in 4763600 on 2026-09-05",
+    "pipeline v1: rows carried a 60s BTC look-ahead and a fake price-to-beat; see evaluated events"
+  ]
+}

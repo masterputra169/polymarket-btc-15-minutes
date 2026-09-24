@@ -1,0 +1,37 @@
+{
+  "id": "20260212-p1-23dc17",
+  "registeredAt": "2026-09-24T01:19:59.266Z",
+  "source": "git 1e35158 (2026-02-12) — v3: Trading bot, ML v7, Polymarket math features, modular refactor",
+  "featurePipeline": 1,
+  "sourceSha256": {
+    "xgboost_model.json": "23dc17feeee25525f92aa882de25924feb926b6445e89e7c54da8c8807aad360",
+    "norm_browser.json": "4edc94cfdf7c9c08ec8b8d3e1dc301eaf296d9cc6e8228aa08298c3a1e00574c"
+  },
+  "storedSha256": {},
+  "artifactRef": "git 1e35158:public/ml/",
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.5526,
+      "auc": 0.5736,
+      "f1": 0.545,
+      "logloss": 0.6842,
+      "high_conf_accuracy": 0.5909,
+      "high_conf_ratio": 37.13,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.5467,
+      "cv_acc": 0.3656
+    },
+    "ensemble": null,
+    "ensembleWeights": null
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "training CSV was never archived before the registry existed",
+    "meta": null,
+    "reportStored": false
+  },
+  "notes": [
+    "first deployed in 1e35158 on 2026-02-12"
+  ]
+}
