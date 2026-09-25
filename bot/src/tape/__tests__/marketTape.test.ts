@@ -12,6 +12,7 @@ import { decodeTape, type SnapshotLine } from '../tapeFormat.ts';
 import {
   readTapeConfig, startMarketTape, stopMarketTape, setTapeMarket, getTapeStatus, type TapeConfig,
   noteTapeDecision, noteTapeStage, noteTapeFilters, noteTapeEntered,
+  getTapeDashboardStatus, scrubUploadError,
 } from '../marketTape.ts';
 
 const H3 = Date.UTC(2026, 8, 24, 3, 59, 0);
@@ -209,6 +210,50 @@ describe('market tape', () => {
       noteTapeFilters(true, []);
       noteTapeEntered();
     }).not.toThrow();
+  });
+
+  test('status: the hour so far and the last full hour, with decisions counted by stage', async () => {
+    const socket = fakeSocket();
+    startMarketTape({ getContext: () => ctx, config: config(), store, socket: socket as any });
+    setTapeMarket(MARKET);
+    socket.fill();
+    noteTapeDecision(decision(H3 + 100));
+    noteTapeFilters(false, ['ML conf 44% < 65%']);
+    noteTapeDecision(decision(H3 + 200)); // finishes the first poll
+    vi.advanceTimersByTime(1_000);         // the sampler writes it
+    noteTapeFilters(true, []);
+    noteTapeEntered();
+    vi.advanceTimersByTime(1_000);
+    const now = getTapeStatus();
+    expect(now.hour).toMatchObject({ hour: '2026-09-24T03', snapshots: 2, liveBookPct: 100, decisions: 2, entered: 1, stages: { filtered: 1, entered: 1 } });
+    expect(now.lastHour).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(60_000); // crosses 04:00
+    const later = getTapeStatus();
+    expect(later.lastHour).toMatchObject({ hour: '2026-09-24T03', decisions: 2, entered: 1, stages: { filtered: 1, entered: 1 } });
+    expect(later.hour).toMatchObject({ hour: '2026-09-24T04', decisions: 0, stages: {} });
+  });
+
+  test('status: the file count may be cached for the poll loop, and is fresh by default', () => {
+    startMarketTape({ getContext: () => ctx, config: config(), store, socket: fakeSocket() as any });
+    expect(getTapeStatus(10_000).localFiles).toBe(0);
+    vi.advanceTimersByTime(10_000); // the flush writes the first file
+    expect(getTapeStatus().localFiles).toBe(1);
+    const cached = getTapeStatus(10_000);
+    expect(cached.localFiles).toBe(1);
+  });
+
+  test('dashboard status never carries the store host or account id', () => {
+    startMarketTape({ getContext: () => ctx, config: config(), store, socket: fakeSocket() as any });
+    const d = getTapeDashboardStatus();
+    expect(d.uploadsConfigured).toBe(true);
+    expect(JSON.stringify(d)).not.toContain('cloudflarestorage');
+    expect(scrubUploadError('connect ECONNREFUSED x.r2.cloudflarestorage.com:443', 'x.r2.cloudflarestorage.com')).toBe('connect ECONNREFUSED <store>:443');
+    expect(scrubUploadError('getaddrinfo ENOTFOUND 0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com', null)).toBe('getaddrinfo ENOTFOUND <store>');
+    expect(scrubUploadError('key 0123456789abcdef0123456789ABCDEF refused', null)).toBe('key <id> refused');
+    expect(scrubUploadError(null, null)).toBeNull();
+    stopMarketTape();
+    expect(getTapeDashboardStatus()).toMatchObject({ running: false, uploadsConfigured: false, hour: null, lastHour: null });
   });
 
   test('setTapeMarket before start is a no-op; TAPE_ENABLED=false does not start', () => {

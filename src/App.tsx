@@ -17,6 +17,7 @@ import PositionPanel from './components/PositionPanel.tsx';
 import LimitOrderPanel from './components/LimitOrderPanel.tsx';
 import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.tsx';
 import SessionInfo from './components/SessionInfo.tsx';
+import TapePanel from './components/TapePanel.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
@@ -449,6 +450,17 @@ export default function App() {
     data?.marketUp, data?.marketDown,
   ]);
 
+  // TapePanel: market tape recorder health. Snapshots tick once a second, so
+  // this repaints at most ~1/s — not on every broadcast.
+  const tapeData = useMemo(() => data?.tape ?? null, [
+    data?.tape?.running, data?.tape?.bookLive, data?.tape?.market,
+    data?.tape?.localFiles, data?.tape?.localBytes, data?.tape?.buffered,
+    data?.tape?.uploaded, data?.tape?.lastUploadError, data?.tape?.errors, data?.tape?.uploadsConfigured,
+    data?.tape?.hour?.hour, data?.tape?.hour?.snapshots, data?.tape?.hour?.decisions,
+    data?.tape?.hour?.trades, data?.tape?.hour?.resyncs, data?.tape?.hour?.entered,
+    data?.tape?.lastHour?.hour,
+  ]);
+
   // BotPanel: extract only what BotPanel needs
   // NOTE: ts/pollCounter excluded from deps — they change every ~50ms poll but are cosmetic.
   // BotPanel uses a local interval to tick the "Xs ago" display independently.
@@ -586,7 +598,10 @@ export default function App() {
           {/* Row 7: Journal Time-Series Analytics (full width) */}
           <JournalTimeSeriesPanel data={journalAnalyticsData} />
 
-          {/* Row 8: Session (full width) */}
+          {/* Row 8: Market tape recorder (full width, hidden on a bot without it) */}
+          <TapePanel tape={tapeData} />
+
+          {/* Row 9: Session (full width) */}
           <SessionInfo />
         </div>
       )}

@@ -43,7 +43,7 @@ printed) plus:
 | `PREMARKET_LONG_ENABLED` | `false` | 2026-09-20: 10 dry-run trades, 30% WR, -19.88 on 8x the normal stake |
 | `BLOCKED_SESSIONS` | `,` (empty list) | 2026-09-25: every session trades. Railway rejects an empty value, and `,` parses to no sessions. Was `Europe` from 2026-09-20 (123 trades, 55.6%/58.3% WR wk1/wk2, -17.05) |
 | `TIME_GATES_ENABLED` | `false` | 2026-09-25: no ET blackout hours, weekend floor or Asia ML floors |
-| `RL_ENABLED` | `false` | deployed weights output a constant action; their own metadata says `improved=false` |
+| `EVAL_WINDOW_START` | `2026-09-25T13:28:12Z` | start of the current evaluation window (deploy d8e1651c); the daily Telegram report scores trades since then. Move it whenever a deploy changes trade selection |
 
 `frontend`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.frontend`, `VITE_BOT_WS_URL=/ws`,
 `BOT_HOST=bot.railway.internal`, `PORT=80`. **No `VITE_BOT_STATUS_TOKEN`** on

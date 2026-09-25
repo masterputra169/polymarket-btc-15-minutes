@@ -234,18 +234,10 @@ const BOT_CONFIG = {
     sentimentCacheMs: envInt(process.env.SENTIMENT_CACHE_MS, 5 * 60 * 1000, 60_000, 30 * 60 * 1000),
   },
 
-  // RL Bandit — context-aware bet sizing multiplier
-  // Shadow mode (default): logs decisions but does NOT modify bet size.
-  // Conservative mode (default): restricts actions to [0.75, 1.0, 1.25].
-  // Enable: RL_ENABLED=true in bot/.env. Shadow first, then conservative, then full.
-  rl: {
-    enabled: process.env.RL_ENABLED === 'true',
-    shadowMode: process.env.RL_SHADOW !== 'false',        // true by default — log only, no bet change
-    conservativeMode: process.env.RL_CONSERVATIVE !== 'false', // true by default — limit to ±25%
-    onlineUpdate: process.env.RL_ONLINE_UPDATE === 'true', // false by default — offline retrain only
-    weightsPath: resolve(__dirname, '..', '..', 'public', 'ml', 'rl_agent_weights.json'),
-    traceFile: resolve(__dirname, '..', 'data', 'rl_trace.jsonl'),
-  },
+  // (The RL bet-sizing bandit was removed on 2026-09-25: it never functioned —
+  // saturated softmax, a constant ×0.75, a reward loop that never closed — and
+  // had been disabled since 2026-09-20. Old journal rows still carry
+  // entry.rlScalar / rlActionIdx; postTradeAnalyst and perfMonitor read them.)
 
   metEngine: {
     enabled: process.env.METENGINE_ENABLED === 'true',

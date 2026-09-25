@@ -91,7 +91,11 @@ export interface TapeDeps {
   now?: () => number;
 }
 
-interface HourStats { snaps: number; ok: number; trades: number; resyncs: number; repairsAtStart: number; decisions: number; entered: number }
+interface HourStats {
+  snaps: number; ok: number; trades: number; resyncs: number; repairsAtStart: number; decisions: number; entered: number;
+  /** Decision lines written this hour, by the furthest stage their poll reached. */
+  stages: Partial<Record<Stage, number>>;
+}
 
 const UPLOAD_BACKOFF_MAX_MS = 60 * 60_000;
 
@@ -106,6 +110,8 @@ let state: {
   market: TapeMarket | null;
   hour: string;
   stats: HourStats;
+  lastHour: TapeHourSummary | null;
+  filesSeen: { at: number; count: number; bytes: number } | null;
   uploading: boolean;
   uploadBackoffMs: number;
   nextUploadAt: number;
@@ -117,7 +123,7 @@ let state: {
 } | null = null;
 
 function freshStats(): HourStats {
-  return { snaps: 0, ok: 0, trades: 0, resyncs: 0, repairsAtStart: state?.socket.repairs ?? 0, decisions: 0, entered: 0 };
+  return { snaps: 0, ok: 0, trades: 0, resyncs: 0, repairsAtStart: state?.socket.repairs ?? 0, decisions: 0, entered: 0, stages: {} };
 }
 
 function round(x: number | null | undefined, dp: number): number | null {
@@ -163,7 +169,7 @@ export function startMarketTape(deps: TapeDeps): boolean {
 
     state = {
       cfg, writer, socket, store, getContext: deps.getContext, now,
-      timers: [], market: null, hour: hourStamp(now()), stats: freshStats(),
+      timers: [], market: null, hour: hourStamp(now()), stats: freshStats(), lastHour: null, filesSeen: null,
       uploading: false, uploadBackoffMs: 0, nextUploadAt: 0,
       uploaded: 0, uploadedBytes: 0, lastUploadError: null, errors: 0,
       trail: new DecisionTrail(),
@@ -245,7 +251,7 @@ function sample(): void {
   if (!state) return;
   try {
     const d = state.trail.takeSample();
-    if (d) { state.writer.push(d); state.stats.decisions++; }
+    if (d) { state.writer.push(d); countDecision(d.st); }
   } catch (err) {
     recordError('decision', err);
   }
@@ -272,9 +278,29 @@ function sample(): void {
   }
 }
 
+function countDecision(st: Stage): void {
+  if (!state) return;
+  state.stats.decisions++;
+  state.stats.stages[st] = (state.stats.stages[st] ?? 0) + 1;
+}
+
+function summarizeHour(hour: string, s: HourStats): TapeHourSummary {
+  return {
+    hour,
+    snapshots: s.snaps,
+    liveBookPct: s.snaps ? Math.round((s.ok / s.snaps) * 1000) / 10 : null,
+    trades: s.trades,
+    resyncs: s.resyncs,
+    decisions: s.decisions,
+    entered: s.entered,
+    stages: { ...s.stages },
+  };
+}
+
 function closeHour(next: string): void {
   if (!state) return;
   const s = state.stats;
+  state.lastHour = summarizeHour(state.hour, s);
   const pct = s.snaps ? ((s.ok / s.snaps) * 100).toFixed(1) : '0.0';
   log.info(`Tape ${state.hour}Z: ${s.snaps} snapshots (${pct}% with a live book), ${s.trades} trades, ${state.socket.repairs - s.repairsAtStart} book levels pruned, ${s.resyncs} resyncs, ${s.decisions} decisions (${s.entered} entries)`);
   state.hour = next;
@@ -366,10 +392,23 @@ export function noteTapeEntered(): void {
   if (!state) return;
   try {
     const d = state.trail.entered();
-    if (d) { state.writer.push(d); state.stats.decisions++; state.stats.entered++; }
+    if (d) { state.writer.push(d); countDecision(d.st); state.stats.entered++; }
   } catch (err) {
     recordError('noteTapeEntered', err);
   }
+}
+
+/** One hour of recording, as the dashboard shows it. */
+export interface TapeHourSummary {
+  hour: string;
+  snapshots: number;
+  /** Share of 1 Hz snapshots taken with a live book on both tokens; null before the first. */
+  liveBookPct: number | null;
+  trades: number;
+  resyncs: number;
+  decisions: number;
+  entered: number;
+  stages: Partial<Record<Stage, number>>;
 }
 
 export interface TapeStatus {
@@ -384,29 +423,73 @@ export interface TapeStatus {
   lastUploadError: string | null;
   errors: number;
   destination: string | null;
+  /** The hour being recorded (UTC), so far. */
+  hour: TapeHourSummary | null;
+  /** The last full hour, once one has closed in this process. */
+  lastHour: TapeHourSummary | null;
 }
 
-export function getTapeStatus(): TapeStatus {
+/**
+ * @param maxFileAgeMs how stale the local file count may be. The poll loop
+ *   broadcasts every ~500 ms and a directory walk per poll is waste; the
+ *   default (0) always lists, which is what tests and one-off callers want.
+ */
+export function getTapeStatus(maxFileAgeMs = 0): TapeStatus {
   if (!state) {
     return {
       running: false, market: null, bookLive: false, buffered: 0, localFiles: 0, localBytes: 0,
       uploaded: 0, uploadedBytes: 0, lastUploadError: null, errors: 0, destination: null,
+      hour: null, lastHour: null,
     };
   }
-  const files = state.writer.listFiles();
+  const now = state.now();
+  let seen = state.filesSeen;
+  if (!seen || now - seen.at >= maxFileAgeMs || now < seen.at) {
+    const files = state.writer.listFiles();
+    seen = { at: now, count: files.length, bytes: files.reduce((s, f) => s + f.bytes, 0) };
+    state.filesSeen = seen;
+  }
   return {
     running: true,
     market: state.market?.slug ?? null,
     bookLive: state.socket.live && state.socket.up.valid && state.socket.down.valid,
     buffered: state.writer.buffered,
-    localFiles: files.length,
-    localBytes: files.reduce((s, f) => s + f.bytes, 0),
+    localFiles: seen.count,
+    localBytes: seen.bytes,
     uploaded: state.uploaded,
     uploadedBytes: state.uploadedBytes,
     lastUploadError: state.lastUploadError,
     errors: state.errors,
     destination: state.store && state.cfg.s3 ? describeStore(state.cfg.s3) : null,
+    hour: summarizeHour(state.hour, state.stats),
+    lastHour: state.lastHour,
   };
+}
+
+/**
+ * What the dashboard gets. The status broadcast reaches a public page, and the
+ * R2 endpoint host carries the Cloudflare account id — so the destination
+ * becomes a yes/no, and an upload error loses any host or 32-hex id it quotes.
+ * The configured host is removed whatever it is; the pattern fallbacks are
+ * R2-shaped, so a different S3 provider relies on the exact-host replacement.
+ */
+export interface TapeDashboardStatus extends Omit<TapeStatus, 'destination'> {
+  uploadsConfigured: boolean;
+}
+
+export function scrubUploadError(msg: string | null, host: string | null): string | null {
+  if (msg == null) return null;
+  let out = msg;
+  if (host) out = out.split(host).join('<store>');
+  out = out.replace(/\b[\w-]+\.r2\.cloudflarestorage\.com\b/gi, '<store>').replace(/\b[0-9a-f]{32}\b/gi, '<id>');
+  return out.length > 160 ? `${out.slice(0, 159)}…` : out;
+}
+
+export function getTapeDashboardStatus(maxFileAgeMs = 0): TapeDashboardStatus {
+  const { destination, ...rest } = getTapeStatus(maxFileAgeMs);
+  let host: string | null = null;
+  try { host = state?.cfg.s3 ? new URL(state.cfg.s3.endpoint).host : null; } catch { host = null; }
+  return { ...rest, uploadsConfigured: destination != null, lastUploadError: scrubUploadError(rest.lastUploadError, host) };
 }
 
 /** Stop recording and write out the buffer. Synchronous, so it fits a shutdown handler. */

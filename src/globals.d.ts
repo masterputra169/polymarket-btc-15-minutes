@@ -11,12 +11,8 @@ interface Window {
   __getLogCount?: () => any;
   __exportTrainingCSV?: () => any;
   __clearTrainingLog?: () => any;
-  // PTB logging dedup flag (src/hooks/useMarketData.js)
-  __ptbLogged?: boolean;
   // Feedback unload-listener guard (src/engines/feedback.js)
   __feedbackUnloadRegistered?: boolean;
-  // CLOB WS handle (src/hooks/useMarketData.js)
-  clobWs?: any;
 }
 
 // IndexedDB request result accessed via event.target.result

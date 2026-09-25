@@ -290,7 +290,15 @@ RECOVERY_BUY_ENABLED=false            # default false: re-entry after a cut-loss
 PREMARKET_LONG_ENABLED=false          # disabled 2026-09-20 (30% WR over 10 trades)
 PREMARKET_LONG_RISK_PCT=0.10
 
-RL_ENABLED=false                      # RL bet-sizing agent: inert weights, keep off
+# Entry-filter thresholds: any of the 48 in bot/src/safety/filterThresholds.ts,
+# as FILTER_<NAME>. Unset = the built-in default. Bad or inverted values are
+# refused at startup with a warning. Changing one changes which trades are taken.
+# FILTER_ML_CONF_MIN=0.65
+
+# Daily Telegram evaluation report (off when unset): WR vs breakeven since this time.
+EVAL_WINDOW_START=2026-09-25T13:28:12Z
+EVAL_TARGET_TRADES=150
+EVAL_REPORT_HOUR_UTC=0
 ```
 
 ### Dry-run only
@@ -917,6 +925,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 | Date | Change |
 |------|--------|
 | 2026-09-25 | **Every hour and session trades**: ET blackout hours, the weekend floor and the Asia ML floors are behind `TIME_GATES_ENABLED` (default off), and Europe is unblocked. |
+| 2026-09-25 | Entry-filter thresholds move to `bot/src/safety/filterThresholds.ts`, overridable as `FILTER_*` (golden test: no decision changed). Daily Telegram **evaluation report** (`EVAL_WINDOW_START`). Dashboard **Market Tape** panel. Decision-trail study (`decisionTrailStudy.mts`) and v2+v3 hybrid backtest (no gain). The RL bet-sizing agent is deleted. |
 | 2026-09-24 | **Market tape**: 1 Hz book, trades and BTC feeds, uploaded hourly to Cloudflare R2 (`bot/src/tape/`, `npm run tape:pull`). |
 | 2026-09-24 | **New model live**: `20260924-p2-0d88d4` (pipeline v2) replaces `20260905-p1-3c517d`. **Model registry and journal** added: every model, its data and every gate/evaluation/deploy is kept in `ml_registry/`, and trades record which model made them. |
 | 2026-09-24 | **ML fix**: training and live features now come from one builder (feature pipeline v2). This removes the 60 s look-ahead, the fake price-to-beat and the window-open market price. New deploy gate: the model must beat the same-instant market price. Kelly sizes on a probability shrunk toward the price (`KELLY_PROB_SHRINK`). The dry-run report shows claimed vs realised edge. Drift detection only counts trades made by the deployed model. A pipeline-v2 model is trained and passes the gate. |

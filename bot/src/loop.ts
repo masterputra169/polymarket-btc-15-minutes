@@ -43,7 +43,7 @@ import {
   setTokenIds,
 } from './streams/clobWs.ts';
 import { evaluateClobFeed } from './streams/clobFreshness.ts';
-import { setTapeMarket, noteTapeDecision, noteTapeStage, noteTapeEntered } from './tape/marketTape.ts';
+import { setTapeMarket, noteTapeDecision, noteTapeStage, noteTapeEntered, getTapeDashboardStatus } from './tape/marketTape.ts';
 import {
   getPrice as getPolyLivePrice,
   isConnected as isPolyLiveConnected,
@@ -203,10 +203,6 @@ import { getLastAnalysis } from './ai/postTradeAnalyst.ts';
 import { getOptimizerStatus } from './ai/selfOptimizer.ts';
 import { getOpenRouterStats } from './ai/openrouterClient.ts';
 
-// RL Agent (contextual bandit bet sizing)
-import { loadRLWeights, getRLScalar, recordRLOutcome, getRLStatus, isRLLoaded } from './engines/rlAgent.ts';
-import { getLastRLNarrative } from './ai/rlNarrative.ts';
-
 // Status broadcast (dashboard integration)
 import { broadcast } from './statusServer.ts';
 
@@ -259,7 +255,6 @@ import { reconcileNow } from './trading/journalReconciler.ts';
 import { scheduleFallbackVerification } from './trading/fallbackVerifier.ts';
 import { triggerRedeem } from './trading/redeemer.ts';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.ts';
-import { captureForShadow } from './monitoring/shadowCapture.ts';
 import { executeArbitrage, executeDirectionalTrade } from './engines/tradePipeline.ts';
 import {
   checkPreMarketEntry,
@@ -308,12 +303,6 @@ export function getPriceToBeatForTape(): { value: number | null; source: string 
 // ── Position callback (injected from index.ts to avoid circular imports) ──
 let _getPositionsSummary: null | ((position?: unknown) => unknown) = null;
 export function registerPositionCallback(fn) { _getPositionsSummary = fn; }
-
-// ── RL Agent — load weights at startup if enabled ──
-let _rlWeightsLoaded = false;
-if (BOT_CONFIG.rl?.enabled) {
-  _rlWeightsLoaded = loadRLWeights(BOT_CONFIG.rl.weightsPath);
-}
 
 // ── Module-level state (stays in loop.js — lifecycle/identity) ──
 let currentMarketSlug: string | null = null;
@@ -429,12 +418,6 @@ function resetMarketCache() {
 
 // ── Shared settlement actions (DRY — used by expiry, switch, stale) ──
 function makeSettlementActions() {
-  // Capture RL entry info BEFORE settlement clears the snapshot.
-  // Used in .finally() to record the outcome and close the reward loop.
-  const _rlSnap = (_rlWeightsLoaded && BOT_CONFIG.rl?.enabled && !BOT_CONFIG.rl?.shadowMode)
-    ? (() => { const s = getEntrySnapshot(); return s?.rlActionIdx != null ? { rlActionIdx: s.rlActionIdx, cost: s.cost } : null; })()
-    : null;
-
   return {
     settleTrade,
     unwindPosition,
@@ -451,28 +434,7 @@ function makeSettlementActions() {
     // price_fallback is provisional: re-check against Polymarket's resolution
     // once it lands and correct the journal (and dry-run bankroll) if it differs.
     onFallbackSettled: scheduleFallbackVerification,
-    _rlSnap, // RL: pre-settlement snapshot for outcome recording
   };
-}
-
-/**
- * Record RL outcome using the most recent journal entry (called from settlement .finally()).
- * Non-fatal: wrapped in try-catch, only called when RL is active and rlActionIdx was set.
- */
-function _recordRLOutcomeFromJournal(rlSnap) {
-  if (rlSnap?.rlActionIdx == null) return;
-  try {
-    const recent = getRecentJournal(1);
-    const lastEntry = recent?.[0];
-    if (lastEntry?.analysis?.pnl != null) {
-      recordRLOutcome({
-        pnl: lastEntry.analysis.pnl,
-        betAmount: rlSnap.cost ?? 1,
-        won: lastEntry.analysis?.outcome === 'WIN',
-        rlActionIdx: rlSnap.rlActionIdx,
-      });
-    }
-  } catch (_e) { /* non-fatal */ }
 }
 
 /**
@@ -827,8 +789,6 @@ export async function pollOnce() {
             clearLastSettlementSource();
             setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (expiry): ${e.message}`)), 60_000);
           }
-          // RL: record settlement outcome
-          _recordRLOutcomeFromJournal(_saExpiry._rlSnap);
         });
       }
       resetCutLossState();
@@ -1006,8 +966,6 @@ export async function pollOnce() {
             clearLastSettlementSource();
             setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (switch): ${e.message}`)), 60_000);
           }
-          // RL: record settlement outcome
-          _recordRLOutcomeFromJournal(_saSwitch._rlSnap);
         });
       }
 
@@ -1224,8 +1182,6 @@ export async function pollOnce() {
         resetTakeProfitState();
         resetRecovery(); // Cancel any pending recovery on stale position recovery
         resetLimitOrderState();
-        // RL: record settlement outcome
-        _recordRLOutcomeFromJournal(_saStale._rlSnap);
       });
     }
 
@@ -1327,24 +1283,6 @@ export async function pollOnce() {
 
     // Null out MC when disabled — prevents noise from GBM random walk affecting sizing/gates
     const mcResult = BOT_CONFIG.monteCarlo.enabled ? mcResultRaw : null;
-
-    // ── Shadow capture (v19 validation, 2026-05-14) ──
-    // Writes featureBuf + v16 prediction to JSONL so offline v19 replay can
-    // compute apples-to-apples comparison. Zero-cost when SHADOW_CAPTURE!=true.
-    {
-      const _phase = (timeLeftMin == null) ? 'UNKNOWN'
-        : timeLeftMin > 10 ? 'EARLY'
-        : timeLeftMin > 5 ? 'MID'
-        : timeLeftMin > 2 ? 'LATE' : 'VERY_LATE';
-      captureForShadow({
-        marketSlug, slugTs: poly?.slugTs ?? null, timeLeftMin,
-        // Audit fix Tier-1 HIGH (2026-05-14): pass .value, not whole {slug, value, updatedAt}.
-        phase: _phase, lastPrice, priceToBeat: priceToBeat?.value ?? null,
-        mlResult, regime: regimeInfo?.regime ?? null, session,
-        ruleProbUp: timeAware?.adjustedUp ?? null,
-        decision: null, // populated below if a trade executes; kept null for snapshot-only
-      });
-    }
 
     // ── 5a0. LLM Regime snapshot feed (throttled — every ~50 polls, cheap storage) ──
     // The classifier reads this snapshot on its own 5-min cadence. Calling every ~50 polls
@@ -2580,8 +2518,6 @@ export async function pollOnce() {
           updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
           // MetEngine smart money gate (Feature 1+2) — null if disabled
           querySmartMoney: BOT_CONFIG.metEngine?.enabled ? querySmartMoney : null,
-          // RL Bandit sizing — null if disabled/shadow mode/weights not loaded
-          getRLScalar: (BOT_CONFIG.rl?.enabled && _rlWeightsLoaded) ? getRLScalar : null,
         });
         if (tapeEntered === true) noteTapeEntered();
       } catch (tradeErr) {
@@ -2812,10 +2748,8 @@ export async function pollOnce() {
       profitTarget: getProfitTargetStatus(),
       profitTargetPaused,
 
-      // RL Agent status + LLM narrative
-      rlAgent: BOT_CONFIG.rl?.enabled
-        ? { ...getRLStatus(), narrative: getLastRLNarrative()?.summary ?? null }
-        : { loaded: false },
+      // Market tape recorder health (record-only; the file count is refreshed every 10s)
+      tape: getTapeDashboardStatus(10_000),
     });
 
     // Periodic save

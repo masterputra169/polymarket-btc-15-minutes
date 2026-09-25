@@ -64,13 +64,13 @@ import { startReconciler, stopReconciler } from './src/trading/journalReconciler
 import { startRedeemer, stopRedeemer } from './src/trading/redeemer.ts';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.ts';
 import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } from './src/trading/tradeJournal.ts';
+import { scheduleEvaluationReport, stopEvaluationReport } from './src/monitoring/evaluationReport.ts';
 import { verifyPendingFallbacks } from './src/trading/fallbackVerifier.ts';
 
 // AI Agent modules
 import { initOpenRouter } from './src/ai/openrouterClient.ts';
 import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/postTradeAnalyst.ts';
 import { maybeOptimize } from './src/ai/selfOptimizer.ts';
-import { loadRLNarrativeFromDisk, maybeGenerateRLNarrative } from './src/ai/rlNarrative.ts';
 import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/regimeClassifier.ts';
 
 // Monitoring / guards
@@ -231,6 +231,8 @@ async function main() {
 
   // 4c. Schedule daily trade summary (Telegram alert at midnight ET)
   scheduleDailySummary();
+  // Daily evaluation-window report (win rate vs breakeven since EVAL_WINDOW_START).
+  scheduleEvaluationReport();
 
   // 4d. Initialize AI agent (OpenRouter + post-trade analysis)
   if (BOT_CONFIG.ai.enabled) {
@@ -249,11 +251,6 @@ async function main() {
     initLLMRegime();
   } else if (BOT_CONFIG.llmRegime?.enabled) {
     log.warn('LLM Regime enabled but AI_AGENT_ENABLED=false — classifier will not run');
-  }
-
-  // 4e. Load RL narrative cache from disk
-  if (BOT_CONFIG.rl?.enabled) {
-    loadRLNarrativeFromDisk();
   }
 
   // 5. Start WebSocket streams (real-time data)
@@ -322,7 +319,6 @@ async function main() {
         const stats = getStats();
         await maybeAnalyze(stats.totalTrades);
         await maybeOptimize();
-        await maybeGenerateRLNarrative();
         // LLM Regime classifier (P2) — internally throttled by intervalMs
         if (BOT_CONFIG.llmRegime?.enabled) {
           await maybeClassifyRegime();
@@ -368,6 +364,7 @@ async function main() {
     stopRedeemer();
     stopMonitor();
     stopDailySummary();
+    stopEvaluationReport();
     try { await shutdownDataStreams(); } catch { /* ignore */ }
     // Persist the partial PTB-health window so a restart does not lose it.
     try { flushPtbHealth(); } catch { /* ignore */ }

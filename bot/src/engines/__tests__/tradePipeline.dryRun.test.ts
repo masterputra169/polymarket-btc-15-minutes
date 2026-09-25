@@ -94,7 +94,7 @@ function makeDeps(overrides: Record<string, any> = {}) {
     notifyTrade: null,
     updateConditionalApproval: null,
     querySmartMoney: null,
-    getRLScalar: null,
+
     ...overrides,
   };
 }

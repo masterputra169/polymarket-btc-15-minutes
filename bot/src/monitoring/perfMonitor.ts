@@ -17,7 +17,6 @@ import { pauseBot } from '../loop.ts';
 import { notify } from './notifier.ts';
 import { checkRollback } from './rollbackMonitor.ts';
 import { checkDrift } from './driftDetector.ts';
-import { generateRLNarrative } from '../ai/rlNarrative.ts';
 
 const log = createLogger('Monitor');
 
@@ -276,16 +275,6 @@ function writeDailySummary(dateStr) {
   if (regimeStr) log.info(`  Regimes:    ${regimeStr}`);
   log.info('\u2550'.repeat(50));
   log.info('');
-
-  // RL narrative — async LLM analysis of agent behavior (fire-and-forget)
-  if (BOT_CONFIG.rl?.enabled && BOT_CONFIG.ai?.enabled) {
-    generateRLNarrative().then(narrative => {
-      if (narrative?.summary) {
-        log.info(`[RL Insight] ${narrative.summary}`);
-        notify('info', `RL Agent Insight: ${narrative.summary}`);
-      }
-    }).catch(err => log.debug(`RL narrative error: ${err.message}`));
-  }
 }
 
 // ── Data loaders ──

@@ -32,8 +32,21 @@ import { createLogger } from '../logger.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
 import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.ts';
+import { readFilterThresholds, type FilterThresholds } from './filterThresholds.ts';
 
 const log = createLogger('Filter');
+
+// Every number the gates below compare against (filterThresholds.ts): the
+// former literals as defaults, FILTER_* env overrides read once at load.
+const THRESHOLDS = readFilterThresholds(process.env);
+const T: FilterThresholds = THRESHOLDS.values;
+if (THRESHOLDS.overrides.length > 0) log.warn(`Filter thresholds overridden: ${THRESHOLDS.overrides.join(', ')}`);
+for (const r of THRESHOLDS.refused) log.warn(`REFUSED filter threshold: ${r}`);
+
+/** The thresholds in force (defaults plus accepted FILTER_* overrides). */
+export function getFilterThresholds(): FilterThresholds {
+  return { ...T };
+}
 
 // Dry-run-only entry-price cap override.
 //
@@ -78,7 +91,7 @@ const log = createLogger('Filter');
 // So the bound stays where it was. Anything that moves it should come from the
 // clean fok_limit window, which is still far too small to carry the decision —
 // see trading/breakevenMargin.ts for the number to watch.
-const DRY_RUN_ENTRY_CAP_FLOOR = 0.68;
+const DRY_RUN_ENTRY_CAP_FLOOR = T.baseHardCap;
 const DRY_RUN_ENTRY_CAP_CEILING = 0.95;
 
 /**
@@ -280,11 +293,11 @@ export function applyTradeFilters({
   const isExactPtbForSniper = ['data_streams', 'polymarket_gamma'].includes(ptbSource);
   const oracleLagBypass = lateSniperEnabled
     && isExactPtbForSniper
-    && timeLeftMin != null && timeLeftMin >= 5.0
-    && marketPrice != null && marketPrice <= 0.62
+    && timeLeftMin != null && timeLeftMin >= T.oracleLagMinTimeLeft
+    && marketPrice != null && marketPrice <= T.oracleLagMaxPrice
     && delta1m != null && btcPrice != null
-    && Math.abs(delta1m / btcPrice) >= 0.0007  // 0.07% BTC movement threshold
-    && mlAvailable && mlConfidence != null && mlConfidence >= 0.75;
+    && Math.abs(delta1m / btcPrice) >= T.oracleLagMinBtcMove  // 0.07% BTC movement threshold
+    && mlAvailable && mlConfidence != null && mlConfidence >= T.oracleLagMlMin;
 
   // 1. ML Confidence gate
   // During tilt protection (post-cut-loss), use the higher threshold.
@@ -292,17 +305,17 @@ export function applyTradeFilters({
   // that moderate ML uncertainty shouldn't block. Relax ML threshold from 65% → 45%.
   // Rationale: edge = modelProb - marketPrice. At 15%+ edge, ensemble strongly favors the side
   // even if ML specifically is uncertain (rule-based indicators still contribute).
-  const highEdgeBypass = bestEdge != null && bestEdge >= 0.15;
+  const highEdgeBypass = bestEdge != null && bestEdge >= T.highEdgeBypass;
   const baseMLMin = (highEdgeBypass || oracleLagBypass)
-    ? Math.min(TRADE_FILTERS.MIN_ML_CONFIDENCE, 0.45) // relax to 45% when edge or oracle-lag triggers
-    : TRADE_FILTERS.MIN_ML_CONFIDENCE;
+    ? Math.min(T.mlConfMin, T.mlConfRelaxed) // relax to 45% when edge or oracle-lag triggers
+    : T.mlConfMin;
   const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > baseMLMin)
     ? tiltMlConfMin
     : baseMLMin;
   if (mlAvailable && mlConfidence != null) {
     if (mlConfidence < mlConfMin) {
       const tiltTag = tiltMlConfMin != null ? ' [tilt]' : '';
-      const edgeTag = highEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥15%→relaxed]` : '';
+      const edgeTag = highEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥${(T.highEdgeBypass * 100).toFixed(0)}%→relaxed]` : '';
       const lagTag = oracleLagBypass ? ' [oracle-lag→relaxed]' : '';
       reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}${edgeTag}${lagTag}`);
     }
@@ -310,7 +323,7 @@ export function applyTradeFilters({
 
   // 1a. Asia session ML minimum — Asia WR 77% vs US 85%. Low liquidity + manipulation risk.
   // Require ML ≥80% to trade during Asia hours (21:00-04:00 ET).
-  const ASIA_ML_MIN = 0.80;
+  const ASIA_ML_MIN = T.asiaMlMin;
   if (TIME_GATES_ENABLED && session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < ASIA_ML_MIN) {
     if (!highEdgeBypass) {
       reasons.push(`Asia session: ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(ASIA_ML_MIN * 100).toFixed(0)}% minimum`);
@@ -320,9 +333,9 @@ export function applyTradeFilters({
   // 1b. ML 75-80% dead zone — data (15 trades): 53.3% WR, -$4.54
   // This confidence band is unreliable; require strong edge to compensate.
   // 80%+ ML unaffected (90.9% WR, no extra gate needed).
-  if (mlAvailable && mlConfidence != null && mlConfidence >= 0.75 && mlConfidence < 0.80) {
-    if (bestEdge == null || bestEdge < 0.10) {
-      reasons.push(`ML dead zone: conf ${(mlConfidence * 100).toFixed(0)}% in 75-80% band, edge ${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < 10% required`);
+  if (mlAvailable && mlConfidence != null && mlConfidence >= T.deadZoneLo && mlConfidence < T.deadZoneHi) {
+    if (bestEdge == null || bestEdge < T.deadZoneEdgeMin) {
+      reasons.push(`ML dead zone: conf ${(mlConfidence * 100).toFixed(0)}% in ${(T.deadZoneLo * 100).toFixed(0)}-${(T.deadZoneHi * 100).toFixed(0)}% band, edge ${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < ${(T.deadZoneEdgeMin * 100).toFixed(0)}% required`);
     }
   }
 
@@ -363,7 +376,7 @@ export function applyTradeFilters({
   // At 92c UP with ML 100%: EV = 0.96×$0.08 - 0.04×$0.92 = +$0.04/dollar (positive).
   const priceRange = TRADE_FILTERS.MARKET_PRICE_RANGE;
   if (priceRange && marketPrice != null && (marketPrice < priceRange[0] || marketPrice > priceRange[1])) {
-    const mlBypass = mlConfidence != null && mlConfidence >= 0.85;
+    const mlBypass = mlConfidence != null && mlConfidence >= T.extremePriceMlBypass;
     if (!mlBypass) {
       reasons.push(`Extreme price ${(marketPrice * 100).toFixed(0)}c outside ${(priceRange[0]*100).toFixed(0)}-${(priceRange[1]*100).toFixed(0)}c range`);
     }
@@ -371,10 +384,10 @@ export function applyTradeFilters({
 
   // 2c. Entry price floor — data shows entries below 55c are consistently unprofitable
   // H1: Allow low-price entries when edge >= 8% (strong model conviction overrides price filter)
-  if (TRADE_FILTERS.MIN_ENTRY_PRICE && marketPrice != null && marketPrice < TRADE_FILTERS.MIN_ENTRY_PRICE) {
-    const edgeBypass = bestEdge != null && bestEdge >= 0.08;
+  if (T.entryFloor && marketPrice != null && marketPrice < T.entryFloor) {
+    const edgeBypass = bestEdge != null && bestEdge >= T.entryFloorEdgeBypass;
     if (!edgeBypass) {
-      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(TRADE_FILTERS.MIN_ENTRY_PRICE * 100).toFixed(0)}c floor`);
+      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c < ${(T.entryFloor * 100).toFixed(0)}c floor`);
     }
   }
 
@@ -382,22 +395,22 @@ export function applyTradeFilters({
   // v4: Data shows >75c entries: 70% WR, -$3.48 PnL. Tightened caps.
   // BASE_HARD_CAP: 68c normal, TRENDING_HARD_CAP: 72c (was 75c) with ML ≥80%.
   // ULTRA ML bypass: ML ≥90% can go up to 75c (v16 ≥90% = near-certain).
-  const BASE_HARD_CAP = DRY_RUN_HARD_ENTRY_CAP ?? 0.68;
-  const TRENDING_HARD_CAP = Math.max(0.72, BASE_HARD_CAP);   // v4: 0.75→0.72 — >75c is negative EV bucket
-  const ULTRA_ML_CAP = Math.max(0.75, BASE_HARD_CAP);        // v4: only ML ≥90% can reach 75c
-  const trendingPremium = regime === 'trending' && mlConfidence != null && mlConfidence >= 0.80;
-  const ultraMl = mlConfidence != null && mlConfidence >= 0.90;
+  const BASE_HARD_CAP = DRY_RUN_HARD_ENTRY_CAP ?? T.baseHardCap;
+  const TRENDING_HARD_CAP = Math.max(T.trendingHardCap, BASE_HARD_CAP);   // v4: 0.75→0.72 — >75c is negative EV bucket
+  const ULTRA_ML_CAP = Math.max(T.ultraMlCap, BASE_HARD_CAP);             // v4: only ML ≥90% can reach 75c
+  const trendingPremium = regime === 'trending' && mlConfidence != null && mlConfidence >= T.trendingPremiumMl;
+  const ultraMl = mlConfidence != null && mlConfidence >= T.ultraMl;
   const HARD_ENTRY_CAP = ultraMl ? ULTRA_ML_CAP : (trendingPremium ? TRENDING_HARD_CAP : BASE_HARD_CAP);
   if (marketPrice != null && marketPrice > HARD_ENTRY_CAP) {
     const trendTag = trendingPremium ? ' [trending premium active]' : '';
     const mlTag = ultraMl ? ' [ultra ML active]' : '';
     const dryTag = DRY_RUN_HARD_ENTRY_CAP != null ? ' [dry-run cap]' : '';
     reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(HARD_ENTRY_CAP * 100).toFixed(0)}c hard cap (need ${(marketPrice * 100).toFixed(0)}% WR)${trendTag}${mlTag}${dryTag}`);
-  } else if (TRADE_FILTERS.MAX_ENTRY_PRICE && marketPrice != null && marketPrice > TRADE_FILTERS.MAX_ENTRY_PRICE) {
+  } else if (T.softEntryCap && marketPrice != null && marketPrice > T.softEntryCap) {
     // Soft cap bypass: ML ≥85% OR trending + ML ≥80%
-    const mlBypass = mlConfidence != null && (mlConfidence >= 0.85 || trendingPremium);
+    const mlBypass = mlConfidence != null && (mlConfidence >= T.softCapMlBypass || trendingPremium);
     if (!mlBypass) {
-      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(TRADE_FILTERS.MAX_ENTRY_PRICE * 100).toFixed(0)}c ceiling (ML ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < 85%)`);
+      reasons.push(`Entry price ${(marketPrice * 100).toFixed(0)}c > ${(T.softEntryCap * 100).toFixed(0)}c ceiling (ML ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'} < ${(T.softCapMlBypass * 100).toFixed(0)}%)`);
     }
   }
 
@@ -422,11 +435,11 @@ export function applyTradeFilters({
   // Late entries need high ML confidence to justify reduced time for resolution.
   // EARLY/MID unaffected (76%/74% WR, working well).
   // Edge bypass (Audit v5 A+B): edge ≥ 15% → relax from 80% to 55% (price advantage compensates time pressure)
-  if (Number.isFinite(timeLeftMin) && timeLeftMin < 5) {
-    const lateEdgeBypass = bestEdge != null && bestEdge >= 0.15;
-    const LATE_ML_MIN = lateEdgeBypass ? 0.55 : 0.80;
+  if (Number.isFinite(timeLeftMin) && timeLeftMin < T.lateTimeLeft) {
+    const lateEdgeBypass = bestEdge != null && bestEdge >= T.lateEdgeBypass;
+    const LATE_ML_MIN = lateEdgeBypass ? T.lateMlRelaxed : T.lateMlMin;
     if (mlAvailable && mlConfidence != null && mlConfidence < LATE_ML_MIN) {
-      const edgeTag = lateEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥15%→relaxed]` : '';
+      const edgeTag = lateEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥${(T.lateEdgeBypass * 100).toFixed(0)}%→relaxed]` : '';
       reasons.push(`LATE phase ML gate: conf ${(mlConfidence * 100).toFixed(0)}% < ${LATE_ML_MIN * 100}% (${timeLeftMin.toFixed(1)}min left)${edgeTag}`);
     }
   }
@@ -434,14 +447,14 @@ export function applyTradeFilters({
   // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)
   // Audit v2 H5: Time-adaptive — EARLY phase (>10min) uses 0.02% (more time for BTC to move),
   // LATE phase uses full 0.04%. Bypass when ML is very high confidence (>=80%).
-  if (TRADE_FILTERS.MIN_BTC_DIST_PCT && btcPrice != null && priceToBeat != null && priceToBeat > 0) {
+  if (T.btcDistMinPct && btcPrice != null && priceToBeat != null && priceToBeat > 0) {
     const btcDistPct = Math.abs(btcPrice - priceToBeat) / priceToBeat * 100;
-    const mlBypass = mlConfidence != null && mlConfidence >= 0.80;
-    const timeAdaptedDist = (timeLeftMin != null && timeLeftMin > 10)
-      ? TRADE_FILTERS.MIN_BTC_DIST_PCT * 0.5   // EARLY: halve threshold
-      : (timeLeftMin != null && timeLeftMin > 5)
-        ? TRADE_FILTERS.MIN_BTC_DIST_PCT * 0.75 // MID: 75% threshold
-        : TRADE_FILTERS.MIN_BTC_DIST_PCT;        // LATE/VERY_LATE: full threshold
+    const mlBypass = mlConfidence != null && mlConfidence >= T.btcDistMlBypass;
+    const timeAdaptedDist = (timeLeftMin != null && timeLeftMin > T.btcDistEarlyTimeLeft)
+      ? T.btcDistMinPct * T.btcDistEarlyFactor   // EARLY: halve threshold
+      : (timeLeftMin != null && timeLeftMin > T.btcDistMidTimeLeft)
+        ? T.btcDistMinPct * T.btcDistMidFactor   // MID: 75% threshold
+        : T.btcDistMinPct;                        // LATE/VERY_LATE: full threshold
     if (!mlBypass && btcDistPct < timeAdaptedDist) {
       reasons.push(`BTC too close to PTB: ${btcDistPct.toFixed(3)}% < ${timeAdaptedDist.toFixed(3)}% (coin flip)`);
     }
@@ -477,9 +490,9 @@ export function applyTradeFilters({
   if (TIME_GATES_ENABLED && isWeekend) {
     if (!mlAvailable) {
       reasons.push('Weekend + ML unavailable — cannot assess confidence');
-    } else if (mlConfidence != null && mlConfidence < 0.65) {
+    } else if (mlConfidence != null && mlConfidence < T.weekendMlMin) {
       // v5: 0.35→0.65 — old threshold was below MIN_ML_CONFIDENCE (0.60), never triggered
-      reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}% < 65%`);
+      reasons.push(`Weekend + low ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(T.weekendMlMin * 100).toFixed(0)}%`);
     }
   }
 
@@ -496,12 +509,12 @@ export function applyTradeFilters({
   // ONLY for data_streams/polymarket_gamma. Do NOT sync the two lists.
   const EXACT_PTB_SOURCES = ['data_streams', 'polymarket_gamma'];
   const isExactPtb = EXACT_PTB_SOURCES.includes(ptbSource);
-  const baseMaxEdge = TRADE_FILTERS.MAX_EDGE ?? 0.15;
+  const baseMaxEdge = T.edgeCeiling;
   let maxEdge;
   if (isExactPtb) {
-    maxEdge = 0.50;  // exact oracle PTB — trust real divergence up to 50%
-  } else if (mlConfidence != null && mlConfidence >= 0.85) {
-    maxEdge = 0.35;  // approximate PTB but ML very confident
+    maxEdge = T.edgeCeilingExactPtb;  // exact oracle PTB — trust real divergence up to 50%
+  } else if (mlConfidence != null && mlConfidence >= T.edgeCeilingHighMlConf) {
+    maxEdge = T.edgeCeilingHighMl;    // approximate PTB but ML very confident
   } else {
     maxEdge = baseMaxEdge;  // approximate PTB + low ML — keep tight cap
   }
@@ -512,7 +525,7 @@ export function applyTradeFilters({
 
   // 9. Counter-trend momentum guard — don't fight strong BTC moves.
   // Audit v2 H1: 0.10%→0.20% — old threshold ($63 at $63k) blocked valid entries; BTC 1min vol ≈ 0.05-0.15%
-  const COUNTER_TREND_THRESHOLD = btcPrice != null && Number.isFinite(btcPrice) ? btcPrice * 0.002 : 100;
+  const COUNTER_TREND_THRESHOLD = btcPrice != null && Number.isFinite(btcPrice) ? btcPrice * T.counterTrendPct : 100;
   if (delta1m != null && signalSide != null) {
     if (signalSide === 'UP' && delta1m < -COUNTER_TREND_THRESHOLD) {
       reasons.push(`Counter-trend: BTC dropped $${Math.abs(delta1m).toFixed(0)} in 1m vs UP signal`);
@@ -538,19 +551,19 @@ export function applyTradeFilters({
   //      Edge ≥ 15% → bypass ML gate entirely (strong price signal)
   if (regime === 'trending') {
     // Gate a: Block EARLY phase — losses entered avg 11.87 min left, win at 4.47 min
-    const TRENDING_MAX_TIME_LEFT = 10; // min — require MID or LATE phase
+    const TRENDING_MAX_TIME_LEFT = T.trendingMaxTimeLeft; // min — require MID or LATE phase
     if (Number.isFinite(timeLeftMin) && timeLeftMin > TRENDING_MAX_TIME_LEFT) {
       reasons.push(`Trending+EARLY blocked: ${timeLeftMin.toFixed(1)}m left > ${TRENDING_MAX_TIME_LEFT}m (data: 7/9 EARLY losses)`);
     }
     // Gate b: Token price consensus — trending losses avg 0.509 (market disagrees)
-    const TRENDING_MIN_TOKEN = 0.60;
+    const TRENDING_MIN_TOKEN = T.trendingMinToken;
     if (marketPrice != null && marketPrice < TRENDING_MIN_TOKEN) {
       reasons.push(`Trending+low price blocked: ${(marketPrice * 100).toFixed(0)}c < ${TRENDING_MIN_TOKEN * 100}c (market says 50/50, not trending)`);
     }
     // Gate c: ML confidence in trending — direction-aware with edge bypass
-    const TRENDING_ML_WITH = 0.55;    // signal aligns with BTC direction (trend supports us)
-    const TRENDING_ML_AGAINST = 0.65; // signal fights BTC direction (riskier)
-    const TRENDING_EDGE_BYPASS = 0.15; // edge ≥ 15% → price signal strong enough, bypass ML gate
+    const TRENDING_ML_WITH = T.trendingMlWith;         // signal aligns with BTC direction (trend supports us)
+    const TRENDING_ML_AGAINST = T.trendingMlAgainst;   // signal fights BTC direction (riskier)
+    const TRENDING_EDGE_BYPASS = T.trendingEdgeBypass; // edge ≥ 15% → price signal strong enough, bypass ML gate
     const trendEdgeBypass = bestEdge != null && bestEdge >= TRENDING_EDGE_BYPASS;
     if (!trendEdgeBypass && mlAvailable && mlConfidence != null) {
       // Direction alignment: does our signal match where BTC sits relative to PTB?
@@ -574,7 +587,7 @@ export function applyTradeFilters({
       ? TRADE_FILTERS.MAX_ENTRY_SPREAD_PCT / 100 : 0.08;
     if (spread > maxSpread) {
       reasons.push(`Wide spread: ${(spread*100).toFixed(1)}% > ${(maxSpread*100).toFixed(0)}% max`);
-    } else if (spread > 0.04 && bestEdge != null) {
+    } else if (spread > T.spreadThinEdgeAbove && bestEdge != null) {
       const spreadEdgeMin = TRADE_FILTERS.SPREAD_EDGE_MIN != null
         ? TRADE_FILTERS.SPREAD_EDGE_MIN / 100 : 0.08;
       if (bestEdge < spreadEdgeMin) {
@@ -585,8 +598,8 @@ export function applyTradeFilters({
 
   // 13. ML accuracy degradation gate
   // If ML has been wrong > 55% of last 20 predictions, stop trusting it for entry
-  if (mlAccuracy != null && mlAccuracy < 0.45) {
-    reasons.push(`ML degraded: ${(mlAccuracy*100).toFixed(0)}% acc (last 20) < 45%`);
+  if (mlAccuracy != null && mlAccuracy < T.mlAccuracyMin) {
+    reasons.push(`ML degraded: ${(mlAccuracy*100).toFixed(0)}% acc (last 20) < ${(T.mlAccuracyMin * 100).toFixed(0)}%`);
   }
 
   // 14. VPIN — Volume-synchronized Probability of Informed Trading
@@ -621,15 +634,15 @@ export function applyTradeFilters({
   }
 
   // 16. Asia session hard gate — require higher ML confidence (data: 69% WR vs 92% Europe)
-  if (TIME_GATES_ENABLED && session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < 0.75) {
-    reasons.push(`Asia session: ML ${(mlConfidence * 100).toFixed(0)}% < 75% required`);
+  if (TIME_GATES_ENABLED && session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < T.asiaHardMlMin) {
+    reasons.push(`Asia session: ML ${(mlConfidence * 100).toFixed(0)}% < ${(T.asiaHardMlMin * 100).toFixed(0)}% required`);
   }
 
   // 17. Extreme sentiment gate — block during market panic/euphoria
   const extremeSentiment = checkExtremeSentiment();
   if (extremeSentiment && extremeSentiment.block) {
     // ML ≥90% bypass: very high ML confidence can override sentiment
-    const mlSentimentBypass = mlConfidence != null && mlConfidence >= 0.90;
+    const mlSentimentBypass = mlConfidence != null && mlConfidence >= T.sentimentMlBypass;
     if (!mlSentimentBypass) {
       reasons.push(`Sentiment: ${extremeSentiment.reason}`);
     }
@@ -640,7 +653,7 @@ export function applyTradeFilters({
   // Ultra-ML (≥95%) bypass only — truly exceptional signal required to trade through the event.
   const macroEvent = checkMacroEvent();
   if (macroEvent && macroEvent.block) {
-    const mlMacroBypass = mlConfidence != null && mlConfidence >= 0.95;
+    const mlMacroBypass = mlConfidence != null && mlConfidence >= T.macroMlBypass;
     if (!mlMacroBypass) {
       reasons.push(`Macro: ${macroEvent.reason}`);
     }
@@ -652,7 +665,7 @@ export function applyTradeFilters({
   if (signalSide) {
     const llmAdvisory = checkLLMRegimeAdvisory(signalSide);
     if (llmAdvisory && llmAdvisory.block) {
-      const bypass = llmAdvisory.mlBypassAbove ?? 0.90;
+      const bypass = llmAdvisory.mlBypassAbove ?? T.llmMlBypassDefault;
       const mlLlmBypass = mlConfidence != null && mlConfidence >= bypass;
       if (!mlLlmBypass) {
         reasons.push(`LLM regime: ${llmAdvisory.reason}`);
