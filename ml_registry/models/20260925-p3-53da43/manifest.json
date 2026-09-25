@@ -1,0 +1,86 @@
+{
+  "id": "20260925-p3-53da43",
+  "registeredAt": "2026-09-25T08:50:19.331Z",
+  "source": "retrain 2026-09-25: feature pipeline v3 (training prices from per-second trade prints)",
+  "featurePipeline": 3,
+  "sourceSha256": {
+    "xgboost_model.json": "53da43457d3924084252faba41cc30ac03d40a5944558c108916b0313c352f08",
+    "lightgbm_model.json": "b41ac402cfa1fb41360161bd18d4eed0588240f324be5247dbd14632e5c20718",
+    "norm_browser.json": "d4961fecc1df20552b0f7f7e054d75dda7f9400131e5d52bc03742650c0b4889"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "31d671112fb8d10955728079b30c45d0d67ae9fe1dce6abdce09bc331069cbde",
+    "lightgbm_model.json.gz": "d90393befca40e7d12eb271d61ab2078a20a7c3f16f9684ac880c53d31d5c232",
+    "norm_browser.json.gz": "6c17144a0ea98c2415af31af521bd46e3163e20a9ecb674268e88059f9d44dc9"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7624,
+      "auc": 0.8556,
+      "f1": 0.764,
+      "logloss": 0.4675,
+      "brier": 0.156,
+      "calibration_ece": 0.0364,
+      "calibration_mce": 0.0833,
+      "high_conf_accuracy": 0.7857,
+      "high_conf_ratio": 91.3,
+      "high_conf_count": 1983,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8581,
+      "cv_acc": 0.764,
+      "cv_test_acc_gap": -0.0016,
+      "cv_test_auc_gap": -0.0025,
+      "holdout_accuracy": 0.7751,
+      "holdout_auc": 0.8645,
+      "test_holdout_acc_gap": -0.0127,
+      "test_holdout_auc_gap": -0.0089,
+      "test_samples": 2172,
+      "holdout_samples": 1534,
+      "market_brier": 0.156,
+      "brier_skill_vs_market": -0.0005,
+      "logloss_skill_vs_market": -0.0037,
+      "market_skill_samples": 2172
+    },
+    "ensemble": {
+      "accuracy": 0.762,
+      "auc": 0.8554,
+      "logloss": 0.4757,
+      "brier": 0.1584,
+      "calibration_ece": 0.0577,
+      "calibration_mce": 0.1272,
+      "weight_source": "oof_cv",
+      "test_samples": 2172,
+      "holdout_samples": 1534,
+      "strict_holdout": true,
+      "market_brier": 0.156,
+      "brier_skill_vs_market": -0.0154,
+      "logloss_skill_vs_market": -0.0213,
+      "market_skill_samples": 2172
+    },
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": true,
+    "csvSha256": "2b4fff45fe1c52ed35813f66bb74f318a327211639510bfa6eed4cec5c740bbe",
+    "csvMissingReason": null,
+    "meta": {
+      "feature_pipeline": 3,
+      "market_price_source": "trade_prints",
+      "generated_at": "2026-09-25T08:18:20.738Z",
+      "days": 182,
+      "seed": 42,
+      "rows": 14585,
+      "first_slug_ts": 1774658700,
+      "last_slug_ts": 1790193600,
+      "feature_names": "(54 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "Gate FAIL on market_skill (-1.5% vs same-instant fresh market); every other check passed"
+  ]
+}
