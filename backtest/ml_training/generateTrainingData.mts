@@ -30,11 +30,12 @@
 
 import fs from 'fs';
 import {
-  candidateIndices, buildTrainingSnapshot, buildTrainingFeatures,
+  candidateIndices, buildTrainingSnapshot, buildTrainingFeatures, printsToUpSeries, pricePointsToUpSeries,
   type HistoricalCandle, type LookupMarket,
 } from '../../src/engines/ml/trainingRow.ts';
 import { FI } from '../../src/engines/ml/featureMap.ts';
-import { FEATURE_PIPELINE_VERSION } from '../../src/engines/ml/featureInputs.ts';
+import { FEATURE_PIPELINE_VERSION, LOOKUP_PRICE_PIPELINE_VERSION } from '../../src/engines/ml/featureInputs.ts';
+import { gunzipSync } from 'zlib';
 
 type CliArgs = Record<string, string | number | boolean | undefined>;
 
@@ -46,6 +47,36 @@ const CANDLE_INTERVAL = '1m';
 const OUTPUT_FILE = typeof ARGS.output === 'string' ? ARGS.output : 'training_data.csv';
 const LIMIT_PER_REQUEST = 1000;
 const POLYMARKET_LOOKUP_PATH = typeof ARGS['polymarket-lookup'] === 'string' ? ARGS['polymarket-lookup'] : './polymarket_lookup.json';
+// --trade-history <dir>: take each market's token price from its per-second trade
+// prints (fetchTradeHistory.mts) instead of the ~1/min lookup series — feature
+// pipeline v3. Labels still come from the lookup (real resolutions). A market
+// without a complete print file is skipped, never filled in from the lookup, so
+// the dataset has a single price source.
+const TRADE_HISTORY_DIR = typeof ARGS['trade-history'] === 'string' ? ARGS['trade-history'] : null;
+const PIPELINE_VERSION = TRADE_HISTORY_DIR ? FEATURE_PIPELINE_VERSION : LOOKUP_PRICE_PIPELINE_VERSION;
+
+// Point queries (fetchPricePoints.mts) for markets without a complete history:
+// the last print at or before each training second, which is all the generator
+// reads — so the two sources give identical rows (featurePipeline.test.ts).
+const PRICE_POINTS_DIR = typeof ARGS['price-points'] === 'string' ? ARGS['price-points'] : './price_points';
+
+function printsMarket(slugTs: number, label: number): LookupMarket | null {
+  const path = `${TRADE_HISTORY_DIR}/${slugTs}.json.gz`;
+  if (fs.existsSync(path)) {
+    const hist = JSON.parse(gunzipSync(fs.readFileSync(path)).toString('utf-8'));
+    if (!hist.truncated && Array.isArray(hist.trades)) {
+      const prices = printsToUpSeries(hist.trades, slugTs);
+      if (prices.length) return { label, prices };
+    }
+  }
+  const pointsPath = `${PRICE_POINTS_DIR}/${slugTs}.json.gz`;
+  if (fs.existsSync(pointsPath)) {
+    const pts = JSON.parse(gunzipSync(fs.readFileSync(pointsPath)).toString('utf-8'));
+    const prices = Array.isArray(pts.points) ? pricePointsToUpSeries(pts.points) : [];
+    if (prices.length) return { label, prices };
+  }
+  return null;
+}
 
 // Proxy support for regions where Binance is blocked (e.g., Indonesia)
 // Usage: --proxy http://localhost:3001  (your local proxy)
@@ -232,7 +263,7 @@ const FEATURE_NAMES: string[] = Object.entries(FI)
 
 // ═══ MAIN ═══
 async function main() {
-  console.log(`\n=== Training Data Generator — feature pipeline v${FEATURE_PIPELINE_VERSION} (shared live builder) ===`);
+  console.log(`\n=== Training Data Generator — feature pipeline v${PIPELINE_VERSION} (shared live builder; prices: ${TRADE_HISTORY_DIR ? 'per-second trade prints' : '~1/min lookup'}) ===`);
   console.log(`Days: ${DAYS} | Output: ${OUTPUT_FILE} | Features: ${FEATURE_NAMES.length}`);
   if (PROXY_URL) {
     console.log(`API: ${PROXY_URL} (proxy mode)`);
@@ -270,9 +301,12 @@ async function main() {
   const rows: Array<{ features: number[]; label: number; slugTs: number }> = [];
   let badLabel = 0;
   let unbuildable = 0;
+  let noPrints = 0;
   for (const slugTs of slugs) {
-    const market = polyLookup[String(slugTs)] as LookupMarket;
-    if (!market || (market.label !== 0 && market.label !== 1)) { badLabel++; continue; }
+    const lookupMarket = polyLookup[String(slugTs)] as LookupMarket;
+    if (!lookupMarket || (lookupMarket.label !== 0 && lookupMarket.label !== 1)) { badLabel++; continue; }
+    const market = TRADE_HISTORY_DIR ? printsMarket(slugTs, lookupMarket.label) : lookupMarket;
+    if (!market) { noPrints++; continue; }
 
     const snaps = [];
     for (const idx of candidateIndices(candles1m, slugTs)) {
@@ -287,7 +321,7 @@ async function main() {
   }
 
   console.log(`\n✅ Generated ${rows.length.toLocaleString()} rows (one per market, all real Polymarket labels)`);
-  console.log(`   Skipped: ${unbuildable} markets with no honest instant (candle gap / no print yet), ${badLabel} without a resolved label`);
+  console.log(`   Skipped: ${unbuildable} markets with no honest instant (candle gap / no print yet), ${badLabel} without a resolved label${TRADE_HISTORY_DIR ? `, ${noPrints} without a complete trade-print file` : ''}`);
   if (rows.length === 0) throw new Error('No rows generated');
 
   const header = FEATURE_NAMES.join(',') + ',slug_timestamp,label';
@@ -301,7 +335,8 @@ async function main() {
   // model through the shared builder only when the model says it was built that way.
   const metaPath = OUTPUT_FILE.replace(/\.csv$/i, '') + '.meta.json';
   const meta = {
-    feature_pipeline: FEATURE_PIPELINE_VERSION,
+    feature_pipeline: PIPELINE_VERSION,
+    market_price_source: TRADE_HISTORY_DIR ? 'trade_prints' : 'lookup_1min',
     generated_at: new Date().toISOString(),
     days: DAYS,
     seed,
@@ -311,7 +346,7 @@ async function main() {
     feature_names: FEATURE_NAMES,
   };
   fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-  console.log(`💾 Saved ${metaPath} (feature_pipeline=${FEATURE_PIPELINE_VERSION})`);
+  console.log(`💾 Saved ${metaPath} (feature_pipeline=${PIPELINE_VERSION})`);
 
   // Normalization stats (kept for tooling that still reads them)
   const nf = FEATURE_NAMES.length;

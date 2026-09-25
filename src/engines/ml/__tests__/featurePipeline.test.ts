@@ -13,10 +13,10 @@
 
 import { describe, test, expect, vi, afterEach } from 'vitest';
 import {
-  buildMlFeatureInputs, marketMomentum, FEATURE_PIPELINE_VERSION, type FeatureSnapshot,
+  buildMlFeatureInputs, marketMomentum, FEATURE_PIPELINE_VERSION, LOOKUP_PRICE_PIPELINE_VERSION, type FeatureSnapshot,
 } from '../featureInputs.ts';
 import {
-  priceAtOrBefore, aggregate5m, candidateIndices, buildTrainingSnapshot, buildTrainingFeatures,
+  priceAtOrBefore, aggregate5m, candidateIndices, buildTrainingSnapshot, buildTrainingFeatures, printsToUpSeries, pricePointsToUpSeries,
   windowStartSecs, CANDLES_1M, type HistoricalCandle, type LookupMarket,
 } from '../trainingRow.ts';
 import { FI } from '../featureMap.ts';
@@ -199,8 +199,9 @@ describe('buildMlFeatureInputs — one pure builder', () => {
     expect(marketMomentum(0.6, 0.5)).toBeCloseTo(0.1, 12);
   });
 
-  test('the pipeline version is 2', () => {
-    expect(FEATURE_PIPELINE_VERSION).toBe(2);
+  test('the pipeline version is 3 (same builder as 2; training prices from per-second prints)', () => {
+    expect(FEATURE_PIPELINE_VERSION).toBe(3);
+    expect(LOOKUP_PRICE_PIPELINE_VERSION).toBe(2);
   });
 });
 
@@ -216,5 +217,60 @@ describe('a live snapshot and a training snapshot of the same instant give the s
       marketUp: snap!.marketUp, marketUpLag: snap!.marketUpLag, fundingRate: null,
     };
     expect(buildTrainingFeatures(live, 54)).toEqual(buildTrainingFeatures(snap!, 54));
+  });
+});
+
+describe('printsToUpSeries — per-second trade prints as the market price (pipeline v3)', () => {
+  const SLUG = 1_790_000_000;
+  test('UP prints stay, DOWN prints become 1 − p, time is seconds into the window, ascending', () => {
+    const trades = [
+      [SLUG + 30, 1, 0.45, 10, 0], // DOWN at 45c = UP at 55c
+      [SLUG - 5, 0, 0.51, 3, 1],
+      [SLUG + 30, 0, 0.56, 2, 0],
+    ];
+    const s = printsToUpSeries(trades, SLUG);
+    expect(s.map(([t]) => t)).toEqual([-5, 30, 30]);
+    expect(s[0][1]).toBeCloseTo(0.51, 12);
+    expect(s[1][1]).toBeCloseTo(0.55, 12);
+    expect(s[2][1]).toBeCloseTo(0.56, 12);
+  });
+
+  test('malformed prints are dropped, not guessed', () => {
+    const trades = [[SLUG, 2, 0.5, 1, 0], [SLUG, 0, 1, 1, 0], [SLUG, 0, 0, 1, 0], [NaN, 0, 0.5, 1, 0], [SLUG + 1, 0, 0.6, 1, 0]];
+    expect(printsToUpSeries(trades, SLUG)).toEqual([[1, 0.6]]);
+  });
+
+  test('a snapshot built on prints reads the print at or before the instant, and the one 60 s earlier', () => {
+    const series = printsToUpSeries([[SLUG + 100, 0, 0.52, 1, 0], [SLUG + 119, 0, 0.58, 1, 0], [SLUG + 121, 0, 0.99, 1, 0]], SLUG);
+    expect(priceAtOrBefore(series, 120)).toBeCloseTo(0.58, 12);
+    expect(priceAtOrBefore(series, 60)).toBeNull();
+  });
+});
+
+describe('pricePointsToUpSeries — last-print point queries equal the full history at every queried second', () => {
+  const SLUG = 1_790_000_000;
+  test('at each query second, the sparse series answers exactly like the full print history', () => {
+    // A synthetic busy market: prints every few seconds, both outcomes.
+    const trades: number[][] = [];
+    let price = 0.5;
+    for (let s = -40; s <= 900; s += 1 + (Math.abs(Math.sin(s)) * 7 | 0)) {
+      price = Math.min(0.98, Math.max(0.02, price + Math.sin(s * 1.7) * 0.01));
+      const down = (s & 1) === 1;
+      trades.push([SLUG + s, down ? 1 : 0, down ? 1 - price : price, 5, 0]);
+    }
+    const full = printsToUpSeries(trades, SLUG);
+    // What fetchPricePoints records: for each query second, the last print at or before it.
+    const points = Array.from({ length: 15 }, (_, i) => i * 60).map(q => {
+      const last = [...trades].reverse().find(t => t[0] - SLUG <= q);
+      return last ? [q, last[0] - SLUG, last[1], last[2]] : [q, null];
+    });
+    const sparse = pricePointsToUpSeries(points);
+    for (let q = 0; q <= 840; q += 60) {
+      expect(priceAtOrBefore(sparse, q)).toBeCloseTo(priceAtOrBefore(full, q) as number, 12);
+    }
+  });
+
+  test('empty answers and malformed points are skipped', () => {
+    expect(pricePointsToUpSeries([[0, null], [60, 58, 1, 0.4], [120, 110, 3, 0.5], [180, 170, 0, 1.2]])).toEqual([[58, 0.6]]);
   });
 });

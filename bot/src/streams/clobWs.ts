@@ -13,7 +13,7 @@
 
 import { WebSocket } from 'ws';
 import { CONFIG } from '../config.ts';
-import { toNumber } from '../../../src/utils.ts';
+import { toNumber, depthNearTop } from '../../../src/utils.ts';
 import { createLogger } from '../logger.ts';
 
 const log = createLogger('ClobWS');
@@ -115,17 +115,6 @@ function bestFromLevels(levels, side) {
   return best;
 }
 
-function summarizeLevels(levels, depth = 5) {
-  if (!Array.isArray(levels)) return 0;
-  let liq = 0;
-  const len = Math.min(levels.length, depth);
-  for (let i = 0; i < len; i++) {
-    const s = toNumber(levels[i]?.size);
-    if (s) liq += s;
-  }
-  return liq;
-}
-
 /** Is this asset one of the two we currently follow? */
 function isFollowed(assetId) {
   return assetId === tokenIds.up || assetId === tokenIds.down;
@@ -154,7 +143,8 @@ function handleBookEvent(data) {
   const bestBid = bestFromLevels(bids, 'bid');
   const bestAsk = bestFromLevels(asks, 'ask');
   const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
-  const bookData = { bestBid, bestAsk, spread, bidLiquidity: summarizeLevels(bids), askLiquidity: summarizeLevels(asks) };
+  // Best levels first: the market channel lists both sides worst-first (see depthNearTop).
+  const bookData = { bestBid, bestAsk, spread, bidLiquidity: depthNearTop(bids, 'bid'), askLiquidity: depthNearTop(asks, 'ask') };
 
   if (assetId === tokenIds.up) {
     Object.assign(_orderbook.up, bookData);

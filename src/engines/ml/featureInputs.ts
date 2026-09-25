@@ -39,9 +39,19 @@ import { getSessionName } from '../../utils.ts';
 /**
  * Bump when the meaning of any feature changes. A model records the version
  * it was trained on (norm_browser.json `feature_pipeline`) and the live bot
- * only builds features this way for a model that declares it.
+ * only builds features this way for a model that declares it (any v >= 2).
+ *
+ * v3 (2026-09-25): the same builder as v2. What changed is the training-side
+ * market price: per-second trade prints (fetchTradeHistory.mts) instead of the
+ * ~1/min lookup series, whose last print could be 60 s older than the other
+ * inputs — the reason v2's offline skill vs the market read +7% and its
+ * fresh-price backtest weight on the model only 0.21. v2 metrics carried that
+ * staleness, so the retrain gate skips the relative pair across v2 → v3.
  */
-export const FEATURE_PIPELINE_VERSION = 2;
+export const FEATURE_PIPELINE_VERSION = 3;
+
+/** Training rows built from the ~1/min lookup series (generator without --trade-history). */
+export const LOOKUP_PRICE_PIPELINE_VERSION = 2;
 
 /** Lookback for market_price_momentum, the same on both sides. */
 export const MARKET_MOMENTUM_WINDOW_MS = 60_000;

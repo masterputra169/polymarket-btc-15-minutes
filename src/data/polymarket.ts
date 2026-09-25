@@ -1,5 +1,5 @@
 import { CONFIG } from '../config.ts';
-import { toNumber } from '../utils.ts';
+import { toNumber, depthNearTop } from '../utils.ts';
 
 export interface GammaEvent {
   markets?: unknown;
@@ -150,8 +150,9 @@ export function summarizeOrderBook(book: any, depthLevels = 5): OrderBookSummary
     : null;
 
   const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
-  const bidLiquidity = bids.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
-  const askLiquidity = asks.slice(0, depthLevels).reduce((acc, x) => acc + (toNumber(x.size) ?? 0), 0);
+  // Best levels first: the CLOB lists both sides worst-first (see depthNearTop).
+  const bidLiquidity = depthNearTop(bids, 'bid', depthLevels);
+  const askLiquidity = depthNearTop(asks, 'ask', depthLevels);
 
   return { bestBid, bestAsk, spread, bidLiquidity, askLiquidity, error: false };
 }

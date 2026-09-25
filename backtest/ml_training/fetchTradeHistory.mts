@@ -19,14 +19,23 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { gzipSync } from 'zlib';
+import { gzipSync, gunzipSync } from 'zlib';
 import { fetchJsonWithPolymarketDoh } from '../../bot/src/services/polymarketHttp.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = resolve(HERE, 'trade_history');
-const PAGE = 500;
-/** The data API answers HTTP 400 past offset 10,000; newest trades come first, so a market busier than that loses its opening minutes (marked truncated). */
-const MAX_OFFSET = 10_000;
+/**
+ * The data API returns newest first, up to 10,000 per page, rejects offsets past
+ * 10,000, and filters by `start`/`end` (unix seconds). So each market is read
+ * as one time window — an hour before it opens (the last print before any
+ * instant) to its close — and paged BACKWARDS by moving `end` to the oldest
+ * trade seen, deduplicating on the transaction. A busy market needs 2-3 pages
+ * instead of being cut at an offset.
+ */
+const PAGE = 10_000;
+const PRE_WINDOW_SECS = 3_600;
+const WINDOW_SECS = 900;
+const MAX_PAGES = 12;
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -62,7 +71,10 @@ async function withRetry<T>(fn: () => Promise<T>, what: string): Promise<T> {
   }
 }
 
-interface RawTrade { timestamp: number | string; outcome?: string; outcomeIndex?: number; price: number | string; size: number | string; side?: string }
+interface RawTrade {
+  timestamp: number | string; outcome?: string; outcomeIndex?: number; price: number | string; size: number | string;
+  side?: string; transactionHash?: string; asset?: string; proxyWallet?: string;
+}
 
 async function fetchMarket(slugTs: number): Promise<{ trades: number; truncated: boolean }> {
   const slug = `btc-updown-15m-${slugTs}`;
@@ -73,20 +85,29 @@ async function fetchMarket(slugTs: number): Promise<{ trades: number; truncated:
   const conditionId = market?.conditionId;
   if (!conditionId || !/^0x[0-9a-fA-F]{64}$/.test(conditionId)) throw new Error(`${slug}: no conditionId`);
 
-  const raw: RawTrade[] = [];
-  let truncated = false;
-  for (let offset = 0; ; offset += PAGE) {
-    if (offset > MAX_OFFSET) { truncated = true; break; }
+  const start = slugTs - PRE_WINDOW_SECS;
+  const byKey = new Map<string, RawTrade>();
+  let truncated = true;
+  let end = slugTs + WINDOW_SECS;
+  for (let pageNo = 0; pageNo < MAX_PAGES; pageNo++) {
     const page = await withRetry(
       () => fetchJsonWithPolymarketDoh<RawTrade[]>(
-        `https://data-api.polymarket.com/trades?market=${conditionId}&limit=${PAGE}&offset=${offset}&takerOnly=false`,
+        `https://data-api.polymarket.com/trades?market=${conditionId}&limit=${PAGE}&offset=0&takerOnly=false&start=${start}&end=${end}`,
       ),
-      `trades ${slug} @${offset}`,
+      `trades ${slug} end=${end}`,
     );
     if (!Array.isArray(page)) throw new Error(`${slug}: trades page is not an array`);
-    raw.push(...page);
-    if (page.length < PAGE) break;
+    for (const t of page) {
+      byKey.set(`${t.transactionHash}|${t.asset}|${t.proxyWallet}|${t.side}|${t.price}|${t.size}|${t.timestamp}`, t);
+    }
+    if (page.length < PAGE) { truncated = false; break; }
+    const oldest = Math.min(...page.map(t => Number(t.timestamp)).filter(Number.isFinite));
+    // +1: covers an inclusive or exclusive `end` alike; the overlap is deduplicated.
+    const nextEnd = oldest + 1;
+    if (!Number.isFinite(oldest) || oldest <= start || nextEnd >= end) { truncated = false; break; }
+    end = nextEnd;
   }
+  const raw = [...byKey.values()];
 
   const trades = raw
     .map(t => {
@@ -105,7 +126,12 @@ async function fetchMarket(slugTs: number): Promise<{ trades: number; truncated:
 async function main(): Promise<void> {
   mkdirSync(OUT, { recursive: true });
   const all = slugsFromCsv();
-  const todo = all.filter(ts => !existsSync(resolve(OUT, `${ts}.json.gz`)));
+  // Missing markets, and ones an earlier (offset-paged) run marked truncated.
+  const todo = all.filter(ts => {
+    const path = resolve(OUT, `${ts}.json.gz`);
+    if (!existsSync(path)) return true;
+    try { return JSON.parse(gunzipSync(readFileSync(path)).toString('utf-8')).truncated === true; } catch { return true; }
+  });
   console.log(`${all.length} markets in range, ${all.length - todo.length} already on disk, ${todo.length} to fetch (concurrency ${concurrency})`);
 
   let done = 0, failed = 0, truncated = 0, trades = 0;

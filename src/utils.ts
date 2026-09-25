@@ -185,7 +185,31 @@ function toNumber(x: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export { toNumber };
+/**
+ * Shares resting on the best `depth` levels of one side of a CLOB book.
+ *
+ * Polymarket sends both sides worst-first (bids ascending, asks descending),
+ * so the first `depth` entries are the 1-5c bids and 95-99c asks. Summing them
+ * as-is — what this replaced (found 2026-09-24 from raw frames) — reported deep
+ * liquidity far from the market, and the dry-run FOK check almost never
+ * rejected. Levels are ordered best-first here, whatever order they arrive in.
+ */
+function depthNearTop(levels: unknown, side: 'bid' | 'ask', depth = 5): number {
+  if (!Array.isArray(levels) || depth <= 0) return 0;
+  const parsed: Array<[number, number]> = [];
+  for (const lvl of levels as Array<{ price?: unknown; size?: unknown }>) {
+    const p = toNumber(lvl?.price);
+    const s = toNumber(lvl?.size);
+    if (p === null || s === null || s <= 0) continue;
+    parsed.push([p, s]);
+  }
+  parsed.sort((a, b) => (side === 'bid' ? b[0] - a[0] : a[0] - b[0]));
+  let liq = 0;
+  for (let i = 0; i < Math.min(depth, parsed.length); i++) liq += parsed[i][1];
+  return liq;
+}
+
+export { toNumber, depthNearTop };
 
 /**
  * ═══ Parse "Price to Beat" from Polymarket market data ═══

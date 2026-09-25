@@ -24,7 +24,7 @@ import { loadMLModelFromDisk, getFeaturePipeline } from '../../bot/src/adapters/
 import { predictML } from '../../src/engines/Mlpredictor.ts';
 import { featureBuf, extractLiveFeaturesInPlace } from '../../src/engines/ml/featureExtract.ts';
 import { buildMlFeatureInputs } from '../../src/engines/ml/featureInputs.ts';
-import { buildTrainingSnapshot, CANDLES_1M } from '../../src/engines/ml/trainingRow.ts';
+import { buildTrainingSnapshot, printsToUpSeries, CANDLES_1M } from '../../src/engines/ml/trainingRow.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MIN = 60_000;
@@ -65,11 +65,6 @@ async function klines(startMs: number, endMs: number): Promise<Candle[]> {
   return out;
 }
 
-/** UP-price series from trade prints: [secsInto, price], time-ordered. */
-function upSeries(trades: number[][], slugTs: number): Array<[number, number]> {
-  return trades.map(([ts, outcome, price]) => [ts - slugTs, outcome === 0 ? price : 1 - price] as [number, number]);
-}
-
 function lastAtOrBefore(series: Array<[number, number]>, secs: number): { price: number; age: number } | null {
   let lo = 0, hi = series.length - 1, found = -1;
   while (lo <= hi) {
@@ -95,7 +90,7 @@ async function main(): Promise<void> {
     const label = lookup[String(slugTs)]?.label;
     if (label !== 0 && label !== 1) { noLabel++; continue; }
     const hist = JSON.parse(gunzipSync(readFileSync(resolve(HERE, 'trade_history', `${slugTs}.json.gz`))).toString('utf-8'));
-    const series = upSeries(hist.trades, slugTs);
+    const series = printsToUpSeries(hist.trades, slugTs);
     const market = { label, prices: series };
     for (let minute = 1; minute <= 14; minute++) {
       const secsInto = minute * 60;

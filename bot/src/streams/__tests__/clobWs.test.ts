@@ -455,3 +455,31 @@ describe('setTokenIds — make-before-break', () => {
     );
   });
 });
+
+describe('orderbook liquidity', () => {
+  test('bid/ask liquidity is the depth at the best five levels, though the CLOB sends them worst-first', () => {
+    const sock = bringUp();
+    sock.deliver({
+      event_type: 'book',
+      asset_id: UP,
+      // Worst-first on both sides, as the market channel sends them.
+      bids: [
+        { price: '0.01', size: '5000' }, { price: '0.02', size: '4000' }, { price: '0.03', size: '3000' },
+        { price: '0.04', size: '2000' }, { price: '0.05', size: '1000' },
+        { price: '0.53', size: '5' }, { price: '0.54', size: '4' }, { price: '0.55', size: '3' },
+        { price: '0.56', size: '2' }, { price: '0.57', size: '1' },
+      ],
+      asks: [
+        { price: '0.99', size: '5000' }, { price: '0.98', size: '4000' }, { price: '0.97', size: '3000' },
+        { price: '0.96', size: '2000' }, { price: '0.95', size: '1000' },
+        { price: '0.62', size: '50' }, { price: '0.61', size: '40' }, { price: '0.60', size: '30' },
+        { price: '0.59', size: '20' }, { price: '0.58', size: '10' },
+      ],
+    });
+    const ob = clob.getOrderbook().up;
+    expect(ob.bestBid).toBe(0.57);
+    expect(ob.bestAsk).toBe(0.58);
+    expect(ob.bidLiquidity).toBe(15);  // 5+4+3+2+1, not 15,000 at 1-5c
+    expect(ob.askLiquidity).toBe(150); // 50+40+30+20+10, not 15,000 at 95-99c
+  });
+});

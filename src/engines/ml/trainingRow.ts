@@ -33,6 +33,41 @@ export interface LookupMarket {
   spread?: number;
 }
 
+/**
+ * UP-price series from per-second trade prints (fetchTradeHistory.mts rows:
+ * [unixSec, outcome 0 Up | 1 Down, price, size, side]) as the `prices` of a
+ * LookupMarket: [secondsIntoWindow, upPrice], ascending. A DOWN print at p is an
+ * UP price of 1 − p. Malformed prints are dropped, not guessed.
+ */
+export function printsToUpSeries(trades: ReadonlyArray<ReadonlyArray<number>>, slugTs: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const t of trades) {
+    const [ts, outcome, price] = t;
+    if (!Number.isFinite(ts) || !Number.isFinite(price) || price <= 0 || price >= 1) continue;
+    if (outcome !== 0 && outcome !== 1) continue;
+    out.push([ts - slugTs, outcome === 0 ? price : 1 - price]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * UP-price series from point queries (fetchPricePoints.mts rows:
+ * [querySecs, printSecs, outcome 0 Up | 1 Down, price], or [querySecs, null]
+ * when nothing had printed yet). Each answer is the last print at or before its
+ * query second, so the union is a sparse series on which priceAtOrBefore gives
+ * the same answer as the full history at every queried second.
+ */
+export function pricePointsToUpSeries(points: ReadonlyArray<ReadonlyArray<number | null>>): Array<[number, number]> {
+  const bySecond = new Map<number, number>();
+  for (const p of points) {
+    const [, printSecs, outcome, price] = p;
+    if (printSecs == null || !Number.isFinite(printSecs) || price == null || !(price > 0 && price < 1)) continue;
+    if (outcome !== 0 && outcome !== 1) continue;
+    bySecond.set(printSecs, outcome === 0 ? price : 1 - price);
+  }
+  return [...bySecond.entries()].sort((a, b) => a[0] - b[0]);
+}
+
 const MINUTE_MS = 60_000;
 const FIVE_MIN_MS = 5 * MINUTE_MS;
 const WINDOW_SECS = WINDOW_MINUTES * 60;
