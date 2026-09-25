@@ -2,6 +2,7 @@
  * Fetch the full trade history (second-resolution prints) of past BTC 15m markets.
  *
  *   node fetchTradeHistory.mts --since 1785528900 [--until <unixSec>] [--concurrency 8]
+ *   node fetchTradeHistory.mts --since <unixSec> --until <unixSec> --all-windows   # every 15m window in range, not just training_data.csv's
  *
  * Why: training_data.csv's market price is the last print of a ~1/min series,
  * up to 60 s older than the model's inputs, so every offline "edge vs market"
@@ -45,6 +46,13 @@ function arg(name: string, fallback?: string): string | undefined {
 const since = Number(arg('since', '0'));
 const until = Number(arg('until', String(Number.MAX_SAFE_INTEGER)));
 const concurrency = Math.max(1, Math.min(16, Number(arg('concurrency', '8'))));
+
+/** Every 15-minute window start in [since, until] — markets newer than the training CSV. */
+function allWindowsInRange(): number[] {
+  const out: number[] = [];
+  for (let ts = Math.ceil(since / 900) * 900; ts <= until; ts += 900) out.push(ts);
+  return out;
+}
 
 function slugsFromCsv(): number[] {
   const lines = readFileSync(resolve(HERE, 'training_data.csv'), 'utf-8').trim().split(/\r?\n/);
@@ -125,7 +133,7 @@ async function fetchMarket(slugTs: number): Promise<{ trades: number; truncated:
 
 async function main(): Promise<void> {
   mkdirSync(OUT, { recursive: true });
-  const all = slugsFromCsv();
+  const all = process.argv.includes('--all-windows') ? allWindowsInRange() : slugsFromCsv();
   // Missing markets, and ones an earlier (offset-paged) run marked truncated.
   const todo = all.filter(ts => {
     const path = resolve(OUT, `${ts}.json.gz`);
