@@ -30,6 +30,11 @@ npm run test:ml:cov   # same, with coverage (mltrain must stay >=90% — CI fail
 pip install -r backtest/ml_training/requirements-dev.txt   # pytest + pytest-cov
 npm run ml:retrain:dry                # retrain without deploying; ml:retrain deploys if all gates pass
 npm run tape:pull                     # download the market tape from the bucket + per-day coverage (--stats-only, --since)
+
+# Fresh-price historical backtest (backtest/ml_training/, 2026-09-25)
+node fetchTradeHistory.mts --since <unixSec>        # per-second trade prints per market (data API, via DoH; resumable; offset cap 10k → busiest markets truncated)
+node predictFreshPrices.mts --model <dir> --since <unixSec>   # re-predict every minute with FRESH token prices through the live feature path
+python freshBacktest.py                            # event-driven entry-rule backtest (SELECT/VALIDATE) + day-block Monte Carlo of bankroll risk
 ```
 
 TypeScript-first codebase. Source files use `.ts`, `.tsx`, `.mts`, and `.cts`; run `npm run typecheck` before shipping.
