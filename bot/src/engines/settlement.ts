@@ -19,6 +19,12 @@ const log = createLogger('Settlement');
 
 type SettlementOpts = {
   signal?: AbortSignal;
+  /**
+   * The window's settlement price: Chainlink's 60 s TWAP stamped at its end, which is
+   * what the market resolves on (since 2026-08-07). When it is there, the price
+   * fallback compares IT with the price to beat instead of the spot price at expiry.
+   */
+  getCloseTwap?: () => Promise<number | null>;
 };
 
 type OracleMarketResponse = {
@@ -123,10 +129,20 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
     } // end !aborted
   }
 
-  // 3. Fallback: BTC price comparison (legacy behavior)
-  if (fallbackBtcPrice != null && ptbValue != null) {
-    const outcome = fallbackBtcPrice >= ptbValue ? 'UP' : 'DOWN';
-    return { won: pos.side === outcome, outcome, source: 'price_fallback' };
+  // 3. Fallback: the settlement TWAP against the price to beat (spot only without it).
+  // Still labelled price_fallback: provisional until fallbackVerifier confirms it.
+  // Waited for (≤3 s) even after an abort: the closing tick IS the next market's price
+  // to beat, and entries on the next market wait for that same tick anyway, so this
+  // holds settlementPending no longer than trading is already held.
+  let closeTwap: number | null = null;
+  try { closeTwap = opts.getCloseTwap ? await opts.getCloseTwap() : null; } catch { closeTwap = null; }
+  const closePrice = closeTwap ?? fallbackBtcPrice;
+  if (closePrice != null && ptbValue != null) {
+    const outcome = closePrice >= ptbValue ? 'UP' : 'DOWN';
+    return {
+      won: pos.side === outcome, outcome, source: 'price_fallback',
+      closePrice, closePriceSource: closeTwap != null ? 'twap_close' : 'spot',
+    };
   }
 
   // 4. Last resort: unknown — settle as loss
@@ -147,7 +163,12 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
  * @returns {Promise<{ won: boolean, pnl: number, outcome: string|null, source: string }>}
  */
 async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, priceSource, context, actions, opts = {}) {
-  const { won, outcome, source } = await settleViaOracle(pos, conditionId, btcPrice, ptbValue, opts);
+  const settled: any = await settleViaOracle(pos, conditionId, btcPrice, ptbValue, opts);
+  const { won, outcome, source } = settled;
+  if (settled.closePrice != null) {
+    btcPrice = settled.closePrice;
+    priceSource = settled.closePriceSource;
+  }
 
   if (source === 'price_fallback' && ptbValue != null && btcPrice != null) {
     const pctFromPtb = Math.abs(btcPrice - ptbValue) / ptbValue;

@@ -125,6 +125,9 @@ export function computeSignals({
   feedbackStats, timeLeftMin, candleWindowMinutes,
   getMLPrediction, fundingRate, smartFlowSignal, oraclePrice,
   featurePipeline = 1,
+  // Chainlink-based estimate of the price the window settles on (engines/settlePrice.ts);
+  // used wherever BTC is compared with the price to beat. Falls back to lastPrice.
+  settlePrice = null,
 }: any) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
@@ -139,8 +142,8 @@ export function computeSignals({
   } = ind;
 
   // ── Price to beat ──
-  // Priority: polymarket_page (exact) > scheduled_ws > chainlink_round > oracle (WS live)
-  // All high-priority sources are set async by loop.js — signalComputation only sets oracle/pending as interim
+  // Ranking lives in engines/ptbSources.ts; loop.ts sets every real source
+  // (the 60 s TWAP tick first). Here only a placeholder for a brand-new market.
   let updatedPriceToBeat = priceToBeat;
 
   if (marketSlug && priceToBeat.slug !== marketSlug) {
@@ -219,6 +222,7 @@ export function computeSignals({
 
   const scored = scoreDirection({
     price: lastPrice, priceToBeat: updatedPriceToBeat.value,
+    ptbComparePrice: settlePrice ?? lastPrice,
     vwap: vwapNow, vwapSlope, rsi: rsiNow, rsiSlope,
     macd, heikenColor: consec.color, heikenCount: consec.count,
     failedVwapReclaim, delta1m, delta3m, regime: regimeInfo,
@@ -313,7 +317,7 @@ export function computeSignals({
 
   // ── Monte Carlo simulation (independent probability from GBM price paths) ──
   const mcResult = simulateBTCPaths({
-    currentBTC: lastPrice,
+    currentBTC: settlePrice ?? lastPrice,
     targetPrice: updatedPriceToBeat.value,
     timeLeftSec: (timeLeftMin ?? 0) * 60,
     atrPct: atr?.atrPct ?? null,

@@ -34,6 +34,11 @@
 export function scoreDirection({
   price,
   priceToBeat = null,
+  // The price the PTB distance is measured from. The price to beat is Chainlink's
+  // 60 s TWAP; `price` (Binance, which the VWAP/indicator terms need) ran ~$24
+  // above Chainlink on the 2026-09 tape, so the bot passes a Chainlink-based
+  // settlement estimate here. Defaults to `price` (the dashboard's call).
+  ptbComparePrice = null,
   vwap = null,
   vwapSlope = null,
   rsi = null,
@@ -71,8 +76,9 @@ export function scoreDirection({
   // Both were scaling PTB by time remaining — net effect was double-decay near expiry.
   // Now PTB uses constant base weights; applyTimeAwareness() handles global time decay.
 
-  if (priceToBeat !== null && price !== null && priceToBeat > 0) {
-    const distance = price - priceToBeat;
+  const ptbPrice = ptbComparePrice ?? price;
+  if (priceToBeat !== null && ptbPrice !== null && priceToBeat > 0) {
+    const distance = ptbPrice - priceToBeat;
     const distPct = distance / priceToBeat;
 
     // M9: Use session-adaptive thresholds if available, else defaults.

@@ -181,11 +181,14 @@ export default function App() {
     binanceConnected: data?.binanceConnected ?? false,
     timeLeftMin: smoothTimeLeft ?? data?.timeLeftMin,
     priceToBeat: data?.priceToBeat,
+    ptbExact: data?.ptbExact ?? null,
+    ptbSource: data?.ptbSource ?? null,
   }), [
     chainlinkResolved.price, chainlinkResolved.prevPrice,
     chainlinkConnected, chainlinkResolved.source,
     binancePrice, binancePrevPrice, data?.binanceConnected,
     data?.lastPrice, smoothTimeLeft, data?.timeLeftMin, data?.priceToBeat,
+    data?.ptbExact, data?.ptbSource,
   ]);
 
   // PredictPanel: probability, recommendation, score

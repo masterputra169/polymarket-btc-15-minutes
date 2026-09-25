@@ -7,6 +7,7 @@
 import { WebSocket } from 'ws';
 import { CONFIG, WS_POLYMARKET_LIVE, WS_DEFAULTS } from '../config.ts';
 import { createLogger } from '../logger.ts';
+import { TickStore, type Tick } from './tickStore.ts';
 
 const log = createLogger('PolyLiveWS');
 
@@ -35,6 +36,13 @@ export function getPrice() { return _price; }
 export function getPrevPrice() { return _prevPrice; }
 export function isConnected() { return _connected; }
 export function getLastUpdate() { return _lastUpdate; }
+
+// Spot ticks by the timestamp Chainlink put on them — the final-minute settlement
+// estimate (engines/settlePrice.ts) averages these, and "latest received" is
+// about a second behind them.
+const _ticks = new TickStore(5 * 60_000);
+export function getSpotTicksBetween(from: number, to: number): Tick[] { return _ticks.between(from, to); }
+export function getSpotAt(ts: number): number | null { return _ticks.at(ts); }
 
 function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
 function stopHb() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
@@ -115,6 +123,8 @@ export function connect() {
         _prevPrice = _price;
         _price = p;
         _lastUpdate = Date.now();
+        const ts = Number(payload.timestamp);
+        if (Number.isFinite(ts) && ts > 0) _ticks.add(ts, p);
       } catch (err) {
         _parseErrors++;
         if (_parseErrors === 1 || _parseErrors % 500 === 0) log.debug(`WS parse error #${_parseErrors}: ${err.message}`);

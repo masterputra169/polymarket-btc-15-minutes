@@ -50,6 +50,7 @@ import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from '.
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.ts';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs, getPrice as getPolyLiveWsPrice } from './src/streams/polymarketLiveWs.ts';
+import { startTwapFeed, stopTwapFeed, getLatestTwap } from './src/streams/chainlinkTwap.ts';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss, getPrice as getChainlinkWssPrice } from './src/streams/chainlinkWss.ts';
 import { startMarketTape, stopMarketTape } from './src/tape/marketTape.ts';
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime, getPriceToBeatForTape } from './src/loop.ts';
@@ -258,6 +259,8 @@ async function main() {
   connectBinanceWs();
   connectClobWs();
   connectPolyLiveWs();
+  // Chainlink 60 s TWAP — what the markets settle on; source of the exact price to beat.
+  startTwapFeed();
   connectChainlinkWss();
 
   // 5b. Position manager + trader discovery (load BEFORE server starts)
@@ -298,6 +301,8 @@ async function main() {
         polyLive: getPolyLiveWsPrice(),
         ptb: ptb.value,
         ptbSource: ptb.source,
+        twap: getLatestTwap()?.value ?? null,
+        twapTs: getLatestTwap()?.ts ?? null,
       };
     },
   });
@@ -353,6 +358,7 @@ async function main() {
     disconnectBinanceWs();
     disconnectClobWs();
     disconnectPolyLiveWs();
+    stopTwapFeed();
     disconnectChainlinkWss();
     stopMarketTape();
 

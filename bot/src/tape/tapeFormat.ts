@@ -35,6 +35,9 @@ export interface SnapshotLine {
   /** The bot's price-to-beat and its source, as the bot held it at `t`. */
   ptb?: number | null;
   ps?: string | null;
+  /** Chainlink 60 s TWAP (the settlement series) and the timestamp Chainlink put on it; since 2026-09-25. */
+  tw?: number | null;
+  twt?: number | null;
 }
 
 /** Written when the recorder moves to a new market. */

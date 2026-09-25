@@ -118,15 +118,21 @@ async function runScenario(env: Record<string, string | undefined>, startMs: num
 const WEDNESDAY = Date.UTC(2026, 8, 23, 14, 0, 0);
 const SATURDAY = Date.UTC(2026, 8, 26, 14, 0, 0);
 
-// Recorded from the pre-refactor module (see header).
+// Recorded from the pre-refactor module (see header), then re-recorded on
+// 2026-09-25 for one intended change: the PTB-source gate now trusts only the
+// 60 s TWAP sources (scheduled_ws and data_streams became non-exact, the gate's
+// reason text changed, data_streams left the sniper/edge-ceiling lists). Before
+// re-recording, all 20k outputs of both scenarios were compared with the
+// previous module fed the same inputs (scheduled_ws/data_streams mapped to a
+// non-exact source, the PTB reason normalised): identical, 20,000 of 20,000.
 const EXPECTED = {
   timeGatesOff_noCap_weekday: [
-    'da1544e64e509d98', '2f7ca6692e56e542', '8feb28f0db7eefa6', 'd1f5673ddf043d5b', '6186a8458b759199',
-    '679883d2a98b0276', '53d2ef0861d98fe1', '99d0832295321e45', '7c59bc8854e6dfb2', 'e562d90a640b4c34',
+    '20948600c8c17976', '9d8e9b4dcbfd4ce1', '526ff7dde04fcb54', 'dac5d609b19b5b05', 'ad117ac2e1fb0572',
+    'd541a7bd557f2a05', 'a0a57c8da0e69338', '513e197d7736a43b', '26b71b32e232d3f3', 'f6ce9b87fce7894c',
   ],
   timeGatesOn_dryCap75_weekend: [
-    'e54e18f279111fe7', 'b9e0b995b2da84c6', '29207ee0f61285c0', '54ab2c18e055ee59', 'ee4cc77667363d1c',
-    '28410cf2df4330a3', 'f0c4c420b0f25b0f', '544934dc81805606', 'cb6675351c713b9a', 'a151553871b24a03',
+    '7ac3fb1401dbbf92', '544a31dfbf7f10a2', 'daf631ccf2946375', '325ed9409d038d44', '044b61f5508643b3',
+    'b502e6d59d3149ca', '8ac1b51c533f2bfe', 'aaa18f33989dd024', '91d508e476ea2a1f', '196712e9d2941ec4',
   ],
 };
 

@@ -28,6 +28,7 @@
 import { TRADE_FILTERS } from '../../../src/config.ts';
 import { BOT_CONFIG } from '../config.ts';
 import { recordPtbSource } from '../monitoring/ptbHealth.ts';
+import { isExactPtbSource } from '../engines/ptbSources.ts';
 import { createLogger } from '../logger.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
@@ -290,7 +291,8 @@ export function applyTradeFilters({
   // leading CLOB repricing by ~55s. Relax ML threshold (75% vs default 80%) — the price feed
   // IS the signal. Gated by env LATE_SNIPER_ENABLED so user can A/B-test impact.
   const lateSniperEnabled = process.env.LATE_SNIPER_ENABLED === 'true';
-  const isExactPtbForSniper = ['data_streams', 'polymarket_gamma'].includes(ptbSource);
+  // 2026-09-25: data_streams dropped (the adapter's default is the spot stream).
+  const isExactPtbForSniper = ['polymarket_gamma'].includes(ptbSource);
   const oracleLagBypass = lateSniperEnabled
     && isExactPtbForSniper
     && timeLeftMin != null && timeLeftMin >= T.oracleLagMinTimeLeft
@@ -354,13 +356,17 @@ export function applyTradeFilters({
   // source. No ML/edge override (any override is how money leaked before).
   // Re-widening this list is a money-losing regression — see
   // tradeFilters.ptbSource.test.js.
-  const EXACT_PTB_TRUST = ['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'];
+  //
+  // 2026-09-25: the list lives in engines/ptbSources.ts. Since 2026-08-07 the
+  // markets settle on Chainlink's 60 s TWAP, so only TWAP-derived sources are
+  // exact; the scheduled SPOT capture that used to be trusted here matched
+  // Polymarket's price to beat in 0 of 130 markets.
   // Durable health record. This gate has no override, so a degrading PTB source
   // silently produces zero entries — see bot/src/monitoring/ptbHealth.ts.
   recordPtbSource(ptbSource);
-  if (!EXACT_PTB_TRUST.includes(ptbSource)) {
+  if (!isExactPtbSource(ptbSource)) {
     const label = ptbSource ? `'${ptbSource}' not exact` : 'unknown/missing';
-    reasons.push(`PTB source ${label} — entry BLOCKED (Lapis0 safety: Polymarket gamma removed 2026-05-16; need exact scheduled_ws/data_streams PTB)`);
+    reasons.push(`PTB source ${label} — entry BLOCKED (need the 60s-TWAP price to beat: chainlink_twap / polymarket_twap_api)`);
   }
 
   // 2. Market near 50/50 (random walk — no edge)
@@ -500,14 +506,17 @@ export function applyTradeFilters({
   // Quant analysis (94 trades): edge 10-15% is sweet spot, edge 15-20% has poor WR.
   // CAVEAT: that journal data was collected when PTB was approximate (chainlink_round /
   // polymarket_page) — high edge then often = measurement error, not real divergence.
-  // With EXACT PTB sources (data_streams / polymarket_gamma) high edge = real model
+  // With EXACT PTB sources (polymarket_gamma) high edge = real model
   // divergence = legitimate sniper signal (per oracle-lag-sniper 60.7% OOS WR research).
   // ML ≥85% raises ceiling to 35% — v16 model trusted at high confidence.
   // NOTE: this list is INTENTIONALLY NARROWER than filter 1c's EXACT_PTB_TRUST.
   // 1c gates whether to trade AT ALL (any exact source is safe). This gates only
   // the edge-ceiling relaxation, which is research-backed (oracle-lag-sniper)
   // ONLY for data_streams/polymarket_gamma. Do NOT sync the two lists.
-  const EXACT_PTB_SOURCES = ['data_streams', 'polymarket_gamma'];
+  // 2026-09-25: data_streams removed — the adapter's default feed is the SPOT
+  // stream, which is not what settles. The TWAP sources are not added: this
+  // relaxation was researched on a different PTB and stays off until re-studied.
+  const EXACT_PTB_SOURCES = ['polymarket_gamma'];
   const isExactPtb = EXACT_PTB_SOURCES.includes(ptbSource);
   const baseMaxEdge = T.edgeCeiling;
   let maxEdge;

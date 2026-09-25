@@ -245,6 +245,9 @@ export async function executeDirectionalTrade({
   ensembleUp, timeAware, mlResult, mlAgreesWithRules,
   regimeInfo, poly, marketSlug, currentConditionId, priceToBeat,
   lastPrice, timeLeftMin, dryRun,
+  // Chainlink-based settlement estimate (engines/settlePrice.ts): what BTC is
+  // compared with the price to beat by. Binance (lastPrice) sits ~$24 above it.
+  settlePrice = null,
   // Signal stability
   signalConfirmCount, recentFlipCount,
   // Tilt
@@ -302,7 +305,7 @@ export async function executeDirectionalTrade({
     marketSlug,
     consecutiveLosses: deps.getConsecutiveLosses(),
     session: getSessionName(),
-    btcPrice: lastPrice,
+    btcPrice: settlePrice ?? lastPrice,
     priceToBeat: priceToBeat.value,
     tiltMlConfMin: tiltMarketsLeft > 0 ? tiltMlConfMin : null,
     bestEdge: edge.bestEdge,
@@ -521,6 +524,7 @@ export async function executeDirectionalTrade({
   const entryData: Record<string, any> = {
     side: betSide, tokenPrice: betMarketPrice, btcPrice: lastPrice,
     priceToBeat: priceToBeat.value, marketSlug, cost: orderCost, size: shares,
+    ptbSource: priceToBeat.source ?? null, settlePrice,
     conditionId: currentConditionId, // lets the fallback verifier ask the CLOB oracle later
     confidence: rec.confidence, phase: rec.phase, reason: rec.reason,
     edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,

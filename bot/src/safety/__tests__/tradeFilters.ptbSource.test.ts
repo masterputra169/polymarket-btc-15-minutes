@@ -11,19 +11,23 @@
  * source is in the exact-trust set. Every non-exact source — and an
  * unknown/missing source — MUST be blocked, regardless of how strong ML or
  * edge is. No emergency override (user decision: "blokir total").
+ *
+ * 2026-09-25: the markets settle on Chainlink's 60 s TWAP (since 2026-08-07).
+ * scheduled_ws (a spot capture) and data_streams (the spot stream) left the
+ * exact set; the TWAP tick and Polymarket's TWAP openPrice joined it.
  */
 
 import { describe, test, expect } from 'vitest';
 import { applyTradeFilters } from '../tradeFilters.ts';
 
 const EXACT_SOURCES = [
-  'data_streams',
+  'chainlink_twap',
+  'polymarket_twap_api',
   'polymarket_gamma',
   'polymarket_page',
   'polymarket_page_prev',
-  'scheduled_ws',
 ];
-const NON_EXACT_SOURCES = ['chainlink_round', 'polymarket_page_approx', 'pending', 'oracle'];
+const NON_EXACT_SOURCES = ['scheduled_ws', 'data_streams', 'chainlink_round', 'polymarket_page_approx', 'pending', 'oracle'];
 
 // Baseline input: strong ML + high edge so that, if the gate had any
 // ML/edge-based override, a non-exact source would slip through. The fix must

@@ -48,7 +48,14 @@ import {
   getPrice as getPolyLivePrice,
   isConnected as isPolyLiveConnected,
   getLastUpdate as getPolyLiveLastUpdate,
+  getSpotTicksBetween,
 } from './streams/polymarketLiveWs.ts';
+import { getTwapAt, getLatestTwap, requestTwapReplay, getTwapFeedHealth } from './streams/chainlinkTwap.ts';
+import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
+import { resolveExactPtb } from './engines/ptbResolver.ts';
+import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
+import { estimateSettlePrice, BasisTracker } from './engines/settlePrice.ts';
+import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
 import {
   getPrice as getChainlinkWssPrice,
   isConnected as isChainlinkWssConnected,
@@ -311,6 +318,77 @@ let currentConditionId: string | null = null;
 let priceToBeat: PriceToBeat = { slug: null, value: null, source: null, updatedAt: 0 };
 let startupPtbFetched = false;  // Guards the one-shot startup PTB resolution on restart
 
+/**
+ * Offer a price-to-beat value for `slug`. It is kept only if it outranks what
+ * the bot already holds for that market (engines/ptbSources.ts: the 60 s TWAP
+ * sources are exact, everything read from spot is an approximation). The one
+ * place that writes priceToBeat from a source.
+ */
+// The market PTB offers are accepted for. Set when a market is entered (switch or
+// startup); a late answer for a market the bot has left is dropped, so it cannot
+// replace the current market's value and make signalComputation rebuild a placeholder.
+let ptbMarketSlug: string | null = null;
+
+function offerPtb(slug: string, value: number, source: string, note = ''): boolean {
+  if (ptbMarketSlug !== null && slug !== ptbMarketSlug) return false;
+  const cur = priceToBeat.slug === slug ? priceToBeat : { value: null, source: null };
+  const d = decidePtb(cur, { value, source });
+  if (d.conflict) {
+    log.warn(`PTB conflict on ${slug}: kept ${cur.source} $${cur.value?.toFixed(2)}, ${source} says $${value.toFixed(2)}`);
+  }
+  if (!d.replace) return false;
+  const prev = cur.value;
+  priceToBeat = { slug, value, source, updatedAt: Date.now() };
+  if (prev !== value) {
+    log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${value.toFixed(2)} (${source}${isExactPtbSource(source) ? ', exact' : ''}${note ? `, ${note}` : ''})`);
+  }
+  return true;
+}
+
+// Exact PTB resolution: the TWAP tick stamped at the window start, else Polymarket's
+// TWAP openPrice (engines/ptbResolver.ts). One resolver at a time; a newer market stops it.
+let ptbResolveSlug: string | null = null;
+function startExactPtbResolution(slug: string, startMs: number): void {
+  if (!slug || !Number.isFinite(startMs) || ptbResolveSlug === slug) return;
+  ptbResolveSlug = slug;
+  void resolveExactPtb(startMs, startMs + 15 * 60_000, {
+    tickAt: getTwapAt,
+    replay: requestTwapReplay,
+    fetchWindow: (s, e) => fetchTwapWindowPrice(s, e),
+    isCurrent: () => ptbResolveSlug === slug,
+    onExact: (value, source, atMs) => { offerPtb(slug, value, source, `+${((atMs - startMs) / 1000).toFixed(1)}s after open`); },
+    onGiveUp: (why) => log.warn(`PTB: no exact value for ${slug} — ${why}; entries stay blocked`),
+  });
+}
+
+/** Window start of a market, from Gamma's eventStartTime or the slug's timestamp. */
+function marketStartMs(slug: string, eventStartTime: unknown): number {
+  const t = eventStartTime ? new Date(String(eventStartTime)).getTime() : NaN;
+  if (Number.isFinite(t)) return t;
+  const ts = Number(String(slug).split('-').pop());
+  return Number.isFinite(ts) ? ts * 1000 : NaN;
+}
+
+/**
+ * A closed 15m window's settlement price: the 60 s TWAP tick stamped at its end
+ * (= the next window's price to beat), waited for briefly — it lands ~1 s late.
+ */
+async function closeTwapFor(slug: string | null | undefined, waitMs = 3_000): Promise<number | null> {
+  const startSec = Number(String(slug ?? '').split('-').pop());
+  if (!Number.isFinite(startSec) || startSec <= 0) return null;
+  const endMs = (startSec + 900) * 1000;
+  const until = Date.now() + waitMs;
+  for (;;) {
+    const v = getTwapAt(endMs);
+    if (v != null) return v;
+    if (Date.now() >= until) return null;
+    await new Promise(r => setTimeout(r, 250));
+  }
+}
+
+// Binance − Chainlink, tracked so the settlement estimate survives a Chainlink outage.
+const basisTracker = new BasisTracker();
+
 // ── Pre-scheduled PTB capture ──
 // Polymarket snapshots Chainlink Data Streams at eventStartTime for PTB.
 // We schedule a WS price capture at the known next market start (= current endDate).
@@ -355,14 +433,10 @@ function schedulePtbCapture(nextStartMs) {
 function schedulePtbPageUpgrade(slug) {
   const attempt = (delayMs) => setTimeout(() => {
     if (priceToBeat.slug !== slug) return; // market already switched
-    if (['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) return; // already good
+    if (isExactPtbSource(priceToBeat.source)) return; // already exact
     fetchPolymarketPtb(slug).then(result => {
       if (!result?.priceToBeat || priceToBeat.slug !== slug) return;
-      if (['polymarket_page', 'polymarket_page_prev'].includes(result.source)) {
-        const prev = priceToBeat.value;
-        priceToBeat = { slug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
-        log.info(`PTB upgraded: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
-      }
+      offerPtb(slug, result.priceToBeat, result.source, 'page upgrade');
     }).catch(() => {});
   }, delayMs);
   attempt(15 * 60_000);  // 15 min: finalPrice may be available by now
@@ -780,7 +854,7 @@ export async function pollOnce() {
             getBinancePrice,
           },
           _saExpiry,
-          { signal: settlementAbort.signal },
+          { signal: settlementAbort.signal, getCloseTwap: () => closeTwapFor(pos.marketSlug) },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
           triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
@@ -957,7 +1031,7 @@ export async function pollOnce() {
             getBinancePrice,
           },
           _saSwitch,
-          { signal: settlementAbort.signal },
+          { signal: settlementAbort.signal, getCloseTwap: () => closeTwapFor(pos.marketSlug) },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
           triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
@@ -967,6 +1041,12 @@ export async function pollOnce() {
             setTimeout(() => reconcileNow().catch(e => log.debug(`Fast reconcile (switch): ${e.message}`)), 60_000);
           }
         });
+      }
+
+      // Record-only: the PTB used for the market that just closed, against the one
+      // Polymarket publishes a minute or two later (ptb_health.jsonl `verified`).
+      if (oldSlug && priceToBeat.slug === oldSlug) {
+        scheduleOfficialPtbCheck({ slug: oldSlug, used: priceToBeat.value, usedSource: priceToBeat.source });
       }
 
       resetMarketCache();
@@ -1030,76 +1110,44 @@ export async function pollOnce() {
       }
       entryRegime = null;
 
-      // ── PTB resolution (async, parallel — first to resolve wins) ──
-      // Priority: data_streams (EXACT, Polymarket source)
-      //         > polymarket_gamma (EXACT, from per-poll snapshot — zero extra network)
-      //         > polymarket_page (EXACT, HTML scrape — slower)
-      //         > scheduled_ws (WS capture at eventStartTime)
-      //         > chainlink_round (on-chain Data Feeds approximation)
-      //         > oracle (live BTC price — fallback)
+      // ── PTB resolution ──
+      // Since 2026-08-07 the market settles on Chainlink's 60 s TWAP: the price to beat
+      // is the TWAP tick stamped at the window start. The resolver waits for that tick
+      // (~1 s), asks the socket for a replay if it is missing, and falls back to
+      // Polymarket's TWAP openPrice. Everything else below is an approximation or a
+      // late confirmation; offerPtb() keeps whichever ranks highest (ptbSources.ts).
       const eventSlug = poly.market?.slug ?? marketSlug;
       const eventStartTime = poly.market?.eventStartTime;
+      ptbMarketSlug = marketSlug;
+      startExactPtbResolution(marketSlug, marketStartMs(marketSlug, eventStartTime));
 
-      // 0a. Gamma API eventMetadata — extracted from the snapshot we already fetched this poll.
-      // Authoritative source: same data Polymarket frontend uses for its eventMetadata.priceToBeat.
+      // Gamma eventMetadata.priceToBeat — exact, but only filled after the window closes.
       const gammaPtb = Number(poly.eventMetadata?.priceToBeat);
-      if (Number.isFinite(gammaPtb) && gammaPtb > 10_000 && priceToBeat.source !== 'data_streams') {
-        const prev = priceToBeat.value;
-        priceToBeat = { slug: marketSlug, value: gammaPtb, source: 'polymarket_gamma', updatedAt: Date.now() };
-        if (prev !== gammaPtb) {
-          log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${gammaPtb.toFixed(2)} (polymarket_gamma, exact)`);
-        }
-      }
+      if (Number.isFinite(gammaPtb) && gammaPtb > 10_000) offerPtb(marketSlug, gammaPtb, 'polymarket_gamma');
 
-      // 0b. Chainlink Data Streams direct — same source Polymarket uses for resolution.
-      // Dormant if CHAINLINK_DS_API_KEY not configured (returns null, pipeline falls through).
+      // Chainlink Data Streams direct (dormant without credentials; its default feed is spot).
       if (eventStartTime && isDataStreamsConfigured()) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchDataStreamsReportAt(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.price, source: 'data_streams', updatedAt: Date.now() };
-            if (prev !== result.price) {
-              log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (data_streams, exact)`);
-            }
-          }
+          if (result?.price > 0) offerPtb(marketSlug, result.price, 'data_streams');
         }).catch(err => log.debug(`Data Streams PTB fetch failed: ${err.message}`));
       }
 
-      // 1. Scrape PTB from Polymarket page (eventMetadata) — HTML fallback path.
-      // polymarket_page / polymarket_page_prev = exact → only relevant if gamma didn't populate yet
-      // polymarket_page_approx = rough estimate → only overwrite oracle/pending/chainlink_round
+      // Event page scrape: the previous window's finalPrice is exact once published.
       fetchPolymarketPtb(eventSlug).then(result => {
-        if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
-          if (['data_streams', 'polymarket_gamma'].includes(priceToBeat.source)) return; // higher priority active
-          const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
-          const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
-          if (isExact || currentIsLowPriority) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
-            if (prev !== result.priceToBeat) {
-              log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
-            }
-          }
-        }
+        if (result?.priceToBeat > 0) offerPtb(marketSlug, result.priceToBeat, result.source);
       }).catch(err => log.debug(`Polymarket PTB scrape failed: ${err.message}`));
 
-      // 2. scheduled_ws capture: handled every poll (see below market-switch block) to avoid race condition
+      // (The scheduled spot capture at the boundary is applied every poll, below.)
 
-      // 3. Chainlink on-chain round query (fallback — Data Feeds aggregator, NOT Data Streams)
+      // On-chain Data Feeds round — a coarse approximation, only if nothing better is held.
       if (eventStartTime) {
         const targetSec = Math.floor(new Date(eventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && !['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
-            log.info(`PTB: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
-          }
+          if (result?.price > 0) offerPtb(marketSlug, result.price, 'chainlink_round', `${result.diff}s from start`);
         }).catch(err => log.debug(`Chainlink PTB fetch failed: ${err.message}`));
       }
 
-      // 4. Schedule delayed upgrade: finalPrice (exact PTB) usually available 15-30min after market start
       schedulePtbPageUpgrade(marketSlug);
     }
 
@@ -1113,46 +1161,29 @@ export async function pollOnce() {
       const startupEventStartTime = poly.market?.eventStartTime;
       log.info(`Startup PTB resolution for market: ${startupEventSlug}`);
 
-      // Startup: try Data Streams direct first (exact match with Polymarket source)
+      // Mid-window after a restart the TWAP tick is past the socket's replay, so the
+      // resolver goes to Polymarket's TWAP openPrice straight away.
+      ptbMarketSlug = marketSlug;
+      startExactPtbResolution(marketSlug, marketStartMs(marketSlug, startupEventStartTime));
+
       if (startupEventStartTime && isDataStreamsConfigured()) {
         const targetSec = Math.floor(new Date(startupEventStartTime).getTime() / 1000);
         fetchDataStreamsReportAt(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.price, source: 'data_streams', updatedAt: Date.now() };
-            log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (data_streams, exact)`);
-          }
+          if (result?.price > 0) offerPtb(marketSlug, result.price, 'data_streams', 'startup');
         }).catch(err => log.debug(`Startup Data Streams PTB failed: ${err.message}`));
       }
 
       fetchPolymarketPtb(startupEventSlug).then(result => {
-        if (result?.priceToBeat > 0 && priceToBeat.slug === marketSlug) {
-          if (['data_streams', 'polymarket_gamma'].includes(priceToBeat.source)) return;
-          const isExact = ['polymarket_page', 'polymarket_page_prev'].includes(result.source);
-          const currentIsLowPriority = ['oracle', 'pending', 'polymarket_page_approx'].includes(priceToBeat.source);
-          if (isExact || currentIsLowPriority) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.priceToBeat, source: result.source, updatedAt: Date.now() };
-            if (prev !== result.priceToBeat) {
-              log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.priceToBeat.toFixed(2)} (${result.source})`);
-            }
-          }
-        }
+        if (result?.priceToBeat > 0) offerPtb(marketSlug, result.priceToBeat, result.source, 'startup');
       }).catch(err => log.debug(`Startup PTB scrape failed: ${err.message}`));
 
       if (startupEventStartTime) {
         const targetSec = Math.floor(new Date(startupEventStartTime).getTime() / 1000);
         fetchChainlinkAtTimestamp(targetSec).then(result => {
-          if (result?.price > 0 && priceToBeat.slug === marketSlug
-              && !['data_streams', 'polymarket_gamma', 'polymarket_page', 'polymarket_page_prev', 'scheduled_ws'].includes(priceToBeat.source)) {
-            const prev = priceToBeat.value;
-            priceToBeat = { slug: marketSlug, value: result.price, source: 'chainlink_round', updatedAt: Date.now() };
-            log.info(`PTB startup: $${prev?.toFixed(2) ?? 'null'} → $${result.price.toFixed(2)} (chainlink_round, ${result.diff}s from start)`);
-          }
+          if (result?.price > 0) offerPtb(marketSlug, result.price, 'chainlink_round', `startup, ${result.diff}s from start`);
         }).catch(err => log.debug(`Startup Chainlink PTB failed: ${err.message}`));
       }
 
-      // Schedule delayed upgrade: finalPrice (exact PTB) usually available 15-30min after market start
       schedulePtbPageUpgrade(marketSlug);
     }
 
@@ -1243,13 +1274,26 @@ export async function pollOnce() {
     if (ptbScheduledPrice?.price > 0 && marketSlug && priceToBeat.slug !== marketSlug) {
       const age = Date.now() - ptbScheduledPrice.capturedAt;
       if (age < 60_000) {
-        priceToBeat = { slug: marketSlug, value: ptbScheduledPrice.price, source: 'scheduled_ws', updatedAt: ptbScheduledPrice.capturedAt };
-        log.info(`PTB from scheduled capture: $${ptbScheduledPrice.price.toFixed(2)} (${(age / 1000).toFixed(1)}s ago)`);
+        // Spot at the boundary: a placeholder until the TWAP tick lands (~1 s), never exact.
+        offerPtb(marketSlug, ptbScheduledPrice.price, 'scheduled_ws', `spot, captured ${(age / 1000).toFixed(1)}s ago`);
       }
       ptbScheduledPrice = null;
     }
 
+    // What BTC is compared with the price to beat by: a Chainlink-based estimate of
+    // the settlement TWAP (engines/settlePrice.ts). Binance ran ~$24 above Chainlink
+    // on the 2026-09 tape, so Binance − PTB read every window as more bullish than it was.
+    const clSpot = getPolyLiveLastUpdate() && Date.now() - getPolyLiveLastUpdate() < 10_000 ? getPolyLivePrice() : null;
+    if (wsFresh) basisTracker.update(lastPrice, clSpot);
+    const settle = estimateSettlePrice({
+      nowMs: now, endMs: currentMarketEndMs, spot: clSpot,
+      spotTicks: currentMarketEndMs ? getSpotTicksBetween(currentMarketEndMs - 61_000, now) : [],
+      binance: lastPrice, basis: basisTracker.get(),
+    });
+    const settlePrice = settle.price ?? lastPrice;
+
     const sig = computeSignals({
+      settlePrice,
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
       clobUsable: clobFeed.usable,
       getClobUpPrice, getClobDownPrice, getClobOrderbook,
@@ -1453,7 +1497,7 @@ export async function pollOnce() {
               `sell ${sfSellSize} @$${sfSellPrice.toFixed(3)} → recover $${sfRecovery.toFixed(2)}`
             );
             const sfExitData = {
-              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+              btcPrice: lastPrice, settlePrice, priceToBeat: priceToBeat.value,
               marketUp, marketDown, tokenPrice: sfTokenPrice,
               regime: regimeInfo?.regime, timeLeftMin,
               smartFlowDirection: smartFlowSignal.direction,
@@ -1548,7 +1592,7 @@ export async function pollOnce() {
       const cutResult = evaluateCutLoss({
         position: pos, currentTokenPrice: tokenPrice,
         orderbook: tokenBook, timeLeftMin,
-        btcPrice: lastPrice,
+        btcPrice: settlePrice,
         priceToBeat: priceToBeat.value,
         modelProbability: pos.side === 'UP' ? ensembleUp : ensembleDown,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
@@ -1565,10 +1609,10 @@ export async function pollOnce() {
         const ep = pos.price;
         const dropPct = ep > 0 && tokenPrice != null
           ? (((ep - tokenPrice) / ep) * 100).toFixed(1) : '?';
-        const btcDist = lastPrice && priceToBeat.value
-          ? (Math.abs((lastPrice - priceToBeat.value) / priceToBeat.value) * 100).toFixed(3) : '?';
-        const btcSide = lastPrice && priceToBeat.value
-          ? (pos.side === 'UP' ? lastPrice >= priceToBeat.value : lastPrice < priceToBeat.value) ? 'WIN' : 'LOSE'
+        const btcDist = settlePrice && priceToBeat.value
+          ? (Math.abs((settlePrice - priceToBeat.value) / priceToBeat.value) * 100).toFixed(3) : '?';
+        const btcSide = settlePrice && priceToBeat.value
+          ? (pos.side === 'UP' ? settlePrice >= priceToBeat.value : settlePrice < priceToBeat.value) ? 'WIN' : 'LOSE'
           : '?';
         log.info(
           `CutLoss: ${cutResult.reason} | ${pos.side} drop=${dropPct}% | ` +
@@ -1591,7 +1635,7 @@ export async function pollOnce() {
               `${cutResult.urgency === 'crash' ? ` [${cutResult.reason}]` : ''}`
             );
             const exitData = {
-              btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+              btcPrice: lastPrice, settlePrice, priceToBeat: priceToBeat.value,
               marketUp, marketDown, tokenPrice,
               regime: regimeInfo?.regime, regimeConfidence: regimeInfo?.confidence,
               entryRegime,
@@ -2004,7 +2048,7 @@ export async function pollOnce() {
         const limitEval = (limFilterResult.pass && limSignalStable) ? evaluateLimitEntry({
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,
-          btcPrice: lastPrice,
+          btcPrice: settlePrice,
           priceToBeat: priceToBeat.value,
           bestBidUp: orderbookUp?.bestBid ?? null,
           bestBidDown: orderbookDown?.bestBid ?? null,
@@ -2129,7 +2173,7 @@ export async function pollOnce() {
             mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
             mlSide: mlResult.available ? mlResult.mlSide : null,
             ensembleProb: getLimitOrderStatus().side === 'UP' ? ensembleUp : ensembleDown,
-            btcPrice: lastPrice,
+            btcPrice: settlePrice,
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
             marketSlug,
@@ -2482,7 +2526,7 @@ export async function pollOnce() {
           rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
           ensembleUp, timeAware, mlResult, mlAgreesWithRules,
           regimeInfo, poly, marketSlug, currentConditionId, priceToBeat,
-          lastPrice, timeLeftMin, dryRun: BOT_CONFIG.dryRun,
+          lastPrice, settlePrice, timeLeftMin, dryRun: BOT_CONFIG.dryRun,
           signalConfirmCount: getConfirmCount(), recentFlipCount,
           tiltMarketsLeft, tiltMlConfMin: TILT_ML_CONF_MIN,
           rsiNow, rsiSlope, macd, vwapDist, vwapSlope,
@@ -2626,6 +2670,11 @@ export async function pollOnce() {
       clobDownReason: clobFeed.reason,
       clobWsConnected: isClobConnected(),
       priceToBeat: priceToBeat.value, marketQuestion,
+      ptbSource: priceToBeat.source, ptbExact: isExactPtbSource(priceToBeat.source),
+      // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
+      settlePrice, settlePriceSource: settle.source,
+      twapNow: getLatestTwap()?.value ?? null,
+      twapFeed: getTwapFeedHealth(),
 
       // Indicators (full objects)
       vwapNow, vwapDist, vwapSlope, vwapSlopeLabel,
@@ -2667,7 +2716,7 @@ export async function pollOnce() {
         const clPos = getCurrentPosition();
         const clPrice = clPos && !clPos.settled ? (clPos.side === 'UP' ? marketUp : marketDown) : null;
         return getCutLossStatus(clPos, clPrice, {
-          btcPrice: lastPrice, priceToBeat: priceToBeat.value,
+          btcPrice: settlePrice, priceToBeat: priceToBeat.value,
           modelProbability: clPos ? (clPos.side === 'UP' ? ensembleUp : ensembleDown) : null,
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,

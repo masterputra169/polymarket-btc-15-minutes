@@ -11,6 +11,8 @@ function CurrentPriceCard({
   binanceConnected,
   timeLeftMin,
   priceToBeat,
+  ptbExact = null,
+  ptbSource = null,
 }) {
   const priceRef = useRef(null);
   const prevRef = useRef(chainlinkPrice);
@@ -182,6 +184,23 @@ function CurrentPriceCard({
             >
               🎯 Price to Beat
             </span>
+            {ptbExact !== null && (
+              <span
+                title={ptbExact
+                  ? `Chainlink 60 s TWAP at the window open (${ptbSource}) — the value Polymarket settles on`
+                  : `Approximation (${ptbSource ?? 'none'}) — entries wait for the exact TWAP value`}
+                style={{
+                  fontSize: '0.6rem',
+                  fontWeight: 700,
+                  padding: '1px 6px',
+                  borderRadius: 3,
+                  background: ptbExact ? 'rgba(0,230,118,0.12)' : 'rgba(255,171,0,0.12)',
+                  color: ptbExact ? 'var(--green-bright)' : 'var(--yellow-bright)',
+                }}
+              >
+                {ptbExact ? '✓ TWAP exact' : '≈ perkiraan'}
+              </span>
+            )}
             <span
               style={{
                 fontFamily: 'var(--font-display)',

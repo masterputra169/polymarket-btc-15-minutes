@@ -72,6 +72,9 @@ export interface TapeContext {
   polyLive: number | null;
   ptb: number | null;
   ptbSource: string | null;
+  /** Latest Chainlink 60 s TWAP tick (what the market settles on), and its own timestamp. */
+  twap?: number | null;
+  twapTs?: number | null;
 }
 
 export interface TapeMarket {
@@ -268,6 +271,7 @@ function sample(): void {
       btc: round(ctx.btc, 2), cl: round(ctx.chainlink, 2), pl: round(ctx.polyLive, 2),
       ptb: round(ctx.ptb, 2), ps: ctx.ptbSource,
     };
+    if (ctx.twap != null) { line.tw = round(ctx.twap, 4); line.twt = ctx.twapTs ?? null; }
     if (socket.up.valid) { line.u = socket.up.top(cfg.depth); line.ua = now - socket.up.updatedMs; }
     if (socket.down.valid) { line.d = socket.down.top(cfg.depth); line.da = now - socket.down.updatedMs; }
     state.writer.push(line);

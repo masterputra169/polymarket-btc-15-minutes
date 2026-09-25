@@ -23,7 +23,7 @@ const TMP_DIR = mkdtempSync(join(tmpdir(), 'ptbhealth-'));
 const HEALTH_PATH = join(TMP_DIR, 'ptb_health.jsonl');
 process.env.PTB_HEALTH_PATH = HEALTH_PATH;
 
-const { recordPtbSource, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES } = await import('../ptbHealth.ts');
+const { recordPtbSource, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES, recordPtbVerification, getPendingVerification } = await import('../ptbHealth.ts');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -38,28 +38,41 @@ afterEach(() => { _reset(); });
 afterAll(() => { rmSync(TMP_DIR, { recursive: true, force: true }); });
 
 describe('ptbHealth', () => {
-  test('the exact-source list matches the gate it mirrors', () => {
-    // If tradeFilters' EXACT_PTB_TRUST changes and this does not, every health
-    // line silently misreports. Read the gate's list straight out of the source.
+  test('the health rollup and the entry gate read the same exact-source list', () => {
+    // They used to keep copies, and the copies drifted into trusting a spot
+    // capture. Both now import engines/ptbSources.ts; guard against a copy
+    // creeping back into the gate.
     const src = readFileSync(resolve(__dirname, '..', '..', 'safety', 'tradeFilters.ts'), 'utf-8');
-    const m = src.match(/const EXACT_PTB_TRUST = \[([^\]]+)\]/);
-    expect(m, 'EXACT_PTB_TRUST not found in tradeFilters.ts').toBeTruthy();
-    const gateList = m![1].split(',').map(s => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-    expect([...EXACT_PTB_SOURCES].sort()).toEqual([...gateList].sort());
+    expect(src).toContain("import { isExactPtbSource } from '../engines/ptbSources.ts'");
+    expect(src).not.toMatch(/const EXACT_PTB_TRUST = \[/);
+    expect([...EXACT_PTB_SOURCES]).toContain('chainlink_twap');
+    expect([...EXACT_PTB_SOURCES]).not.toContain('scheduled_ws');
+  });
+
+  test('verification: the PTB the bot used against the published one, by source', () => {
+    expect(recordPtbVerification(83743.8965356868, 'chainlink_twap', 83743.8965356868)).toBe(0);
+    expect(recordPtbVerification(83778.83461303619, 'scheduled_ws', 83743.8965356868)).toBeCloseTo(34.938, 2);
+    expect(recordPtbVerification(null, null, 83743.9)).toBeNull();
+    const v = getPendingVerification();
+    expect(v).toMatchObject({ checked: 2, exact: 1, mismatch: 1 });
+    expect(v.bySource).toEqual({ chainlink_twap: { checked: 1, exact: 1 }, scheduled_ws: { checked: 1, exact: 0 } });
+    flush();
+    expect(readLines().pop().verified).toMatchObject({ checked: 2, exact: 1, mismatch: 1, maxAbsDiff: 34.94 });
+    expect(getPendingVerification().checked).toBe(0);
   });
 
   test('counts in memory without writing until flushed', () => {
     const before = readLines().length;
-    recordPtbSource('scheduled_ws');
-    recordPtbSource('scheduled_ws');
+    recordPtbSource('chainlink_twap');
+    recordPtbSource('chainlink_twap');
     recordPtbSource('chainlink_round');
-    expect(getPendingCounts()).toEqual({ scheduled_ws: 2, chainlink_round: 1 });
+    expect(getPendingCounts()).toEqual({ chainlink_twap: 2, chainlink_round: 1 });
     expect(readLines().length).toBe(before);   // nothing written yet
   });
 
   test('flush writes one line with the exact/total split', () => {
     const before = readLines().length;
-    for (let i = 0; i < 7; i++) recordPtbSource('scheduled_ws');
+    for (let i = 0; i < 7; i++) recordPtbSource('chainlink_twap');
     for (let i = 0; i < 3; i++) recordPtbSource('chainlink_round');
     flush();
 
@@ -69,12 +82,12 @@ describe('ptbHealth', () => {
     expect(last.total).toBe(10);
     expect(last.exact).toBe(7);
     expect(last.exactPct).toBeCloseTo(70, 5);
-    expect(last.bySource).toEqual({ scheduled_ws: 7, chainlink_round: 3 });
+    expect(last.bySource).toEqual({ chainlink_twap: 7, chainlink_round: 3 });
     expect(last.to).toBeGreaterThanOrEqual(last.from);
   });
 
   test('flush resets the window so counts are not double reported', () => {
-    recordPtbSource('scheduled_ws');
+    recordPtbSource('chainlink_twap');
     flush();
     expect(getPendingCounts()).toEqual({});
     const before = readLines().length;
@@ -94,7 +107,7 @@ describe('ptbHealth', () => {
 
   test('an unknown source counts toward total but never toward exact', () => {
     recordPtbSource('some_new_oracle');
-    recordPtbSource('scheduled_ws');
+    recordPtbSource('chainlink_twap');
     flush();
     const last = readLines().pop();
     expect(last.total).toBe(2);
