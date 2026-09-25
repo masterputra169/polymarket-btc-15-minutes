@@ -41,7 +41,8 @@ printed) plus:
 | `POLYMARKET_DOH_ENABLED` | `false` | no ISP DNS block on Railway |
 | `TZ` | `Asia/Jakarta` | log timestamps |
 | `PREMARKET_LONG_ENABLED` | `false` | 2026-09-20: 10 dry-run trades, 30% WR, -19.88 on 8x the normal stake |
-| `BLOCKED_SESSIONS` | `Europe` | 2026-09-20: 123 trades, 55.6%/58.3% WR wk1/wk2 — under breakeven both weeks, -17.05 |
+| `BLOCKED_SESSIONS` | `,` (empty list) | 2026-09-25: every session trades. Railway rejects an empty value, and `,` parses to no sessions. Was `Europe` from 2026-09-20 (123 trades, 55.6%/58.3% WR wk1/wk2, -17.05) |
+| `TIME_GATES_ENABLED` | `false` | 2026-09-25: no ET blackout hours, weekend floor or Asia ML floors |
 | `RL_ENABLED` | `false` | deployed weights output a constant action; their own metadata says `improved=false` |
 
 `frontend`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.frontend`, `VITE_BOT_WS_URL=/ws`,

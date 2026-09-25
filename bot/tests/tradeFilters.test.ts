@@ -47,10 +47,11 @@ describe('applyTradeFilters', () => {
     expect(typeof r.pass).toBe('boolean');
   });
 
-  it('blocks during blackout hour (23 ET)', () => {
+  it('does not block a former blackout hour (23 ET) — time gates are off by default', () => {
+    // 2026-09-25: every hour trades; TIME_GATES_ENABLED=true restores the
+    // blackout (see src/safety/__tests__/tradeFilters.timeGates.test.ts).
     const r = applyTradeFilters(baseInput({ etHour: 23 }));
-    expect(r.pass).toBe(false);
-    expect(r.reasons.some(x => /blackout|hour|23/i.test(x))).toBe(true);
+    expect(r.reasons.some(x => /blackout/i.test(x))).toBe(false);
   });
 
   it('blocks when ML confidence below threshold', () => {

@@ -63,7 +63,8 @@ The bot automates that loop 24/7:
 | Deployment | Bot, dashboard, Postgres and Redis run on **Railway** (see [docs/RAILWAY.md](docs/RAILWAY.md)). A local Docker stack is also supported. |
 | Mode | **`DRY_RUN=true`**. Dry run simulates fills at the price a live order would really pay (see [Dry run and evaluation](#dry-run-and-evaluation)). |
 | Go-live gate | The bot needs a positive **margin over breakeven** on the clean evaluation window, scored with `--since` (not a rolling window). Plan: ~2 weeks of clean dry run to rule out a gross regression, then a mini-size live phase ($1–2 per trade) to measure real fills, then full sizing. |
-| Disabled on evidence | Pre-market long (10 trades, 30% WR, −19.88), Europe session (`BLOCKED_SESSIONS=Europe`, under breakeven in two separate weeks), RL bet-sizing agent (inert weights), take-profit (settlement beats early exit). |
+| Disabled on evidence | Pre-market long (10 trades, 30% WR, −19.88), RL bet-sizing agent (inert weights), take-profit (settlement beats early exit). |
+| Trading hours | **Every hour and session trades** since 2026-09-25 (operator decision). The ET blackout hours, weekend floor and Asia ML floors are off (`TIME_GATES_ENABLED=true` restores them), and Europe is no longer blocked (`BLOCKED_SESSIONS` empty). |
 
 The edge is thin. Proving a ~2.5pp edge over breakeven with 80% power takes about **2,280 trades**, so a two-week dry run can catch a regression but cannot confirm profitability.
 
@@ -271,7 +272,12 @@ KELLY_PROB_SHRINK=0.5                 # Kelly sizes on price + shrink × (model 
 ```env
 # Sessions that never trade. Comma-separated, case-insensitive:
 # Asia | Europe | EU/US Overlap | US | Off-hours. Hard gate, no bypass. Needs a restart.
-BLOCKED_SESSIONS=Europe
+# Empty since 2026-09-25: every session trades. (Europe was blocked 2026-09-20.)
+BLOCKED_SESSIONS=
+
+# ET blackout hours (16-23), weekend ML floor and Asia-session ML floors.
+# Off by default since 2026-09-25; true restores all four. Needs a restart.
+TIME_GATES_ENABLED=false
 
 CUT_LOSS_ENABLED=true                 # default true
 CUT_LOSS_MIN_HOLD_SEC=720             # hold >= 12 min before any cut
@@ -538,16 +544,16 @@ Every entry must pass every gate:
 | 4 | Min/max time remaining, late-phase ML gate, BTC distance from PTB |
 | 5 | Cooldown after a loss |
 | 6 | Max trades per market + re-entry edge gate |
-| 7 | Weekend low liquidity |
+| 7 | Weekend low liquidity (off unless `TIME_GATES_ENABLED=true`) |
 | 8 | Edge ceiling |
 | 9 | Counter-trend momentum |
-| 10 | Hour-of-day blackout (ET hours 16–23, `BLACKOUT_HOURS_ET` in `src/config.ts`) |
+| 10 | Hour-of-day blackout (ET hours 16–23, `BLACKOUT_HOURS_ET` in `src/config.ts`; off unless `TIME_GATES_ENABLED=true`) |
 | 11 | Trending-regime protection |
 | 12 | Wide spread |
 | 13 | ML rolling-accuracy degradation |
 | 14 | VPIN (informed flow) |
 | 15 | Sudden spread widening |
-| 16 | Asia session ML floor |
+| 16 | Asia session ML floor (off unless `TIME_GATES_ENABLED=true`) |
 | 17 | Extreme sentiment |
 | 18 | Macro event guard (CPI / FOMC / NFP) |
 | 19 | LLM regime advisory (shadow mode by default) |
@@ -902,6 +908,8 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-09-25 | **Every hour and session trades**: ET blackout hours, the weekend floor and the Asia ML floors are behind `TIME_GATES_ENABLED` (default off), and Europe is unblocked. |
+| 2026-09-24 | **Market tape**: 1 Hz book, trades and BTC feeds, uploaded hourly to Cloudflare R2 (`bot/src/tape/`, `npm run tape:pull`). |
 | 2026-09-24 | **New model live**: `20260924-p2-0d88d4` (pipeline v2) replaces `20260905-p1-3c517d`. **Model registry and journal** added: every model, its data and every gate/evaluation/deploy is kept in `ml_registry/`, and trades record which model made them. |
 | 2026-09-24 | **ML fix**: training and live features now come from one builder (feature pipeline v2). This removes the 60 s look-ahead, the fake price-to-beat and the window-open market price. New deploy gate: the model must beat the same-instant market price. Kelly sizes on a probability shrunk toward the price (`KELLY_PROB_SHRINK`). The dry-run report shows claimed vs realised edge. Drift detection only counts trades made by the deployed model. A pipeline-v2 model is trained and passes the gate. |
 | 2026-09-23 | Telegram alerts gain a **🌐 View Web** button (below View Market and View Profile) that opens the dashboard. Configurable with `DASHBOARD_URL`. |

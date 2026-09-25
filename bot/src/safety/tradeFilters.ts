@@ -10,16 +10,16 @@
  * 4c. BTC distance from PTB — coin flip territory
  * 5. Cooldown after loss — avoid tilt/revenge trading
  * 6. Max trades per market
- * 7. Weekend low-liquidity
+ * 7. Weekend low-liquidity (time gate — off unless TIME_GATES_ENABLED=true)
  * 8. Edge ceiling — hard cap at 20% for all regimes (high edge = 0-14% WR)
  * 9. Counter-trend momentum — don't fight strong BTC moves
- * 10. Hour-of-day blackout
+ * 10. Hour-of-day blackout (time gate — off unless TIME_GATES_ENABLED=true)
  * 11. Trending regime protection
  * 12. Wide spread gate
  * 13. ML accuracy degradation
  * 14. VPIN — informed flow opposing signal
  * 15. Spread widening — sudden spread increase
- * 16. Asia session hard gate
+ * 16. Asia session hard gate (time gate — off unless TIME_GATES_ENABLED=true)
  * 17. Extreme sentiment — block during panic/euphoria (Fear & Greed API)
  * 18. Macro event guard — block around high-impact macro events (CPI, FOMC, NFP)
  * 19. LLM regime advisory — block when LLM regime conflicts with signal direction
@@ -217,6 +217,25 @@ if (BLOCKED_SESSIONS.size > 0) {
 }
 
 /**
+ * Time-of-day / day-of-week gates: the ET blackout hours (filter 10), the
+ * weekend ML floor (7) and the two Asia-session ML floors (1a, 16).
+ *
+ * Off by default since 2026-09-25 — operator decision: every hour and session
+ * trades under the same signal rules. Their evidence was v1-era ("31.6% WR
+ * during 16-23 ET", "Asia 69% WR") and predates the look-ahead fix, and with
+ * the honest v2 model the Asia floor (ML conf ≥ 0.80, i.e. p ≥ 0.90) had
+ * become a de-facto block. TIME_GATES_ENABLED=true restores all four.
+ *
+ * Not covered here: BLOCKED_SESSIONS (its own explicit switch, above),
+ * SESSION_QUALITY (scales bet size, blocks nothing), the macro-event guard
+ * (event-driven, MACRO_GUARD_ENABLED), and the in-market time-left gates.
+ */
+const TIME_GATES_ENABLED = (process.env.TIME_GATES_ENABLED ?? '').trim().toLowerCase() === 'true';
+log.info(TIME_GATES_ENABLED
+  ? 'TIME_GATES_ENABLED=true — blackout hours, weekend and Asia ML floors are active.'
+  : 'Time gates off — no blackout hours, weekend or Asia-session floors (TIME_GATES_ENABLED=true restores them).');
+
+/**
  * Run all trade filters. Returns { pass: boolean, reasons: string[], sessionQuality: number }
  */
 export function applyTradeFilters({
@@ -292,7 +311,7 @@ export function applyTradeFilters({
   // 1a. Asia session ML minimum — Asia WR 77% vs US 85%. Low liquidity + manipulation risk.
   // Require ML ≥80% to trade during Asia hours (21:00-04:00 ET).
   const ASIA_ML_MIN = 0.80;
-  if (session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < ASIA_ML_MIN) {
+  if (TIME_GATES_ENABLED && session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < ASIA_ML_MIN) {
     if (!highEdgeBypass) {
       reasons.push(`Asia session: ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(ASIA_ML_MIN * 100).toFixed(0)}% minimum`);
     }
@@ -455,7 +474,7 @@ export function applyTradeFilters({
   // has its own 60% ML gate). Only block when mlAvailable=false (model not loaded).
   const dayOfWeek = new Date().getUTCDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  if (isWeekend) {
+  if (TIME_GATES_ENABLED && isWeekend) {
     if (!mlAvailable) {
       reasons.push('Weekend + ML unavailable — cannot assess confidence');
     } else if (mlConfidence != null && mlConfidence < 0.65) {
@@ -505,7 +524,7 @@ export function applyTradeFilters({
 
   // 10. Hour-of-day blackout — data shows certain ET hours are consistently unprofitable
   const blackout = TRADE_FILTERS.BLACKOUT_HOURS_ET;
-  if (blackout && etHour != null && blackout.includes(etHour)) {
+  if (TIME_GATES_ENABLED && blackout && etHour != null && blackout.includes(etHour)) {
     reasons.push(`Blackout hour: ${etHour}:00 ET (historically unprofitable)`);
   }
 
@@ -602,7 +621,7 @@ export function applyTradeFilters({
   }
 
   // 16. Asia session hard gate — require higher ML confidence (data: 69% WR vs 92% Europe)
-  if (session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < 0.75) {
+  if (TIME_GATES_ENABLED && session === 'Asia' && mlAvailable && mlConfidence != null && mlConfidence < 0.75) {
     reasons.push(`Asia session: ML ${(mlConfidence * 100).toFixed(0)}% < 75% required`);
   }
 
