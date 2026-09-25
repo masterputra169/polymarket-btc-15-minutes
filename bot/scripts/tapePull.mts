@@ -104,12 +104,18 @@ function stats(): void {
 
   console.log(`\nTape at ${OUT}`);
   console.log('day          files     MB   snapshots  live-book  of-day  trades  markets  longest-gap  resyncs  bad');
-  let tot = { snaps: 0, live: 0, trades: 0, mb: 0 };
+  let tot = { snaps: 0, live: 0, trades: 0, mb: 0, decisions: 0 };
+  const stageLines: string[] = [];
   for (const [day, d] of byDay) {
     const s = summarizeTape(d.lines);
     const mb = d.bytes / 1024 / 1024;
     const pctDay = (s.live / 86_400) * 100;
-    tot = { snaps: tot.snaps + s.snapshots, live: tot.live + s.live, trades: tot.trades + s.trades, mb: tot.mb + mb };
+    tot = { snaps: tot.snaps + s.snapshots, live: tot.live + s.live, trades: tot.trades + s.trades, mb: tot.mb + mb, decisions: tot.decisions + s.decisions };
+    if (s.decisions > 0) {
+      const order = ['wait', 'pre', 'arb', 'unstable', 'filtered', 'passed', 'entered'];
+      const parts = order.filter(k => s.stages[k]).map(k => `${k} ${s.stages[k]} (${((s.stages[k] / s.decisions) * 100).toFixed(1)}%)`);
+      stageLines.push(`${day}  ${s.decisions} decisions: ${parts.join(', ')}`);
+    }
     console.log(
       `${day}  ${String(d.files).padStart(5)}  ${mb.toFixed(1).padStart(5)}  ${String(s.snapshots).padStart(10)}  ` +
       `${(s.snapshots ? (s.live / s.snapshots) * 100 : 0).toFixed(1).padStart(8)}%  ${pctDay.toFixed(1).padStart(5)}%  ` +
@@ -117,7 +123,11 @@ function stats(): void {
       `${String(s.resyncs).padStart(7)}  ${String(d.bad).padStart(3)}`,
     );
   }
-  console.log(`total: ${tot.snaps} snapshots, ${tot.live} with a live book, ${tot.trades} trades, ${tot.mb.toFixed(1)} MB`);
+  console.log(`total: ${tot.snaps} snapshots, ${tot.live} with a live book, ${tot.trades} trades, ${tot.decisions} decisions, ${tot.mb.toFixed(1)} MB`);
+  if (stageLines.length) {
+    console.log("\nDecision trail (one line per second of the bot's decisions; every entry kept):");
+    for (const l of stageLines) console.log(l);
+  }
   console.log('"of-day" = live-book seconds / 86,400 — the share of the day usable as second-resolution market price.');
 }
 

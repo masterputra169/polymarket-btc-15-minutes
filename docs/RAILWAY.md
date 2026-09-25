@@ -110,7 +110,9 @@ its PTB (`bot/src/tape/`). Hourly gzip files are written to
 and deleted from the volume. A simulated tape with random level sizes (the
 worst case for compression) came to ~700 KB/hour, i.e. at most ~17 MB/day or
 ~0.5 GB/month; the first day of real data settles the number (`npm run
-tape:pull` prints it).
+tape:pull` prints it). Measured on the first 7 h: ~11 MB/day. Since
+2026-09-25 the tape also carries one decision-trail line per second (`d`,
+the bot's decision and every filter reason), estimated at +3–5 MB/day.
 
 Without a bucket, files stay on the 4.6 GB volume under `TAPE_MAX_LOCAL_MB`
 (default 1500, oldest deleted first), and writing stops outright below

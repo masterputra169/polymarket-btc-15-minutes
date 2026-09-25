@@ -11,6 +11,7 @@ import { BookState } from '../bookState.ts';
 import { decodeTape, type SnapshotLine } from '../tapeFormat.ts';
 import {
   readTapeConfig, startMarketTape, stopMarketTape, setTapeMarket, getTapeStatus, type TapeConfig,
+  noteTapeDecision, noteTapeStage, noteTapeFilters, noteTapeEntered,
 } from '../marketTape.ts';
 
 const H3 = Date.UTC(2026, 8, 24, 3, 59, 0);
@@ -168,6 +169,46 @@ describe('market tape', () => {
     expect(() => vi.advanceTimersByTime(3_000)).not.toThrow();
     expect(() => setTapeMarket({ ...MARKET, upTokenId: '' })).not.toThrow();
     expect(getTapeStatus().errors).toBe(3);
+  });
+
+  const decision = (t: number, over = {}) => ({
+    t, slug: MARKET.slug, action: 'ENTER', side: 'UP', phase: 'MID', reason: 'UP edge 9%',
+    mlUp: 0.8, mlConf: 0.6, ensembleUp: 0.7, edgeUp: 0.09, edgeDown: -0.2,
+    marketUp: 0.61, marketDown: 0.39, timeLeftMin: 7, regime: 'moderate', session: 'US', ...over,
+  });
+
+  test('decision trail: one finished poll per second lands on the tape as a d line', () => {
+    startMarketTape({ getContext: () => ctx, config: config(), store, socket: fakeSocket() as any });
+    // three polls inside the first second; the sampler writes the last FINISHED one
+    noteTapeDecision(decision(H3 + 100, { action: 'WAIT', side: null, reason: 'DOWN: agree 2 < 3' }));
+    noteTapeDecision(decision(H3 + 200));
+    noteTapeStage('unstable', ['confirm 1/3']);
+    noteTapeDecision(decision(H3 + 300));
+    noteTapeFilters(false, ['ML conf 44% < 65%', 'Entry price 81c > 75c hard cap']);
+    noteTapeDecision(decision(H3 + 400)); // in progress when the sampler fires
+    vi.advanceTimersByTime(1_000);
+    stopMarketTape();
+    const ds = allLines().filter(l => l.k === 'd');
+    expect(ds).toHaveLength(1);
+    expect(ds[0]).toMatchObject({ t: H3 + 300, a: 'E', sd: 'U', st: 'filtered', fp: 0, fr: ['ML conf 44% < 65%', 'Entry price 81c > 75c hard cap'] });
+  });
+
+  test('decision trail: an entry is written at once, not left to the sampler', () => {
+    startMarketTape({ getContext: () => ctx, config: config(), store, socket: fakeSocket() as any });
+    noteTapeDecision(decision(H3 + 100));
+    noteTapeFilters(true, []);
+    noteTapeEntered();
+    stopMarketTape(); // no sampler tick happened
+    expect(allLines().filter(l => l.k === 'd')).toEqual([expect.objectContaining({ t: H3 + 100, st: 'entered', fp: 1 })]);
+  });
+
+  test('decision trail calls are no-ops before start and never throw', () => {
+    expect(() => {
+      noteTapeDecision(decision(1));
+      noteTapeStage('pre', ['has_position']);
+      noteTapeFilters(true, []);
+      noteTapeEntered();
+    }).not.toThrow();
   });
 
   test('setTapeMarket before start is a no-op; TAPE_ENABLED=false does not start', () => {

@@ -1,6 +1,8 @@
 /**
  * Market tape recorder: a 1 Hz record of the Polymarket book (top N levels of
- * both tokens), every trade print, BTC from three feeds, and the bot's PTB.
+ * both tokens), every trade print, BTC from three feeds, and the bot's PTB —
+ * plus the bot's own decision trail (`d` lines, decisionTrail.ts): one sampled
+ * poll per second and every entry.
  *
  * Why: training rows can only use token prices as fresh as their source.
  * polymarket_lookup.json prints about once a minute, so offline market skill
@@ -28,6 +30,7 @@ import { ClobTapeSocket, type TradeEvent } from './clobTapeSocket.ts';
 import { TapeWriter } from './tapeWriter.ts';
 import { createS3Store, describeStore, readS3Config, type S3Store, type S3Config } from './s3Store.ts';
 import { hourStamp, makeBootId, type SnapshotLine } from './tapeFormat.ts';
+import { DecisionTrail, type DecisionInput, type Stage } from './decisionTrail.ts';
 
 const log = createLogger('Tape');
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -88,7 +91,7 @@ export interface TapeDeps {
   now?: () => number;
 }
 
-interface HourStats { snaps: number; ok: number; trades: number; resyncs: number; repairsAtStart: number }
+interface HourStats { snaps: number; ok: number; trades: number; resyncs: number; repairsAtStart: number; decisions: number; entered: number }
 
 const UPLOAD_BACKOFF_MAX_MS = 60 * 60_000;
 
@@ -110,10 +113,11 @@ let state: {
   uploadedBytes: number;
   lastUploadError: string | null;
   errors: number;
+  trail: DecisionTrail;
 } | null = null;
 
 function freshStats(): HourStats {
-  return { snaps: 0, ok: 0, trades: 0, resyncs: 0, repairsAtStart: state?.socket.repairs ?? 0 };
+  return { snaps: 0, ok: 0, trades: 0, resyncs: 0, repairsAtStart: state?.socket.repairs ?? 0, decisions: 0, entered: 0 };
 }
 
 function round(x: number | null | undefined, dp: number): number | null {
@@ -162,6 +166,7 @@ export function startMarketTape(deps: TapeDeps): boolean {
       timers: [], market: null, hour: hourStamp(now()), stats: freshStats(),
       uploading: false, uploadBackoffMs: 0, nextUploadAt: 0,
       uploaded: 0, uploadedBytes: 0, lastUploadError: null, errors: 0,
+      trail: new DecisionTrail(),
     };
 
     const every = (ms: number, fn: () => void) => {
@@ -239,6 +244,12 @@ function onEvent(ev: string, note?: string): void {
 function sample(): void {
   if (!state) return;
   try {
+    const d = state.trail.takeSample();
+    if (d) { state.writer.push(d); state.stats.decisions++; }
+  } catch (err) {
+    recordError('decision', err);
+  }
+  try {
     const now = state.now();
     const hour = hourStamp(now);
     if (hour !== state.hour) closeHour(hour);
@@ -265,7 +276,7 @@ function closeHour(next: string): void {
   if (!state) return;
   const s = state.stats;
   const pct = s.snaps ? ((s.ok / s.snaps) * 100).toFixed(1) : '0.0';
-  log.info(`Tape ${state.hour}Z: ${s.snaps} snapshots (${pct}% with a live book), ${s.trades} trades, ${state.socket.repairs - s.repairsAtStart} book levels pruned, ${s.resyncs} resyncs`);
+  log.info(`Tape ${state.hour}Z: ${s.snaps} snapshots (${pct}% with a live book), ${s.trades} trades, ${state.socket.repairs - s.repairsAtStart} book levels pruned, ${s.resyncs} resyncs, ${s.decisions} decisions (${s.entered} entries)`);
   state.hour = next;
   state.stats = freshStats();
   flushNow();
@@ -325,6 +336,39 @@ async function uploadRound(): Promise<void> {
     recordError('upload', err);
   } finally {
     st.uploading = false;
+  }
+}
+
+// ── Decision trail (the tape's `d` lines) ────────────────────────────────
+// Called from the poll loop and tradePipeline on every poll; each is total and
+// a no-op until the tape is running.
+
+/** Open this poll's decision record (right after decide()). */
+export function noteTapeDecision(d: DecisionInput): void {
+  if (!state) return;
+  try { state.trail.begin(d); } catch (err) { recordError('noteTapeDecision', err); }
+}
+
+/** A stage this poll reached: 'pre' (with the loop preconditions that held it), 'unstable' (with reasons), 'arb'. */
+export function noteTapeStage(stage: Exclude<Stage, 'wait' | 'filtered' | 'passed' | 'entered'>, detail?: unknown): void {
+  if (!state) return;
+  try { state.trail.stage(stage, detail); } catch (err) { recordError('noteTapeStage', err); }
+}
+
+/** applyTradeFilters() result for this poll. */
+export function noteTapeFilters(pass: boolean, reasons: unknown): void {
+  if (!state) return;
+  try { state.trail.filters(pass, reasons); } catch (err) { recordError('noteTapeFilters', err); }
+}
+
+/** This poll entered a trade: written at once, never sampled away. */
+export function noteTapeEntered(): void {
+  if (!state) return;
+  try {
+    const d = state.trail.entered();
+    if (d) { state.writer.push(d); state.stats.decisions++; state.stats.entered++; }
+  } catch (err) {
+    recordError('noteTapeEntered', err);
   }
 }
 

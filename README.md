@@ -601,7 +601,15 @@ Once a second the bot records the top 10 levels of both tokens' books, together 
 - **Crash-safe.** Hourly gzip files (`YYYY-MM-DD/HH-<boot>.jsonl.gz`) are appended one member per minute, so a crash loses at most a minute.
 - **Stored in the cloud.** Finished hours are uploaded to an S3-compatible bucket and removed from the volume. **Cloudflare R2** is recommended: 10 GB free, no egress fees. Setup is in [docs/RAILWAY.md](docs/RAILWAY.md#market-tape-second-resolution-training-data).
 - **Disk-safe.** Without a bucket, files stay local under `TAPE_MAX_LOCAL_MB`, and writing stops before the volume runs low.
-- **`npm run tape:pull`** downloads the tape to `backtest/ml_training/tape/` (gitignored) and prints the coverage per day: live-book seconds, the longest gap, trades and markets.
+- **`npm run tape:pull`** downloads the tape to `backtest/ml_training/tape/` (gitignored). It prints the coverage per day (live-book seconds, the longest gap, trades and markets) and the decision-trail stage mix.
+- **Decision trail (`d` lines).** Once a second the tape also records the bot's own decision:
+  - what `decide()` said (side, or why it waited);
+  - ML P(UP) and confidence, the ensemble probability, the edge per side and the market prices;
+  - which loop precondition held an ENTER;
+  - every trade-filter reason, not just the first;
+  - whether a trade was entered. Every entry is written, not sampled.
+
+  With the book and the outcome, this lets any entry threshold be replayed on the signals the bot really saw. It is record-only: nothing it does changes a decision.
 
 ---
 

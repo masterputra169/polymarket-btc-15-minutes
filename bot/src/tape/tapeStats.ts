@@ -19,6 +19,9 @@ export interface TapeSummary {
   lastMs: number | null;
   /** Longest run without a live-book snapshot, seconds. */
   longestGapSec: number;
+  /** Decision-trail lines, and how many reached each stage. */
+  decisions: number;
+  stages: Record<string, number>;
 }
 
 export function summarizeTape(lines: TapeLine[]): TapeSummary {
@@ -26,7 +29,7 @@ export function summarizeTape(lines: TapeLine[]): TapeSummary {
   const markets = new Set<string>();
   const s: TapeSummary = {
     snapshots: 0, live: 0, trades: 0, markets: 0, resyncs: 0, subscriptions: 0,
-    firstMs: null, lastMs: null, longestGapSec: 0,
+    firstMs: null, lastMs: null, longestGapSec: 0, decisions: 0, stages: {},
   };
   let lastLiveMs: number | null = null;
   for (const l of sorted) {
@@ -41,6 +44,10 @@ export function summarizeTape(lines: TapeLine[]): TapeSummary {
         s.live++;
       }
     } else if (l.k === 'x') s.trades++;
+    else if (l.k === 'd') {
+      s.decisions++;
+      s.stages[l.st] = (s.stages[l.st] ?? 0) + 1;
+    }
     else if (l.k === 'm') markets.add(l.m);
     else if (l.k === 'i') {
       if (l.ev === 'resync') s.resyncs++;

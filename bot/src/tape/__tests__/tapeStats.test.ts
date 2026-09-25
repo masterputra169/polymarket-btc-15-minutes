@@ -13,11 +13,14 @@ describe('summarizeTape', () => {
       { k: 'x', t: 6500, m: 'mkt-a', o: 'u', p: 0.5, q: 10, sd: 'BUY', st: null },
       { k: 'i', t: 7000, ev: 'resync' },
       snap(8000, 1, 'mkt-b'),
+      { k: 'd', t: 8100, m: 'mkt-b', a: 'W', sd: null, ph: 'MID', why: null, ml: null, mc: null, en: null, eu: null, ed: null, pu: null, pd: null, tl: null, rg: null, ss: null, st: 'wait' },
+      { k: 'd', t: 8200, m: 'mkt-b', a: 'E', sd: 'U', ph: 'MID', why: null, ml: null, mc: null, en: null, eu: null, ed: null, pu: null, pd: null, tl: null, rg: null, ss: null, st: 'filtered', fp: 0, fr: ['x'] },
+      { k: 'd', t: 8300, m: 'mkt-b', a: 'E', sd: 'U', ph: 'MID', why: null, ml: null, mc: null, en: null, eu: null, ed: null, pu: null, pd: null, tl: null, rg: null, ss: null, st: 'filtered', fp: 0, fr: ['x'] },
     ];
     // out of order on purpose: files from two processes are merged by time
     expect(summarizeTape([...lines].reverse())).toEqual({
       snapshots: 7, live: 4, trades: 1, markets: 2, resyncs: 1, subscriptions: 1,
-      firstMs: 0, lastMs: 8000, longestGapSec: 3,
+      firstMs: 0, lastMs: 8300, longestGapSec: 3, decisions: 3, stages: { wait: 1, filtered: 2 },
     });
   });
 

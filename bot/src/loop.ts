@@ -43,7 +43,7 @@ import {
   setTokenIds,
 } from './streams/clobWs.ts';
 import { evaluateClobFeed } from './streams/clobFreshness.ts';
-import { setTapeMarket } from './tape/marketTape.ts';
+import { setTapeMarket, noteTapeDecision, noteTapeStage, noteTapeEntered } from './tape/marketTape.ts';
 import {
   getPrice as getPolyLivePrice,
   isConnected as isPolyLiveConnected,
@@ -1909,6 +1909,17 @@ export async function pollOnce() {
     rec.strength = rec.confidence;
     rec.edge = edge.bestEdge;
 
+    // Market tape decision trail (record only, never throws): what this poll decided.
+    noteTapeDecision({
+      t: Date.now(), slug: marketSlug || null,
+      action: rec.action, side: rec.side, phase: rec.phase, reason: rec.reason,
+      mlUp: mlResult.available ? mlResult.mlProbUp : null,
+      mlConf: mlResult.available ? mlResult.mlConfidence : null,
+      ensembleUp, edgeUp: edge.edgeUp, edgeDown: edge.edgeDown,
+      marketUp, marketDown, timeLeftMin,
+      regime: regimeInfo?.regime ?? null, session: getSessionName(),
+    });
+
     // ── 8. Bet sizing ──
     const betSide = rec.side;
     const betEnsembleProb = betSide === 'UP' ? ensembleUp
@@ -2481,11 +2492,24 @@ export async function pollOnce() {
       }
     }
 
+    // Market tape: an ENTER held back by a loop precondition (the gates below).
+    if (rec.action === 'ENTER') {
+      const tapePre = [
+        preMarketEnteredThisPoll && 'premarket_entered', preMarketWindowActive && 'premarket_window',
+        profitTargetPaused && 'profit_target', settlementPending && 'settlement_pending',
+        signalStale && 'signal_stale', tooCloseToExpiry && 'too_close_to_expiry',
+        hasPending && 'pending_order', smartSellTriggered && 'smart_sell', alreadyHasPosition && 'has_position',
+        (limitOrderBlocksFOK && !smartRouteFOK) && 'limit_order_active',
+      ].filter(Boolean);
+      if (tapePre.length > 0) noteTapeStage('pre', tapePre);
+    }
+
     // 10a. Arbitrage execution (priority over directional)
     if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
       try {
+        noteTapeStage('arb');
         await executeArbitrage({
           arb, poly, marketSlug, currentConditionId, regimeInfo, rec, priceToBeat, lastPrice,
           orderbookUp, orderbookDown,
@@ -2516,7 +2540,7 @@ export async function pollOnce() {
     else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK)) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
-        await executeDirectionalTrade({
+        const tapeEntered = await executeDirectionalTrade({
           rec, betSide, betMarketPrice, betEnsembleProb, betSizing, edge,
           ensembleUp, timeAware, mlResult, mlAgreesWithRules,
           regimeInfo, poly, marketSlug, currentConditionId, priceToBeat,
@@ -2559,6 +2583,7 @@ export async function pollOnce() {
           // RL Bandit sizing — null if disabled/shadow mode/weights not loaded
           getRLScalar: (BOT_CONFIG.rl?.enabled && _rlWeightsLoaded) ? getRLScalar : null,
         });
+        if (tapeEntered === true) noteTapeEntered();
       } catch (tradeErr) {
         log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);
       }

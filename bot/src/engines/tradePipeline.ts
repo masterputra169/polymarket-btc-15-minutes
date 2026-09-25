@@ -13,6 +13,7 @@ import { EXECUTION } from '../../../src/config.ts';
 import { BOT_CONFIG } from '../config.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
+import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -278,6 +279,7 @@ export async function executeDirectionalTrade({
   if (!deps.isSignalStable(requiredPolls)) {
     const reasons = deps.getInstabilityReasons(requiredPolls);
     log.info(`Signal unstable, holding: ${reasons.join(' | ')}`);
+    noteTapeStage('unstable', reasons);
     return false;
   }
 
@@ -313,6 +315,8 @@ export async function executeDirectionalTrade({
     buyRatio: volDelta?.buyRatio ?? null,
     ptbSource: priceToBeat?.source ?? null,
   });
+  // Market tape decision trail: every reason, including the ones after the first.
+  noteTapeFilters(filterResult.pass, filterResult.reasons);
 
   // Orderbook flow alignment check
   const flowAlign = deps.checkFlowAlignment(betSide);

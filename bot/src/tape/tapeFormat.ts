@@ -62,6 +62,48 @@ export interface TradeLine {
   st: number | null;
 }
 
+/**
+ * What the bot decided on one poll, sampled once a second (every poll that
+ * entered is written, unsampled). Pairs with the snapshots and the market's
+ * outcome to replay any threshold on the signals the bot really saw — the tape
+ * alone cannot, because most entry gates depend on live state it lacks.
+ *
+ * Stages, furthest reached: wait (decide() said WAIT) · pre (ENTER, but a
+ * loop precondition stopped it — see `pre`) · arb (arbitrage took the poll) ·
+ * unstable (signal-confirmation hold) · filtered / passed (applyTradeFilters
+ * ran; `fr` lists every reason, not just the first) · entered.
+ */
+export interface DecisionLine {
+  k: 'd';
+  t: number;
+  m: string | null;
+  /** 'E' ENTER or 'W' WAIT, from decide(). */
+  a: 'E' | 'W';
+  sd: 'U' | 'D' | null;
+  ph: string | null;
+  /** decide()'s reason (why WAIT, or what qualified the ENTER). */
+  why: string | null;
+  /** ML P(UP), ML confidence (|p − 0.5| × 2), ensemble P(UP). */
+  ml: number | null;
+  mc: number | null;
+  en: number | null;
+  /** Edge per side and the market's UP / DOWN prices the decision used. */
+  eu: number | null;
+  ed: number | null;
+  pu: number | null;
+  pd: number | null;
+  /** Minutes left, regime, session. */
+  tl: number | null;
+  rg: string | null;
+  ss: string | null;
+  st: 'wait' | 'pre' | 'arb' | 'unstable' | 'filtered' | 'passed' | 'entered';
+  pre?: string[];
+  hold?: string[];
+  /** applyTradeFilters(): pass and every reason. */
+  fp?: 0 | 1;
+  fr?: string[];
+}
+
 /** Recorder life events (connect, resync, ...), so gaps can be explained later. */
 export interface InfoLine {
   k: 'i';
@@ -70,7 +112,7 @@ export interface InfoLine {
   note?: string;
 }
 
-export type TapeLine = SnapshotLine | MarketLine | TradeLine | InfoLine;
+export type TapeLine = SnapshotLine | MarketLine | TradeLine | InfoLine | DecisionLine;
 
 const REL_RE = /^(\d{4}-\d{2}-\d{2})\/(\d{2})-([a-z0-9]{1,16})\.jsonl\.gz$/;
 
