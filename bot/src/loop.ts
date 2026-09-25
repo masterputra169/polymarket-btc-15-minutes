@@ -386,6 +386,20 @@ async function closeTwapFor(slug: string | null | undefined, waitMs = 3_000): Pr
   }
 }
 
+/**
+ * Record-only: check the PTB used for a market that just closed against the one
+ * Polymarket publishes a minute or two later (ptb_health.jsonl `verified`).
+ * Called from both ways a market ends — expiry (which resets the cache first,
+ * so it must run before that) and a slug switch — and at most once per market.
+ */
+const ptbVerifyScheduled = new Set<string>();
+function verifyClosedMarketPtb(slug: string | null): void {
+  if (!slug || ptbVerifyScheduled.has(slug) || priceToBeat.slug !== slug) return;
+  ptbVerifyScheduled.add(slug);
+  if (ptbVerifyScheduled.size > 50) ptbVerifyScheduled.delete(ptbVerifyScheduled.values().next().value as string);
+  scheduleOfficialPtbCheck({ slug, used: priceToBeat.value, usedSource: priceToBeat.source });
+}
+
 // Binance − Chainlink, tracked so the settlement estimate survives a Chainlink outage.
 const basisTracker = new BasisTracker();
 
@@ -870,6 +884,7 @@ export async function pollOnce() {
       resetRecovery(); // Cancel any pending recovery on market expiry
       clearPendingOrders(); // H2 audit fix: stale orders from expired market
       resetMarketTradeCount(currentMarketSlug);
+      verifyClosedMarketPtb(currentMarketSlug); // before the reset clears priceToBeat
       resetMarketCache();
       entryRegime = null;
     }
@@ -1043,11 +1058,7 @@ export async function pollOnce() {
         });
       }
 
-      // Record-only: the PTB used for the market that just closed, against the one
-      // Polymarket publishes a minute or two later (ptb_health.jsonl `verified`).
-      if (oldSlug && priceToBeat.slug === oldSlug) {
-        scheduleOfficialPtbCheck({ slug: oldSlug, used: priceToBeat.value, usedSource: priceToBeat.source });
-      }
+      verifyClosedMarketPtb(oldSlug); // no-op if the expiry path already scheduled it
 
       resetMarketCache();
       resetCutLossState();
