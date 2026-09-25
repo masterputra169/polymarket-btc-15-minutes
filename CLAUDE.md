@@ -40,6 +40,7 @@ node generateTrainingData.mts --days 182 --trade-history ./trade_history --price
 python compareFreshModels.py --a <preds> --b <preds> --since <slug>   # head-to-head of two models on fresh prices, OOS for both
 python hybridBacktest.py                           # v3 as a veto on v2's live rule (answer 2026-09-25: no — v3 agrees on every v2 entry)
 node decisionTrailStudy.mts [--since YYYY-MM-DD]   # from the tape's d lines: which gates held signals, and would they have won (needs `npm run tape:pull`)
+node ptbImpactStudy.mts [--until ISO] [--offline]  # what the wrong PTB / Binance comparison changed: who-is-ahead accuracy, filter replay (4c, 11c), last-minutes leader vs token price
 ```
 
 TypeScript-first codebase. Source files use `.ts`, `.tsx`, `.mts`, and `.cts`; run `npm run typecheck` before shipping.
