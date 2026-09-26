@@ -32,6 +32,10 @@ export interface DecisionInput {
   timeLeftMin: number | null | undefined;
   regime: string | null | undefined;
   session: string | null | undefined;
+  /** TWAP arithmetic (record-only); omitted from the line when absent. */
+  twapP?: number | null;
+  twapZ?: number | null;
+  drift30?: number | null;
 }
 
 /** Furthest stage wins; a later, lesser note never downgrades a record. */
@@ -96,6 +100,7 @@ export class DecisionTrail {
         rg: text(d.regime, 24),
         ss: text(d.session, 24),
         st: 'wait',
+        ...(d.twapP != null ? { tp: r(d.twapP, 4), tz: r(d.twapZ, 3), dr: r(d.drift30, 2) } : {}),
       },
     };
   }

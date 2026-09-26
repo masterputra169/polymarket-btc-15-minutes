@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  categorizeReason, scoreLine, soleGate, passesWithRelaxed, passesAtMlThreshold,
+  categorizeReason, scoreLine, soleGate, passesWithRelaxed, passesAtMlThreshold, passesMlRule, ML_RULE_CANDIDATES,
   firstPerMarket, entryPrice, breakevenWinRate, winPnlPerDollar, pnlPerDollar,
   simulateTrade, summarizeTrades, wilsonInterval, marketEndMs, stageMix,
   type TrailLine, type GateId,
@@ -246,5 +246,23 @@ describe('helpers', () => {
     expect(asia.total).toBe(3);
     expect(asia.enter).toBe(2);
     expect(asia.stages).toMatchObject({ wait: 1, filtered: 1, entered: 1, pre: 0 });
+  });
+});
+
+describe('ML-rule predicate (forward test of candidate gates)', () => {
+  const live = ML_RULE_CANDIDATES[0];
+  const bypass = ML_RULE_CANDIDATES[1];
+  it('the first candidate is the live gate: 0.65, or 0.45 when the side edge is >= 15%', () => {
+    expect(live).toMatchObject({ min: 0.65, relaxed: 0.45, bypass: 0.15 });
+    const lowConf = (edge: number) => scoreLine({ ...line({ sd: 'U', mc: 0.5, fr: ['ML conf 50% < 65%'] }), eu: edge, ed: -edge } as any);
+    expect(passesMlRule(lowConf(0.10), live)).toBe(false);
+    expect(passesMlRule(lowConf(0.16), live)).toBe(true);
+  });
+  it("uses the edge of the line's own side, and still needs every other gate clear", () => {
+    const down = scoreLine({ ...line({ sd: 'D', mc: 0.25, fr: ['ML conf 25% < 65%'] }), eu: 0.3, ed: 0.13 } as any);
+    expect(passesMlRule(down, bypass)).toBe(true);   // 0.25 >= 0.20 with the DOWN edge 13% >= 12%
+    expect(passesMlRule(down, live)).toBe(false);    // 13% < 15%: the floor stays 0.65
+    const other = scoreLine({ ...line({ sd: 'D', mc: 0.9, fr: ['Market 50c near 50/50 (47-53c)'] }), eu: 0, ed: 0.2 } as any);
+    expect(passesMlRule(other, bypass)).toBe(false);
   });
 });

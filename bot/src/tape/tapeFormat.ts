@@ -105,6 +105,14 @@ export interface DecisionLine {
   /** applyTradeFilters(): pass and every reason. */
   fp?: 0 | 1;
   fr?: string[];
+  /**
+   * TWAP arithmetic (engines/twapPhysics.ts), record-only, since 2026-09-26:
+   * P(UP) = Φ(z), z = (settlement estimate − PTB) / (σ·√T_eff), and the 30 s drift
+   * of the settlement estimate. Present only with an exact PTB and spot history.
+   */
+  tp?: number | null;
+  tz?: number | null;
+  dr?: number | null;
 }
 
 /** Recorder life events (connect, resync, ...), so gaps can be explained later. */

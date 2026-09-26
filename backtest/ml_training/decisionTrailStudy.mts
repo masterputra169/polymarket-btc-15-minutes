@@ -36,7 +36,7 @@ import { fetchResolvedOutcome, type LookupOpts } from '../../bot/src/engines/mar
 import { fetchJsonWithPolymarketDoh } from '../../bot/src/services/polymarketHttp.ts';
 import {
   GATE_IDS, isGateId, reasonShape, categorizeReason, scoreLine, isEvaluableEnter, soleGate,
-  passesWithRelaxed, passesAtMlThreshold, firstPerMarket, simulateTrade, summarizeTrades,
+  passesWithRelaxed, passesAtMlThreshold, passesMlRule, ML_RULE_CANDIDATES, firstPerMarket, simulateTrade, summarizeTrades,
   marketEndMs, stageMix, STAGES, DEFAULT_SLIPPAGE,
   type GateId, type ScoredLine, type SimTrade, type Side, type TradeSummary, type StageCounts,
 } from './decisionTrailCore.mts';
@@ -454,6 +454,18 @@ function sectionMlSweep(scored: readonly ScoredLine<DecisionLine>[], outcomes: M
   if (nullMc) console.log(`\n  ${nullMc} evaluable ENTER line(s) had no ML confidence; they pass at every T, as the bot's gate needs ML.`);
 }
 
+function sectionMlRules(scored: readonly ScoredLine<DecisionLine>[], outcomes: Map<string, Side>, args: Args,
+  actual: Map<string, ScoredLine<DecisionLine>>): void {
+  section('(e) Candidate ML rules, scored forward — the full ML gate (min / relaxed at edge >= bypass), other reasons absent');
+  console.log('  The 30-day rule search (ruleSearch.py, 2026-09-26) found no rule that beat the live one out of sample;');
+  console.log('  the edge-bypass variant looked promising only after seeing VALIDATE, so it is tested here on markets it never saw.\n');
+  const rows: ScenarioRow[] = ML_RULE_CANDIDATES.map((rule) => ({
+    label: rule.label,
+    picks: firstPerMarket(scored, (s) => passesMlRule(s, rule)),
+  }));
+  compareRows(rows, actual, outcomes, args);
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -486,6 +498,7 @@ async function main(): Promise<void> {
   const gates = sectionGates(scored, outcomes, args);
   sectionRelax(scored, outcomes, gates, args, actual);
   sectionMlSweep(scored, outcomes, args, actual);
+  sectionMlRules(scored, outcomes, args, actual);
 
   const enteredLines = decisions.filter((d) => d.st === 'entered').length;
   console.log(`\n  actual entries: ${enteredLines} entered line(s) in ${actual.size} market(s)` +

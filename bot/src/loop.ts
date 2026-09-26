@@ -55,6 +55,7 @@ import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
 import { estimateSettlePrice, BasisTracker } from './engines/settlePrice.ts';
+import { twapPhysics, SettleHistory } from './engines/twapPhysics.ts';
 import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
 import {
   getPrice as getChainlinkWssPrice,
@@ -399,6 +400,9 @@ function verifyClosedMarketPtb(slug: string | null): void {
   if (ptbVerifyScheduled.size > 50) ptbVerifyScheduled.delete(ptbVerifyScheduled.values().next().value as string);
   scheduleOfficialPtbCheck({ slug, used: priceToBeat.value, usedSource: priceToBeat.source });
 }
+
+// Settlement estimates of the last minutes, for the 30 s drift on the tape (record-only).
+const settleHistory = new SettleHistory(120_000);
 
 // Binance − Chainlink, tracked so the settlement estimate survives a Chainlink outage.
 const basisTracker = new BasisTracker();
@@ -1302,6 +1306,7 @@ export async function pollOnce() {
       binance: lastPrice, basis: basisTracker.get(),
     });
     const settlePrice = settle.price ?? lastPrice;
+    if (settle.price != null) settleHistory.add(now, settle.price);
 
     const sig = computeSignals({
       settlePrice,
@@ -1903,8 +1908,21 @@ export async function pollOnce() {
     rec.edge = edge.bestEdge;
 
     // Market tape decision trail (record only, never throws): what this poll decided.
+    // Record-only: the TWAP arithmetic's P(UP) for the tape (engines/twapPhysics.ts).
+    let phys = null;
+    try {
+      if (marketSlug && priceToBeat.slug === marketSlug && isExactPtbSource(priceToBeat.source)) {
+        const nowP = Date.now();
+        phys = twapPhysics({
+          settle: settle.price, settle30sAgo: settleHistory.at(nowP - 30_000),
+          ptb: priceToBeat.value, spotTicks: getSpotTicksBetween(nowP - 121_000, nowP),
+          nowMs: nowP, endMs: currentMarketEndMs,
+        });
+      }
+    } catch { phys = null; }
     noteTapeDecision({
       t: Date.now(), slug: marketSlug || null,
+      twapP: phys?.p ?? null, twapZ: phys?.z ?? null, drift30: phys?.drift30 ?? null,
       action: rec.action, side: rec.side, phase: rec.phase, reason: rec.reason,
       mlUp: mlResult.available ? mlResult.mlProbUp : null,
       mlConf: mlResult.available ? mlResult.mlConfidence : null,

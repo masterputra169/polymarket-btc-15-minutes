@@ -141,6 +141,31 @@ export function passesWithRelaxed(s: ScoredLine, relaxed: ReadonlySet<GateId>): 
  * (dead zone, LATE, trending ML) stay as recorded. A line without an ML
  * confidence passes, as in the bot (the gate needs mlAvailable).
  */
+/** The bot's ML gate (tradeFilters.ts filter 1) with its three thresholds. */
+export interface MlRule { label: string; min: number; relaxed: number; bypass: number }
+
+/** Candidate rules scored forward on the tape; the first is the live rule. */
+export const ML_RULE_CANDIDATES: readonly MlRule[] = [
+  { label: 'live: conf>=0.65 (0.45 at edge>=15%)', min: 0.65, relaxed: 0.45, bypass: 0.15 },
+  { label: 'edge bypass: 0.20 at edge>=12%', min: 0.65, relaxed: 0.20, bypass: 0.12 },
+  { label: 'conf>=0.45 flat', min: 0.45, relaxed: 0.45, bypass: 1 },
+];
+
+/**
+ * Would this line pass the ML gate under `rule`, every other recorded reason absent?
+ * The edge is the bot's own for the line's side (d.eu / d.ed: ensemble probability
+ * minus ask and fee), so the replay measures edge exactly as tradeFilters.ts does.
+ */
+export function passesMlRule(s: ScoredLine<TrailLine & { eu?: number | null; ed?: number | null }>, rule: MlRule): boolean {
+  if (!isEvaluableEnter(s.line)) return false;
+  if (!s.gates.every((g) => g === 'ml_conf')) return false;
+  const mc = s.line.mc;
+  if (mc == null) return true;
+  const edge = s.line.sd === 'U' ? s.line.eu : s.line.sd === 'D' ? s.line.ed : null;
+  const threshold = edge != null && edge >= rule.bypass ? Math.min(rule.min, rule.relaxed) : rule.min;
+  return mc >= threshold;
+}
+
 export function passesAtMlThreshold(s: ScoredLine, threshold: number): boolean {
   if (!isEvaluableEnter(s.line)) return false;
   if (!s.gates.every((g) => g === 'ml_conf')) return false;
