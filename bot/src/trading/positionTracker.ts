@@ -10,7 +10,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, renameSync, statSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
-import { polyFeeRate } from '../../../src/config.ts';
+import { takerFee } from '../engines/settlementMath.ts';
 import { createLogger } from '../logger.ts';
 import { mirrorStateSnapshot } from '../services/runtimeIntegrations.ts';
 
@@ -23,16 +23,16 @@ const roundMoney = (n) => Math.round(n * 100) / 100;
 const roundPct = (n) => Math.round(n * 100) / 100;
 
 /**
- * Polymarket dynamic fee on profit.
- * Uses actual formula: 0.072 × p × (1-p) — max ~1.80% at p=0.50 (Mar-30-2026 update).
- * Falls back to conservative 2% if entry price unavailable.
- * Audit v5 H1: was flat 2%, now dynamic — fixes systematic P&L under-tracking.
+ * Entry fee of the open position: every leg was bought as a taker, and
+ * Polymarket charges shares × 0.07 × p × (1 − p) at match, win or lose
+ * (settlementMath.takerFee). Booked when the position closes, so bankroll, the
+ * journal's P&L and breakevenMargin all see the same number.
  */
-const FALLBACK_FEE_RATE = 0.02;
-function getSettlementFeeRate(entryPrice) {
-  if (!Number.isFinite(entryPrice) || entryPrice <= 0 || entryPrice >= 1) return FALLBACK_FEE_RATE;
-  const rate = polyFeeRate(entryPrice);
-  return rate > 0 ? rate : FALLBACK_FEE_RATE;
+function entryFeeOf(pos, shares = pos.size) {
+  if (pos.side === 'ARB' && pos.arbUpCost != null && pos.arbDownCost != null && pos.size > 0) {
+    return roundMoney(takerFee(shares, pos.arbUpCost / pos.size) + takerFee(shares, pos.arbDownCost / pos.size));
+  }
+  return takerFee(shares, pos.price);
 }
 
 type PositionState = Record<string, any>;
@@ -366,25 +366,13 @@ export function settleTrade(won) {
     return false;
   }
 
-  // H6: Polymarket charges 2% fee on profit at redemption
   const grossPayout = won ? pos.size : 0; // Binary: win = $1/share, lose = $0
-
-  // ARB fee: Polymarket charges 2% on the WINNING TOKEN's profit, not net arb profit.
-  // For ARB, we don't know which side won, so use worst-case (cheaper leg wins = larger profit = larger fee).
-  // Example: arb cost $97 (UP $46 + DOWN $51), payout $100 → worst-case fee = ($100-$46)×2% = $1.08
-  let profit;
-  if (pos.side === 'ARB' && pos.arbUpCost != null && pos.arbDownCost != null) {
-    const minLegCost = Math.min(pos.arbUpCost, pos.arbDownCost);
-    profit = Math.max(0, grossPayout - minLegCost); // Worst-case winning token profit
-  } else {
-    profit = Math.max(0, grossPayout - pos.cost);
-  }
-  const feeRate = getSettlementFeeRate(pos.price);
-  const fee = roundMoney(profit * feeRate);
+  // The taker entry fee is owed win or lose, so a loss books a negative payout.
+  const fee = entryFeeOf(pos);
   const payout = roundMoney(grossPayout - fee);
 
   // C7: NaN guard after fee calculation — prevent bankroll corruption
-  if (!Number.isFinite(payout) || payout < 0) {
+  if (!Number.isFinite(payout) || payout < -fee) {
     log.error(`Settlement ABORTED: payout=${payout} after fee calc (fee=${fee}, gross=${grossPayout}) — would corrupt bankroll`);
     auditLog({ type: 'SETTLE_ABORTED', reason: 'payout_NaN', payout, fee, grossPayout });
     return false;
@@ -408,14 +396,14 @@ export function settleTrade(won) {
       state.peakBankroll = state.bankroll;
     }
     // Track unredeemed value — on-chain USDC doesn't include this until ERC-1155 redeem
-    if (payout > 0 && pos.conditionId) {
+    if (grossPayout > 0 && pos.conditionId) {
       if (!Array.isArray(state.pendingRedeems)) state.pendingRedeems = [];
       state.pendingRedeems.push({
         conditionId: pos.conditionId,
-        value: roundMoney(payout),
+        value: roundMoney(grossPayout), // the redeem pays $1/share; the fee left at entry
         settledAt: Date.now(),
       });
-      log.info(`Pending redeem tracked: $${payout.toFixed(2)} (${pos.conditionId.slice(0, 16)}...)`);
+      log.info(`Pending redeem tracked: $${grossPayout.toFixed(2)} (${pos.conditionId.slice(0, 16)}...)`);
     }
   } else {
     state.losses++;
@@ -485,15 +473,16 @@ export function settleTradeEarlyExit(recoveredUsdc) {
   }
 
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
+  const entryFee = entryFeeOf(pos);
 
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTradeEarlyExit')) return false;
 
-  state.bankroll = roundMoney(state.bankroll + recovered);
+  state.bankroll = roundMoney(state.bankroll + recovered - entryFee);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
 
-  const pnl = roundMoney(recovered - pos.cost);
+  const pnl = roundMoney(recovered - pos.cost - entryFee);
   const isWin = pnl >= 0;
 
   // C2 FIX: Update counters BEFORE saveState so all financial state is saved atomically.
@@ -644,7 +633,8 @@ export function partialExit(sellSize, recoveredUsdc) {
   const fractionSold = sellSize / pos.size;
   const costPortion = roundMoney(pos.cost * fractionSold);
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
-  const pnl = roundMoney(recovered - costPortion);
+  const feePortion = entryFeeOf(pos, sellSize); // the rest is booked when the remainder closes
+  const pnl = roundMoney(recovered - costPortion - feePortion);
 
   // Update position in-place (reduce size + cost)
   // Round size to prevent float drift (e.g. 10 - 7.5 = 2.4999999...)
@@ -652,8 +642,8 @@ export function partialExit(sellSize, recoveredUsdc) {
   pos.size = Math.round((pos.size - sellSize) * 1e8) / 1e8;
   pos.cost = roundMoney(pos.cost - costPortion);
 
-  // Add recovery to bankroll
-  state.bankroll = roundMoney(state.bankroll + recovered);
+  // Add recovery to bankroll, less the entry fee of the shares sold
+  state.bankroll = roundMoney(state.bankroll + recovered - feePortion);
 
   state.trades.push({
     type: 'PARTIAL_CUT',

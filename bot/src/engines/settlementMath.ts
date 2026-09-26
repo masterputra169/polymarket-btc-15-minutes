@@ -5,9 +5,10 @@
  * written.
  */
 
-import { polyFeeRate } from '../../../src/config.ts';
+import { polyTakerFeePerShare } from '../../../src/config.ts';
 
-const FALLBACK_FEE_RATE = 0.02;
+/** Fee per share when the entry price is unusable: 2c, above the 1.75c maximum at 50c. */
+const FALLBACK_FEE_PER_SHARE = 0.02;
 
 /**
  * Settlement sources that are not Polymarket's resolution: 'price_fallback'
@@ -22,22 +23,30 @@ function roundCents(v: number): number {
   return Math.round(v * 100) / 100;
 }
 
-/** Dynamic Polymarket fee on profit (0.072 × p × (1−p)); 2% if the entry price is unusable. */
-export function settlementFeeRate(entryPrice: number | null | undefined): number {
-  if (!Number.isFinite(entryPrice) || (entryPrice as number) <= 0 || (entryPrice as number) >= 1) return FALLBACK_FEE_RATE;
-  const rate = polyFeeRate(entryPrice as number);
-  return rate > 0 ? rate : FALLBACK_FEE_RATE;
+function usable(price: number | null | undefined): price is number {
+  return Number.isFinite(price) && (price as number) > 0 && (price as number) < 1;
 }
 
 /**
- * Net P&L of a binary position: a win pays $1/share minus the fee on profit,
- * a loss forfeits the cost. Rounded to cents at each step, like positionTracker.
+ * Taker fee on a fill of `shares` at `price`, in dollars, rounded to cents:
+ * shares × 0.07 × p × (1 − p) (CLOB V2 `crypto_fees_v2`). Charged at match on
+ * every taker fill, win or lose. 2c a share when the price is unusable.
+ */
+export function takerFee(shares: number, price: number | null | undefined): number {
+  if (!Number.isFinite(shares) || shares <= 0) return 0;
+  if (!usable(price)) return roundCents(shares * FALLBACK_FEE_PER_SHARE);
+  return roundCents(shares * polyTakerFeePerShare(price));
+}
+
+/**
+ * Net P&L of a binary position bought as a taker: a win pays $1/share, a loss
+ * pays nothing, and the entry fee is paid either way. Until 2026-09-26 the fee
+ * was modelled as 0.072·p·(1−p) of the winning profit only — about a quarter of
+ * what Polymarket charges, so every booked P&L and breakeven was optimistic.
  */
 export function computeSettlementPnl({ won, size, cost, price }: {
   won: boolean; size: number; cost: number; price: number | null | undefined;
 }): number {
-  if (!won) return roundCents(-cost);
-  const grossProfit = Math.max(0, size - cost);
-  const fee = roundCents(grossProfit * settlementFeeRate(price));
-  return roundCents(size - cost - fee);
+  const fee = takerFee(size, price);
+  return roundCents((won ? size : 0) - cost - fee);
 }

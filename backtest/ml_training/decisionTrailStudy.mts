@@ -22,7 +22,7 @@
  * <tape>/_resolutions.json, so a rerun is offline for every market already seen.
  *
  * What a simulated trade is, and is not: side `sd` at the price decide() used
- * (`pu`/`pd`) + slip, $1 stake, fee 0.072·c·(1−c) on the winning profit. The
+ * (`pu`/`pd`) + slip, $1 stake, taker fee 0.07·c·(1−c) per share at match, win or lose (CLOB V2). The
  * gates after applyTradeFilters() (Monte Carlo, smart flow, validateTrade, FOK
  * depth) are not modelled, so every simulated set is an upper bound.
  */
@@ -488,7 +488,7 @@ async function main(): Promise<void> {
   for (const e of stats.errors.slice(0, 10)) console.log(`    error ${e}`);
   const up = [...outcomes.values()].filter((o) => o === 'UP').length;
   console.log(`  resolved outcomes: UP ${up}, DOWN ${outcomes.size - up}`);
-  console.log(`  simulated fill = side price (pu/pd) + ${args.slip.toFixed(2)}; $1 stake; fee 0.072*c*(1-c) on profit; breakeven = n/(n + sum win-profit).`);
+  console.log(`  simulated fill = side price (pu/pd) + ${args.slip.toFixed(2)}; $1 stake; taker fee 0.07*c*(1-c) per share, win or lose; breakeven = losses / (losses + win profits).`);
   console.log(`  Rows flagged n<${SMALL_N} are anecdotes, not evidence — do not change a gate on them.`);
 
   const scored = decisions.map(scoreLine);

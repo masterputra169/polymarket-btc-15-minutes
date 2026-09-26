@@ -16,7 +16,9 @@ Not replicable offline: rule agreement, signal stability, VPIN, spread widening,
 the ensemble edge ceiling -> trade counts are upper bounds, comparisons are fair.
 
 Economics: pay = last print + COST (tape: spread 1c in 98% of snapshots);
-fee 0.072 c (1 - c) on profit; breakeven c / ((1 - c)(1 - r) + c).
+taker fee 0.07 c (1 - c) per share at match, win or lose (CLOB V2; until
+2026-09-26 this charged 0.072 c (1 - c) on the winning profit only, which
+overstated ROI by ~2pp); breakeven c + 0.07 c (1 - c).
 
 Protocol: rules are chosen on SELECT (Jul 31 -> Aug 27) and judged on VALIDATE
 (Aug 28 -> Sep 23) only. Monte Carlo resamples VALIDATE trades by day.
@@ -37,16 +39,28 @@ STAKE_USD = 1.31  # median dry-run stake on Railway (458 trades)
 rng = np.random.default_rng(2026)
 
 
+TAKER_FEE_RATE = 0.07  # CLOB V2 crypto_fees_v2: shares x 0.07 x p x (1 - p), at match, win or lose
+
+
 def fee(c):
+    """The bot's SELECTION-side fee model (src/config.ts polyFeeRate, a rate on the
+    winning profit). Kept only to replicate how edge.ts sizes the edge; the money
+    paid is taker_fee_per_dollar."""
     return 0.072 * c * (1 - c)
 
 
+def taker_fee_per_dollar(c):
+    """Fee on a $1 taker buy at c: 1/c shares x 0.07 x c x (1 - c), win or lose."""
+    return TAKER_FEE_RATE * (1 - c)
+
+
 def breakeven(c):
-    return c / ((1 - c) * (1 - fee(c)) + c)
+    """Win rate with zero expected value: c + 0.07 c (1 - c) (the fee is owed either way)."""
+    return c + TAKER_FEE_RATE * c * (1 - c)
 
 
 def pnl_per_dollar(win, c):
-    return np.where(win, (1 / c - 1) * (1 - fee(c)), -1.0)
+    return np.where(win, 1 / c - 1, -1.0) - taker_fee_per_dollar(c)
 
 
 def logit(x):

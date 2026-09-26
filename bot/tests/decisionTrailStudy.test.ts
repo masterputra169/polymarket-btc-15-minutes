@@ -169,10 +169,8 @@ describe('one trade per market', () => {
 });
 
 describe('settlement math', () => {
-  it('breakeven at 60c is about 60.43%, from the fee on profit', () => {
-    expect(breakevenWinRate(0.6)).toBeCloseTo(0.6043, 3);
-    const r = 0.072 * 0.6 * 0.4;
-    expect(breakevenWinRate(0.6)).toBeCloseTo(0.6 / ((1 - 0.6) * (1 - r) + 0.6), 12);
+  it('breakeven at 60c is 61.68%: the price plus the 1.68c taker fee, win or lose', () => {
+    expect(breakevenWinRate(0.6)).toBeCloseTo(0.6168, 6);
   });
 
   it('agrees with the bot’s own breakeven (solved from computeSettlementPnl)', () => {
@@ -186,8 +184,9 @@ describe('settlement math', () => {
       const w = breakevenWinRate(c);
       expect(w * pnlPerDollar(c, true) + (1 - w) * pnlPerDollar(c, false)).toBeCloseTo(0, 12);
     }
-    expect(winPnlPerDollar(0.5)).toBeCloseTo(1 * (1 - 0.018), 12);
-    expect(pnlPerDollar(0.5, false)).toBe(-1);
+    // $1 at 50c = 2 shares, fee 2 × 0.07 × 0.25 = 0.035
+    expect(winPnlPerDollar(0.5)).toBeCloseTo(1 - 0.035, 12);
+    expect(pnlPerDollar(0.5, false)).toBeCloseTo(-1.035, 12);
   });
 
   it('prices a simulated entry at the side price plus slippage, capped at 99c', () => {
@@ -215,7 +214,7 @@ describe('settlement math', () => {
     expect(s.wins).toBe(2);
     expect(s.winRate).toBeCloseTo(2 / 3, 12);
     expect(s.breakeven).toBeCloseTo(breakevenWinRate(0.6), 12);
-    expect(s.roi).toBeCloseTo((2 * winPnlPerDollar(0.6) - 1) / 3, 12);
+    expect(s.roi).toBeCloseTo((2 * winPnlPerDollar(0.6) + pnlPerDollar(0.6, false)) / 3, 12);
     expect(s.marginPp).toBeCloseTo((2 / 3 - breakevenWinRate(0.6)) * 100, 10);
     expect(summarizeTrades([]).n).toBe(0);
     expect(summarizeTrades([]).winRate).toBeNull();

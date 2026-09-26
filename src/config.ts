@@ -69,6 +69,28 @@ export function polyFeeRate(price: number): number {
   return 0.072 * price * (1 - price);
 }
 
+/**
+ * Polymarket taker fee rate, CLOB V2 schedule `crypto_fees_v2` (Gamma
+ * `feeSchedule: {rate: 0.07, exponent: 1, takerOnly: true, rebateRate: 0.2}`,
+ * read from a live BTC 15m market 2026-09-26; docs.polymarket.com/trading/fees).
+ */
+export const POLY_TAKER_FEE_RATE = 0.07;
+
+/**
+ * Taker fee per share traded, in dollars: rate × p × (1 − p), charged at match on
+ * every taker fill — the losing trades too — and never to makers. At 60c that is
+ * 1.68c a share, 2.8% of the notional.
+ *
+ * This is what settlement books. polyFeeRate() above is the older model (a rate
+ * applied to the winning profit only, about a quarter of the real cost) and still
+ * feeds entry selection — edge.ts, asymmetricBet.ts, arbitrage.ts — which changes
+ * which trades are taken and so waits for an evaluation-window restart.
+ */
+export function polyTakerFeePerShare(price: number): number {
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0;
+  return POLY_TAKER_FEE_RATE * price * (1 - price);
+}
+
 export const CONFIG = {
   symbol: 'BTCUSDT',
   binanceWsUrl: 'wss://data-stream.binance.vision/ws/btcusdt@trade',

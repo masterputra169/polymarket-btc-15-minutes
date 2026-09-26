@@ -71,14 +71,15 @@ describe('applyResolution', () => {
     expect(JSON.stringify(PREMARKET_ROW)).toBe(before);
   });
 
-  test('corrected win→loss: LOSS at full cost, delta = new − old, model flags recomputed', () => {
+  test('corrected win→loss: LOSS at cost plus the taker fee, delta = new − old, model flags recomputed', () => {
     const r = applyResolution(PREMARKET_ROW, { outcome: 'DOWN', source: 'gamma_oracle' }, NOW);
     expect(r.status).toBe('corrected');
     expect(r.wasWin).toBe(true);
     expect(r.nowWin).toBe(false);
-    expect(r.delta).toBe(-10.88);
+    // 11 shares @ 0.365: LOSS = -4.01 cost - 0.18 fee; the row was booked +6.87 under the old fee model
+    expect(r.delta).toBe(-11.06);
     expect(r.row.analysis).toMatchObject({
-      outcome: 'LOSS', pnl: -4.01, actualOutcome: 'DOWN', mlWasRight: false, ruleWasRight: false, edgeWasReal: false,
+      outcome: 'LOSS', pnl: -4.19, actualOutcome: 'DOWN', mlWasRight: false, ruleWasRight: false, edgeWasReal: false,
     });
     expect(r.row.exit).toMatchObject({
       outcome: 'DOWN', source: 'price_fallback', verifiedOutcome: 'DOWN', verifiedSource: 'gamma_oracle',
@@ -89,8 +90,9 @@ describe('applyResolution', () => {
   test('corrected loss→win: WIN with the same fee math settlement uses', () => {
     const r = applyResolution(LOSS_ROW, { outcome: 'UP', source: 'oracle' }, NOW);
     expect(r.status).toBe('corrected');
-    expect(r.row.analysis).toMatchObject({ outcome: 'WIN', pnl: 0.74, actualOutcome: 'UP', mlWasRight: true, edgeWasReal: true });
-    expect(r.delta).toBe(1.99);
+    // 2 shares @ 0.625: 2 - 1.25 - 0.03 fee = 0.72; booked -1.25 under the old model
+    expect(r.row.analysis).toMatchObject({ outcome: 'WIN', pnl: 0.72, actualOutcome: 'UP', mlWasRight: true, edgeWasReal: true });
+    expect(r.delta).toBe(1.97);
   });
 });
 
@@ -137,9 +139,9 @@ describe('verifyFallbackSettlement', () => {
     vi.mocked(fetchResolvedOutcome).mockResolvedValue({ outcome: 'DOWN', source: 'gamma_oracle' });
     expect(await verifyFallbackSettlement({ marketSlug: SLUG, conditionId: null })).toBe('corrected');
     const [, update] = vi.mocked(rewriteJournalRow).mock.calls[0];
-    expect(update(PREMARKET_ROW).analysis).toMatchObject({ outcome: 'LOSS', pnl: -4.01 });
+    expect(update(PREMARKET_ROW).analysis).toMatchObject({ outcome: 'LOSS', pnl: -4.19 });
     expect(correctSettlement).toHaveBeenCalledWith(expect.objectContaining({
-      delta: -10.88, wasWin: true, nowWin: false, slug: SLUG, adjustBankroll: true,
+      delta: -11.06, wasWin: true, nowWin: false, slug: SLUG, adjustBankroll: true,
       settledAtMs: PREMARKET_ROW.exit.exitedAt,
     }));
     expect(notify).toHaveBeenCalledTimes(1);
@@ -174,7 +176,7 @@ describe('verifyFallbackSettlement', () => {
     vi.mocked(readJournalRows).mockReturnValue([unknownRow]);
     vi.mocked(fetchResolvedOutcome).mockResolvedValue({ outcome: 'UP', source: 'oracle' });
     expect(await verifyFallbackSettlement({ marketSlug: LOSS_ROW.entry.marketSlug, conditionId: null })).toBe('corrected');
-    expect(correctSettlement).toHaveBeenCalledWith(expect.objectContaining({ wasWin: false, nowWin: true, delta: 1.99 }));
+    expect(correctSettlement).toHaveBeenCalledWith(expect.objectContaining({ wasWin: false, nowWin: true, delta: 1.97 }));
   });
 });
 

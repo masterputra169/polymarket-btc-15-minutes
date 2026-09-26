@@ -13,7 +13,7 @@
  * taken, not a forecast of it.
  */
 
-import { polyFeeRate } from '../../src/config.ts';
+import { polyTakerFeePerShare } from '../../src/config.ts';
 import type { DecisionLine } from '../../bot/src/tape/tapeFormat.ts';
 
 /** Report order. 'other' = a reason no rule recognises; extend RULES when one appears. */
@@ -218,23 +218,30 @@ export function entryPrice(line: Pick<TrailLine, 'sd' | 'pu' | 'pd'>, slip = DEF
   return Math.min(MAX_ENTRY, Math.round((p + slip) * 10_000) / 10_000);
 }
 
-/** Net profit of a winning $1 stake bought at `c`: payout 1/c shares, fee 0.072·c·(1−c) on the profit. */
+/**
+ * Taker fee per $1 staked at `c`: 1/c shares × 0.07·c·(1−c) = 0.07·(1−c), paid at
+ * match whether the trade wins or loses (CLOB V2; engines/settlementMath.ts).
+ */
+export function feePerDollar(c: number): number {
+  return polyTakerFeePerShare(c) / c;
+}
+
+/** Net profit of a winning $1 stake bought at `c`: 1/c shares pay $1 each, less the entry fee. */
 export function winPnlPerDollar(c: number): number {
-  return (1 / c - 1) * (1 - polyFeeRate(c));
+  return 1 / c - 1 - feePerDollar(c);
 }
 
 export function pnlPerDollar(c: number, won: boolean): number {
-  return won ? winPnlPerDollar(c) : -1;
+  return won ? winPnlPerDollar(c) : -1 - feePerDollar(c);
 }
 
 /**
- * Win rate at which a position bought at `c` has zero expected value. The fee is
- * charged on the winning profit (engines/settlementMath.ts), so this is
- * c / ((1−c)(1−r) + c), not c + r.
+ * Win rate at which a position bought at `c` has zero expected value: the taker
+ * fee is owed win or lose, so c + 0.07·c·(1−c). Until 2026-09-26 this was
+ * c / ((1−c)(1−r) + c), the fee-on-profit model, 1.0-1.3pp too low.
  */
 export function breakevenWinRate(c: number): number {
-  const r = polyFeeRate(c);
-  return c / ((1 - c) * (1 - r) + c);
+  return c + polyTakerFeePerShare(c);
 }
 
 export interface SimTrade {
@@ -287,15 +294,17 @@ export function summarizeTrades(trades: readonly SimTrade[]): TradeSummary {
   let wins = 0;
   let pnl = 0;
   let winProfitSum = 0;
+  let lossSum = 0;
   let priceSum = 0;
   for (const tr of trades) {
     if (tr.won) wins++;
     pnl += pnlPerDollar(tr.price, tr.won);
     winProfitSum += winPnlPerDollar(tr.price);
+    lossSum -= pnlPerDollar(tr.price, false); // the stake plus the fee, not just -1
     priceSum += tr.price;
   }
   const winRate = wins / n;
-  const breakeven = n / (n + winProfitSum);
+  const breakeven = lossSum / (lossSum + winProfitSum);
   return {
     n,
     wins,

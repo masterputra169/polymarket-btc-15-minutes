@@ -63,8 +63,9 @@ def norm_cdf(z):
     return 0.5 * (1 + np.vectorize(math.erf)(z / math.sqrt(2)))
 
 
-def fee(c):
-    return 0.072 * c * (1 - c)
+def fee_per_dollar(c):
+    """Taker fee on a $1 buy at c (CLOB V2): 1/c shares x 0.07 c (1 - c), win or lose."""
+    return 0.07 * (1 - c)
 
 
 def load(path):
@@ -156,7 +157,7 @@ def simulate(df, col, theta, band, max_age):
     d = d.assign(ok=ok, ask=ask, win=np.where(side_up, d.label == 1, d.label == 0))
     first = d[d.ok].groupby("slug_timestamp").head(1)
     c = first.ask.to_numpy()
-    pnl = np.where(first.win, (1 / c - 1) * (1 - fee(c)), -1.0)
+    pnl = np.where(first.win, 1 / c - 1, -1.0) - fee_per_dollar(c)
     return first.assign(pnl=pnl)
 
 

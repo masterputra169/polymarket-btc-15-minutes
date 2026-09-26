@@ -2,19 +2,21 @@
  * Margin over breakeven — the number a win rate alone cannot tell you.
  *
  * A 66.6% win rate reads as healthy and says almost nothing on its own: buying
- * at an average of 63c, breakeven is already 63.6%, so the same book is worth
- * +3.0pp, not +66.6%. Which side of breakeven a strategy sits on, and by how
+ * at an average of 63c, breakeven is already 64.6%, so the same book is worth
+ * +2.0pp, not +66.6%. Which side of breakeven a strategy sits on, and by how
  * much, is the only form of the number worth putting in front of an operator.
  *
  * Breakeven is NOT re-derived here. It is solved from computeSettlementPnl —
  * the same function that books the trade and the same one the fallback verifier
  * re-books it with — so the dashboard can never drift from the bot's own
- * accounting. That matters concretely: on 2026-09-22 an analysis of 410 dry-run
- * rows used "breakeven = p + fee(p)", which charges the fee on the stake. The
- * bot charges it on the winning profit. The difference is 1.0-1.3pp across the
- * traded range — enough to make a band that is exactly breakeven look like a
- * 1.5pp loser, and enough to nearly ship a filter change for a result that was
- * not there.
+ * accounting.
+ *
+ * History, because the fee model has been wrong once in each direction: on
+ * 2026-09-22 an analysis used "breakeven = p + fee(p)" (the fee on the stake)
+ * and this module replaced it with the bot's model of the day, a fee on the
+ * winning profit only — 1.0-1.3pp lower. The CLOB V2 docs (checked 2026-09-26)
+ * settle it: the taker pays shares × 0.07 × p × (1 − p) at match, win or lose,
+ * so breakeven is p + 0.07·p·(1 − p) — the stake-side formula was the right one.
  */
 
 import { computeSettlementPnl } from '../engines/settlementMath.ts';
@@ -129,7 +131,7 @@ export function summarizeMargin(rows: readonly ScorableRow[]): MarginSummary {
   let losses = 0;
   let pnl = 0;
   let priceSum = 0;
-  let costSum = 0;
+  let lossSum = 0;
   let winPayoutSum = 0;
 
   for (const r of scorable) {
@@ -142,14 +144,15 @@ export function summarizeMargin(rows: readonly ScorableRow[]): MarginSummary {
 
     priceSum += price;
     const cost = SOLVE_NOTIONAL * price;
-    costSum += cost;
+    // A loss costs the stake AND the taker fee, so it is booked, not assumed to be -cost.
+    lossSum -= computeSettlementPnl({ won: false, size: SOLVE_NOTIONAL, cost, price });
     winPayoutSum += computeSettlementPnl({ won: true, size: SOLVE_NOTIONAL, cost, price });
   }
 
   const trades = scorable.length;
   const winRatePct = (wins / trades) * 100;
-  const denom = winPayoutSum + costSum;
-  const breakevenPct = denom > 0 ? (costSum / denom) * 100 : null;
+  const denom = winPayoutSum + lossSum;
+  const breakevenPct = denom > 0 ? (lossSum / denom) * 100 : null;
 
   return {
     trades,

@@ -63,7 +63,7 @@ describe('price_fallback settlement', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(actions.writeJournalEntry).toHaveBeenCalledWith(expect.objectContaining({
-      outcome: 'LOSS', pnl: -1.25,
+      outcome: 'LOSS', pnl: -1.28, // 1.25 cost + 0.03 taker fee (2 × 0.07 × 0.625 × 0.375)
       exitData: expect.objectContaining({ outcome: 'DOWN', source: 'price_fallback' }),
     }));
     expect(actions.onFallbackSettled).toHaveBeenCalledWith({ marketSlug: SLUG, conditionId: COND });
@@ -88,7 +88,7 @@ describe('stale position (restart with a leftover position, no PTB)', () => {
       deps, actions, { signal: ac.signal });
 
     expect(actions.writeJournalEntry).toHaveBeenCalledWith(expect.objectContaining({
-      outcome: 'LOSS', pnl: -1.25,
+      outcome: 'LOSS', pnl: -1.28, // 1.25 cost + 0.03 taker fee (2 × 0.07 × 0.625 × 0.375)
       exitData: expect.objectContaining({ source: 'unknown', staleRecovery: true }),
     }));
     expect(actions.onFallbackSettled).toHaveBeenCalledWith({ marketSlug: SLUG, conditionId: COND });

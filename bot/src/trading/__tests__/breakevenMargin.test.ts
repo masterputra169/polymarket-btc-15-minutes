@@ -1,22 +1,19 @@
 /**
  * Margin over breakeven — the number a win rate alone cannot tell you.
  *
- * Why this module exists: on 2026-09-22 a review of 410 dry-run rows scored
- * every entry-price band against "breakeven = p + fee(p)" and concluded that
- * expensive entries lose money. That formula puts the fee on the COST. The bot
- * charges it on the winning PROFIT (engines/settlementMath.ts), which makes
- * breakeven about 1.0-1.3pp lower across the traded range — enough to turn a
- * band that looked like -1.5pp into one that is exactly 0.0pp, and enough to
- * have shipped a filter change on a result that was not there.
+ * Breakeven is not re-derived here. It is solved from computeSettlementPnl, the
+ * same function that books the trade. If the fee model changes, this moves with
+ * it, and the cross-check test below fails if it ever stops agreeing.
  *
- * So breakeven is not re-derived here. It is solved from computeSettlementPnl,
- * the same function that books the trade. If the fee model changes, this moves
- * with it, and the cross-check test below fails if it ever stops agreeing.
+ * The fee model changed on 2026-09-26: the CLOB V2 docs charge the taker
+ * shares × 0.07 × p × (1 − p) at match, win or lose, so breakeven is
+ * p + 0.07·p·(1 − p). The fee-on-the-winning-profit model it replaced
+ * understated breakeven by 1.0-1.3pp across the traded range.
  */
 
 import { describe, test, expect } from 'vitest';
 import { computeSettlementPnl } from '../../engines/settlementMath.ts';
-import { polyFeeRate } from '../../../../src/config.ts';
+import { polyTakerFeePerShare } from '../../../../src/config.ts';
 import { breakevenWinRate, summarizeMargin, isRealisticFill } from '../breakevenMargin.ts';
 
 /** A resolved journal row, trimmed to the fields the summary reads. */
@@ -44,17 +41,14 @@ describe('breakevenWinRate', () => {
     }
   });
 
-  test('and strictly below the cost-side approximation that caused the error', () => {
-    // p + fee(p) is what you get by charging the fee on the stake. It is the
-    // wrong denominator and it always overstates breakeven; this test is the
-    // regression guard for that specific mistake.
+  test('equals p + 0.07·p·(1 − p): the taker pays the fee per share, win or lose', () => {
     for (const p of [0.55, 0.632, 0.70, 0.78]) {
-      expect(breakevenWinRate(p)!).toBeLessThan(p + polyFeeRate(p));
+      expect(breakevenWinRate(p)!).toBeCloseTo(p + polyTakerFeePerShare(p), 6);
     }
   });
 
-  test('a 63.2c entry needs about 63.6%, not the 64.9% the cost-side formula claims', () => {
-    expect(breakevenWinRate(0.632)!).toBeCloseTo(0.6359, 3);
+  test('a 63.2c entry needs 64.8%, not the 63.6% the fee-on-profit model claimed', () => {
+    expect(breakevenWinRate(0.632)!).toBeCloseTo(0.6483, 3);
   });
 
   test('unusable prices return null rather than a plausible-looking number', () => {
@@ -66,7 +60,7 @@ describe('breakevenWinRate', () => {
 
 describe('summarizeMargin', () => {
   test('counts wins and losses and reports the margin over breakeven', () => {
-    // 10 trades at 60c, 7 wins. Breakeven at 60c is ~60.4%, so +9.6pp.
+    // 10 trades at 60c, 7 wins. Breakeven at 60c is 60% + 1.68c fee = 61.68%, so +8.3pp.
     const rows = [
       ...Array.from({ length: 7 }, () => row(0.60, 'WIN', 0.39)),
       ...Array.from({ length: 3 }, () => row(0.60, 'LOSS', -0.60)),
@@ -77,8 +71,8 @@ describe('summarizeMargin', () => {
     expect(s.losses).toBe(3);
     expect(s.winRatePct).toBeCloseTo(70, 6);
     expect(s.avgEntryPrice).toBeCloseTo(0.60, 6);
-    expect(s.breakevenPct).toBeCloseTo(60.4, 1);
-    expect(s.marginPp).toBeCloseTo(70 - 60.4, 1);
+    expect(s.breakevenPct).toBeCloseTo(61.68, 1);
+    expect(s.marginPp).toBeCloseTo(70 - 61.68, 1);
   });
 
   test('a losing book reports a negative margin, not an absolute distance', () => {

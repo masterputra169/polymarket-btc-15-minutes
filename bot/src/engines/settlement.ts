@@ -11,9 +11,8 @@
 import { createLogger } from '../logger.ts';
 import { CONFIG } from '../config.ts';
 import { notify } from '../monitoring/notifier.ts';
-import { polyFeeRate } from '../../../src/config.ts';
 import { fetchGammaMarketBySlug, outcomeFromMarket } from './marketResolution.ts';
-import { computeSettlementPnl, isProvisionalSource } from './settlementMath.ts';
+import { computeSettlementPnl, isProvisionalSource, takerFee } from './settlementMath.ts';
 
 const log = createLogger('Settlement');
 
@@ -191,7 +190,7 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
     ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
   }
 
-  // FINTECH: Round P&L to cents. Subtract Polymarket fee on profit (matches positionTracker math).
+  // FINTECH: Round P&L to cents, net of the taker entry fee (matches positionTracker math).
   // Shared with the fallback verifier so a later correction re-books the same numbers.
   const pnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
   _lastSettlementSource = source; // RC5: track for fast reconcile trigger
@@ -224,23 +223,12 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
  * Settle an ARB position (guaranteed win).
  */
 function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
-  // H10: Apply Polymarket fee on the ACTUAL winning leg's profit (not worst-case).
-  // Determine which side won using BTC price vs PTB, then use that leg's cost.
-  // Mar-30-2026: dynamic 0.072×p×(1-p); falls back to 2% if entry price unavailable.
-  const POLY_FEE_RATE = (Number.isFinite(pos?.price) && pos.price > 0 && pos.price < 1)
-    ? polyFeeRate(pos.price) : 0.02;
-  let winningLegCost;
-  if (pos.arbUpCost != null && pos.arbDownCost != null && btcPrice != null && ptbValue != null) {
-    // UP wins if BTC >= PTB, DOWN wins otherwise
-    winningLegCost = btcPrice >= ptbValue ? pos.arbUpCost : pos.arbDownCost;
-  } else {
-    // Fallback: worst-case (cheaper leg = larger profit = larger fee) when outcome unknown
-    winningLegCost = (pos.arbUpCost != null && pos.arbDownCost != null)
-      ? Math.min(pos.arbUpCost, pos.arbDownCost)
-      : pos.cost;
-  }
-  const grossProfit = Math.max(0, pos.size - winningLegCost);
-  const fee = Math.round(grossProfit * POLY_FEE_RATE * 100) / 100;
+  // Both legs were bought as a taker, and the entry fee (shares × 0.07 × p × (1−p)
+  // per leg) is owed whichever leg wins — the same number positionTracker books.
+  const legPrice = (legCost) => (legCost != null && pos.size > 0 ? legCost / pos.size : pos?.price);
+  const fee = pos.arbUpCost != null && pos.arbDownCost != null
+    ? Math.round((takerFee(pos.size, legPrice(pos.arbUpCost)) + takerFee(pos.size, legPrice(pos.arbDownCost))) * 100) / 100
+    : takerFee(pos.size, pos?.price);
   const arbPnl = Math.round((pos.size - pos.cost - fee) * 100) / 100; // FINTECH: net of fee
   log.info(`ARB position settled (${context}) — guaranteed WIN | P&L: +$${arbPnl.toFixed(2)} (fee $${fee.toFixed(2)})`);
   actions.settleTrade(true);

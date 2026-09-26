@@ -163,19 +163,19 @@ describe('settleTrade', () => {
     recordTrade({ side: 'UP', tokenId: 't1', price: 0.40, size: 10, marketSlug: 's' });
   });
 
-  it('on WIN: adds payout minus dynamic fee to bankroll', () => {
+  it('on WIN: adds $1/share minus the taker entry fee to bankroll', () => {
     // cost = 4.00, win pays $1/share * 10 = $10
-    // profit = 10 - 4 = 6, fee = 6 * polyFeeRate(0.40) = 0.10, payout = 9.90
-    // bankroll: 96 + 9.90 = 105.90
+    // taker fee = 10 × 0.07 × 0.40 × 0.60 = 0.168 -> 0.17, payout = 9.83
+    // bankroll: 96 + 9.83 = 105.83
     const result = settleTrade(true);
     expect(result).toBe(true);
-    expect(getBankroll()).toBeCloseTo(105.90, 2);
+    expect(getBankroll()).toBeCloseTo(105.83, 2);
   });
 
-  it('on LOSS: bankroll unchanged (payout = 0)', () => {
+  it('on LOSS: the cost is gone and the entry fee is still owed', () => {
     settleTrade(false);
-    // bankroll stays at 96 (already deducted)
-    expect(getBankroll()).toBeCloseTo(96, 2);
+    // bankroll: 96 (cost already deducted) - 0.17 fee = 95.83
+    expect(getBankroll()).toBeCloseTo(95.83, 2);
   });
 
   it('increments wins on WIN', () => {
@@ -239,8 +239,8 @@ describe('settleTradeEarlyExit', () => {
 
   it('adds recovered USDC to bankroll', () => {
     settleTradeEarlyExit(3.00);
-    // bankroll: 96 + 3 = 99
-    expect(getBankroll()).toBeCloseTo(99, 2);
+    // bankroll: 96 + 3 recovered - 0.17 entry fee = 98.83
+    expect(getBankroll()).toBeCloseTo(98.83, 2);
   });
 
   it('counts as loss when recovered < cost', () => {
@@ -434,8 +434,8 @@ describe('getDrawdownPct', () => {
   it('returns correct drawdown after loss', () => {
     recordTrade({ side: 'UP', tokenId: 't1', price: 0.50, size: 20, marketSlug: 's' });
     settleTrade(false);
-    // bankroll = 90, peak = 100
-    expect(getDrawdownPct()).toBeCloseTo(10, 1);
+    // bankroll = 90 - 0.35 fee (20 × 0.07 × 0.25) = 89.65, peak = 100
+    expect(getDrawdownPct()).toBeCloseTo(10.35, 1);
   });
 
   it('handles peak=0', () => {
@@ -544,15 +544,16 @@ describe('partialExit', () => {
     expect(pos.cost).toBeCloseTo(2, 2);
   });
 
-  it('adds recovered USDC to bankroll', () => {
+  it('adds recovered USDC to bankroll, less the entry fee of the shares sold', () => {
     partialExit(5, 2.50);
-    expect(getBankroll()).toBeCloseTo(98.50, 2);
+    // 96 + 2.50 - 0.08 (5 × 0.07 × 0.40 × 0.60 = 0.084)
+    expect(getBankroll()).toBeCloseTo(98.42, 2);
   });
 
   it('delegates to full exit when selling all', () => {
     partialExit(10, 3.00);
     expect(getCurrentPosition()).toBeNull();
-    expect(getBankroll()).toBeCloseTo(99, 2);
+    expect(getBankroll()).toBeCloseTo(98.83, 2);
   });
 
   it('returns false on settled position', () => {
@@ -618,14 +619,13 @@ describe('float precision', () => {
 // ────────────────────────────────────────────
 
 describe('ARB settlement', () => {
-  it('charges fee on worst-case winning leg profit', () => {
+  it('charges the taker fee on both legs', () => {
     recordArbTrade({ upCost: 4.60, downCost: 5.10, shares: 10, marketSlug: 'arb-1' });
     // cost = 9.70, bankroll = 90.30
     settleTrade(true);
-    // Worst-case fee: min(4.60, 5.10)=4.60, profit from that leg = 10 - 4.60 = 5.40
-    // dynamic fee uses ARB entry price 0.97, fee rounds to 0.01
-    // payout = 10 - 0.01 = 9.99
-    // bankroll = 90.30 + 9.99 = 100.29
-    expect(getBankroll()).toBeCloseTo(100.29, 2);
+    // UP leg 10 @ 0.46: 10 × 0.07 × 0.46 × 0.54 = 0.174 -> 0.17
+    // DOWN leg 10 @ 0.51: 10 × 0.07 × 0.51 × 0.49 = 0.175 -> 0.17
+    // payout = 10 - 0.34 = 9.66, bankroll = 90.30 + 9.66 = 99.96 — the fee eats a 3c arb
+    expect(getBankroll()).toBeCloseTo(99.96, 2);
   });
 });
