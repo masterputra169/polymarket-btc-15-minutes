@@ -26,6 +26,13 @@ NUM_BOOST_ROUND = 1200
 EARLY_STOPPING = 80
 N_CV_FOLDS = 5
 
+# XGBoost early-stops on the LAST metric of `eval_metric`, so log loss goes last:
+# it scores the probability the bot prices with, while AUC only ranks and keeps
+# adding trees to a model that orders well and is miscalibrated. Until 2026-09-26
+# the list was ["logloss", "auc"] and every XGBoost fit stopped on AUC.
+# (LightGBM reads its first metric instead, with first_metric_only=True.)
+XGB_EVAL_METRIC: tuple[str, ...] = ("auc", "logloss")
+
 # --- 8 Seed Configurations ---
 _SEED_CONFIGS: Mapping[str, Mapping[str, float]] = MappingProxyType(
     {

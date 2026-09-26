@@ -160,7 +160,7 @@ def lgb_walk_forward_cv(
         )
 
         callbacks = [
-            lgb.early_stopping(early_stopping, verbose=False),
+            lgb.early_stopping(early_stopping, first_metric_only=True, verbose=False),
             lgb.log_evaluation(period=0),
         ]
 
@@ -315,7 +315,7 @@ def train_final_lgb(
     )
 
     lgb_callbacks = [
-        lgb.early_stopping(early_stopping, verbose=False),
+        lgb.early_stopping(early_stopping, first_metric_only=True, verbose=False),
         lgb.log_evaluation(period=0),
     ]
 

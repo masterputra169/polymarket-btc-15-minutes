@@ -244,7 +244,7 @@ from sklearn.metrics import (
 
 # Pure logic extracted into the mltrain package (importable + unit-tested).
 from mltrain.calibration import calibrate_platt
-from mltrain.configs import EARLY_STOPPING, N_CV_FOLDS, NUM_BOOST_ROUND
+from mltrain.configs import EARLY_STOPPING, N_CV_FOLDS, NUM_BOOST_ROUND, XGB_EVAL_METRIC
 from mltrain.cv import walk_forward_cv as _walk_forward_cv
 from mltrain.export import (
     ValidationInfo,
@@ -325,7 +325,7 @@ if args.holdout_frac > 0:
 
 final_params = {
     "objective": "binary:logistic",
-    "eval_metric": ["logloss", "auc"],
+    "eval_metric": list(XGB_EVAL_METRIC),
     "scale_pos_weight": spw,
     "seed": args.seed,
     "tree_method": "hist",

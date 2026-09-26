@@ -24,7 +24,7 @@ from mltrain.pruning import PRUNE_THRESHOLD, evaluate_pruning
 
 RETRAIN_PARAMS: dict[str, Any] = {
     "objective": "binary:logistic",
-    "eval_metric": ["logloss", "auc"],
+    "eval_metric": ["auc", "logloss"],
     "seed": 42,
     "tree_method": "hist",
     "max_depth": 3,

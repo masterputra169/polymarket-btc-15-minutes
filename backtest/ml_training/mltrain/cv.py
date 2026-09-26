@@ -15,6 +15,8 @@ import numpy as np
 import xgboost as xgb
 from sklearn.metrics import accuracy_score, roc_auc_score
 
+from mltrain.configs import XGB_EVAL_METRIC
+
 DEFAULT_NUM_BOOST_ROUND = 1200
 DEFAULT_EARLY_STOPPING = 80
 DEFAULT_N_CV_FOLDS = 5
@@ -73,7 +75,7 @@ def walk_forward_cv(
 
         params = {
             "objective": "binary:logistic",
-            "eval_metric": ["logloss", "auc"],
+            "eval_metric": list(XGB_EVAL_METRIC),
             "scale_pos_weight": spw_f,
             "seed": seed,
             "tree_method": "hist",
