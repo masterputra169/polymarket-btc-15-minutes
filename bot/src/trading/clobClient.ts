@@ -7,6 +7,7 @@ import { ethers } from 'ethers';
 import { ClobClient, OrderType, Side, SignatureType, Chain } from '@polymarket/clob-client';
 import { createLogger } from '../logger.ts';
 import { CONFIG } from '../config.ts';
+import { polygonRpcUrl } from './polygonRpc.ts';
 
 const log = createLogger('CLOB');
 
@@ -319,7 +320,7 @@ export async function placeSellOrder({ tokenId, price, size }) {
 // USDC.e (legacy) which is invisible → ghost-drawdown / wealth under-report.
 // Read USDC.e on-chain and ADD to pUSD for a true total-wallet bankroll.
 const _USDCE_ADDR = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-const _CHAINSTACK = 'https://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
+const _CHAINSTACK = polygonRpcUrl();
 const _POLY_NET = new ethers.Network('matic', 137);
 const _ERC20_BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
 let _usdceProvider = null;

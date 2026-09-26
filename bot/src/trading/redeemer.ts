@@ -21,6 +21,7 @@ import { createLogger } from '../logger.ts';
 import { getWalletAddress } from './clobClient.ts';
 import { gasFeeOverrides } from './gasConfig.ts';
 import { clearPendingRedeem } from './positionTracker.ts';
+import { polygonRpcUrl } from './polygonRpc.ts';
 
 const log = createLogger('Redeemer');
 
@@ -53,8 +54,7 @@ const PARENT_COLLECTION_ID = '0x' + '0'.repeat(64);
 const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
 
 // Custom Chainstack RPC (WSS + HTTP on same endpoint)
-const CHAINSTACK_WSS = 'wss://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
-const CHAINSTACK_HTTP = CHAINSTACK_WSS.replace(/^wss:\/\//, 'https://');
+const CHAINSTACK_HTTP = polygonRpcUrl();
 
 // Single authoritative endpoint -- no round-robin needed with dedicated node
 const RPC_ENDPOINTS = [CHAINSTACK_HTTP];
