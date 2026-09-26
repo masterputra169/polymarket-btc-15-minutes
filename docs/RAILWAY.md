@@ -43,7 +43,7 @@ printed) plus:
 | `PREMARKET_LONG_ENABLED` | `false` | 2026-09-20: 10 dry-run trades, 30% WR, -19.88 on 8x the normal stake |
 | `BLOCKED_SESSIONS` | `,` (empty list) | 2026-09-25: every session trades. Railway rejects an empty value, and `,` parses to no sessions. Was `Europe` from 2026-09-20 (123 trades, 55.6%/58.3% WR wk1/wk2, -17.05) |
 | `TIME_GATES_ENABLED` | `false` | 2026-09-25: no ET blackout hours, weekend floor or Asia ML floors |
-| `EVAL_WINDOW_START` | `2026-09-25T13:28:12Z` | start of the current evaluation window (deploy d8e1651c); the daily Telegram report scores trades since then. Move it whenever a deploy changes trade selection |
+| `EVAL_WINDOW_START` | `2026-09-25T16:53:38Z` | start of the current evaluation window (deploy 4db87b58, the TWAP price-to-beat fix cc24b5c); the daily Telegram report scores trades since then. Move it whenever a deploy changes trade selection |
 
 `frontend`: `RAILWAY_DOCKERFILE_PATH=Dockerfile.frontend`, `VITE_BOT_WS_URL=/ws`,
 `BOT_HOST=bot.railway.internal`, `PORT=80`. **No `VITE_BOT_STATUS_TOKEN`** on
@@ -123,12 +123,12 @@ volume, so the tape always loses before they do.
 so pulling the tape to a PC for training costs nothing). Any S3-compatible
 store works by changing the variables (Backblaze B2, AWS S3, MinIO).
 
-1. Cloudflare dashboard → R2 → *Create bucket* `polybtc15-tape` (location: automatic).
+1. Cloudflare dashboard → R2 → *Create bucket* (location: automatic). The deployed bucket is `poly15btc`.
 2. R2 → *Manage API tokens* → *Create API token*: permission **Object Read & Write**,
    scoped to that bucket only. Copy the Access Key ID, Secret Access Key and the
    S3 endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
 3. Railway → `bot` → Variables (the dashboard, so the secret never passes through a shell history):
-   `TAPE_S3_ENDPOINT`, `TAPE_S3_BUCKET=polybtc15-tape`, `TAPE_S3_ACCESS_KEY_ID`,
+   `TAPE_S3_ENDPOINT`, `TAPE_S3_BUCKET=poly15btc`, `TAPE_S3_ACCESS_KEY_ID`,
    `TAPE_S3_SECRET_ACCESS_KEY`. Saving redeploys; files recorded before that are
    uploaded by the new process on startup.
 4. Same four values in the local, gitignored `bot/.env` for `npm run tape:pull`.
