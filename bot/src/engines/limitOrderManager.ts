@@ -343,11 +343,15 @@ export async function placeLimitOrder({
   // so Kelly naturally recommends larger bets at cheap prices.
   const CLOB_MIN_SHARES = 5;
   const HALF_KELLY = 0.50;          // Conservative half-Kelly
-  const POLY_FEE = 0.072 * targetPrice * (1 - targetPrice) * 0.80; // Maker fee (20% rebate, Mar-30-2026)
+  // A resting limit order is a maker: CLOB V2 charges makers nothing (fee
+  // schedule takerOnly; they share a rebate of the taker fees instead).
   const SPREAD_COST = 0.01;         // Limit orders = maker → lower spread cost
   const grossB = (1 / targetPrice) - 1;                   // Gross payoff ratio
-  const netB = grossB * (1 - POLY_FEE - SPREAD_COST);     // Net after fees
-  const p = mlConfidence;                                  // Win probability from ML
+  const netB = grossB * (1 - SPREAD_COST);                // Net after costs
+  // mlConfidence is |P(UP) − 0.5| × 2, not a probability: the side's win
+  // probability is 0.5 + conf / 2 (conf 0.70 → 85%). Until 2026-09-26 the raw
+  // confidence was used as the probability, under-sizing every limit order.
+  const p = 0.5 + mlConfidence / 2;
   const q = 1 - p;
   const rawKelly = (netB * p - q) / netB;
 

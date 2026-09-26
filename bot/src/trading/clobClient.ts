@@ -27,6 +27,7 @@ import {
 import { checkGtdExpiration, getOrderConstraints, prepareOrder } from './orderConstraints.ts';
 import type { OrderKind, OrderSide, PreparedOrder } from './orderConstraints.ts';
 import { describeApprovals, evaluateV2Readiness, readWalletState } from './v2Readiness.ts';
+import { polygonRpcUrl } from './polygonRpc.ts';
 
 const log = createLogger('CLOB');
 
@@ -420,7 +421,7 @@ export async function placeSellOrder({ tokenId, price, size }: OrderParams) {
 // USDC.e (legacy) which is invisible → ghost-drawdown / wealth under-report.
 // Read USDC.e on-chain and ADD to pUSD for a true total-wallet bankroll.
 const _USDCE_ADDR = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-const _CHAINSTACK = 'https://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
+const _CHAINSTACK = polygonRpcUrl();
 const _POLY_NET = new ethers.Network('matic', 137);
 const _ERC20_BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
 let _usdceProvider = null;

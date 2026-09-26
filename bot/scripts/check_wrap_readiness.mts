@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.resolve(__dirname, '..', '.env') });
 
-const RPC = process.env.POLYGON_RPC_URL || 'https://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
+const RPC = process.env.POLYGON_RPC_URL || 'https://polygon-rpc.com';
 const provider = new ethers.JsonRpcProvider(RPC, { name: 'matic', chainId: 137 }, { staticNetwork: true, batchMaxCount: 1 });
 
 const USDCE  = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';

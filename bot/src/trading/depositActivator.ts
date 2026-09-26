@@ -28,6 +28,7 @@ import { ethers } from 'ethers';
 import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { gasFeeOverrides } from './gasConfig.ts';
+import { polygonRpcUrl } from './polygonRpc.ts';
 
 const log = createLogger('Activator');
 
@@ -37,7 +38,7 @@ const ONRAMP = '0x93070a847efEf7F70739046A929D47a521F5B8ee';
 const PUSD   = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
 
 // Reuse Chainstack endpoint from redeemer (shared dedicated node)
-const CHAINSTACK_HTTP = 'https://polygon-mainnet.core.chainstack.com/af9ff560fda2d0cd33e2dc98b41748af';
+const CHAINSTACK_HTTP = polygonRpcUrl();
 const POLYGON_NETWORK = new ethers.Network('matic', 137);
 
 // ── ABIs ──
