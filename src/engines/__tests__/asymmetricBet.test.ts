@@ -28,6 +28,9 @@ vi.mock('../../config.ts', () => ({
   polyFeeRate: (price: number) => (
     Number.isFinite(price) && price > 0 && price < 1 ? 0.072 * price * (1 - price) : 0
   ),
+  polyTakerFeePerShare: (price: number) => (
+    Number.isFinite(price) && price > 0 && price < 1 ? 0.07 * price * (1 - price) : 0
+  ),
 }));
 
 // Mock feedback stats — return insufficient_data by default so Kelly = base
@@ -127,15 +130,15 @@ describe('gate conditions', () => {
 
 describe('Kelly formula', () => {
   it('computes correct raw Kelly', () => {
-    // grossB = (1/0.50) - 1 = 1.0
-    // netB includes dynamic fee + default spread + slippage = 0.962
+    // taker fee at 0.50 = 0.07 × 0.25 = 0.0175/share; b = (1 - 0.5 - 0.0175) / (0.5 + 0.0175) = 0.93237
+    // then × (1 - 0.015 spread - 0.005 slippage) = 0.91372
     // p = 0.65, q = 0.35
-    // rawKelly = (0.962 * 0.65 - 0.35) / 0.962 = 0.2862
+    // rawKelly = (0.91372 * 0.65 - 0.35) / 0.91372 = 0.2670
     const result = computeBetSizing(makeParams({
       ensembleProb: 0.65,
       marketPrice: 0.50,
     }));
-    expect(result.rawKelly).toBeCloseTo(0.2862, 4);
+    expect(result.rawKelly).toBeCloseTo(0.2670, 4);
   });
 
   it('negative Kelly → noBet (no positive edge)', () => {
@@ -152,16 +155,15 @@ describe('Kelly formula', () => {
   });
 
   it('Kelly with low price (high payout ratio)', () => {
-    // grossB = (1/0.20) - 1 = 4.0
-    // netB includes dynamic fee + default spread + slippage = 3.87392
+    // taker fee at 0.20 = 0.07 × 0.16 = 0.0112/share; b = 0.7888 / 0.2112 × 0.98 = 3.66015
     // p = 0.30, q = 0.70
-    // rawKelly = (3.87392 * 0.30 - 0.70) / 3.87392 = 0.1193
+    // rawKelly = (3.66015 * 0.30 - 0.70) / 3.66015 = 0.1088
     const result = computeBetSizing(makeParams({
       ensembleProb: 0.30,
       marketPrice: 0.20,
       edge: 0.10,
     }));
-    expect(result.rawKelly).toBeCloseTo(0.1193, 3);
+    expect(result.rawKelly).toBeCloseTo(0.1088, 3);
   });
 });
 
@@ -407,14 +409,14 @@ describe('risk level', () => {
 
 describe('expected value', () => {
   it('EV = b*p - q (rounded)', () => {
-    // netB includes dynamic fee + default spread + slippage, p=0.65, q=0.35
-    // EV = 0.962*0.65 - 0.35 = 0.2753, rounded to 0.28
+    // b = 0.91372 (taker fee + default spread + slippage), p=0.65, q=0.35
+    // EV = 0.91372*0.65 - 0.35 = 0.2439, rounded to 0.24
     const result = computeBetSizing(makeParams({
       ensembleProb: 0.65,
       marketPrice: 0.50,
     }));
     if (result.shouldBet) {
-      expect(result.expectedValue).toBeCloseTo(0.28, 2);
+      expect(result.expectedValue).toBeCloseTo(0.24, 2);
     }
   });
 });

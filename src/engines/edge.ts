@@ -1,4 +1,4 @@
-import { ML_CONFIDENCE, polyFeeRate } from '../config.ts';
+import { ML_CONFIDENCE, polyTakerFeePerShare } from '../config.ts';
 
 /**
  * ═══ Edge & Decision Engine v2 ═══
@@ -60,11 +60,11 @@ export function computeEdge({ modelUp, modelDown, marketYes, marketNo, orderbook
   const spreadPenaltyUp = hasBookUp ? 0 : (Number.isFinite(rawSpreadUp) ? rawSpreadUp * 0.5 : DEFAULT_SPREAD_PENALTY);
   const spreadPenaltyDown = hasBookDown ? 0 : (Number.isFinite(rawSpreadDown) ? rawSpreadDown * 0.5 : DEFAULT_SPREAD_PENALTY);
 
-  // H3: Subtract expected Polymarket taker fee from edge.
-  // Fee is on profit (1 - price). Dynamic formula (Feb 2026): feeRate = 0.25 × (p×(1−p))².
-  // At 65c: 1.29% (was flat 2%), at 70c: 1.10%, at 50c: 1.56% (max).
-  const feeAdjUp = effectiveUp != null && Number.isFinite(effectiveUp) ? polyFeeRate(effectiveUp) * (1 - effectiveUp) : 0;
-  const feeAdjDown = effectiveDown != null && Number.isFinite(effectiveDown) ? polyFeeRate(effectiveDown) * (1 - effectiveDown) : 0;
+  // Subtract the taker fee, per share and in probability units: CLOB V2 charges
+  // 0.07 × p × (1 − p) a share at match, win or lose (1.68c at 60c). Until
+  // 2026-09-26 this was 0.072·p·(1−p) of the profit only — about 1pp less edge.
+  const feeAdjUp = effectiveUp != null && Number.isFinite(effectiveUp) ? polyTakerFeePerShare(effectiveUp) : 0;
+  const feeAdjDown = effectiveDown != null && Number.isFinite(effectiveDown) ? polyTakerFeePerShare(effectiveDown) : 0;
 
   const edgeUp = effectiveUp !== null && Number.isFinite(effectiveUp)
     ? modelUp - effectiveUp - spreadPenaltyUp - feeAdjUp

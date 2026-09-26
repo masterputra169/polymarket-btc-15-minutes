@@ -7,9 +7,9 @@
  * This is "Pattern 3: Structural Exploitation" — profit from math, not prediction.
  */
 
-import { ARBITRAGE, polyFeeRate } from '../../../src/config.ts';
+import { ARBITRAGE, polyTakerFeePerShare } from '../../../src/config.ts';
 
-const { MIN_NET_PROFIT, FEE_RATE, MAX_SPREAD, MAX_SPREAD_HIGH_PROFIT } = ARBITRAGE;
+const { MIN_NET_PROFIT, MAX_SPREAD, MAX_SPREAD_HIGH_PROFIT } = ARBITRAGE;
 
 /**
  * Detect if riskless arbitrage exists by buying both YES and NO at bestAsk.
@@ -43,14 +43,10 @@ export function detectArbitrage({ orderbookUp, orderbookDown, marketUp, marketDo
 
   const totalCost = askUp + askDown;
   const grossProfit = 1.00 - totalCost;            // guaranteed payout = $1.00
-  // Fee is on winning side's profit (1.00 - askWinner), not net arb profit.
-  // Use max winning profit (= 1.00 - min(askUp, askDown)) for conservative estimate.
-  const winnerAsk = Math.min(askUp, askDown);
-  const winnerProfit = grossProfit > 0 ? (1.00 - winnerAsk) : 0;
-  // Dynamic fee per winner price (Polymarket Crypto: 0.072 × p × (1−p)).
-  // Fallback to flat FEE_RATE if polyFeeRate returns 0 (edge case on bounds).
-  const winnerFeeRate = polyFeeRate(winnerAsk) || FEE_RATE;
-  const fees = winnerProfit > 0 ? Math.round(winnerProfit * winnerFeeRate * 10000) / 10000 : 0;
+  // Both legs are taker buys, and CLOB V2 charges each 0.07 × p × (1 − p) a share
+  // at match — about 3.5c a pair near 50/50, so an arb needs asks summing under
+  // ~0.965 before it pays. (Until 2026-09-26: the fee on one leg's profit only.)
+  const fees = Math.round((polyTakerFeePerShare(askUp) + polyTakerFeePerShare(askDown)) * 10000) / 10000;
   const netProfit = grossProfit - fees;
 
   // Spread health — wide spreads mean bestAsk is unreliable.

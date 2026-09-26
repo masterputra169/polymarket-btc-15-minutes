@@ -13,6 +13,9 @@ vi.mock('../../config.ts', () => ({
   polyFeeRate: (price: number) => (
     Number.isFinite(price) && price > 0 && price < 1 ? 0.072 * price * (1 - price) : 0
   ),
+  polyTakerFeePerShare: (price: number) => (
+    Number.isFinite(price) && price > 0 && price < 1 ? 0.07 * price * (1 - price) : 0
+  ),
 }));
 
 import { computeEdge, countAgreement, decide } from '../edge.ts';
@@ -31,8 +34,9 @@ describe('computeEdge', () => {
       orderbookUp: { bestAsk: 0.52, bestBid: 0.48, spread: 0.04 },
       orderbookDown: { bestAsk: 0.42, bestBid: 0.38, spread: 0.04 },
     });
-    expect(result.edgeUp).toBeCloseTo(0.1214, 4);   // 0.65 - 0.52 - dynamic fee
-    expect(result.edgeDown).toBeCloseTo(-0.0802, 4); // 0.35 - 0.42 - dynamic fee
+    // taker fee per share: 0.07 × p × (1 − p)
+    expect(result.edgeUp).toBeCloseTo(0.1125, 4);   // 0.65 - 0.52 - 0.01747
+    expect(result.edgeDown).toBeCloseTo(-0.0871, 4); // 0.35 - 0.42 - 0.01705
   });
 
   it('uses market price with spread penalty when no orderbook', () => {
@@ -44,8 +48,8 @@ describe('computeEdge', () => {
       orderbookUp: { spread: 0.04 },   // no bestAsk
       orderbookDown: { spread: 0.04 },
     });
-    // effectiveUp = 0.55 (market), spreadPenalty = 0.04 * 0.5 = 0.02, plus dynamic fee.
-    expect(result.edgeUp).toBeCloseTo(0.0720, 4);
+    // effectiveUp = 0.55 (market), spreadPenalty = 0.04 * 0.5 = 0.02, taker fee 0.01733.
+    expect(result.edgeUp).toBeCloseTo(0.0627, 4);
   });
 
   it('no spread penalty when bestAsk is available', () => {
@@ -58,7 +62,7 @@ describe('computeEdge', () => {
       orderbookDown: null,
     });
     expect(result.spreadPenaltyUp).toBe(0);
-    expect(result.edgeUp).toBeCloseTo(0.1214, 4);
+    expect(result.edgeUp).toBeCloseTo(0.1125, 4);
   });
 
   it('null orderbook → fallback to market prices', () => {
@@ -70,8 +74,8 @@ describe('computeEdge', () => {
       orderbookUp: null,
       orderbookDown: null,
     });
-    expect(result.edgeUp).toBeCloseTo(0.0770, 4);   // includes default spread penalty + dynamic fee
-    expect(result.edgeDown).toBeCloseTo(-0.1248, 4);
+    expect(result.edgeUp).toBeCloseTo(0.0677, 4);   // 0.65 - 0.55 - 0.015 default spread - 0.01733 fee
+    expect(result.edgeDown).toBeCloseTo(-0.1323, 4);
   });
 
   it('selects best side correctly', () => {
@@ -82,7 +86,7 @@ describe('computeEdge', () => {
       marketNo: 0.45,
     });
     expect(result.bestSide).toBe('UP');
-    expect(result.bestEdge).toBeCloseTo(0.1270, 4);
+    expect(result.bestEdge).toBeCloseTo(0.1177, 4);  // 0.70 - 0.55 - 0.015 - 0.01733
   });
 
   it('returns null bestSide when no positive edge', () => {

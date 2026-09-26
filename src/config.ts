@@ -17,7 +17,7 @@ export const BET_SIZING = {
 
 export const ARBITRAGE = {
   MIN_NET_PROFIT: 0.005,       // 0.5% minimum net profit to trigger
-  FEE_RATE: 0.018,             // Dynamic approx at p≈0.5: 0.072×0.5×0.5=0.018 (Mar-30-2026). Use polyFeeRate(p) for exact.
+  FEE_RATE: 0.018,             // unused since 2026-09-26: arbitrage.ts charges polyTakerFeePerShare on both legs
   MAX_SPREAD: 0.08,            // raised 0.05→0.08 — whale bots (PBot1/gabagool22) operate at 45-49c/side where spread is 5-10%
   MAX_SPREAD_HIGH_PROFIT: 0.12, // allow up to 12% spread when netProfit >3% (high margin justifies wide book)
 } as const;
@@ -81,10 +81,10 @@ export const POLY_TAKER_FEE_RATE = 0.07;
  * every taker fill — the losing trades too — and never to makers. At 60c that is
  * 1.68c a share, 2.8% of the notional.
  *
- * This is what settlement books. polyFeeRate() above is the older model (a rate
- * applied to the winning profit only, about a quarter of the real cost) and still
- * feeds entry selection — edge.ts, asymmetricBet.ts, arbitrage.ts — which changes
- * which trades are taken and so waits for an evaluation-window restart.
+ * Settlement, bankroll, breakeven, the edge (edge.ts), Kelly (asymmetricBet.ts)
+ * and arbitrage all use this. polyFeeRate() above is the older model — a rate on
+ * the winning profit only, about a quarter of the real cost — kept for reference;
+ * nothing outside tests calls it since 2026-09-26.
  */
 export function polyTakerFeePerShare(price: number): number {
   if (!Number.isFinite(price) || price <= 0 || price >= 1) return 0;

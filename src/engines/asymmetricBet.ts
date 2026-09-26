@@ -1,4 +1,4 @@
-import { BET_SIZING, EXECUTION, polyFeeRate } from '../config.ts';
+import { BET_SIZING, EXECUTION, polyTakerFeePerShare } from '../config.ts';
 import { computeKellyTune } from './feedback/stats.ts';
 
 const {
@@ -162,16 +162,15 @@ export function computeBetSizing({
   }
 
   // ── Kelly Criterion ──
-  // Quant fix C2: net payout after Polymarket taker fee on profit.
-  // Gross b = (1/price - 1). Net b = gross × (1 - feeRate).
-  // Dynamic fee (Feb 2026): feeRate = 0.25 × (p×(1−p))². At 65c: 1.29%, at 70c: 1.10%.
-  const grossB = (1 / marketPrice) - 1;
-  const feeRate = polyFeeRate(marketPrice);
+  // Net odds after the taker fee: a share costs price + fee (CLOB V2 charges
+  // 0.07·p·(1−p) a share at match, win or lose) and pays $1, so
+  // b = (1 − price − fee) / (price + fee).
+  const takerFee = polyTakerFeePerShare(marketPrice);
+  const feeB = (1 - marketPrice - takerFee) / (marketPrice + takerFee);
   // Audit v4 H7: Include spread cost + avg slippage in Kelly denominator (not just Polymarket fee)
   const spreadCost = executionContext?.spread ? executionContext.spread * 0.5 : 0.015;
   const slippage = executionContext?.avgSlippage ?? 0.005;
-  const totalCost = feeRate + spreadCost + slippage;
-  const b = grossB * (1 - totalCost);    // net decimal odds after fee + spread + slippage
+  const b = feeB * (1 - spreadCost - slippage);    // net decimal odds after fee + spread + slippage
   // Probability Kelly sizes on: the model's, pulled toward the price by the
   // shrink. Never amplified (clamped to [0, 1]); a non-finite shrink = no shrink.
   const shrink = Number.isFinite(probShrinkToMarket) ? Math.max(0, Math.min(1, probShrinkToMarket)) : 1;
