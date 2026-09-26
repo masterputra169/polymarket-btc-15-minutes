@@ -144,10 +144,14 @@ export function passesWithRelaxed(s: ScoredLine, relaxed: ReadonlySet<GateId>): 
 /** The bot's ML gate (tradeFilters.ts filter 1) with its three thresholds. */
 export interface MlRule { label: string; min: number; relaxed: number; bypass: number }
 
-/** Candidate rules scored forward on the tape; the first is the live rule. */
+/**
+ * ML gates scored forward on the tape. Since 2026-09-26 the live gate is the edge
+ * bypass (FILTER_ML_CONF_RELAXED=0.20, FILTER_HIGH_EDGE_BYPASS=0.10 on the bot's
+ * fee- and ask-adjusted edge); the first row is the gate it replaced.
+ */
 export const ML_RULE_CANDIDATES: readonly MlRule[] = [
-  { label: 'live: conf>=0.65 (0.45 at edge>=15%)', min: 0.65, relaxed: 0.45, bypass: 0.15 },
-  { label: 'edge bypass: 0.20 at edge>=12%', min: 0.65, relaxed: 0.20, bypass: 0.12 },
+  { label: 'before 09-26: 0.65 (0.45 at edge>=15%)', min: 0.65, relaxed: 0.45, bypass: 0.15 },
+  { label: 'live since 09-26: 0.65 (0.20 at edge>=10%)', min: 0.65, relaxed: 0.20, bypass: 0.10 },
   { label: 'conf>=0.45 flat', min: 0.45, relaxed: 0.45, bypass: 1 },
 ];
 

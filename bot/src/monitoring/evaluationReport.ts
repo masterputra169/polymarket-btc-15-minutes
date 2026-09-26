@@ -49,7 +49,34 @@ export function readEvalConfig(env: Env): EvalConfig {
 }
 
 export interface EvalRow extends ScorableRow {
-  entry?: ScorableRow['entry'] & { enteredAt?: number | null; session?: string | null; modelId?: string | null };
+  entry?: ScorableRow['entry'] & {
+    enteredAt?: number | null; session?: string | null; modelId?: string | null;
+    mlConfidence?: number | null; bestEdge?: number | null; timeLeftMin?: number | null;
+    settlePrice?: number | null; priceToBeat?: number | null;
+  };
+}
+
+/**
+ * The entry gates as they stood before the 2026-09-26 softening (FILTER_ML_CONF_RELAXED
+ * 0.45 → 0.20, FILTER_HIGH_EDGE_BYPASS 0.15 → 0.10, FILTER_BTC_DIST_MIN_PCT 0.04 → 0.01).
+ * Every trade is classed against them, so the report shows what the softening added —
+ * the forward test of a change chosen on a 30-day backtest, now on live markets.
+ */
+export const PRE_SOFTENING_RULE = {
+  mlMin: 0.65, mlRelaxed: 0.45, edgeBypass: 0.15,
+  btcDistPct: 0.04, btcDistMlBypass: 0.8, earlyLeft: 10, earlyFactor: 0.5, midLeft: 5, midFactor: 0.75,
+} as const;
+
+/** Would this entry have passed the pre-softening ML and BTC-distance gates? null when the row lacks the fields. */
+export function passedPreSofteningRule(e: EvalRow['entry']): boolean | null {
+  const R = PRE_SOFTENING_RULE;
+  const mc = Number(e?.mlConfidence), edge = Number(e?.bestEdge), tl = Number(e?.timeLeftMin);
+  const price = Number(e?.settlePrice), ptb = Number(e?.priceToBeat);
+  if (![mc, edge, tl, price, ptb].every(Number.isFinite) || !(ptb > 0)) return null;
+  const mlOk = mc >= (edge >= R.edgeBypass ? Math.min(R.mlMin, R.mlRelaxed) : R.mlMin);
+  const need = tl > R.earlyLeft ? R.btcDistPct * R.earlyFactor : tl > R.midLeft ? R.btcDistPct * R.midFactor : R.btcDistPct;
+  const distOk = mc >= R.btcDistMlBypass || (Math.abs(price - ptb) / ptb) * 100 >= need;
+  return mlOk && distOk;
 }
 
 export interface WinRateInterval { lo: number; hi: number }
@@ -78,6 +105,8 @@ export interface EvaluationSummary {
   bySession: Array<{ session: string; summary: MarginSummary }>;
   last24h: MarginSummary;
   excludedNotRealistic: number;
+  /** Realistic-fill trades the pre-softening rule would have taken, and the ones the softening added. */
+  byRule: { old: MarginSummary; added: MarginSummary; unclassified: number };
 }
 
 const RESOLVED = new Set(['WIN', 'LOSS']);
@@ -125,6 +154,11 @@ export function buildEvaluation(rows: readonly EvalRow[], since: number, now: nu
     bySession,
     last24h: marginReport(win.filter(r => Number(r.entry?.enteredAt) >= now - 86_400_000)).realistic,
     excludedNotRealistic: report.lifetime.trades - realistic.trades,
+    byRule: {
+      old: marginReport(win.filter(r => passedPreSofteningRule(r.entry) === true)).realistic,
+      added: marginReport(win.filter(r => passedPreSofteningRule(r.entry) === false)).realistic,
+      unclassified: win.filter(r => passedPreSofteningRule(r.entry) === null).length,
+    },
   };
 }
 
@@ -173,6 +207,11 @@ export function formatEvaluation(s: EvaluationSummary): string {
   if (s.bySession.length) {
     out.push('', '<b>By session</b>');
     for (const { session, summary } of s.bySession) out.push(line(esc(session), summary));
+  }
+  if (s.byRule.old.trades + s.byRule.added.trades > 0) {
+    out.push('', '<b>Softening forward test</b> (gates eased 2026-09-26)');
+    out.push(line('Old rule would take', s.byRule.old));
+    out.push(line('Added by softening', s.byRule.added));
   }
   out.push('', line('Last 24h', s.last24h));
   if (s.excludedNotRealistic > 0) {

@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  buildEvaluation, formatEvaluation, readEvalConfig, wilson95, msUntilHourUtc, readJournalRows, type EvalRow,
+  buildEvaluation, formatEvaluation, readEvalConfig, wilson95, msUntilHourUtc, readJournalRows, passedPreSofteningRule, type EvalRow,
 } from '../evaluationReport.ts';
 import { breakevenWinRate } from '../../trading/breakevenMargin.ts';
 
@@ -124,5 +124,36 @@ describe('readJournalRows', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('softening forward test', () => {
+  const PTB = 84_000;
+  const e = (over: Record<string, number>) => ({ mlConfidence: 0.7, bestEdge: 0.05, timeLeftMin: 3, settlePrice: PTB + 50, priceToBeat: PTB, ...over });
+  test('classes an entry against the pre-softening ML and BTC-distance gates', () => {
+    expect(passedPreSofteningRule(e({}))).toBe(true);                                  // conf 0.70 >= 0.65, 0.06% >= 0.04%
+    expect(passedPreSofteningRule(e({ mlConfidence: 0.3, bestEdge: 0.11 }))).toBe(false); // only the new 0.20@10% path
+    expect(passedPreSofteningRule(e({ mlConfidence: 0.5, bestEdge: 0.16 }))).toBe(true);  // old relaxed path 0.45@15%
+    expect(passedPreSofteningRule(e({ settlePrice: PTB + 10 }))).toBe(false);           // 0.012% < 0.04% late
+    expect(passedPreSofteningRule(e({ settlePrice: PTB + 10, mlConfidence: 0.85 }))).toBe(true); // ML >= 0.80 waives distance
+    expect(passedPreSofteningRule(e({ settlePrice: PTB + 10, timeLeftMin: 12 }))).toBe(false);   // early needs 0.02%
+    expect(passedPreSofteningRule(e({ settlePrice: PTB + 20, timeLeftMin: 12 }))).toBe(true);    // 0.024% >= 0.02%
+    expect(passedPreSofteningRule({ tokenPrice: 0.6 } as any)).toBeNull();
+  });
+  test('the report splits the window and prints both lines', () => {
+    const rows = [
+      row(0, true, e({}) as any),
+      row(1, false, e({ mlConfidence: 0.3, bestEdge: 0.11 }) as any),
+      row(2, true, e({ mlConfidence: 0.3, bestEdge: 0.11 }) as any),
+      row(3, true),
+    ];
+    const s = buildEvaluation(rows, SINCE, NOW, 150);
+    expect(s.byRule.old.trades).toBe(1);
+    expect(s.byRule.added.trades).toBe(2);
+    expect(s.byRule.unclassified).toBe(1);
+    const text = formatEvaluation(s);
+    expect(text).toContain('Softening forward test');
+    expect(text).toContain('Old rule would take: 1 trades');
+    expect(text).toContain('Added by softening: 2 trades');
   });
 });
