@@ -45,7 +45,8 @@ import { loadMLModelFromDisk } from './src/adapters/mlLoader.ts';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.ts';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition, resetDailyBaseline } from './src/trading/positionTracker.ts';
-import { initClobClient, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
+import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
+import { GTD_MIN_LEAD_SEC, worstCaseLimitLeadSec } from './src/trading/orderConstraints.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.ts';
@@ -151,6 +152,30 @@ async function main() {
         const intervalMs = intervalMin * 60 * 1000;
         log.info(`Auto-activate periodic enabled: every ${intervalMin} minutes`);
         setInterval(() => runActivate('periodic').catch(() => {}), intervalMs);
+      }
+    }
+
+    // 1c'. CLOB V2 readiness — fail closed. The funder must hold pUSD and have
+    // approved CTF Exchange V2 for pUSD (BUY) and its outcome tokens (SELL).
+    // View calls only: nothing is approved or wrapped here. Runs after the
+    // opt-in auto-activate above so a wrap it just did is counted.
+    try {
+      await verifyClobV2Readiness();
+    } catch (err) {
+      log.error(`CLOB V2 readiness check failed: ${err.message}`);
+      log.error('Not trading live until the wallet is ready (docs/CLOB_V2_MIGRATION.md). Exiting.');
+      process.exit(1);
+    }
+    // GTD orders need >= 180 s of lead on CLOB V2. Warn (do not change config)
+    // when the limit window can place later than that allows.
+    if (BOT_CONFIG.limitOrder?.enabled) {
+      const lead = worstCaseLimitLeadSec(BOT_CONFIG.limitOrder.maxElapsedMin, BOT_CONFIG.limitOrder.expirationBufferSec);
+      if (lead < GTD_MIN_LEAD_SEC) {
+        log.warn(
+          `LIMIT config: a placement at LIMIT_MAX_ELAPSED_MIN=${BOT_CONFIG.limitOrder.maxElapsedMin} with ` +
+          `LIMIT_EXPIRATION_BUFFER_SEC=${BOT_CONFIG.limitOrder.expirationBufferSec} leaves ${lead}s of GTD lead; ` +
+          `CLOB V2 needs ${GTD_MIN_LEAD_SEC}s, so late limit orders will be refused (FOK fallback applies)`,
+        );
       }
     }
 

@@ -118,9 +118,11 @@ export async function closePosition(tokenId, size, price) {
         throw new Error('no_tokens_on_chain');
       }
 
-      // Check ERC1155 allowance: 0 = exchange not approved to transfer tokens
-      // Fix: trigger Polymarket's gasless approval relay, then retry sell.
-      if (clobAllowance === 0) {
+      // Check ERC1155 allowance: 0 = exchange not approved to transfer tokens.
+      // null = the CLOB V2 response did not report CTF Exchange V2 at all
+      // (allowances are per spender) — treat it like a missing approval.
+      // Fix: sync the CLOB's allowance cache, then retry sell.
+      if (clobAllowance === 0 || clobAllowance == null) {
         log.warn(`SELL: ERC1155 approval missing for ${tokenId.slice(0, 12)}... — triggering gasless approval via CLOB API`);
         await updateConditionalApproval(tokenId);
         // Wait for approval to propagate on-chain (Polygon ~2s block time)

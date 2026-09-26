@@ -21,7 +21,7 @@ jobs:
             package-lock.json
             bot/package-lock.json
       - run: npm ci
-      # The bot is its own package: ethers, @polymarket/clob-client, dotenv, ...
+      # The bot is its own package: ethers, viem, @polymarket/clob-client-v2, dotenv, ...
       # live only in bot/package.json. Without this the typecheck cannot resolve
       # them and fails on every push.
       - run: npm ci --prefix bot
