@@ -8,7 +8,7 @@
  * Persistence: saves baseline to bot/data/profit_target.json so it survives restarts.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'fs';
 import { resolve } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
@@ -58,12 +58,14 @@ function loadState() {
  */
 function saveState() {
   try {
-    writeFileSync(STATE_FILE, JSON.stringify({
+    const tmp = `${STATE_FILE}.tmp`;
+    writeFileSync(tmp, JSON.stringify({
       wibDate: currentWibDate,
       baseline: startOfDayBalance,
       targetReached,
       savedAt: Date.now(),
     }, null, 2));
+    renameSync(tmp, STATE_FILE);
   } catch (err) {
     log.warn(`Could not save profit target state: ${err.message}`);
   }

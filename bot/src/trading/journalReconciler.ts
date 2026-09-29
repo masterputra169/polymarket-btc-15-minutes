@@ -14,7 +14,7 @@
  * Output: bot/data/verified_journal.jsonl (append-only, schema-compatible)
  */
 
-import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { appendFileSync, readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { dirname } from 'path';
 import { BOT_CONFIG, CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
@@ -33,6 +33,13 @@ type ClobMarketResponse = {
   question?: string;
   [key: string]: any;
 };
+
+/** Replace the verified journal atomically: a crash mid-write must not truncate the file. */
+function rewriteVerifiedJournal(lines: string[]) {
+  const tmp = `${BOT_CONFIG.verifiedJournalFile}.tmp`;
+  writeFileSync(tmp, lines.join('\n') + '\n');
+  renameSync(tmp, BOT_CONFIG.verifiedJournalFile);
+}
 
 /**
  * Fetch paginated /activity records from Polymarket data-api.
@@ -508,7 +515,7 @@ async function _reconcileFromDataApi(activity, now) {
         } catch { /* keep original on parse error */ }
         return line;
       });
-      writeFileSync(BOT_CONFIG.verifiedJournalFile, newLines.join('\n') + '\n');
+      rewriteVerifiedJournal(newLines);
       log.info(`data-api: replaced ${updatedEntries.length} unresolved → resolved`);
     } catch (err) {
       log.warn(`data-api: failed to update unresolved entries: ${err.message}`);
@@ -743,7 +750,7 @@ async function reconcile() {
         } catch { /* keep original */ }
         return line;
       });
-      writeFileSync(BOT_CONFIG.verifiedJournalFile, newLines.join('\n') + '\n');
+      rewriteVerifiedJournal(newLines);
       log.info(`Replaced ${updatedEntries.length} unresolved entries with resolved data`);
     } catch (err) {
       log.warn(`Failed to update unresolved entries: ${err.message}`);

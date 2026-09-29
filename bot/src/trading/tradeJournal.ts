@@ -164,7 +164,10 @@ export function captureEntrySnapshot(data) {
   try {
     const dir = dirname(BOT_CONFIG.entrySnapshotFile);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(BOT_CONFIG.entrySnapshotFile, JSON.stringify(entrySnapshot));
+    // tmp + rename: a crash mid-write must not leave a truncated snapshot for the open position
+    const snapTmp = `${BOT_CONFIG.entrySnapshotFile}.tmp`;
+    writeFileSync(snapTmp, JSON.stringify(entrySnapshot));
+    renameSync(snapTmp, BOT_CONFIG.entrySnapshotFile);
   } catch (err) {
     log.warn(`[RC1] Failed to persist entry snapshot: ${err.message}`);
   }

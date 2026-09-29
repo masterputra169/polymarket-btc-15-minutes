@@ -18,15 +18,9 @@ import { maybeAnalyze, getLastAnalysis } from './ai/postTradeAnalyst.ts';
 import { maybeOptimize, getOptimizerStatus } from './ai/selfOptimizer.ts';
 import { cacheStatusSnapshot } from './services/runtimeIntegrations.ts';
 import { isLocalBindHost } from './utils/net.ts';
+import { parseClobAmount } from './utils/clobAmount.ts';
 
 const log = createLogger('StatusWS');
-
-/** Validate a numeric amount from CLOB response. Returns fallback if invalid. */
-function parseClobAmount(raw, fallback) {
-    const v = parseFloat(raw);
-    if (!Number.isFinite(v) || v < 0 || v > 1_000_000) return fallback;
-    return v;
-}
 
 const HEARTBEAT_MS = 15_000;             // W4: 30s→15s — faster zombie detection for trading bot
 const SET_BANKROLL_COOLDOWN_MS = 5_000;  // rate limit: 1 setBankroll per 5s

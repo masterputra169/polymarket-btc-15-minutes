@@ -17,6 +17,8 @@ const USDC_BALANCE_INTERVAL = 30_000;
 
 // ── State ──
 let pendingUsdcSync = null;
+// Local bankroll at the moment the pending sync was queued (null = not checked, e.g. startup).
+let pendingSyncBaseline = null;
 let usdcBalanceData = null;
 let usdcBalanceLastFetchMs = 0;
 let reconcileCooldownUntil = 0; // block syncs during/after reconciliation
@@ -36,8 +38,17 @@ export function applyPendingSync(getBankroll, setBankroll) {
       return;
     }
     const syncVal = pendingUsdcSync;
+    const baseline = pendingSyncBaseline;
     pendingUsdcSync = null;
+    pendingSyncBaseline = null;
     const current = getBankroll();
+    // The sync was queued when no position was open. If the bankroll has moved since (a trade
+    // was recorded between the fetch and this poll), the fetched balance predates it: applying
+    // it would hand the trade's cost back to the bankroll.
+    if (baseline != null && Math.abs(current - baseline) > 0.01) {
+      log.debug(`USDC sync dropped: bankroll moved since it was queued ($${baseline.toFixed(2)} -> $${current.toFixed(2)})`);
+      return;
+    }
     if (Math.abs(current - syncVal) > 0.01) {
       log.info(`USDC sync: $${current.toFixed(2)} → $${syncVal.toFixed(2)}`);
       setBankroll(syncVal);
@@ -99,6 +110,7 @@ export function scheduleUsdcCheck({
     } else if (drift > 0.01 && !hasPos && !hasPendingCost) {
       log.info(`AUTO-SYNC queued: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
       pendingUsdcSync = onChain;
+      pendingSyncBaseline = localBankroll;
     } else if (drift > 1.0 && (hasPos || hasPendingCost)) {
       log.warn(`DRIFT: local=$${localBankroll.toFixed(2)} vs on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)}, ${hasPos ? 'position open' : 'pending cost'} — deferring sync)`);
     }
@@ -110,6 +122,7 @@ export function scheduleUsdcCheck({
  */
 export function queueSync(value) {
   pendingUsdcSync = value;
+  pendingSyncBaseline = null;
 }
 
 /**
@@ -117,6 +130,7 @@ export function queueSync(value) {
  */
 export function invalidateSync() {
   pendingUsdcSync = null;
+  pendingSyncBaseline = null;
 }
 
 /**
@@ -128,6 +142,7 @@ export function invalidateSync() {
 export function setReconcileCooldown(durationMs) {
   reconcileCooldownUntil = Date.now() + durationMs;
   pendingUsdcSync = null; // also clear any stale queued sync
+  pendingSyncBaseline = null;
   log.debug(`Reconcile cooldown set: ${(durationMs / 1000).toFixed(0)}s`);
 }
 
@@ -190,6 +205,7 @@ export async function forceUsdcSync(fetchBalance, getBankroll, setBankroll) {
   setBankroll(onChain);
   usdcBalanceData = result;   // update cached data
   pendingUsdcSync = null;     // clear any queued sync
+  pendingSyncBaseline = null;
   log.info(`forceSync: $${prev.toFixed(2)} → $${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
   return { ok: true, action: 'synced', prev, onChain, drift };
 }

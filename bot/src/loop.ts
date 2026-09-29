@@ -218,6 +218,8 @@ import { broadcast } from './statusServer.ts';
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
 import { beatLiveness } from './monitoring/processLiveness.ts';
+import { recordIdleHeartbeat } from './monitoring/ptbHealth.ts';
+import { parseClobAmount } from './utils/clobAmount.ts';
 
 // Live Polymarket data logger
 import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.ts';
@@ -590,8 +592,10 @@ export async function pollOnce() {
     broadcast({ paused: true, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
     // Same as the halted path: a paused bot is idle by choice, not blind. Without a heartbeat
     // the liveness watch exits the process, and since `paused` lives in memory the restart
-    // comes back UNPAUSED and trades against the operator's pause.
+    // comes back UNPAUSED and trades against the operator's pause. The external watchdog
+    // reads ptb_health.jsonl instead, so that gets a heartbeat as well.
     beatLiveness();
+    recordIdleHeartbeat('paused');
     return;
   }
   polling = true;
@@ -680,6 +684,7 @@ export async function pollOnce() {
         // in-memory cooldown, and after 10 restarts Railway stops the service
         // (measured 2026-09-08 02:13–03:09Z: crash loop, then down for 3+ hours).
         beatLiveness();
+        recordIdleHeartbeat('halted');
         return;
       }
     } else {
@@ -2853,15 +2858,4 @@ export async function pollOnce() {
   } finally {
     polling = false;
   }
-}
-
-/**
- * Safely parse a CLOB amount field (makingAmount / takingAmount).
- * Returns null if the value is missing, NaN, negative, or unreasonably large.
- */
-function parseClobAmount(value, fallback = null) {
-  if (value == null) return fallback;
-  const n = typeof value === 'number' ? value : parseFloat(value);
-  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return fallback;
-  return n;
 }

@@ -14,6 +14,7 @@ import { BOT_CONFIG } from '../config.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
+import { parseClobAmount } from '../utils/clobAmount.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -53,17 +54,6 @@ function fokBuyPrice(targetPrice, spread) {
   const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
   return Math.min(Math.round((targetPrice + slippage) * 1000) / 1000, 0.99);
-}
-
-/**
- * Safely parse a CLOB amount field (makingAmount / takingAmount).
- * Returns null if the value is missing, NaN, negative, or unreasonably large.
- */
-function parseClobAmount(value, fallback = null) {
-  if (value == null) return fallback;
-  const n = typeof value === 'number' ? value : parseFloat(value);
-  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return fallback;
-  return n;
 }
 
 /**
