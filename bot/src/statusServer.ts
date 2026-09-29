@@ -291,7 +291,8 @@ export function startStatusServer() {
                   // merges on-chain positions); settling the tracked position for those would book
                   // the wrong cost and close a position that is still open.
                   const owns = !!sellPos && !sellPos.settled && sellPos.tokenId === tokenId;
-                  const soldAll = owns && size >= sellPos.size - 1e-6;
+                  // The Data API's size can differ from the tracker's by rounding: under 0.01 share left is a full exit, not a dust position.
+                  const soldAll = owns && sellPos.size - size < 0.01;
                   let settled = false;
                   if (owns && soldAll) {
                     // Net of the entry fee, like the tracker's own booking (settleTradeEarlyExit).
