@@ -19,6 +19,7 @@ type RequestOptions = {
 const POLYMARKET_HOST_RE = /(^|\.)polymarket\.com$/i;
 const DEFAULT_DOH_URL = 'https://cloudflare-dns.com/dns-query';
 const DEFAULT_TTL_MS = 5 * 60_000;
+const MAX_BODY_CHARS = 32 * 1024 * 1024; // the largest legitimate payload (Gamma event pages) is a few MB
 
 const dnsCache = new Map<string, { addresses: LookupAddress[]; expiresAt: number }>();
 
@@ -128,7 +129,11 @@ function requestText(url: string, options: RequestOptions = {}, redirectCount = 
 
       let body = '';
       res.setEncoding('utf8');
-      res.on('data', (chunk) => { body += chunk; });
+      res.on('data', (chunk) => {
+        body += chunk;
+        // A misbehaving or hijacked endpoint must not be able to grow this string without bound.
+        if (body.length > MAX_BODY_CHARS) req.destroy(new Error(`Response body exceeds ${MAX_BODY_CHARS} characters`));
+      });
       res.on('end', () => resolve({ status, body, headers: res.headers }));
     });
 

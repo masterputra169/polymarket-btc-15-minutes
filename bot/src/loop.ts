@@ -128,6 +128,7 @@ import {
   recordTrade,
   settleTrade,
   settleTradeEarlyExit,
+  earlyExitPnl,
   hasOpenPosition,
   getBankroll,
   getAvailableBankroll,
@@ -217,6 +218,8 @@ import { broadcast } from './statusServer.ts';
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
 import { beatLiveness } from './monitoring/processLiveness.ts';
+import { recordIdleHeartbeat } from './monitoring/ptbHealth.ts';
+import { parseClobAmount } from './utils/clobAmount.ts';
 
 // Live Polymarket data logger
 import { shouldLog as shouldLogPoly, logSnapshot as logPolySnapshot } from './polymarketLogger.ts';
@@ -587,6 +590,12 @@ export async function pollOnce() {
   if (polling) return;
   if (paused) {
     broadcast({ paused: true, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
+    // Same as the halted path: a paused bot is idle by choice, not blind. Without a heartbeat
+    // the liveness watch exits the process, and since `paused` lives in memory the restart
+    // comes back UNPAUSED and trades against the operator's pause. The external watchdog
+    // reads ptb_health.jsonl instead, so that gets a heartbeat as well.
+    beatLiveness();
+    recordIdleHeartbeat('paused');
     return;
   }
   polling = true;
@@ -675,6 +684,7 @@ export async function pollOnce() {
         // in-memory cooldown, and after 10 restarts Railway stops the service
         // (measured 2026-09-08 02:13–03:09Z: crash loop, then down for 3+ hours).
         beatLiveness();
+        recordIdleHeartbeat('halted');
         return;
       }
     } else {
@@ -821,7 +831,7 @@ export async function pollOnce() {
           // No orders + local position with unconfirmed fill → check trade history
           log.info('Startup reconciliation: no open orders, unconfirmed position — checking trade history');
           try {
-            const trades = await getTradeHistory({ assetId: pos.tokenId, after: pos.entryTime || (Date.now() - 30 * 60_000) });
+            const trades = await getTradeHistory({ assetId: pos.tokenId, after: (pos.enteredAt ? pos.enteredAt - 60_000 : Date.now() - 30 * 60_000) });
             if (trades.length > 0) {
               // Trades found → order was filled, flag was lost
               confirmFill();
@@ -864,6 +874,9 @@ export async function pollOnce() {
         settlementPending = true;
         settlementAbort = new AbortController();
         const _saExpiry = makeSettlementActions();
+        // Captured now: by the time the settlement finishes, currentConditionId has been
+        // reset (or moved to the next market), and the redeem must target THIS position's market.
+        const expiryCondId = pos.conditionId ?? currentConditionId;
         handleExpiry(
           { pos, currentMarketSlug, currentConditionId, priceToBeat, now },
           {
@@ -875,7 +888,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal, getCloseTwap: () => closeTwapFor(pos.marketSlug) },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
-          triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
+          triggerRedeem(15_000, expiryCondId); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -1042,6 +1055,7 @@ export async function pollOnce() {
         settlementPending = true;
         settlementAbort = new AbortController();
         const _saSwitch = makeSettlementActions();
+        const switchCondId = pos.conditionId ?? currentConditionId; // this position's market, not the new one
         handleSwitch(
           { pos, oldSlug, currentConditionId, priceToBeat, now },
           {
@@ -1053,7 +1067,7 @@ export async function pollOnce() {
           { signal: settlementAbort.signal, getCloseTwap: () => closeTwapFor(pos.marketSlug) },
         ).finally(() => {
           settlementPending = false; settlementAbort = null;
-          triggerRedeem(15_000, currentConditionId); // Auto-redeem after oracle settlement
+          triggerRedeem(15_000, switchCondId); // Auto-redeem after oracle settlement
           // RC5: If settlement used price_fallback, schedule fast reconcile to correct bankroll
           if (getLastSettlementSource() === 'price_fallback') {
             clearLastSettlementSource();
@@ -1453,7 +1467,7 @@ export async function pollOnce() {
             const emRecovery = parseClobAmount(result?.takingAmount, emSellPrice * emergencyPos.size);
             if (emRecovery !== null) {
               settleTradeEarlyExit(emRecovery);
-              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: emRecovery - emergencyPos.cost, exitData: { reason: emergencyCheck.reason } });
+              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: earlyExitPnl(emergencyPos, emRecovery), exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
@@ -1520,7 +1534,7 @@ export async function pollOnce() {
               smartFlowStrength: smartFlowSignal.strength,
             };
             if (BOT_CONFIG.dryRun) {
-              const sfPnl = sfRecovery - sfPos.cost;
+              const sfPnl = earlyExitPnl(sfPos, sfRecovery);
               settleTradeEarlyExit(sfRecovery);
               invalidateSync();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
@@ -1535,7 +1549,7 @@ export async function pollOnce() {
               try {
                 const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
                 const sfActualRecovery = parseClobAmount(sfResult?.takingAmount, sfRecovery);
-                const sfPnl = sfActualRecovery - sfPos.cost;
+                const sfPnl = earlyExitPnl(sfPos, sfActualRecovery);
                 settleTradeEarlyExit(sfActualRecovery);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
@@ -1662,7 +1676,7 @@ export async function pollOnce() {
 
             if (BOT_CONFIG.dryRun) {
               const recovery = cutResult.sellPrice * sellSize;
-              const cutPnl = recovery - pos.cost;
+              const cutPnl = earlyExitPnl(pos, recovery);
               settleTradeEarlyExit(recovery);
               invalidateSync();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
@@ -1683,7 +1697,7 @@ export async function pollOnce() {
               try {
                 const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
                 const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
-                const cutPnl = actualRecovery - pos.cost;
+                const cutPnl = earlyExitPnl(pos, actualRecovery);
                 settleTradeEarlyExit(actualRecovery);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
@@ -1706,7 +1720,7 @@ export async function pollOnce() {
                   log.error(`CUT-LOSS: Phantom position — no tokens found on-chain. Unwinding position state (loss=$${pos.cost.toFixed(2)})`);
                   settleTradeEarlyExit(0); // 0 recovery
                   invalidateSync();
-                  writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: -pos.cost, exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
+                  writeJournalEntry({ outcome: 'PHANTOM_LOSS', pnl: earlyExitPnl(pos, 0), exitData: { ...exitData, reason: 'no_tokens_on_chain' } });
                   clearEntrySnapshot();
                   resetCutLossState();
                   resetTakeProfitState();
@@ -1765,7 +1779,7 @@ export async function pollOnce() {
             const tpExitData = { gainPct: tpResult.gainPct, weakeners: tpResult.weakeners, timeLeftMin };
 
             if (BOT_CONFIG.dryRun) {
-              const tpPnl = tpResult.recoveryAmount - tpPos.cost;
+              const tpPnl = earlyExitPnl(tpPos, tpResult.recoveryAmount);
               settleTradeEarlyExit(tpResult.recoveryAmount);
               invalidateSync();
               writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: tpExitData });
@@ -1779,7 +1793,7 @@ export async function pollOnce() {
               try {
                 const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
                 const tpActualRecovery = parseClobAmount(tpSellResult?.takingAmount, tpResult.sellPrice * tpSellSize);
-                const tpPnl = tpActualRecovery - tpPos.cost;
+                const tpPnl = earlyExitPnl(tpPos, tpActualRecovery);
                 settleTradeEarlyExit(tpActualRecovery);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...tpExitData, recovered: tpActualRecovery } });
@@ -2844,15 +2858,4 @@ export async function pollOnce() {
   } finally {
     polling = false;
   }
-}
-
-/**
- * Safely parse a CLOB amount field (makingAmount / takingAmount).
- * Returns null if the value is missing, NaN, negative, or unreasonably large.
- */
-function parseClobAmount(value, fallback = null) {
-  if (value == null) return fallback;
-  const n = typeof value === 'number' ? value : parseFloat(value);
-  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return fallback;
-  return n;
 }

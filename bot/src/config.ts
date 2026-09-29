@@ -5,6 +5,7 @@
 
 import { CONFIG as SHARED_CONFIG, BET_SIZING, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK } from '../../src/config.ts';
 import { envNum, envInt } from './utils/env.ts';
+import { polygonRpcUrl } from './trading/polygonRpc.ts';
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 
@@ -16,6 +17,9 @@ const CONFIG = {
   binanceBaseUrl: 'https://data-api.binance.vision',
   gammaBaseUrl: 'https://gamma-api.polymarket.com',
   clobBaseUrl: 'https://clob.polymarket.com',
+  // The shared (browser) config hardcodes the public endpoint; the bot honours POLYGON_RPC_URL
+  // like every other on-chain path, so one setting moves them all.
+  chainlink: { ...SHARED_CONFIG.chainlink, polygonRpcUrls: [polygonRpcUrl()] },
 };
 
 // envNum/envInt now live in ./utils/env.ts (shared with services + scripts).

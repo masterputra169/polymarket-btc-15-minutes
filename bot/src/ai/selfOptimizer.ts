@@ -9,7 +9,7 @@
  * - Requires AI_AUTO_OPTIMIZE=true
  */
 
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, chmodSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { BOT_CONFIG } from '../config.ts';
@@ -31,8 +31,9 @@ const ALLOWED_PARAMS = {
   LIMIT_MAX_ENTRY_PRICE:      { envKey: 'LIMIT_MAX_ENTRY_PRICE',      min: 0.45, max: 0.75, type: 'num' },
   ROUTER_FOK_ML:              { envKey: 'ROUTER_FOK_ML',              min: 0.70, max: 0.95, type: 'num' },
   ROUTER_FOK_MAX_PRICE:       { envKey: 'ROUTER_FOK_MAX_PRICE',       min: 0.50, max: 0.75, type: 'num' },
-  MAX_BET_AMOUNT_USD:         { envKey: 'MAX_BET_AMOUNT_USD',         min: 1.00, max: 10.0, type: 'num' },
-  MAX_DAILY_LOSS_PCT:         { envKey: 'MAX_DAILY_LOSS_PCT',         min: 5,    max: 30,   type: 'num' },
+  // Deliberately absent: MAX_BET_AMOUNT_USD, MAX_DAILY_LOSS_PCT and every other risk limit.
+  // A model that reads trade journals must never be able to raise the limits that cap its own
+  // losses; those stay operator-only.
 };
 
 const MAX_DELTA_PCT = 0.20; // max 20% change per parameter per cycle
@@ -155,6 +156,7 @@ async function applyRecommendations(recommendations) {
   const backupFile = resolve(BACKUP_DIR, `.env.backup_${Date.now()}`);
   try {
     copyFileSync(ENV_FILE, backupFile);
+    try { chmodSync(backupFile, 0o600); } catch { /* best effort — the copy holds the same secrets as .env */ }
     log.info(`Backed up .env to ${backupFile}`);
   } catch (err) {
     log.warn(`Failed to backup .env: ${err.message} — aborting optimization`);

@@ -23,7 +23,7 @@ const TMP_DIR = mkdtempSync(join(tmpdir(), 'ptbhealth-'));
 const HEALTH_PATH = join(TMP_DIR, 'ptb_health.jsonl');
 process.env.PTB_HEALTH_PATH = HEALTH_PATH;
 
-const { recordPtbSource, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES, recordPtbVerification, getPendingVerification } = await import('../ptbHealth.ts');
+const { recordPtbSource, recordIdleHeartbeat, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES, recordPtbVerification, getPendingVerification } = await import('../ptbHealth.ts');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -112,5 +112,26 @@ describe('ptbHealth', () => {
     const last = readLines().pop();
     expect(last.total).toBe(2);
     expect(last.exact).toBe(1);
+  });
+});
+
+describe('idle heartbeat', () => {
+  test('a paused / halted bot still advances the file the external watchdog reads', () => {
+    recordIdleHeartbeat('paused');
+    recordIdleHeartbeat('paused');
+    recordIdleHeartbeat('halted');
+    flush();
+    const line = readLines().at(-1);
+    expect(line.idle).toEqual({ paused: 2, halted: 1 });
+    // Filter statistics are untouched: idle polls are not filter evaluations.
+    expect(line.total).toBe(0);
+    expect(line.exactPct).toBeNull();
+    expect(typeof line.to).toBe('number');
+  });
+
+  test('no idle field on a normal line', () => {
+    recordPtbSource('chainlink_twap');
+    flush();
+    expect(readLines().at(-1).idle).toBeUndefined();
   });
 });

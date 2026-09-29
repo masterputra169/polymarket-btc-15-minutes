@@ -153,6 +153,7 @@ export async function fullScan() {
  * Fetches their activity and computes hypothetical P&L.
  */
 export async function simulateTrader(address) {
+  if (!isEvmAddress(address)) return { address, error: 'invalid_address' };
   try {
     const res = await rateLimitedFetch(
       `${DATA_API}/activity?user=${address}&limit=200`
@@ -213,16 +214,21 @@ export function getTrackedTraders() { return trackedTraders; }
 export function getDiscoveredTraders() { return discoveredTraders; }
 export function getLastScanTime() { return lastScanMs; }
 
+// Addresses end up in request URLs and in a persisted file: accept only a well-formed EVM address.
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const isEvmAddress = (a) => typeof a === 'string' && EVM_ADDRESS_RE.test(a);
+
 export function addTrackedTrader(address) {
-  if (!address || trackedTraders.some(t => t.address === address)) return false;
+  if (!isEvmAddress(address) || trackedTraders.some(t => t.address === address)) return false;
   const discovered = discoveredTraders.find(t => t.address === address);
   trackedTraders.push({
     address,
     score: discovered?.score ?? 0,
     addedAt: Date.now(),
   });
-  if (trackedTraders.length > (BOT_CONFIG.maxTrackedTraders ?? 20)) {
-    trackedTraders = trackedTraders.slice(-20);
+  const maxTracked = BOT_CONFIG.maxTrackedTraders ?? 20;
+  if (trackedTraders.length > maxTracked) {
+    trackedTraders = trackedTraders.slice(-maxTracked);
   }
   saveTrackedTraders();
   log.info(`Tracking trader: ${address.slice(0, 10)}...`);

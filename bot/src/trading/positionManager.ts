@@ -8,6 +8,7 @@ import { dirname } from 'path';
 import { createLogger } from '../logger.ts';
 import { BOT_CONFIG } from '../config.ts';
 import { mirrorPositionsSnapshot } from '../services/runtimeIntegrations.ts';
+import { polygonRpcUrl } from './polygonRpc.ts';
 import { placeSellOrder, getWalletAddress, getConditionalTokenBalance, updateConditionalApproval } from './clobClient.ts';
 
 const log = createLogger('Positions');
@@ -20,7 +21,6 @@ const CACHE_TTL_MS = 5_000; // H6: Reduced 15s→5s — less stale data for clos
 const DATA_API = 'https://data-api.polymarket.com';
 
 const CTF_ADDRESS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
-const POLYGON_RPC = 'https://polygon-rpc.com';
 
 let cachedPositions = [];
 let lastFetchMs = 0;
@@ -75,7 +75,7 @@ async function queryOnChainTokenBalance(tokenId) {
     const id = bigId.toString(16).padStart(64, '0');
     const data = '0x00fdd58e' + addr + id;
 
-    const res = await fetch(POLYGON_RPC, {
+    const res = await fetch(polygonRpcUrl(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_call', params: [{ to: CTF_ADDRESS, data }, 'latest'], id: 1 }),

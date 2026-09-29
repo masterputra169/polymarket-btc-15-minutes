@@ -156,7 +156,7 @@ export async function settleViaOracle(pos, conditionId, fallbackBtcPrice, ptbVal
  * @param {string|null} conditionId - Oracle condition ID
  * @param {number} btcPrice - Current BTC price
  * @param {number|null} ptbValue - Price-to-beat (null if stale)
- * @param {string} priceSource - Source of BTC price ('oracle'|'binance'|'entry')
+ * @param {string} priceSource - Source of BTC price ('oracle'|'binance'|'none'; TWAP close overrides)
  * @param {string} context - Label for logging ('expired'|'switched'|'stale')
  * @param {Object} actions - Side-effect callbacks
  * @returns {Promise<{ won: boolean, pnl: number, outcome: string|null, source: string }>}
@@ -250,8 +250,12 @@ function settleArbPosition(pos, btcPrice, ptbValue, context, actions) {
 function resolveSettlementPrices(pos, slug, priceToBeat, getOraclePrice, getBinancePrice) {
   const oraclePrice = getOraclePrice();
   const wsPrice = getBinancePrice();
-  const btcPrice = oraclePrice || wsPrice || pos.price;
-  const priceSource = oraclePrice ? 'oracle' : wsPrice ? 'binance' : 'entry';
+  // Never fall back to `pos.price`: that is the TOKEN's entry price (0-1), not a BTC price.
+  // Compared with a ~$100k price-to-beat it always reads "BTC below the PTB" and would
+  // book every UP as a loss and every DOWN as a win. With no BTC price at all the
+  // fallback stays empty and the row is booked 'unknown' (provisional, re-verified).
+  const btcPrice = oraclePrice || wsPrice || null;
+  const priceSource = oraclePrice ? 'oracle' : wsPrice ? 'binance' : 'none';
   const ptbValue = priceToBeat.value;
   const ptbFresh = ptbValue != null && priceToBeat.slug === slug;
   return { btcPrice, priceSource, ptbValue: ptbFresh ? ptbValue : null, ptbRaw: ptbValue };
@@ -339,6 +343,15 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
   }
 
   log.warn(`STALE POSITION detected: ${pos.side} on ${pos.marketSlug} (current market: ${currentMarketSlug})`);
+
+  // An ARB holds both tokens, so it never goes through the oracle's UP/DOWN comparison
+  // (side 'ARB' equals neither outcome and would be booked as a loss). Settle it the
+  // same way expiry does.
+  if (pos.side === 'ARB') {
+    settleArbPosition(pos, null, null, 'stale', actions);
+    actions.setLastSettled(pos.marketSlug, Date.now());
+    return;
+  }
 
   const oracleCondId = pos.conditionId;
   if (oracleCondId) {

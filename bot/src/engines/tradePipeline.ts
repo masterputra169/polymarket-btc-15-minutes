@@ -14,6 +14,8 @@ import { BOT_CONFIG } from '../config.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
+import { parseClobAmount } from '../utils/clobAmount.ts';
+import { envInt } from '../utils/env.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -53,17 +55,6 @@ function fokBuyPrice(targetPrice, spread) {
   const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
   return Math.min(Math.round((targetPrice + slippage) * 1000) / 1000, 0.99);
-}
-
-/**
- * Safely parse a CLOB amount field (makingAmount / takingAmount).
- * Returns null if the value is missing, NaN, negative, or unreasonably large.
- */
-function parseClobAmount(value, fallback = null) {
-  if (value == null) return fallback;
-  const n = typeof value === 'number' ? value : parseFloat(value);
-  if (!Number.isFinite(n) || n < 0 || n > 1_000_000) return fallback;
-  return n;
 }
 
 /**
@@ -262,6 +253,17 @@ export async function executeDirectionalTrade({
   // Monte Carlo simulation
   mcResult,
 }, deps) {
+  // ── ML availability gate ──
+  // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
+  // is null), so without this the bot would quietly trade on the rule engine alone — a rule
+  // set that was only ever validated together with the model (its edge is where the model
+  // and the market disagree). Rule-only trading needs an explicit opt-in.
+  if (!mlResult?.available && process.env.ALLOW_RULE_ONLY_TRADING !== 'true') {
+    log.warn('ML model unavailable — entry blocked (set ALLOW_RULE_ONLY_TRADING=true to trade on rules alone)');
+    noteTapeStage('pre', ['ML unavailable']);
+    return false;
+  }
+
   // ── Signal Confirmation Gate ──
   // Audit v2 H3: Edge-adaptive confirmation. High edge (≥15%) or high ML (≥80%) → fast entry.
   // In a 15-min market, 3-poll wait (9s) can miss 2-5% price movement.
@@ -482,10 +484,10 @@ export async function executeDirectionalTrade({
   // since v19 ML triggers FOK at higher confidence than LIMIT.
   // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
   const FOK_MIN_BY_CONF = {
-    LOW:       parseInt(process.env.FOK_MIN_SHARES_LOW       ?? '3', 10),
-    MEDIUM:    parseInt(process.env.FOK_MIN_SHARES_MEDIUM    ?? '5', 10),
-    HIGH:      parseInt(process.env.FOK_MIN_SHARES_HIGH      ?? '6', 10),
-    VERY_HIGH: parseInt(process.env.FOK_MIN_SHARES_VERY_HIGH ?? '7', 10),
+    LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       3, 1, 50),
+    MEDIUM:    envInt(process.env.FOK_MIN_SHARES_MEDIUM,    5, 1, 50),
+    HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
+    VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
   };
   const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
   if (shares < minShares) {

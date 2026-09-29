@@ -11,6 +11,13 @@ export function getBotStatusToken() {
     const tokenFromUrl = params.get('botStatusToken') || params.get('botToken') || params.get('statusToken');
     if (tokenFromUrl) {
       localStorage.setItem('botStatusToken', tokenFromUrl);
+      // The token also authorises control commands: once stored, take it out of the address
+      // bar so it does not stay in history, screenshots, shared links or Referer headers.
+      try {
+        const clean = new URL(window.location.href);
+        for (const k of ['botStatusToken', 'botToken', 'statusToken']) clean.searchParams.delete(k);
+        window.history.replaceState(null, '', clean.pathname + clean.search + clean.hash);
+      } catch (_e) { /* non-critical */ }
       return tokenFromUrl;
     }
     const tokenFromStorage = localStorage.getItem('botStatusToken');

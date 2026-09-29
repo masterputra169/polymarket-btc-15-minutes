@@ -8,6 +8,7 @@
 
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
+import { redactSecrets } from '../utils/redact.ts';
 
 const log = createLogger('Notifier');
 
@@ -33,7 +34,7 @@ export async function notify(level: 'critical' | 'warn' | 'info', message: strin
   lastSentMs[rateKey] = now;
 
   const prefix = level === 'critical' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
-  const fullMessage = `${prefix} [BTC15m Bot] ${message}`;
+  const fullMessage = redactSecrets(`${prefix} [BTC15m Bot] ${message}`);
 
   const results = await Promise.allSettled([
     sendTelegram(fullMessage),

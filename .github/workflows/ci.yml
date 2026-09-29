@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token: CI only checks out and tests, it never writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   typescript:
     name: TypeScript (typecheck, tests, build)

@@ -37,6 +37,15 @@ function entryFeeOf(pos, shares = pos.size) {
 
 type PositionState = Record<string, any>;
 
+/**
+ * Net P&L of closing `pos` early for `recoveredUsdc`: the proceeds less the cost and the entry
+ * fee that settleTradeEarlyExit() books to the bankroll. Journal rows use this so their P&L
+ * matches the bankroll (they used to omit the fee, drifting from it by ~1c a share).
+ */
+export function earlyExitPnl(pos, recoveredUsdc) {
+  return roundMoney(roundMoney(Math.max(0, recoveredUsdc)) - pos.cost - entryFeeOf(pos));
+}
+
 type TrackerState = {
   bankroll: number;
   peakBankroll: number;
@@ -211,6 +220,15 @@ export function loadState() {
     }
   } catch (err) {
     log.warn(`Could not load state: ${err.message}`);
+    // The next saveState() would overwrite an unreadable state.json with defaults
+    // (config bankroll, no open position). Keep a copy so the real numbers can be recovered.
+    try {
+      if (err instanceof SyntaxError && existsSync(BOT_CONFIG.stateFile)) {
+        const aside = `${BOT_CONFIG.stateFile}.corrupt-${Date.now()}`;
+        renameSync(BOT_CONFIG.stateFile, aside);
+        log.error(`state.json unreadable — moved to ${aside}; starting from defaults`);
+      }
+    } catch { /* best-effort */ }
   }
 }
 

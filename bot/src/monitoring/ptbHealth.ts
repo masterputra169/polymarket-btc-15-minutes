@@ -42,6 +42,9 @@ const FLUSH_MS = envNum(process.env.PTB_HEALTH_FLUSH_MS, 60_000, 1_000, 3_600_00
 const MAX_BYTES = envNum(process.env.PTB_HEALTH_MAX_BYTES, 5_000_000, 100_000, 100_000_000);
 
 let counts: Record<string, number> = {};
+// Polls where the bot was deliberately idle (operator pause, circuit-breaker halt). Kept out of
+// `total`/`exactPct`, which describe filter evaluations; they exist so the line still advances.
+let idle: Record<string, number> = {};
 let verified = freshVerified();
 
 interface Verified { checked: number; exact: number; mismatch: number; maxAbsDiff: number; bySource: Record<string, { checked: number; exact: number }> }
@@ -81,10 +84,22 @@ export function recordPtbSource(source: string | null | undefined): void {
   if (Date.now() - lastFlush >= FLUSH_MS) flush();
 }
 
+/**
+ * A poll that ended early on purpose (paused / halted). The external watchdog reads this file's
+ * newest `to` as "the bot can still see the market" (monitoring/liveness.ts); a bot that is
+ * idle by choice never evaluates a filter, so without this it looked blind, got restarted every
+ * ten minutes, and each restart dropped the in-memory pause / halt cooldown.
+ */
+export function recordIdleHeartbeat(kind: string): void {
+  idle[kind] = (idle[kind] || 0) + 1;
+  if (Date.now() - lastFlush >= FLUSH_MS) flush();
+}
+
 /** Append the current window as one line and start a new window. */
 export function flush(): void {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
-  if (total === 0 && verified.checked === 0) { lastFlush = Date.now(); return; }
+  const idleTotal = Object.values(idle).reduce((a, b) => a + b, 0);
+  if (total === 0 && verified.checked === 0 && idleTotal === 0) { lastFlush = Date.now(); return; }
 
   const exact = Object.entries(counts)
     .filter(([src]) => EXACT_PTB_SOURCES.includes(src))
@@ -97,6 +112,7 @@ export function flush(): void {
     exact,
     exactPct: total ? Number(((exact / total) * 100).toFixed(2)) : null,
     bySource: counts,
+    ...(idleTotal ? { idle } : {}),
     ...(verified.checked ? { verified: { ...verified, maxAbsDiff: Number(verified.maxAbsDiff.toFixed(2)) } } : {}),
   };
 
@@ -113,6 +129,7 @@ export function flush(): void {
   }
 
   counts = {};
+  idle = {};
   verified = freshVerified();
   windowStart = Date.now();
   lastFlush = windowStart;
@@ -131,6 +148,7 @@ export function getPendingVerification(): Readonly<Verified> {
 /** Reset module state. Tests only. */
 export function _reset(): void {
   counts = {};
+  idle = {};
   verified = freshVerified();
   windowStart = Date.now();
   lastFlush = windowStart;

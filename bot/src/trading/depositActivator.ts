@@ -29,6 +29,7 @@ import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { gasFeeOverrides } from './gasConfig.ts';
 import { polygonRpcUrl } from './polygonRpc.ts';
+import { envNum } from '../utils/env.ts';
 
 const log = createLogger('Activator');
 
@@ -37,8 +38,8 @@ const USDCE  = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const ONRAMP = '0x93070a847efEf7F70739046A929D47a521F5B8ee';
 const PUSD   = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
 
-// Reuse Chainstack endpoint from redeemer (shared dedicated node)
-const CHAINSTACK_HTTP = polygonRpcUrl();
+// Same endpoint as the redeemer (POLYGON_RPC_URL, else the public node)
+const POLYGON_RPC_HTTP = polygonRpcUrl();
 const POLYGON_NETWORK = new ethers.Network('matic', 137);
 
 // ── ABIs ──
@@ -163,7 +164,7 @@ export async function activateDeposit({ minAmount = 1_000_000n, dryRun = false }
   if (!pk) throw new Error('POLYMARKET_PRIVATE_KEY not set');
   if (!proxyAddr) throw new Error('POLYMARKET_PROXY_ADDRESS not set');
 
-  const provider = new ethers.JsonRpcProvider(CHAINSTACK_HTTP, POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
+  const provider = new ethers.JsonRpcProvider(POLYGON_RPC_HTTP, POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
   const signer = new ethers.Wallet(pk, provider);
   const eoa = signer.address;
 
@@ -251,7 +252,7 @@ export async function autoActivateOnStartup() {
     return { executed: false, reason: 'disabled' };
   }
   const dryRun = process.env.DRY_RUN === 'true';
-  const minAmountUsd = parseFloat(process.env.MIN_ACTIVATE_AMOUNT ?? '1');
+  const minAmountUsd = envNum(process.env.MIN_ACTIVATE_AMOUNT, 1, 0, 1_000_000);
   const minAmount = BigInt(Math.round(minAmountUsd * 1e6));
 
   try {
