@@ -6,7 +6,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
-import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
+import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, earlyExitPnl, partialExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
+import { computeSettlementPnl } from './engines/settlementMath.ts';
 import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.ts';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.ts';
 import { resetCutLossState } from './trading/cutLoss.ts';
@@ -39,6 +40,19 @@ let lastSnapshot = null;
 let lastSetBankrollMs = 0;
 let lastBotControlMs = 0;
 let lastBroadcastMs = 0;
+
+// Commands that spend money (LLM calls, third-party API sweeps) or write files are
+// rate limited per command so one client cannot loop them.
+const EXPENSIVE_COMMAND_COOLDOWN_MS = 10_000;
+const lastCommandMs = new Map();
+function commandThrottled(cmd, cooldownMs = EXPENSIVE_COMMAND_COOLDOWN_MS) {
+  const now = Date.now();
+  if (now - (lastCommandMs.get(cmd) ?? 0) < cooldownMs) return true;
+  lastCommandMs.set(cmd, now);
+  return false;
+}
+
+const EVM_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
 
 // Bot control callbacks — set via registerBotControl() to avoid circular imports
 let _pauseBot = null;
@@ -95,6 +109,30 @@ function requestToken(req) {
     return url.searchParams.get('token') || '';
   } catch (_e) {
     return '';
+  }
+}
+
+/**
+ * Cross-site WebSocket hijacking guard. Browsers do not apply the same-origin
+ * policy to WebSockets, so with no token configured any web page the operator
+ * opens could connect to ws://127.0.0.1:3099 and issue sellPosition / setBankroll /
+ * forceSettle. Without a token, a loopback-bound server therefore only serves
+ * non-browser clients (no Origin header), loopback origins (the local dashboard)
+ * and origins listed in STATUS_ALLOWED_ORIGINS. A DNS-rebinding page arrives with
+ * its own hostname as Origin and is refused as well.
+ * With a token the token is the credential (a foreign page cannot read it), and
+ * an explicit off-host unauthenticated bind is the operator's stated choice.
+ */
+export function originAllowed(origin, { authRequired, bindHost, allowed = process.env.STATUS_ALLOWED_ORIGINS || '' }) {
+  if (authRequired || !isLocalBindHost(bindHost)) return true;
+  if (!origin) return true;
+  const list = String(allowed).split(',').map(o => o.trim().toLowerCase().replace(/\/$/, '')).filter(Boolean);
+  if (list.includes(String(origin).toLowerCase().replace(/\/$/, ''))) return true;
+  try {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch (_e) {
+    return false;
   }
 }
 
@@ -172,7 +210,13 @@ export function startStatusServer() {
   });
 
   wss.on('connection', (ws, req) => {
-    if (getStatusConfig().authRequired && !tokenMatches(requestToken(req))) {
+    const cfg = getStatusConfig();
+    if (!originAllowed(req?.headers?.origin, cfg)) {
+      log.warn(`Rejected status WS connection from foreign origin ${String(req?.headers?.origin).slice(0, 100)}`);
+      try { ws.close(1008, 'origin not allowed'); } catch (_e) { /* */ }
+      return;
+    }
+    if (cfg.authRequired && !tokenMatches(requestToken(req))) {
       log.warn(`Rejected unauthorized status WS connection from ${req?.socket?.remoteAddress || 'unknown'}`);
       try { ws.close(1008, 'unauthorized'); } catch (_e) { /* */ }
       return;
@@ -248,25 +292,36 @@ export function startStatusServer() {
                 .then(result => {
                   // H1: Settle the position with recovered USDC (dashboard sell was missing this)
                   const recovered = parseClobAmount(result?.takingAmount, price * size);
-                  const cost = sellPos?.cost ?? (price * size);
-                  const cutPnl = recovered - cost;
-                  // Only write journal/cleanup if settlement actually happened
-                  // (position may have been settled by loop during the async sell)
-                  const settled = settleTradeEarlyExit(recovered);
-                  if (settled) {
-                    writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
-                    clearEntrySnapshot();
-                    resetCutLossState();
-                    resetTakeProfitState();
-                    if (_resetEntryRegime) _resetEntryRegime(); // Prevent stale regime leaking into next trade's cut-loss
-                    if (cutPnl < 0) recordLoss();
+                  // Only touch the tracked position when the sold token IS that position's token.
+                  // The dashboard can also sell holdings the tracker does not know about (getPositions
+                  // merges on-chain positions); settling the tracked position for those would book
+                  // the wrong cost and close a position that is still open.
+                  const owns = !!sellPos && !sellPos.settled && sellPos.tokenId === tokenId;
+                  const soldAll = owns && size >= sellPos.size - 1e-6;
+                  let settled = false;
+                  if (owns && soldAll) {
+                    // Net of the entry fee, like the tracker's own booking (settleTradeEarlyExit).
+                    const cutPnl = earlyExitPnl(sellPos, recovered);
+                    settled = settleTradeEarlyExit(recovered);
+                    if (settled) {
+                      writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
+                      clearEntrySnapshot();
+                      resetCutLossState();
+                      resetTakeProfitState();
+                      if (_resetEntryRegime) _resetEntryRegime(); // Prevent stale regime leaking into next trade's cut-loss
+                      if (cutPnl < 0) recordLoss();
+                    }
+                  } else if (owns) {
+                    // Partial sell: the tracker keeps the rest of the position riding to settlement.
+                    settled = partialExit(size, recovered);
+                    if (settled) writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: 'partial_sell', recovered, size } });
                   }
-                  // M8: Write journal entry even when position was settled elsewhere (audit trail for CLOB sell)
+                  // M8: Write journal entry even when nothing was settled (audit trail for the CLOB sell)
                   if (!settled) {
-                    writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: 'position_settled_elsewhere', recovered } });
+                    writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: owns ? 'position_settled_elsewhere' : 'token_not_tracked_position', recovered } });
                   }
                   releaseSellLock();
-                  respond('sellPosition', { ok: settled, result, ...(settled ? {} : { error: 'position_settled_elsewhere' }) });
+                  respond('sellPosition', { ok: owns ? settled : true, result, ...(owns && !settled ? { error: 'position_settled_elsewhere' } : {}), ...(owns ? {} : { note: 'sold_untracked_token' }) });
                 })
                 .catch(err => { releaseSellLock(); respond('sellPosition', { ok: false, error: err.message }); });
             }
@@ -294,8 +349,13 @@ export function startStatusServer() {
             respond('forceSettle', { ok: true, action: 'unwind', returned: pos.cost });
           } else {
             const won = msg.outcome === 'WIN';
-            const pnl = won ? (pos.size - pos.cost) : -pos.cost;
-            settleTrade(won);
+            // Net of the taker entry fee — the same number settleTrade books to the bankroll.
+            const pnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos.price });
+            if (!settleTrade(won)) {
+              releaseSellLock();
+              respond('forceSettle', { ok: false, error: 'settle_failed' });
+              return;
+            }
             writeJournalEntry({ outcome: won ? 'WIN' : 'LOSS', pnl, exitData: { source: 'forceSettle' } });
             clearEntrySnapshot();
             resetCutLossState();
@@ -326,6 +386,7 @@ export function startStatusServer() {
 
         // ── Trader Discovery commands ──
         } else if (msg.type === 'scanTraders' && _scanTraders) {
+          if (commandThrottled('scanTraders', 30_000)) { respond('scanTraders', { error: 'rate_limited' }); return; }
           _scanTraders()
             .then(traders => respond('scanTraders', { traders }))
             .catch(err => respond('scanTraders', { error: err.message }));
@@ -333,10 +394,10 @@ export function startStatusServer() {
           respond('getTrackedTraders', { traders: _getTrackedTraders() });
         } else if (msg.type === 'getDiscoveredTraders' && _getDiscoveredTraders) {
           respond('getDiscoveredTraders', { traders: _getDiscoveredTraders() });
-        } else if (msg.type === 'addTracker' && _addTracker && msg.address) {
+        } else if (msg.type === 'addTracker' && _addTracker && typeof msg.address === 'string' && EVM_ADDRESS_RE.test(msg.address)) {
           const ok = _addTracker(msg.address);
           respond('addTracker', { ok, address: msg.address });
-        } else if (msg.type === 'removeTracker' && _removeTracker && msg.address) {
+        } else if (msg.type === 'removeTracker' && _removeTracker && typeof msg.address === 'string' && EVM_ADDRESS_RE.test(msg.address)) {
           const ok = _removeTracker(msg.address);
           respond('removeTracker', { ok, address: msg.address });
         // ── Profit Target reset ──
@@ -347,15 +408,18 @@ export function startStatusServer() {
 
         // ── AI Agent commands ──
         } else if (msg.type === 'analyzeNow') {
+          if (commandThrottled('analyzeNow', 30_000)) { respond('analyzeNow', { ok: false, error: 'rate_limited' }); return; }
           maybeAnalyze(0)
             .then(() => respond('analyzeNow', { ok: true, analysis: getLastAnalysis() }))
             .catch(err => respond('analyzeNow', { ok: false, error: err.message }));
         } else if (msg.type === 'optimizeNow') {
+          if (commandThrottled('optimizeNow', 30_000)) { respond('optimizeNow', { ok: false, error: 'rate_limited' }); return; }
           maybeOptimize()
             .then(() => respond('optimizeNow', { ok: true, status: getOptimizerStatus() }))
             .catch(err => respond('optimizeNow', { ok: false, error: err.message }));
 
-        } else if (msg.type === 'simulateTrader' && _simulateTrader && msg.address) {
+        } else if (msg.type === 'simulateTrader' && _simulateTrader && typeof msg.address === 'string' && EVM_ADDRESS_RE.test(msg.address)) {
+          if (commandThrottled('simulateTrader', 2_000)) { respond('simulateTrader', { error: 'rate_limited' }); return; }
           _simulateTrader(msg.address)
             .then(result => respond('simulateTrader', result))
             .catch(err => respond('simulateTrader', { error: err.message }));

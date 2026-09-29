@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 REM --- BTC Prediction ML Training Pipeline v8 ---
 
-set DAYS=540
+set DAYS=180
 set TUNE=
 set DEPLOY=false
 set EPOCHS=1200
@@ -23,7 +23,7 @@ if "%~1"=="--proxy" ( set PROXY=%~2& shift& shift& goto parse_args )
 if "%~1"=="--help" (
     echo Usage: runTraining.bat [OPTIONS]
     echo.
-    echo   --days N          Days of historical data [default: 540]
+    echo   --days N          Days of historical data [default: 180]
     echo   --tune            Run Optuna tuning [150 trials]
     echo   --tune-trials N   Number of tuning trials [default: 150]
     echo   --epochs N        Max training rounds [default: 1200]

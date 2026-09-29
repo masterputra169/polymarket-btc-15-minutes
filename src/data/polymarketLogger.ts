@@ -176,7 +176,7 @@ export async function exportToCSV(): Promise<void> {
     if (futurePrice === null) continue;
 
     const ptb = row.priceToBeat ?? row.btcPrice;
-    const label = futurePrice > ptb ? 1 : 0;
+    const label = futurePrice >= ptb ? 1 : 0; // a tie resolves UP, as the market and the bot do
     const moveAbs = Math.abs(futurePrice - ptb) / ptb;
     if (moveAbs < 0.0008) continue; // 0.08% min-move filter
 

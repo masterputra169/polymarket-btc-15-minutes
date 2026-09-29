@@ -5,10 +5,13 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const POLYMARKET_HOST = "https://clob.polymarket.com";
-const CHAIN_ID = 137;
 
 const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
 type WalletCompat = Wallet & { _signTypedData?: Wallet['signTypedData'] };
+if (!privateKey) {
+  console.error("POLYMARKET_PRIVATE_KEY is not set (put it in bot/.env).");
+  process.exit(1);
+}
 const wallet = new Wallet(privateKey) as WalletCompat;
 
 // Patch: ethers v6 compatibility - add _signTypedData alias

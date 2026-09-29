@@ -61,7 +61,7 @@ function envNum(key, def, min = -Infinity, max = Infinity) {
 const CFG = {
   dayOfWeek:      envNum('RETRAIN_DAY_OF_WEEK', 0, 0, 6),       // 0=Sunday
   hourUtc:        envNum('RETRAIN_HOUR_UTC', 3, 0, 23),          // 3 AM UTC
-  days:           envNum('RETRAIN_DAYS', 540, 30, 1500),
+  days:           envNum('RETRAIN_DAYS', 180, 30, 1500),
   enrichDays:     envNum('RETRAIN_ENRICH_DAYS', 60, 1, 1500),    // recent Polymarket tick-price refresh window
   fetchPrices:    process.env.RETRAIN_FETCH_PRICES !== 'false',
   requireFreshData: process.env.RETRAIN_REQUIRE_FRESH_DATA !== 'false',
@@ -100,7 +100,7 @@ Usage:
   node bot/src/autoRetrain.ts --rollback      Restore last backup
 
 Env vars (in bot/.env):
-  RETRAIN_DAY_OF_WEEK=0   RETRAIN_HOUR_UTC=3    RETRAIN_DAYS=540
+  RETRAIN_DAY_OF_WEEK=0   RETRAIN_HOUR_UTC=3    RETRAIN_DAYS=180
   RETRAIN_ENRICH_DAYS=60  RETRAIN_FETCH_PRICES=true
   RETRAIN_REQUIRE_FRESH_DATA=true  RETRAIN_LOOKUP_MAX_STALE_DAYS=7
   RETRAIN_TUNE_TRIALS=100  RETRAIN_MIN_ACCURACY=0.70  RETRAIN_MIN_AUC=0.80

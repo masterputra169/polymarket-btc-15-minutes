@@ -43,6 +43,17 @@ function validateOrderResponse(result, action) {
 }
 
 /**
+ * Refuse to sign an order whose parameters are not sane. Every caller computes price and
+ * size from live quotes, so a NaN/undefined from an upstream feed must stop here rather
+ * than be signed into an order (an outcome token trades strictly between 0 and 1).
+ */
+function assertOrderParams(action, { tokenId, price, size }) {
+  if (typeof tokenId !== 'string' || tokenId.length === 0) throw new Error(`${action}: invalid tokenId`);
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) throw new Error(`${action}: invalid price ${price} (must be within 0-1)`);
+  if (!Number.isFinite(size) || size <= 0) throw new Error(`${action}: invalid size ${size}`);
+}
+
+/**
  * Extract orderId from CLOB API response.
  * The API may return it as orderID, order_id, or id depending on version.
  */
@@ -142,6 +153,7 @@ export async function initClobClient() {
  */
 export async function placeBuyOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
+  assertOrderParams('BUY', { tokenId, price, size });
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
   // FOK (Fill-or-Kill): entire order fills immediately or is cancelled.
@@ -178,6 +190,7 @@ export async function placeBuyOrder({ tokenId, price, size }) {
  */
 export async function placeLimitBuyOrder({ tokenId, price, size, expiration }) {
   if (!client) throw new Error('CLOB client not initialized');
+  assertOrderParams('LIMIT_BUY', { tokenId, price, size });
   const nowSec = Math.floor(Date.now() / 1000);
   if (expiration <= nowSec) throw new Error(`GTD expiration ${expiration} already past`);
 
@@ -294,6 +307,7 @@ export async function getOpenOrders() {
  */
 export async function placeSellOrder({ tokenId, price, size }) {
   if (!client) throw new Error('CLOB client not initialized');
+  assertOrderParams('SELL', { tokenId, price, size });
 
   // orderType is the 3rd positional arg to createAndPostOrder, NOT inside userOrder
   // H13: 15s timeout prevents bot from hanging indefinitely on slow CLOB API

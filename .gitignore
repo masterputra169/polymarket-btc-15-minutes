@@ -9,9 +9,11 @@ package-lock.json
 dist/
 build/
 
-# Environment variables
+# Environment variables (any real env file; only the *.example templates are tracked)
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
 
 # IDE
 .vscode/

@@ -89,7 +89,7 @@ IMPORTANT:
 - Focus on patterns that are statistically significant (n >= 5 trades minimum)
 - Only recommend changes with clear evidence from the data
 - Be conservative — small improvements compound over hundreds of trades
-- Parameters you can recommend: CUT_LOSS_MIN_HOLD_SEC, CUT_LOSS_MIN_TOKEN_DROP_PCT, LIMIT_MIN_ML_CONF, LIMIT_MAX_ENTRY_PRICE, ROUTER_FOK_ML, ROUTER_FOK_MAX_PRICE, MAX_BET_AMOUNT_USD, blackout hours
+- Parameters you can recommend: CUT_LOSS_MIN_HOLD_SEC, CUT_LOSS_MIN_TOKEN_DROP_PCT, LIMIT_MIN_ML_CONF, LIMIT_MAX_ENTRY_PRICE, ROUTER_FOK_ML, ROUTER_FOK_MAX_PRICE, blackout hours
 - Each recommendation needs: parameter name, current value, suggested value, reason, confidence (0-1)
 
 Respond ONLY with valid JSON (no markdown, no code blocks).`;

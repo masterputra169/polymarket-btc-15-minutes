@@ -262,6 +262,17 @@ export async function executeDirectionalTrade({
   // Monte Carlo simulation
   mcResult,
 }, deps) {
+  // ── ML availability gate ──
+  // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
+  // is null), so without this the bot would quietly trade on the rule engine alone — a rule
+  // set that was only ever validated together with the model (its edge is where the model
+  // and the market disagree). Rule-only trading needs an explicit opt-in.
+  if (!mlResult?.available && process.env.ALLOW_RULE_ONLY_TRADING !== 'true') {
+    log.warn('ML model unavailable — entry blocked (set ALLOW_RULE_ONLY_TRADING=true to trade on rules alone)');
+    noteTapeStage('pre', ['ML unavailable']);
+    return false;
+  }
+
   // ── Signal Confirmation Gate ──
   // Audit v2 H3: Edge-adaptive confirmation. High edge (≥15%) or high ML (≥80%) → fast entry.
   // In a 15-min market, 3-poll wait (9s) can miss 2-5% price movement.

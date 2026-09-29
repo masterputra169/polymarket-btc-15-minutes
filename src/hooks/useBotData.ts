@@ -54,6 +54,17 @@ export function useBotData() {
   const [binancePrice, setBinancePrice] = useState(null);
   const [binancePrevPrice, setBinancePrevPrice] = useState(null);
 
+  // Resolve the pending promise of a command from its `response` frame.
+  function deliverResponse(msg) {
+    const requestId = responseHandlersRef.current.get(msg.cmd);
+    if (requestId && typeof requestId === 'string') {
+      const resolver = responseHandlersRef.current.get(requestId);
+      responseHandlersRef.current.delete(msg.cmd);
+      responseHandlersRef.current.delete(requestId);
+      if (resolver) resolver(msg.data);
+    }
+  }
+
   // Parse raw JSON + flush to React state
   function flushToState() {
     const raw = rawRef.current;
@@ -65,13 +76,7 @@ export function useBotData() {
 
     // Handle response messages (request/response pattern)
     if (msg.type === 'response' && msg.cmd) {
-      const requestId = responseHandlersRef.current.get(msg.cmd);
-      if (requestId && typeof requestId === 'string') {
-        const resolver = responseHandlersRef.current.get(requestId);
-        responseHandlersRef.current.delete(msg.cmd);
-        responseHandlersRef.current.delete(requestId);
-        if (resolver) resolver(msg.data);
-      }
+      deliverResponse(msg);
       return; // Don't update main data state for responses
     }
 
@@ -133,6 +138,16 @@ export function useBotData() {
 
       ws.onmessage = (evt) => {
         lastMsgRef.current = Date.now();
+        // Command responses are delivered at once. They used to go through rawRef like snapshots,
+        // and the bot broadcasts a snapshot every ~750ms: a snapshot landing before the next 500ms
+        // flush overwrote the response, so the command's promise silently timed out (15s → null).
+        if (typeof evt.data === 'string' && evt.data.startsWith('{"type":"response"')) {
+          try {
+            const resp = JSON.parse(evt.data);
+            if (resp?.cmd) deliverResponse(resp);
+          } catch { /* malformed frame — ignore */ }
+          return;
+        }
         // Store raw string only — NO JSON.parse here (memory optimization)
         rawRef.current = evt.data;
         dirtyRef.current = true;

@@ -17,7 +17,7 @@
 set -e
 
 # ═══ Parse args ═══
-DAYS=540
+DAYS=180
 TUNE=""
 DEPLOY=false
 EPOCHS=1200
@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
     --help)
       echo "Usage: ./runTraining.sh [--days 30] [--tune] [--tune-trials 100] [--min-move 0.0005] [--deploy]"
       echo ""
-      echo "  --days N          Days of historical data (default: 30)"
+      echo "  --days N          Days of historical data (default: 180 — the window the live model and rule were validated on)"
       echo "  --tune            Run Optuna Bayesian hyperparameter optimization"
       echo "  --tune-trials N   Number of Optuna trials (default: 100)"
       echo "  --min-move F      Min price move fraction to keep sample (default: 0.0005 = 0.05%)"
