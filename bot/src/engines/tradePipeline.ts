@@ -15,6 +15,7 @@ import { notify } from '../monitoring/notifier.ts';
 import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
+import { envInt } from '../utils/env.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -483,10 +484,10 @@ export async function executeDirectionalTrade({
   // since v19 ML triggers FOK at higher confidence than LIMIT.
   // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
   const FOK_MIN_BY_CONF = {
-    LOW:       parseInt(process.env.FOK_MIN_SHARES_LOW       ?? '3', 10),
-    MEDIUM:    parseInt(process.env.FOK_MIN_SHARES_MEDIUM    ?? '5', 10),
-    HIGH:      parseInt(process.env.FOK_MIN_SHARES_HIGH      ?? '6', 10),
-    VERY_HIGH: parseInt(process.env.FOK_MIN_SHARES_VERY_HIGH ?? '7', 10),
+    LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       3, 1, 50),
+    MEDIUM:    envInt(process.env.FOK_MIN_SHARES_MEDIUM,    5, 1, 50),
+    HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
+    VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
   };
   const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
   if (shares < minShares) {

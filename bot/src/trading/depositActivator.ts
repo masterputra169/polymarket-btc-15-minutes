@@ -29,6 +29,7 @@ import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { gasFeeOverrides } from './gasConfig.ts';
 import { polygonRpcUrl } from './polygonRpc.ts';
+import { envNum } from '../utils/env.ts';
 
 const log = createLogger('Activator');
 
@@ -251,7 +252,7 @@ export async function autoActivateOnStartup() {
     return { executed: false, reason: 'disabled' };
   }
   const dryRun = process.env.DRY_RUN === 'true';
-  const minAmountUsd = parseFloat(process.env.MIN_ACTIVATE_AMOUNT ?? '1');
+  const minAmountUsd = envNum(process.env.MIN_ACTIVATE_AMOUNT, 1, 0, 1_000_000);
   const minAmount = BigInt(Math.round(minAmountUsd * 1e6));
 
   try {

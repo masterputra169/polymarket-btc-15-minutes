@@ -77,8 +77,11 @@ import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/re
 // Monitoring / guards
 import { initMacroCalendar, fetchMacroEvents } from './src/monitoring/macroCalendar.ts';
 
+import { envInt } from './src/utils/env.ts';
+
 // Poll interval: 500ms — actual execution ~150ms, well within Binance rate limits
-const POLL_MS = parseInt(process.env.POLL_INTERVAL_MS || '500', 10);
+// Bounded: an unparsable value used to reach setInterval as NaN (= 1 ms) and a 0 as a busy loop.
+const POLL_MS = envInt(process.env.POLL_INTERVAL_MS, 500, 50, 60_000);
 
 // ── Configure logging ──
 setLogLevel(BOT_CONFIG.logLevel);
@@ -349,6 +352,15 @@ async function main() {
     shuttingDown = true;
 
     log.info(`\n${signal} received — shutting down gracefully...`);
+    // Every step below can await the network (CLOB cancel, DB close). A hung one must not
+    // keep the process — and the unsaved state — alive until the supervisor SIGKILLs it.
+    const hardExit = setTimeout(() => {
+      log.error('Shutdown timed out after 20s — forcing exit');
+      process.exit(1);
+    }, 20_000);
+    hardExit.unref?.();
+    // State first (cheap, local); saved again after the order cancel below.
+    try { saveFeedbackToDisk(); saveSignalPerfToDisk(); savePositionState(); } catch (err) { log.warn(`Early state save failed: ${err.message}`); }
     clearInterval(intervalId);
     stopLivenessWatch();
     if (aiIntervalId) clearInterval(aiIntervalId);

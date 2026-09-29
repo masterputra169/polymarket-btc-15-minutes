@@ -30,6 +30,7 @@ import { BOT_CONFIG } from '../config.ts';
 import { recordPtbSource } from '../monitoring/ptbHealth.ts';
 import { isExactPtbSource } from '../engines/ptbSources.ts';
 import { createLogger } from '../logger.ts';
+import { envInt } from '../utils/env.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
 import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.ts';
@@ -153,7 +154,7 @@ let tradesThisMarket = {};  // { [slug]: count }
 
 // Spread baseline tracker (rolling ring buffer for spread widening detection)
 // H5 audit fix: scale buffer to ~5s of data regardless of poll rate (50ms→100, 3s→10)
-const _pollMs = parseInt(process.env.POLL_INTERVAL_MS, 10) || 3000;
+const _pollMs = envInt(process.env.POLL_INTERVAL_MS, 500, 50, 60_000); // same default as bot/index.ts
 const SPREAD_BUF_SIZE = Math.max(10, Math.min(200, Math.ceil(5000 / _pollMs)));
 const spreadBuf = new Float64Array(SPREAD_BUF_SIZE);
 let spreadBufIdx = 0;

@@ -12,6 +12,7 @@
 // M10: Derive from poll interval instead of hardcoding (assumes 3s poll).
 // At 3s poll: 9s confirmation. At 5s poll: 10s confirmation. Scales correctly.
 import { CONFIG } from '../../../src/config.ts';
+import { envInt } from '../utils/env.ts';
 const POLL_INTERVAL_S = (CONFIG.pollIntervalMs ?? 3000) / 1000;
 export const SIGNAL_CONFIRM_POLLS = Math.max(2, Math.round(9 / POLL_INTERVAL_S));  // ~9s of confirmation
 const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
@@ -20,7 +21,9 @@ const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
 // Faster polling captures micro-oscillations (signal briefly crosses threshold then returns),
 // creating more flip events than at 3s polling even when the market is fundamentally stable.
 // At ≤100ms (bot default 50ms): allow up to 10 flips in 15s. At >1s: original 3.
-const _actualPollMs = parseInt(process.env.POLL_INTERVAL_MS, 10) || (CONFIG.pollIntervalMs ?? 3000);
+// Same default and bounds as bot/index.ts (500 ms) — this used to fall back to the browser's
+// 3000 ms, so an unset variable made the loop poll at 500 ms while this assumed 3 s.
+const _actualPollMs = envInt(process.env.POLL_INTERVAL_MS, 500, 50, 60_000);
 const MAX_FLIPS_TO_ENTER = _actualPollMs <= 100 ? 10 : _actualPollMs <= 1000 ? 6 : 3;
 
 // ── State ──
