@@ -334,7 +334,7 @@ export async function placeSellOrder({ tokenId, price, size }) {
 // USDC.e (legacy) which is invisible → ghost-drawdown / wealth under-report.
 // Read USDC.e on-chain and ADD to pUSD for a true total-wallet bankroll.
 const _USDCE_ADDR = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
-const _CHAINSTACK = polygonRpcUrl();
+const _POLYGON_RPC = polygonRpcUrl();
 const _POLY_NET = new ethers.Network('matic', 137);
 const _ERC20_BAL_ABI = ['function balanceOf(address) view returns (uint256)'];
 let _usdceProvider = null;
@@ -342,7 +342,7 @@ let _usdceProvider = null;
 async function readUsdceOnChain(proxyAddr) {
   try {
     if (!_usdceProvider) {
-      _usdceProvider = new ethers.JsonRpcProvider(_CHAINSTACK, _POLY_NET, { staticNetwork: true, batchMaxCount: 1 });
+      _usdceProvider = new ethers.JsonRpcProvider(_POLYGON_RPC, _POLY_NET, { staticNetwork: true, batchMaxCount: 1 });
     }
     const c = new ethers.Contract(_USDCE_ADDR, _ERC20_BAL_ABI, _usdceProvider);
     const raw = await c.balanceOf(proxyAddr);

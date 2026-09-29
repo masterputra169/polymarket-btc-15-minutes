@@ -53,11 +53,11 @@ const DATA_API = 'https://data-api.polymarket.com';
 const PARENT_COLLECTION_ID = '0x' + '0'.repeat(64);
 const INDEX_SETS = [1, 2]; // outcome 0 + outcome 1 for binary markets
 
-// Custom Chainstack RPC (WSS + HTTP on same endpoint)
-const CHAINSTACK_HTTP = polygonRpcUrl();
+// POLYGON_RPC_URL if set, else the public node (see polygonRpc.ts)
+const POLYGON_RPC_HTTP = polygonRpcUrl();
 
 // Single authoritative endpoint -- no round-robin needed with dedicated node
-const RPC_ENDPOINTS = [CHAINSTACK_HTTP];
+const RPC_ENDPOINTS = [POLYGON_RPC_HTTP];
 let rpcIndex = 0;
 
 // Minimal ABIs (ethers v6 human-readable)
@@ -144,9 +144,9 @@ function initProvider() {
   if (!pk) throw new Error('POLYMARKET_PRIVATE_KEY not set');
 
   // Use HTTP for the persistent provider (simpler lifecycle than WebSocketProvider)
-  provider = new ethers.JsonRpcProvider(CHAINSTACK_HTTP, POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
+  provider = new ethers.JsonRpcProvider(POLYGON_RPC_HTTP, POLYGON_NETWORK, { staticNetwork: true, batchMaxCount: 1 });
   signer = new ethers.Wallet(pk, provider);
-  log.info(`Redeemer wallet: ${signer.address} (Chainstack dedicated node)`);
+  log.info(`Redeemer wallet: ${signer.address} (POLYGON_RPC_URL)`);
 }
 
 /**
@@ -154,7 +154,7 @@ function initProvider() {
  * HTTP is used for tx submission (simpler lifecycle than WS provider).
  */
 function makeSigner(_url) {
-  const p = new ethers.JsonRpcProvider(CHAINSTACK_HTTP, POLYGON_NETWORK, {
+  const p = new ethers.JsonRpcProvider(POLYGON_RPC_HTTP, POLYGON_NETWORK, {
     staticNetwork: true,
     batchMaxCount: 1,
   });

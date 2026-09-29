@@ -1,6 +1,9 @@
 /**
  * Structured logger with configurable levels.
+ * Every line goes through redactSecrets(): error messages echo URLs and connection strings.
  */
+
+import { redactSecrets } from './utils/redact.ts';
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 } as const;
 type LogLevel = keyof typeof LEVELS;
@@ -19,7 +22,7 @@ function ts(): string {
 function emit(level: LogLevel, tag: string, msg: unknown, extra?: unknown): void {
   if (LEVELS[level] < currentLevel) return;
   const prefix = `${ts()} [${level.toUpperCase().padEnd(5)}] [${tag}]`;
-  const text = typeof msg === 'string' ? msg : String(msg);
+  const text = redactSecrets(typeof msg === 'string' ? msg : String(msg));
   if (extra !== undefined) {
     console.log(`${prefix} ${text}`, extra);
   } else {
