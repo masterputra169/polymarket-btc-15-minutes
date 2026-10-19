@@ -1,13 +1,32 @@
 /**
- * Polymarket LiveData WebSocket stream for Node.js bot.
- * Real-time Chainlink BTC/USD price via Polymarket's LiveData feed.
- * Ported from usePolymarketChainlinkStream.ts — same protocol, no React.
+ * Polymarket Chainlink BTC/USD SPOT feed — used by the settlement estimate
+ * (the final-minute TWAP path in engines/settlePrice.ts, via the timestamped
+ * spot ticks), the tape and the dashboard.
+ *
+ * Since 2026-10-19 the primary source is PolyBolt channel `price.crypto`
+ * (`provider:"chainlink"`, the default vendor for crypto symbols — Pyth is
+ * only an optional pin, verified live 2026-10-19: PolyBolt and RTDS delivered
+ * identical values for every overlapping second). RTDS topic
+ * `crypto_prices_chainlink` (ws-live-data) is deprecated — removal expected
+ * ~2026-10-23 — so it stays connected as a shadow fallback: reads prefer fresh
+ * PolyBolt ticks and fall back to RTDS, and the tick stores are merged per
+ * second. TWAP_FEED=rtds keeps the old RTDS-only behaviour.
+ *
+ * The exported surface is unchanged, so loop.ts / index.ts need no edit.
  */
 
 import { WebSocket } from 'ws';
 import { CONFIG, WS_POLYMARKET_LIVE, WS_DEFAULTS } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { TickStore, type Tick } from './tickStore.ts';
+import {
+  createPolyBoltFeed,
+  POLYBOLT_CRYPTO_CHANNEL,
+  resolveTwapFeedMode,
+  type PolyBoltFeed,
+  type PolyBoltHealth,
+  type TwapFeedMode,
+} from './polyboltWs.ts';
 
 const log = createLogger('PolyLiveWS');
 
@@ -16,6 +35,21 @@ const PING_MS = WS_POLYMARKET_LIVE.pingMs;               // 15s
 const HEARTBEAT_DEAD_MS = WS_POLYMARKET_LIVE.heartbeatDeadMs; // 30s
 const HEARTBEAT_CHECK_MS = WS_DEFAULTS.heartbeatCheckMs;  // 10s
 const RECONNECT_MAX_MS = WS_DEFAULTS.reconnectMaxMs;      // 10s
+
+// Reference-price migration (2026-10-19): the same switch that moves the TWAP
+// feed decides whether PolyBolt carries Chainlink spot. RTDS keeps running as a
+// shadow fallback while it still exists; reads prefer fresh PolyBolt ticks.
+const FEED_MODE: TwapFeedMode = resolveTwapFeedMode(process.env);
+/** A healthy Chainlink spot publishes every second; older than this hands reads back to RTDS. */
+const POLYBOLT_FRESH_MS = 15_000;
+const pbSpot: PolyBoltFeed | null = FEED_MODE === 'polybolt'
+  ? createPolyBoltFeed({
+      name: 'SPOT',
+      channel: POLYBOLT_CRYPTO_CHANNEL,
+      filter: { symbol: 'btcusd', provider: 'chainlink' },
+      keepMs: 5 * 60_000,
+    })
+  : null;
 
 let ws = null;
 let reconnectTimer = null;
@@ -32,17 +66,56 @@ let _prevPrice = null;
 let _connected = false;
 let _lastUpdate = 0;
 
-export function getPrice() { return _price; }
-export function getPrevPrice() { return _prevPrice; }
-export function isConnected() { return _connected; }
-export function getLastUpdate() { return _lastUpdate; }
+/** Fresh PolyBolt Chainlink spot, or null (then the RTDS values are used). */
+function freshPolyBoltSpot(): { tick: Tick; recvMs: number } | null {
+  if (!pbSpot) return null;
+  const h = pbSpot.health();
+  if (!h.connected || !h.subscribed) return null;
+  const tick = pbSpot.latest();
+  if (!tick || Date.now() - h.lastTickRecvMs > POLYBOLT_FRESH_MS) return null;
+  return { tick, recvMs: h.lastTickRecvMs };
+}
+
+export function getPrice() {
+  const pb = freshPolyBoltSpot();
+  return pb ? pb.tick.value : _price;
+}
+export function getPrevPrice() {
+  const pb = freshPolyBoltSpot();
+  if (pb) {
+    const recent = pbSpot.between(pb.tick.ts - 5_000, pb.tick.ts);
+    return recent.length >= 2 ? recent[recent.length - 2].value : pb.tick.value;
+  }
+  return _prevPrice;
+}
+export function isConnected() { return freshPolyBoltSpot() != null || _connected; }
+export function getLastUpdate() {
+  const pb = freshPolyBoltSpot();
+  return Math.max(pb?.recvMs ?? 0, _lastUpdate);
+}
+
+/** Which feed carries the reference prices ('polybolt' or 'rtds'), and PolyBolt's health. */
+export function getSpotFeedMode(): TwapFeedMode { return FEED_MODE; }
+export function getPolyBoltSpotHealth(): PolyBoltHealth | null { return pbSpot?.health() ?? null; }
 
 // Spot ticks by the timestamp Chainlink put on them — the final-minute settlement
 // estimate (engines/settlePrice.ts) averages these, and "latest received" is
 // about a second behind them.
 const _ticks = new TickStore(5 * 60_000);
-export function getSpotTicksBetween(from: number, to: number): Tick[] { return _ticks.between(from, to); }
-export function getSpotAt(ts: number): number | null { return _ticks.at(ts); }
+/**
+ * Spot ticks by source timestamp. PolyBolt and the RTDS fallback are merged per
+ * second (PolyBolt wins on a shared second — the values are identical, verified
+ * 2026-10-19), so one feed's missed second does not thin the settlement estimate.
+ */
+export function getSpotTicksBetween(from: number, to: number): Tick[] {
+  const pbTicks = pbSpot?.between(from, to) ?? [];
+  if (pbTicks.length === 0) return _ticks.between(from, to);
+  const merged = new Map<number, number>();
+  for (const t of _ticks.between(from, to)) merged.set(t.ts, t.value);
+  for (const t of pbTicks) merged.set(t.ts, t.value);
+  return [...merged.entries()].sort((a, b) => a[0] - b[0]).map(([ts, value]) => ({ ts, value }));
+}
+export function getSpotAt(ts: number): number | null { return pbSpot?.at(ts) ?? _ticks.at(ts); }
 
 function stopPing() { if (pingTimer) { clearInterval(pingTimer); pingTimer = null; } }
 function stopHb() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } }
@@ -58,6 +131,7 @@ function scheduleReconnect() {
 }
 
 export function connect() {
+  pbSpot?.start();
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
   intentionalClose = false; // L: Reset before attempt — prevents stuck flag after disconnect+failed connect
 
@@ -153,6 +227,7 @@ export function connect() {
 }
 
 export function disconnect() {
+  pbSpot?.stop();
   intentionalClose = true; // H4: Signal to close handler not to reconnect
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   stopTimers();
