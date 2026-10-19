@@ -135,3 +135,39 @@ console.log('  calibration (JEV settle-up):');
 for (const key of Object.keys(buckets).sort()) { const b = buckets[key]; console.log('    ' + key + '%: n=' + b.n + ' avg=' + (b.conf / b.n).toFixed(2) + ' up-rate=' + (b.hits / b.n).toFixed(2)); }
 console.log('  by JEV regime:');
 for (const [rg, v] of Object.entries(byRegime).sort()) console.log('    ' + rg + ': n=' + v.n + ' dir-acc=' + pct(v.ok, v.n));
+
+// Policy simulation, adapted from the strongest GitHub patterns:
+//   VGabriel/Polytutor: confidence > threshold, max ask, min edge, one entry per market
+//   bnskaggs: score against resolved outcomes and compare with market Brier
+//   buberlo/lazuli: policy lives in code, JEV only supplies the judgment.
+// This is a shadow backtest over the JEV log, not a live gate.
+console.log('\nPolicy simulation (JEV-only, shadow; one entry per market; taker fee included)');
+for (const threshold of [0.5, 0.6, 0.7, 0.8, 0.9]) {
+  const trades: { row: Row; side: string; ask: number; pSide: number; pnl: number; won: boolean }[] = [];
+  for (const row of scored) {
+    const dir = row.direction;
+    if (dir !== 'UP' && dir !== 'DOWN') continue;
+    const conf = Number(row.directionConfidence);
+    if (!(conf > threshold)) continue;
+    const pSide = Number(row.directionProbabilities?.[dir]);
+    const ask = Number(dir === 'UP' ? row.market?.marketUp : row.market?.marketDown);
+    const timeLeft = Number(row.market?.timeLeftMin);
+    if (!Number.isFinite(pSide) || !Number.isFinite(ask) || ask <= 0 || ask >= 1) continue;
+    if (ask > 0.70) continue;
+    if (pSide - ask < 0.10) continue;
+    if (Number.isFinite(timeLeft) && timeLeft < 1.5) continue;
+    const actual = outcomes.get(row.slug)!;
+    const won = dir === actual;
+    const fee = 0.07 * ask * (1 - ask);
+    const pnl = won ? 1 - ask - fee : -ask - fee;
+    trades.push({ row, side: dir, ask, pSide, pnl, won });
+  }
+  const wins = trades.filter(t => t.won).length;
+  const pnl = trades.reduce((a, t) => a + t.pnl, 0);
+  const cost = trades.reduce((a, t) => a + t.ask, 0);
+  const avgAsk = trades.length ? trades.reduce((a, t) => a + t.ask, 0) / trades.length : null;
+  console.log('  conf> ' + threshold.toFixed(2) + ': trades=' + trades.length + ' WR=' + pct(wins, trades.length) +
+    ' PnL/unit=' + (trades.length ? pnl.toFixed(4) : 'n/a') +
+    ' ROI=' + (cost > 0 ? (100 * pnl / cost).toFixed(1) + '%' : 'n/a') +
+    ' avgAsk=' + (avgAsk != null ? avgAsk.toFixed(3) : 'n/a'));
+}

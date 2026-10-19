@@ -324,3 +324,9 @@ sudo systemctl reload nginx
 - `loop.ts` calls JEV on the ENTER candidate, then force-refreshes once after the actual fill (`entryRefresh: true`, final `side`). Forced calls bypass the once-per-market guard but respect in-flight/pause/PTB checks; in-flight candidates queue the forced snapshot.
 - Journal entries now carry `jevDirection`, `jevConfidence`, `jevSettleUp`, `jevRegime`, `jevCallTs`, `jevConflict` at the actual fill.
 - Deployed and service active; 86 files / 917 tests PASS. No new trade yet after deploy, so the next entry should be the first row with the new fields and an `entryRefresh` JEV log row.
+
+### GitHub patterns applied (2026-10-19)
+
+- Adopted policy-in-code/JEV-judgment, shadow gate policy, benchmark-first, final-fill journaling. Rejected live-threshold copying, news layer, maker entry and SDK migration for now.
+- `jevEvaluate.mts` now prints a JEV-only shadow policy simulation. 47 resolved markets: direction 61.1%; settle Brier 0.2825 vs market 0.1819. conf>0.60: 17 trades, WR 70.6%, ROI +14.3%; conf>0.70: 7 trades, WR 57.1%, ROI −5.6%; >0.80/0.90 no trades.
+- Treat as hypothesis: n=17 and threshold-sensitive. Next: fixed-policy (conf>0.60, ask≤0.70, edge≥0.10) forward shadow for ≥100 markets; do not enable live gate yet.
