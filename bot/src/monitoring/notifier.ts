@@ -12,10 +12,16 @@ import { redactSecrets } from '../utils/redact.ts';
 
 const log = createLogger('Notifier');
 
-const RATE_LIMIT_MS = 60_000; // 1 message per level per 60s
+const RATE_LIMIT_MS = 60_000; // 1 message per key per 60s
+const MAX_TELEGRAM_CHARS = 3900;
 
 /** Timestamp of last sent message per level */
 const lastSentMs: Record<string, number> = {};
+
+/** Test helper: clear rate-limit state. */
+export function resetNotifierRateLimitsForTests(): void {
+  for (const k of Object.keys(lastSentMs)) delete lastSentMs[k];
+}
 
 /**
  * Send a notification to configured channels.
@@ -24,17 +30,21 @@ const lastSentMs: Record<string, number> = {};
  * @param {{ key?: string }} [opts] - Optional rate-limit key (defaults to level).
  *   Use distinct keys so e.g. 'info:entry' and 'info:settle' don't block each other.
  */
-export async function notify(level: 'critical' | 'warn' | 'info', message: string, opts: { key?: string } = {}) {
+export async function notify(level: 'critical' | 'warn' | 'info', message: string, opts: { key?: string } = {}): Promise<boolean> {
   const rateKey = opts?.key ?? level;
   const now = Date.now();
   if (lastSentMs[rateKey] && (now - lastSentMs[rateKey]) < RATE_LIMIT_MS) {
     log.debug(`Notification rate-limited (${rateKey}): ${message}`);
-    return;
+    return false;
   }
   lastSentMs[rateKey] = now;
 
-  const prefix = level === 'critical' ? '🚨' : level === 'warn' ? '⚠️' : 'ℹ️';
-  const fullMessage = redactSecrets(`${prefix} [BTC15m Bot] ${message}`);
+  const header = level === 'critical'
+    ? '🚨 <b>BTC15m · CRITICAL</b>'
+    : level === 'warn'
+      ? '⚠️ <b>BTC15m · WARN</b>'
+      : 'ℹ️ <b>BTC15m</b>';
+  const fullMessage = redactSecrets(`${header}\n${message}`);
 
   const results = await Promise.allSettled([
     sendTelegram(fullMessage),
@@ -47,10 +57,11 @@ export async function notify(level: 'critical' | 'warn' | 'info', message: strin
   } else {
     log.debug(`Notification not sent (no channels configured): ${message}`);
   }
+  return sent > 0;
 }
 
 const PROFILE_URL = 'https://polymarketscan.org/address/0x2f8b9af5a465e2bdd5f9b541c3878bc64659b472';
-const DEFAULT_DASHBOARD_URL = 'https://frontend-production-d0bf1.up.railway.app';
+// No hardcoded fallback: the old Railway dashboard is retired.
 
 interface InlineButton { text: string; url: string }
 export interface InlineKeyboard { inline_keyboard: InlineButton[][] }
@@ -71,7 +82,8 @@ let warnedDashboardValue: string | null = null;
  * Read at send time, not at import — same env-hoisting reason as sendTelegram.
  */
 function dashboardUrl(): string | null {
-  const raw = (process.env.DASHBOARD_URL ?? '').trim() || DEFAULT_DASHBOARD_URL;
+  const raw = (process.env.DASHBOARD_URL ?? '').trim();
+  if (!raw) return null;
   const candidate = /^[a-z][a-z0-9+.-]*:/i.test(raw) ? raw : `https://${raw}`;
   try {
     const { protocol, hostname } = new URL(candidate);
@@ -92,14 +104,15 @@ function dashboardUrl(): string | null {
  * append the fixed rows: "View Profile", and "View Web" below it.
  */
 export function extractInlineButton(text: string): { cleanText: string; inlineKeyboard: InlineKeyboard } {
-  const linkRe = /\n?<a href="([^"]+)">([^<]+)<\/a>/;
-  const match = text.match(linkRe);
-  const buttons: InlineButton[][] = [];
-  let cleanText = text;
-  if (match) {
-    cleanText = text.replace(linkRe, '').trimEnd();
-    buttons.push([{ text: `🔗 ${match[2]}`, url: match[1] }]);
-  }
+  // Move every <a href> link to an inline button (max 3), keep the text clean.
+  const linkRe = /\n?<a href="([^"]+)">([^<]+)<\/a>/g;
+  const matches = [...text.matchAll(linkRe)];
+  const buttons: InlineButton[][] = matches.slice(0, 3).map(m => {
+    const label = m[2].replace(/^[^\p{L}\p{N}]+/u, '').trim() || 'Open';
+    return [{ text: `🔗 ${label}`, url: m[1] }];
+  });
+  let cleanText = text.replace(linkRe, '').trimEnd();
+  if (cleanText.length > MAX_TELEGRAM_CHARS) cleanText = cleanText.slice(0, MAX_TELEGRAM_CHARS) + '…';
   buttons.push([{ text: '📊 View Profile', url: PROFILE_URL }]);
   const webUrl = dashboardUrl();
   if (webUrl) buttons.push([{ text: '🌐 View Web', url: webUrl }]);
@@ -145,6 +158,17 @@ async function sendTelegram(text) {
  * Send message via Discord webhook.
  * @returns {Promise<boolean>} true if sent successfully
  */
+/** Convert Telegram HTML to readable Discord plain text. */
+function stripTelegramHtml(text: string): string {
+  return text
+    .replace(/<a href="([^"]+)">([^<]+)<\/a>/g, '$2 ($1)')
+    .replace(/<\/?[^>]+>/g, '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"');
+}
+
 async function sendDiscord(text) {
   const webhookUrl = BOT_CONFIG.discordWebhookUrl;
   if (!webhookUrl) return false;
@@ -153,7 +177,7 @@ async function sendDiscord(text) {
     const res = await fetch(webhookUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text }),
+      body: JSON.stringify({ content: stripTelegramHtml(text) }),
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {

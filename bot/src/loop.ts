@@ -204,6 +204,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, getJevPrimarySide, getJevSizingMultiplier, getJevStatus } from './ai/jevAdvisor.ts';
+import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
 import { evaluateExecutionTiming, getExecutionTimingStatus, resetExecutionTiming, recordSpreadTick, recordVolumeTick } from './engines/executionTiming.ts';
@@ -1294,6 +1295,24 @@ export async function pollOnce() {
     // Is the CLOB book good enough to price off? A quiet book is NOT a stale
     // one — see clobFreshness.ts for why conflating the two was expensive.
     const clobFeed = evaluateClobFeed(getClobFeedHealth());
+
+    // Feed-health guard (rate-limited, transition-based): PTB not exact, PolyBolt
+    // disconnected/stale, CLOB book down. Never throws into the poll loop.
+    const feedHealth = getTwapFeedHealth();
+    checkFeedAlerts({
+      now,
+      slug: marketSlug,
+      marketAgeSec: timeLeftMin != null ? Math.max(0, 900 - timeLeftMin * 60) : null,
+      ptbExact: isExactPtbSource(priceToBeat.source),
+      ptbSource: priceToBeat.source,
+      twapMode: (feedHealth as { mode?: string } | null)?.mode ?? null,
+      twapConnected: (feedHealth as { connected?: boolean } | null)?.connected === true,
+      twapLastTickAgeMs: (() => {
+        const ts = (feedHealth as { lastTick?: { ts?: number } } | null)?.lastTick?.ts;
+        return ts ? Math.max(0, Date.now() - Number(ts)) : null;
+      })(),
+      clobStatus: clobFeed.status,
+    });
 
     // Get smart flow signal from PREVIOUS poll cycle (point-in-time correct for ML features)
     const smartFlowSignalForML = getSmartFlowSignal();

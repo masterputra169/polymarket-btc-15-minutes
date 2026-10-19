@@ -44,14 +44,14 @@ import { setLogLevel, log } from './src/logger.ts';
 import { loadMLModelFromDisk } from './src/adapters/mlLoader.ts';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.ts';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
-import { loadState, saveState as savePositionState, getStats, getCurrentPosition, resetDailyBaseline } from './src/trading/positionTracker.ts';
+import { loadState, saveState as savePositionState, getStats, getCurrentPosition, getBankroll, resetDailyBaseline } from './src/trading/positionTracker.ts';
 import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
 import { GTD_MIN_LEAD_SEC, worstCaseLimitLeadSec } from './src/trading/orderConstraints.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.ts';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs, getPrice as getPolyLiveWsPrice } from './src/streams/polymarketLiveWs.ts';
-import { startTwapFeed, stopTwapFeed, getLatestTwap } from './src/streams/chainlinkTwap.ts';
+import { startTwapFeed, stopTwapFeed, getLatestTwap, getTwapFeedHealth } from './src/streams/chainlinkTwap.ts';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss, getPrice as getChainlinkWssPrice } from './src/streams/chainlinkWss.ts';
 import { startMarketTape, stopMarketTape } from './src/tape/marketTape.ts';
 import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime, getPriceToBeatForTape } from './src/loop.ts';
@@ -75,6 +75,8 @@ import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/po
 import { maybeOptimize } from './src/ai/selfOptimizer.ts';
 import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/regimeClassifier.ts';
 import { initJevAdvisor } from './src/ai/jevAdvisor.ts';
+import { notify } from './src/monitoring/notifier.ts';
+import { startupAlert } from './src/monitoring/alertTemplates.ts';
 
 // Monitoring / guards
 import { initMacroCalendar, fetchMacroEvents } from './src/monitoring/macroCalendar.ts';
@@ -317,6 +319,20 @@ async function main() {
 
   // 5c. Start status broadcast server (dashboard integration)
   startStatusServer();
+
+  // 5c2. Startup alert (formatted; Telegram/Discord). Disable with TELEGRAM_NOTIFY_STARTUP=false.
+  if (process.env.TELEGRAM_NOTIFY_STARTUP !== 'false') {
+    const twapHealth = getTwapFeedHealth() as { mode?: string } | null;
+    void notify('info', startupAlert({
+      dryRun: BOT_CONFIG.dryRun,
+      bankroll: getBankroll(),
+      jevMode: BOT_CONFIG.jev?.mode ?? null,
+      jevProvider: process.env.JEV_PROVIDER || 'openrouter',
+      twapMode: twapHealth?.mode ?? null,
+      clobV2: !BOT_CONFIG.dryRun,
+      modelId: null,
+    }), { key: 'startup' });
+  }
 
   // 6. Start poll loop
   log.info(`Starting poll loop (every ${POLL_MS}ms)...`);

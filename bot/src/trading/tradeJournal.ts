@@ -15,6 +15,7 @@ import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
 import { mirrorTradeJournalRecord } from '../services/runtimeIntegrations.ts';
 import { getBankroll } from './positionTracker.ts';
+import { getJevSummary } from '../ai/jevAdvisor.ts';
 
 const log = createLogger('Journal');
 
@@ -294,6 +295,7 @@ async function _sendTradeAlert(record) {
     edge != null ? `📐 Edge: ${(edge * 100).toFixed(1)}%` : null,
     mlConf != null ? `🤖 ML: ${(mlConf * 100).toFixed(0)}%` : null,
     ``,
+    entry?.marketSlug ? getJevSummary(entry.marketSlug) ? `🧠 ${getJevSummary(entry.marketSlug)}` : null : null,
     `📊 Today: <b>${todayStr}</b> trades`,
     entry?.marketSlug ? `<a href="https://polymarket.com/event/${entry.marketSlug}">View Market</a>` : null,
   ].filter(Boolean);

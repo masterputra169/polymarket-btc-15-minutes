@@ -257,3 +257,12 @@ sudo systemctl reload nginx
 - Before live: sync internal bankroll to ~$25.36 and remember the 5-share minimum makes many Kelly-sized orders too small; optional `--mode fok` test for the reconciler fee.
 - Daily data backup: `polybot-backup.timer` (00:15 UTC, 14-day retention, `/opt/polybtc15/backups/data-*.tar.gz`).
 - Watchdog now sends a Telegram alert when it restarts the bot (`polybot-watchdog.timer`).
+
+### Alert system (2026-10-19)
+
+- Templates: `bot/src/monitoring/alertTemplates.ts` (entry/startup/feed). Entry alerts include side, price, shares/cost, edge, ML, JEV, phase/time left, regime, flow, bankroll + market button.
+- Notifier: header per severity, up to 3 link buttons + Profile + optional Web (`DASHBOARD_URL`; no hardcoded Railway fallback), 3900-char cap, Discord plain text.
+- Feed guard: PTB not exact 120 s (+20 s observation), PolyBolt disconnected/stale 60 s, CLOB down 60 s, recovery messages. Called each poll; never throws.
+- Startup alert on every boot (disable with `TELEGRAM_NOTIFY_STARTUP=false`).
+- Test: `cd /opt/polybtc15/bot && sudo -u ubuntu node --env-file=./.env scripts/alertTest.mts` (sends one real alert, exit 0 = accepted).
+- Watchdog alert is HTML and includes the dashboard URL from `/opt/polybtc15/.tunnel-url`.
