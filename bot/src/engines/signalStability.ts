@@ -9,21 +9,17 @@
  */
 
 // ── Constants ──
-// M10: Derive from poll interval instead of hardcoding (assumes 3s poll).
-// At 3s poll: 9s confirmation. At 5s poll: 10s confirmation. Scales correctly.
-import { CONFIG } from '../../../src/config.ts';
+// Confirmation is ~9 SECONDS, derived from the bot's real poll interval (POLL_INTERVAL_MS,
+// default 500 ms — same default/bounds as bot/index.ts). Before 2026-10-19 this used the
+// browser CONFIG.pollIntervalMs (3 s), giving 3 polls ≈150 ms at the deployed 50 ms poll.
+// Fixing it changes trade selection, so the evaluation window is reset on deploy.
 import { envInt } from '../utils/env.ts';
-const POLL_INTERVAL_S = (CONFIG.pollIntervalMs ?? 3000) / 1000;
-export const SIGNAL_CONFIRM_POLLS = Math.max(2, Math.round(9 / POLL_INTERVAL_S));  // ~9s of confirmation
+const _actualPollMs = envInt(process.env.POLL_INTERVAL_MS, 500, 50, 60_000);
+export const SIGNAL_CONFIRM_POLLS = Math.max(2, Math.round(9_000 / _actualPollMs));
 const FLIP_WINDOW_MS = 15_000;          // Track flips in last 15 seconds
 
-// v6: Scale flip tolerance with actual bot poll rate (from POLL_INTERVAL_MS env var).
-// Faster polling captures micro-oscillations (signal briefly crosses threshold then returns),
-// creating more flip events than at 3s polling even when the market is fundamentally stable.
-// At ≤100ms (bot default 50ms): allow up to 10 flips in 15s. At >1s: original 3.
-// Same default and bounds as bot/index.ts (500 ms) — this used to fall back to the browser's
-// 3000 ms, so an unset variable made the loop poll at 500 ms while this assumed 3 s.
-const _actualPollMs = envInt(process.env.POLL_INTERVAL_MS, 500, 50, 60_000);
+// v6: Scale flip tolerance with the same actual poll rate.
+// At ≤100ms allow up to 10 flips in 15s; >1s the original 3.
 const MAX_FLIPS_TO_ENTER = _actualPollMs <= 100 ? 10 : _actualPollMs <= 1000 ? 6 : 3;
 
 // ── State ──

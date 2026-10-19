@@ -80,7 +80,7 @@ describe('maybeJevAnalyze when disabled', () => {
 
 describe('JEV mode collaboration', () => {
   const cfg = BOT_CONFIG.jev;
-  const saved = { enabled: cfg.enabled, mode: cfg.mode, minConfidence: cfg.minConfidence, primaryMinConfidence: cfg.primaryMinConfidence, sizingWeight: cfg.sizingWeight };
+  const saved = { enabled: cfg.enabled, mode: cfg.mode, minConfidence: cfg.minConfidence, primaryMinConfidence: cfg.primaryMinConfidence, sizingWeight: cfg.sizingWeight, settleMargin: cfg.settleMargin };
   beforeEach(() => {
     resetJevAdvisorForTests();
     cfg.enabled = true;
@@ -88,6 +88,7 @@ describe('JEV mode collaboration', () => {
     cfg.minConfidence = 0.60;
     cfg.primaryMinConfidence = 0.70;
     cfg.sizingWeight = 0.15;
+    cfg.settleMargin = 0.05;
   });
   afterEach(() => {
     Object.assign(cfg, saved);
@@ -150,5 +151,23 @@ describe('JEV mode collaboration', () => {
   it('formats a compact summary for alerts', () => {
     __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.7, settleUpProbability: 0.66, regime: 'trending_up' });
     expect(getJevSummary('btc-updown-15m-test')).toBe('JEV: UP 70% | settle 66% | trending_up');
+  });
+
+  it('veto ignores a direction whose settle probability contradicts it', () => {
+    cfg.mode = 'veto';
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.85, settleUpProbability: 0.90, regime: 'choppy' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+  });
+
+  it('gate blocks a direction whose settle probability contradicts it', () => {
+    cfg.mode = 'gate';
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.85, settleUpProbability: 0.30, regime: 'trending_up' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toMatchObject({ action: 'block' });
+  });
+
+  it('primary refuses a direction whose settle probability contradicts it', () => {
+    cfg.mode = 'primary';
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.90, settleUpProbability: 0.90, regime: 'trending_down' });
+    expect(getJevPrimarySide('btc-updown-15m-test')).toBeNull();
   });
 });

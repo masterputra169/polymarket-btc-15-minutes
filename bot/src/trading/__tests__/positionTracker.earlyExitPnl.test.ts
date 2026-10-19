@@ -36,4 +36,14 @@ describe('earlyExitPnl', () => {
     const pos = getCurrentPosition();
     expect(earlyExitPnl(pos, -3)).toBe(earlyExitPnl(pos, 0));
   });
+
+  it('subtracts an explicit exit fee (dry-run sell leg) from P&L and bankroll', () => {
+    recordTrade({ side: 'UP', tokenId: 't', price: 0.6, size: 10, marketSlug: 'm', orderId: null });
+    const pos = getCurrentPosition();
+    const before = getBankroll(); // 94 after the $6 cost
+    // entry fee 0.17, exit fee 0.17
+    expect(earlyExitPnl(pos, 2, 0.17)).toBe(-4.34);
+    expect(settleTradeEarlyExit(2, 0.17)).toBe(true);
+    expect(getBankroll()).toBeCloseTo(before + 2 - 0.17 - 0.17, 2);
+  });
 });

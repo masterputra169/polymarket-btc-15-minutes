@@ -317,6 +317,14 @@ function freshDecision(slug?: string | null): (JevDecision & { ts: number; slug:
   return _current;
 }
 
+/** Does JEV settle probability support its direction, with a safety margin? */
+function settleSupports(direction: 'UP' | 'DOWN' | 'NO_EDGE', settleUp: number, margin: number): boolean {
+  if (!Number.isFinite(settleUp)) return false;
+  if (direction === 'UP') return settleUp >= 0.5 + margin;
+  if (direction === 'DOWN') return settleUp <= 0.5 - margin;
+  return false;
+}
+
 /** Primary mode: confident JEV direction for this market, or null. */
 export function getJevPrimarySide(slug?: string | null): 'UP' | 'DOWN' | null {
   const cfg = BOT_CONFIG.jev;
@@ -325,6 +333,7 @@ export function getJevPrimarySide(slug?: string | null): 'UP' | 'DOWN' | null {
   if (!d) return null;
   if (d.direction !== 'UP' && d.direction !== 'DOWN') return null;
   if (d.directionConfidence < cfg.primaryMinConfidence) return null;
+  if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return null;
   return d.direction;
 }
 
@@ -335,6 +344,7 @@ export function getJevSizingMultiplier(side: string, slug?: string | null): numb
   const d = freshDecision(slug);
   if (!d || d.direction !== side) return 1;
   if (d.directionConfidence < cfg.minConfidence) return 1;
+  if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return 1;
   const span = Math.max(0.001, 1 - cfg.minConfidence);
   const k = Math.min(1, (d.directionConfidence - cfg.minConfidence) / span);
   return 1 + cfg.sizingWeight * k;
@@ -354,6 +364,7 @@ export function getJevStatus() {
     shadowMode: BOT_CONFIG.jev?.shadowMode ?? true,
     mode: BOT_CONFIG.jev?.mode ?? 'shadow',
     primaryMinConfidence: BOT_CONFIG.jev?.primaryMinConfidence ?? null,
+    settleMargin: BOT_CONFIG.jev?.settleMargin ?? null,
     sizingWeight: BOT_CONFIG.jev?.sizingWeight ?? null,
     model: BOT_CONFIG.jev?.model ?? null,
     provider: resolveJevProviderConfig().provider,
@@ -379,15 +390,22 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
   if (cfg.mode === 'veto') {
     if (d.direction === 'NO_EDGE') return null;
     if (d.directionConfidence < cfg.minConfidence) return null;
-    if (d.direction !== side) return { action: 'block', reason: 'JEV ' + d.direction + ' (' + conf + '%) disagrees with ' + side };
+    if (d.direction !== side) {
+      // Only veto when JEV's settle probability also supports the opposite side.
+      if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return null;
+      return { action: 'block', reason: 'JEV ' + d.direction + ' (' + conf + '%) disagrees with ' + side + ' | settle ' + Math.round(d.settleUpProbability * 100) + '%' };
+    }
     return null;
   }
-  // gate: require a confident JEV agreement with the entry side
+  // gate: require a confident JEV agreement with the entry side and its settle probability
   if (d.direction !== side) {
     return { action: 'block', reason: 'JEV gate: needs ' + side + ', got ' + d.direction + ' (' + conf + '%)' };
   }
   if (d.directionConfidence < cfg.minConfidence) {
     return { action: 'block', reason: 'JEV gate: confidence ' + conf + '% < ' + Math.round(cfg.minConfidence * 100) + '%' };
+  }
+  if (!settleSupports(side === 'UP' ? 'UP' : 'DOWN', d.settleUpProbability, cfg.settleMargin)) {
+    return { action: 'block', reason: 'JEV gate: settle ' + Math.round(d.settleUpProbability * 100) + '% contradicts ' + side };
   }
   return null;
 }

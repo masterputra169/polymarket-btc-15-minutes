@@ -301,6 +301,9 @@ const BOT_CONFIG = {
     timeoutMs: envInt(process.env.JEV_TIMEOUT_MS, 8000, 1000, 30000),
     intervalMs: envInt(process.env.JEV_INTERVAL_MS, 0, 0, 10 * 60 * 1000),
     minConfidence: envNum(process.env.JEV_MIN_CONF, 0.60, 0.30, 0.99),
+    // Veto/gate/primary must also agree with JEV settle_above_ptb:
+    // UP needs settleUp >= 0.5+margin, DOWN needs settleUp <= 0.5-margin.
+    settleMargin: envNum(process.env.JEV_SETTLE_MARGIN, 0.05, 0, 0.20),
     // shadow = log only; veto = block entries JEV disagrees with; gate = require agreement;
     // primary = JEV may override the side of an ENTER (and force entries only if explicitly enabled).
     mode: ((): 'shadow' | 'veto' | 'gate' | 'primary' => {

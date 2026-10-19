@@ -272,3 +272,10 @@ sudo systemctl reload nginx
 - `AI_AGENT_ENABLED=false`; `google/gemini-3-flash-preview` is no longer called. The 4-hourly post-trade analysis was advisory only and never applied (`AI_AUTO_OPTIMIZE=false`, `LLM_REGIME_ENABLED=false`).
 - `OPENROUTER_API_KEY` is still required — JEV uses OpenRouter System One (`typesafe/jev-1.14`). Do not remove it.
 - Dashboard `analyzeNow` / `optimizeNow` return `ai_disabled`. Re-enable with `AI_AGENT_ENABLED=true`.
+
+### Quant fixes (2026-10-19)
+
+- Early-exit P&L/bankroll now subtract the sell-leg taker fee in dry-run (entry + exit fees); live waits for a real fill to prove `takingAmount` net/gross.
+- `SIGNAL_CONFIRM_POLLS` = 9000 / `POLL_INTERVAL_MS` → **180 polls at 50 ms ≈ 9 s** (was 3 polls ≈150 ms). Evaluation window reset: `EVAL_WINDOW_START=2026-10-19T12:04:33Z`.
+- JEV decisions must agree with `settle_above_ptb` before veto/gate/primary/sizing act: `JEV_SETTLE_MARGIN=0.05` (UP ≥55%, DOWN ≤45%).
+- Verify after deploy: loop shows `Stab:x/180`; no errors; JEV ACTIVE.

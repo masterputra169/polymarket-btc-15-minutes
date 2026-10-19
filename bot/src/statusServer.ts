@@ -8,7 +8,7 @@ import { BOT_CONFIG } from './config.ts';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, earlyExitPnl, partialExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
-import { computeSettlementPnl } from './engines/settlementMath.ts';
+import { computeSettlementPnl, takerFee } from './engines/settlementMath.ts';
 import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.ts';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.ts';
 import { resetCutLossState } from './trading/cutLoss.ts';
@@ -297,8 +297,10 @@ export function startStatusServer() {
                   let settled = false;
                   if (owns && soldAll) {
                     // Net of the entry fee, like the tracker's own booking (settleTradeEarlyExit).
-                    const cutPnl = earlyExitPnl(sellPos, recovered);
-                    settled = settleTradeEarlyExit(recovered);
+                    // Sell leg pays the V2 taker fee; dry-run proceeds are gross.
+                    const exitFee = BOT_CONFIG.dryRun ? takerFee(size, price) : 0;
+                    const cutPnl = earlyExitPnl(sellPos, recovered, exitFee);
+                    settled = settleTradeEarlyExit(recovered, exitFee);
                     if (settled) {
                       writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { source: 'dashboard_sell', recovered } });
                       clearEntrySnapshot();

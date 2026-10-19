@@ -161,6 +161,7 @@ import {
   setTradeTimestamps,
   getPendingRedeemValue,
 } from './trading/positionTracker.ts';
+import { takerFee } from './engines/settlementMath.ts';
 import { closePosition } from './trading/positionManager.ts';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.ts';
 import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.ts';
@@ -1486,8 +1487,10 @@ export async function pollOnce() {
             // closePosition returns takingAmount (USDC received), not .success flag
             const emRecovery = parseClobAmount(result?.takingAmount, emSellPrice * emergencyPos.size);
             if (emRecovery !== null) {
-              settleTradeEarlyExit(emRecovery);
-              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: earlyExitPnl(emergencyPos, emRecovery), exitData: { reason: emergencyCheck.reason } });
+              // The sell leg pays the V2 taker fee too; dry-run simulates proceeds net.
+              const emExitFee = BOT_CONFIG.dryRun ? takerFee(emergencyPos.size, emSellPrice) : 0;
+              settleTradeEarlyExit(emRecovery, emExitFee);
+              writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: earlyExitPnl(emergencyPos, emRecovery, emExitFee), exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
               resetCutLossState();
               resetTakeProfitState();
@@ -1554,8 +1557,9 @@ export async function pollOnce() {
               smartFlowStrength: smartFlowSignal.strength,
             };
             if (BOT_CONFIG.dryRun) {
-              const sfPnl = earlyExitPnl(sfPos, sfRecovery);
-              settleTradeEarlyExit(sfRecovery);
+              const sfExitFee = takerFee(sfSellSize, sfSellPrice);
+              const sfPnl = earlyExitPnl(sfPos, sfRecovery, sfExitFee);
+              settleTradeEarlyExit(sfRecovery, sfExitFee);
               invalidateSync();
               writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: sfExitData });
               clearEntrySnapshot();
@@ -1696,8 +1700,9 @@ export async function pollOnce() {
 
             if (BOT_CONFIG.dryRun) {
               const recovery = cutResult.sellPrice * sellSize;
-              const cutPnl = earlyExitPnl(pos, recovery);
-              settleTradeEarlyExit(recovery);
+              const cutExitFee = takerFee(sellSize, cutResult.sellPrice);
+              const cutPnl = earlyExitPnl(pos, recovery, cutExitFee);
+              settleTradeEarlyExit(recovery, cutExitFee);
               invalidateSync();
               writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: recovery } });
               clearEntrySnapshot();
@@ -1799,8 +1804,9 @@ export async function pollOnce() {
             const tpExitData = { gainPct: tpResult.gainPct, weakeners: tpResult.weakeners, timeLeftMin };
 
             if (BOT_CONFIG.dryRun) {
-              const tpPnl = earlyExitPnl(tpPos, tpResult.recoveryAmount);
-              settleTradeEarlyExit(tpResult.recoveryAmount);
+              const tpExitFee = takerFee(tpSellSize, tpResult.sellPrice);
+              const tpPnl = earlyExitPnl(tpPos, tpResult.recoveryAmount, tpExitFee);
+              settleTradeEarlyExit(tpResult.recoveryAmount, tpExitFee);
               invalidateSync();
               writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: tpExitData });
               clearEntrySnapshot();

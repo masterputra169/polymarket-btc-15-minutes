@@ -57,11 +57,12 @@ beforeEach(() => {
 });
 
 describe('sellPosition RPC', () => {
-  test('selling the tracked token in full settles the position, net of the entry fee', async () => {
+  test('selling the tracked token in full settles the position, net of entry and exit fees', async () => {
     const r = await rpc({ type: 'sellPosition', tokenId: 'tok-mine', size: 10, price: 0.25 });
     expect(r.ok).toBe(true);
-    expect(tracker.settleTradeEarlyExit).toHaveBeenCalledWith(2.5);
-    expect(tracker.earlyExitPnl).toHaveBeenCalled();
+    // Dry-run sell: 10 shares @ 0.25 → exit taker fee 10×0.07×0.25×0.75 = 0.13 (rounded).
+    expect(tracker.settleTradeEarlyExit).toHaveBeenCalledWith(2.5, 0.13);
+    expect(tracker.earlyExitPnl).toHaveBeenCalledWith(expect.anything(), 2.5, 0.13);
     expect(journal.writeJournalEntry).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'CUT_LOSS' }));
     expect(tracker.releaseSellLock).toHaveBeenCalled();
   });

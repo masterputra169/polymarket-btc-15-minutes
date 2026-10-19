@@ -42,8 +42,9 @@ type PositionState = Record<string, any>;
  * fee that settleTradeEarlyExit() books to the bankroll. Journal rows use this so their P&L
  * matches the bankroll (they used to omit the fee, drifting from it by ~1c a share).
  */
-export function earlyExitPnl(pos, recoveredUsdc) {
-  return roundMoney(roundMoney(Math.max(0, recoveredUsdc)) - pos.cost - entryFeeOf(pos));
+export function earlyExitPnl(pos, recoveredUsdc, exitFee = 0) {
+  const fee = Number.isFinite(exitFee) && exitFee > 0 ? roundMoney(exitFee) : 0;
+  return roundMoney(roundMoney(Math.max(0, recoveredUsdc)) - pos.cost - entryFeeOf(pos) - fee);
 }
 
 type TrackerState = {
@@ -466,7 +467,7 @@ export function settleTrade(won) {
  * @param {number} recoveredUsdc - Actual USDC recovered from the FOK sell
  * @returns {boolean} Whether settlement occurred
  */
-export function settleTradeEarlyExit(recoveredUsdc) {
+export function settleTradeEarlyExit(recoveredUsdc, exitFee = 0) {
   if (!state.currentPosition) return false;
 
   // NaN guard — prevent bankroll corruption from malformed CLOB response
@@ -492,15 +493,18 @@ export function settleTradeEarlyExit(recoveredUsdc) {
 
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
   const entryFee = entryFeeOf(pos);
+  // The sell leg is a taker fill too. Dry-run passes the simulated exit fee;
+  // live passes 0 until takingAmount is proven gross/net.
+  const exit = Number.isFinite(exitFee) && exitFee > 0 ? roundMoney(exitFee) : 0;
 
   // FINTECH: Validate bankroll before modification
   if (!assertBankrollOk('settleTradeEarlyExit')) return false;
 
-  state.bankroll = roundMoney(state.bankroll + recovered - entryFee);
+  state.bankroll = roundMoney(state.bankroll + recovered - entryFee - exit);
   state.currentPosition.settled = true;
   state.currentPosition.settledAt = Date.now();
 
-  const pnl = roundMoney(recovered - pos.cost - entryFee);
+  const pnl = roundMoney(recovered - pos.cost - entryFee - exit);
   const isWin = pnl >= 0;
 
   // C2 FIX: Update counters BEFORE saveState so all financial state is saved atomically.
