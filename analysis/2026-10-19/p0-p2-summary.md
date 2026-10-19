@@ -13,7 +13,7 @@
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| CLOB V2 merge (go-live blocker) | DONE (merged + deployed to VPS in DRY RUN) | main `92e8deb` + PolyBolt `eda6891`; `npm run typecheck` PASS; `npx vitest run` 83 files / 893 tests PASS |
+| CLOB V2 merge (go-live blocker) | DONE (merged + deployed, preflight PASS, 5-share smoke PASS; still DRY RUN) | main `92e8deb` + PolyBolt `eda6891`; `npm run typecheck` PASS; `npx vitest run` 83 files / 893 tests PASS |
 | Evaluation window | RUNNING | n=~260+ of 300 target, ~61% WR, PnL +$4.2 at last check |
 | JEV evaluation all markets | DONE | Gamma fallback; first n=3: settle Brier JEV 0.238 vs market 0.339 vs ML 0.331 (too early) |
 

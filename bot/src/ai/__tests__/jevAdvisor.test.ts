@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
-import { buildJevState, buildJevQuestions, parseJevAnswers, getJevStatus, maybeJevAnalyze, resetJevAdvisorForTests } from '../jevAdvisor.ts';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { buildJevState, buildJevQuestions, parseJevAnswers, getJevStatus, maybeJevAnalyze, resetJevAdvisorForTests,
+  checkJevAdvisory, getJevPrimarySide, getJevSizingMultiplier, getJevSummary, __setJevDecisionForTests } from '../jevAdvisor.ts';
+import { BOT_CONFIG } from '../../config.ts';
 import type { JevSnapshot } from '../jevAdvisor.ts';
 
 const snapshot: JevSnapshot = {
@@ -73,5 +75,80 @@ describe('maybeJevAnalyze when disabled', () => {
     const status = getJevStatus();
     expect(status.calls).toBe(0);
     expect(status.enabled).toBe(false);
+  });
+});
+
+describe('JEV mode collaboration', () => {
+  const cfg = BOT_CONFIG.jev;
+  const saved = { enabled: cfg.enabled, mode: cfg.mode, minConfidence: cfg.minConfidence, primaryMinConfidence: cfg.primaryMinConfidence, sizingWeight: cfg.sizingWeight };
+  beforeEach(() => {
+    resetJevAdvisorForTests();
+    cfg.enabled = true;
+    cfg.mode = 'shadow';
+    cfg.minConfidence = 0.60;
+    cfg.primaryMinConfidence = 0.70;
+    cfg.sizingWeight = 0.15;
+  });
+  afterEach(() => {
+    Object.assign(cfg, saved);
+    resetJevAdvisorForTests();
+  });
+
+  it('veto blocks an opposite confident direction and allows agreement', () => {
+    cfg.mode = 'veto';
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.72, settleUpProbability: 0.2, regime: 'trending_down' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toMatchObject({ action: 'block' });
+    expect(checkJevAdvisory('DOWN', 'btc-updown-15m-test')).toBeNull();
+  });
+
+  it('veto ignores NO_EDGE and low confidence', () => {
+    cfg.mode = 'veto';
+    __setJevDecisionForTests({ direction: 'NO_EDGE', directionConfidence: 0.8, settleUpProbability: 0.5, regime: 'choppy' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.55, settleUpProbability: 0.3, regime: 'choppy' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+  });
+
+  it('gate requires a confident agreement', () => {
+    cfg.mode = 'gate';
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.75, settleUpProbability: 0.7, regime: 'trending_up' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+    expect(checkJevAdvisory('DOWN', 'btc-updown-15m-test')).toMatchObject({ action: 'block' });
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.50, settleUpProbability: 0.6, regime: 'trending_up' });
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toMatchObject({ action: 'block' });
+  });
+
+  it('shadow and primary modes never veto at the filter layer', () => {
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.95, settleUpProbability: 0.1, regime: 'trending_down' });
+    cfg.mode = 'shadow';
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+    cfg.mode = 'primary';
+    expect(checkJevAdvisory('UP', 'btc-updown-15m-test')).toBeNull();
+  });
+
+  it('primary exposes only confident directions', () => {
+    cfg.mode = 'primary';
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.85, settleUpProbability: 0.1, regime: 'trending_down' });
+    expect(getJevPrimarySide('btc-updown-15m-test')).toBe('DOWN');
+    __setJevDecisionForTests({ direction: 'DOWN', directionConfidence: 0.66, settleUpProbability: 0.3, regime: 'trending_down' });
+    expect(getJevPrimarySide('btc-updown-15m-test')).toBeNull();
+    cfg.mode = 'shadow';
+    expect(getJevPrimarySide('btc-updown-15m-test')).toBeNull();
+  });
+
+  it('sizing multiplier rewards agreement and is neutral in shadow', () => {
+    cfg.mode = 'veto';
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.80, settleUpProbability: 0.75, regime: 'trending_up' });
+    const m = getJevSizingMultiplier('UP', 'btc-updown-15m-test');
+    expect(m).toBeGreaterThan(1);
+    expect(m).toBeLessThanOrEqual(1 + cfg.sizingWeight);
+    expect(getJevSizingMultiplier('DOWN', 'btc-updown-15m-test')).toBe(1);
+    cfg.mode = 'shadow';
+    expect(getJevSizingMultiplier('UP', 'btc-updown-15m-test')).toBe(1);
+  });
+
+  it('formats a compact summary for alerts', () => {
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.7, settleUpProbability: 0.66, regime: 'trending_up' });
+    expect(getJevSummary('btc-updown-15m-test')).toBe('JEV: UP 70% | settle 66% | trending_up');
   });
 });

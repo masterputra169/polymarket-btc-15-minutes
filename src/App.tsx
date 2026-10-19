@@ -472,7 +472,7 @@ export default function App() {
 const jevData = useMemo(() => data?.jev ?? null, [
   data?.jev?.calls, data?.jev?.errors, data?.jev?.mode, data?.jev?.configured,
   data?.jev?.last?.ts, data?.jev?.last?.direction, data?.jev?.last?.directionConfidence,
-  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.lastCostUsd,
+  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.lastCostUsd, data?.jev?.totalCostUsd,
 ]);
 
 const botData = useMemo(() => {

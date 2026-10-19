@@ -24,6 +24,7 @@ export interface JevStatusData {
   errors?: number | null;
   lastLatencyMs?: number | null;
   lastCostUsd?: number | null;
+  totalCostUsd?: number | null;
   lastError?: string | null;
   last?: JevLast | null;
 }
@@ -85,6 +86,7 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
       )}
       <div style={{ marginTop: 8, fontSize: '0.64rem', color: 'var(--text-muted)' }}>
         calls {data.calls ?? 0} · errors {data.errors ?? 0} · last latency {data.lastLatencyMs != null ? Math.round(data.lastLatencyMs) + 'ms' : '-'}
+        {data.totalCostUsd != null ? ' · total $' + data.totalCostUsd.toFixed(4) : ''}
         {data.lastError ? ' · ' + data.lastError.slice(0, 80) : ''}
       </div>
     </div>

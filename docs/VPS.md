@@ -248,3 +248,12 @@ sudo systemctl reload nginx
 - JEV veto active: `JEV_MODE=veto`, `JEV_SHADOW=false`, `JEV_MIN_CONF=0.60`; `EVAL_WINDOW_START=2026-10-19T05:03:02Z`. Previous window archived: 260 trades, 61.5% WR.
 - Railway project `polybtc15` deletion requested (scheduled for 2026-10-21T05:03Z; data exported locally). Permanent dashboard hostname still pending a Cloudflare named tunnel (`cloudflared tunnel login` requires the operator).
 
+### CLOB V2 preflight/smoke PASS (2026-10-19)
+
+- `POLYGON_RPC_URL=https://polygon-bor-rpc.publicnode.com` in `bot/.env` (old `polygon-rpc.com` was disabled/401).
+- Preflight: L2 auth OK, order version 2, no open orders, pUSD **$25.36**, USDC.e 0, allowance max, `setApprovalForAll` yes.
+- Smoke: post-only GTD BUY 5 @ 0.01 placed LIVE and cancelled; open orders 0.
+- `FOK_MIN_SHARES_LOW=5`; eval window reset `2026-10-19T11:07:51Z`.
+- Before live: sync internal bankroll to ~$25.36 and remember the 5-share minimum makes many Kelly-sized orders too small; optional `--mode fok` test for the reconciler fee.
+- Daily data backup: `polybot-backup.timer` (00:15 UTC, 14-day retention, `/opt/polybtc15/backups/data-*.tar.gz`).
+- Watchdog now sends a Telegram alert when it restarts the bot (`polybot-watchdog.timer`).

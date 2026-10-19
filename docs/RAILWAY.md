@@ -1,3 +1,5 @@
+> **ARCHIVED 2026-10-19** — Railway is retired; the bot runs on the Tencent VPS. See `docs/VPS.md`.
+
 # Railway deployment
 
 The whole stack runs on Railway (project `polybtc15`, environment

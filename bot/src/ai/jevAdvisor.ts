@@ -110,7 +110,7 @@ let _inFlight = false;
 let _warnedNoKey = false;
 let _pausedUntil = 0;
 let _current: (JevDecision & { ts: number; slug: string | null }) | null = null;
-const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, lastError: null as string | null };
+const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCostUsd: 0, lastError: null as string | null };
 
 /** Compact state object. JSON structure is cheaper for JEV than prose. */
 export function buildJevState(s: JevSnapshot): Record<string, unknown> {
@@ -264,6 +264,7 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
   _stats.calls++;
   _stats.lastLatencyMs = parsed.latencyMs;
   _stats.lastCostUsd = parsed.costUsd ?? 0;
+  _stats.totalCostUsd += parsed.costUsd ?? 0;
   log.info('JEV ' + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up ' + Math.round(parsed.settleUpProbability * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd');
 }
 
@@ -297,6 +298,10 @@ export function maybeJevAnalyze(snapshot: JevSnapshot): void {
       if (err instanceof TypesafeError && (err.status === 401 || err.status === 402)) {
         _pausedUntil = Date.now() + 10 * 60_000;
         log.warn('JEV paused 10 min (HTTP ' + err.status + '): ' + _stats.lastError + (err.status === 402 ? ' - top up OpenRouter credits at https://openrouter.ai/settings/credits' : ''));
+        // Tell the operator on Telegram/Discord; a silent pause can waste a whole evaluation day.
+        void import('../monitoring/notifier.ts')
+          .then(m => m.notify('warn', 'JEV paused 10 min (HTTP ' + err.status + '): ' + _stats.lastError + (err.status === 402 ? ' — top up OpenRouter credits' : ''), { key: 'jev:paused' }))
+          .catch(() => {});
       } else {
         log.warn('JEV call failed: ' + _stats.lastError);
       }
@@ -356,6 +361,7 @@ export function getJevStatus() {
     errors: _stats.errors,
     lastLatencyMs: _stats.lastLatencyMs,
     lastCostUsd: _stats.lastCostUsd,
+    totalCostUsd: _stats.totalCostUsd,
     lastError: _stats.lastError,
     last: _current,
   };
@@ -395,7 +401,34 @@ export function resetJevAdvisorForTests(): void {
   _stats.errors = 0;
   _stats.lastLatencyMs = 0;
   _stats.lastError = null;
+  _stats.totalCostUsd = 0;
   _pausedUntil = 0;
+}
+
+/** Test-only: inject a cached decision so mode logic can be unit-tested without a network call. */
+export function __setJevDecisionForTests(partial: {
+  direction: 'UP' | 'DOWN' | 'NO_EDGE';
+  directionConfidence: number;
+  settleUpProbability: number;
+  regime: string;
+  slug?: string | null;
+  ts?: number;
+}): void {
+  _current = {
+    model: 'test',
+    direction: partial.direction,
+    directionProbabilities: {},
+    directionConfidence: partial.directionConfidence,
+    settleUpProbability: partial.settleUpProbability,
+    regime: partial.regime,
+    regimeConfidence: 0,
+    latencyMs: 0,
+    inputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+    ts: partial.ts ?? Date.now(),
+    slug: partial.slug ?? 'btc-updown-15m-test',
+  };
 }
 
 /** Fire-and-forget: called from the poll loop, never awaited, never throws. */
