@@ -51,9 +51,9 @@ function AccuracyPanel({ data }) {
         {journal
           ? <span className="card__badge badge--live">{journal.totalTrades} TRADES</span>
           : <span className="card__badge badge--loading">TRACKING</span>}
-        {data.overallCRPS != null && (
-          <span className="card__badge" style={{ background: 'var(--bg-elevated)', color: data.overallCRPS <= 0.20 ? 'var(--green-mid)' : data.overallCRPS <= 0.25 ? 'var(--yellow-mid, #ffc107)' : 'var(--red-mid)' }}>
-            CRPS {data.overallCRPS.toFixed(3)}
+        {journal?.brier != null && (
+          <span className="card__badge" style={{ background: 'var(--bg-elevated)', color: journal.brier <= 0.20 ? 'var(--green-mid)' : journal.brier <= 0.25 ? 'var(--yellow-mid, #ffc107)' : 'var(--red-mid)' }}>
+            Brier/CRPS {journal.brier.toFixed(4)}
           </span>
         )}
       </div>
@@ -85,6 +85,9 @@ function AccuracyPanel({ data }) {
           </div>
           <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: 4 }}>
             {journal.totalWins}W / {journal.totalLosses}L · avg win +{(journal.avgPnlWin ?? 0).toFixed(2)} · avg loss {(journal.avgPnlLoss ?? 0).toFixed(2)} · avg hold {Math.round((journal.avgHoldWin ?? 0) / 60)}m
+          </div>
+          <div style={{ fontSize: '0.64rem', color: 'var(--text-muted)', marginTop: 2 }}>
+            Brier/CRPS {journal.brier != null ? journal.brier.toFixed(4) : '-'} (n={journal.brierN ?? 0}) · logloss {journal.logLoss != null ? journal.logLoss.toFixed(4) : '-'} — binary CRPS = Brier
           </div>
         </div>
       )}

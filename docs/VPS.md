@@ -292,3 +292,10 @@ sudo systemctl reload nginx
 - `fallbackVerifier` now calls `reconcilePrediction(slug, verifiedOutcome)` (adapter → shared feedback store) on every verified resolution; journal corrections reach Accuracy/streak automatically.
 - One-off backlog: `cd /opt/polybtc15/bot && sudo -u ubuntu node --env-file=./.env scripts/reconcileFeedback.mts` (stop the bot first so it cannot overwrite the file). Reconciled 3 stale predictions.
 - Snapshot: accuracy 0.8 (4/5), streak 1L, `Hot (80% of last 5)`. Evaluation window reset to `2026-10-19T12:25:44Z` (feedback feeds sizing).
+
+### Brier/CRPS from journal (2026-10-19)
+
+- Old dashboard CRPS came from browser localStorage; not real. New: `journalAnalytics.patterns.brier/brierN/logLoss/logLossN` computed from every directional journal row (entry `ensembleUp` for the chosen side, `exit.verifiedOutcome` first).
+- Snapshot: Brier/CRPS 0.2583 (n=749), logloss 0.7548; market Brier 0.2229, base-rate 0.2282; mean predicted 82.9% vs realised 64.8% → calibration, not display, is the issue.
+- Accuracy panel header/journal section shows `Brier/CRPS` and `logloss`; binary CRPS = Brier.
+- Gate audit: 20 numbered gates; binding blocker is the price cap (dry-run 75c / live 68c), not the 9 s confirmation. Indicators: 10 TA modules, 79 ML features.

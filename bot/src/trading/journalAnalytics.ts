@@ -546,7 +546,7 @@ function computeEventTimeline(trades, auditEvents) {
 
 function computePatterns(trades, hourly, sessions, dayOfWeek) {
   if (trades.length === 0) {
-    return { totalTrades: 0, totalPnl: 0, overallWr: 0 };
+    return { totalTrades: 0, totalPnl: 0, overallWr: 0, brier: null, brierN: 0, logLoss: null, logLossN: 0 };
   }
 
   const totalTrades = trades.length;
@@ -568,6 +568,14 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
   let totalCost = 0;
   let totalEvents = 0;
 
+  // Brier score for the chosen side (binary CRPS) and log loss, from the same
+  // ensemble probability the live decision used (entry.ensembleUp). Verified
+  // outcome first: price_fallback can flip later and fallbackVerifier corrects it.
+  let brierSum = 0;
+  let brierN = 0;
+  let logLossSum = 0;
+  let logLossN = 0;
+
   // Streak tracking
   let longestWinStreak = 0;
   let longestLossStreak = 0;
@@ -584,6 +592,20 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
     const cost = t.entry?.cost ?? 0;
     totalPnl += pnl;
     totalCost += cost;
+
+    const side = t.entry?.side;
+    const ensembleUp = t.entry?.ensembleUp;
+    const resolved = t.exit?.verifiedOutcome ?? t.exit?.outcome;
+    if ((side === 'UP' || side === 'DOWN') && Number.isFinite(ensembleUp) && (resolved === 'UP' || resolved === 'DOWN')) {
+      const p = side === 'UP' ? ensembleUp : 1 - ensembleUp;
+      const y = resolved === side ? 1 : 0;
+      brierSum += (p - y) ** 2;
+      brierN++;
+      if (p > 0 && p < 1) {
+        logLossSum -= y * Math.log(p) + (1 - y) * Math.log(1 - p);
+        logLossN++;
+      }
+    }
 
     // Volume = gross notional traded (cost + proceeds across all sub-trades).
     // If entry only has cost (most local trades), volume ≈ 2×cost (BUY + SELL/REDEEM on resolution).
@@ -657,6 +679,11 @@ function computePatterns(trades, hourly, sessions, dayOfWeek) {
     totalLosses,
     totalPnl: roundMoney(totalPnl),
     overallWr: roundPct((totalWins / totalTrades) * 100),
+    // Binary CRPS == Brier score for a two-outcome event.
+    brier: brierN > 0 ? +(brierSum / brierN).toFixed(4) : null,
+    brierN,
+    logLoss: logLossN > 0 ? +(logLossSum / logLossN).toFixed(4) : null,
+    logLossN,
 
     // Polymarketscan-style metrics
     totalVolume: roundMoney(totalVolume),

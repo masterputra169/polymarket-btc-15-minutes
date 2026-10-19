@@ -3,7 +3,7 @@ import { useBotData } from './hooks/useBotData.ts';
 import { describeClobSource } from './components/clobSourceLabel.ts';
 import { useCountdown } from './hooks/useCountdown.ts';
 import { initLoggerDB, shouldLog, logSnapshot } from './data/polymarketLogger.ts';
-import { recordPrediction, autoSettle, loadHistory, onMarketSwitch, getSignalPerfStats, computeOverallCRPS } from './engines/feedback.ts';
+import { recordPrediction, autoSettle, onMarketSwitch, getSignalPerfStats } from './engines/feedback.ts';
 import CurrentPriceCard from './components/CurrentPriceCard.tsx';
 import TAIndicators from './components/TAIndicators.tsx';
 import PredictPanel from './components/PredictPanel.tsx';
@@ -357,13 +357,13 @@ export default function App() {
       feedbackStats: data.feedbackStats,
       detailedFeedback: data.detailedFeedback,
       signalPerf: getSignalPerfStats(),
-      overallCRPS: computeOverallCRPS(loadHistory()),
       journal: data.journalAnalytics?.patterns ?? null,
       actualPnl: data.journalAnalytics?.actualPnl ?? null,
     };
   }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions,
       data?.detailedFeedback?.totalSettled, data?.journalAnalytics?.patterns?.totalTrades,
-      data?.journalAnalytics?.patterns?.overallWr, data?.journalAnalytics?.patterns?.totalPnl]);
+      data?.journalAnalytics?.patterns?.overallWr, data?.journalAnalytics?.patterns?.totalPnl,
+      data?.journalAnalytics?.patterns?.brier]);
 
   // JournalTimeSeriesPanel: time-series analytics from bot
   // Granular deps — only re-render when actual data changes, NOT computedAt (which ticks every recompute)
