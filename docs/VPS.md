@@ -305,3 +305,9 @@ sudo systemctl reload nginx
 - Filter log 05:03–12:45: 113,954 filtered lines. Largest sole blockers: entry-price hard cap 19,083; "Too early >12min" 10,705; ML conf 4,231; JEV 830. Price cap protects EV; early-time gate is the only high-volume lever worth a tape/backtest probe.
 - JEV: direction 16/26 (61.5%); settle-up Brier **0.2907** vs market 0.1727; conf≥0.60 direction 14/19 (73.7%, CI wide), conf≥0.70 3/7. Keep veto-only; do not use JEV settle probability for gate/primary/edge/sizing; collect ≥100 markets.
 - Report: `analysis/2026-10-19/gateway-blockers-jev-quality.md`.
+
+### JEV real-resolution audit (2026-10-19)
+
+- Fresh Gamma resolutions for all 55 calls / 38 markets: 52 calls / 36 markets resolved. Direction 22/38 = 57.9% (NO_EDGE 14/52); conf≥0.60 14/20 = 70%; conf≥0.70 4/8 = 50%.
+- All 21 calls with `rules.side` agreed with it (71.4%); calls without a rule side 7/17 = 41.2% — JEV mostly echoes the bot rules. Settle Brier 0.3017 vs market 0.1686; calibration buckets badly off (0–20% → actual 40%; 80–100% → actual 66.7%).
+- Keep JEV out of gate/primary/sizing; shadow mode is the safer default; veto counterfactual still needs tape. Full CSV: `analysis/2026-10-19/jev-call-eval.csv`; report: `analysis/2026-10-19/jev-real-resolution-audit.md`.
