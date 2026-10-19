@@ -245,7 +245,29 @@ Phase-based decision with regime-adaptive thresholds:
 
 ### Environment Notes
 
+- Dashboard VPS (Cloudflare Tunnel + HTTP Basic Auth): kredensial ada di `.claude/memory/polybtc15-vps-dashboard.md` (gitignored; jangan dicommit). URL terbaru: `ssh polyvps "cat /opt/polybtc15/.tunnel-url"`. Runbook: `docs/VPS.md`.
 - Windows (MSYS/Git Bash), `.bashrc` has encoding errors (harmless, ignore)
 - Binance FAPI + Bybit both blocked in user's region — funding rate defaults to neutral
 - Python 3.13.0, Node 25.1.0, xgboost 3.1.3
 - PM2 ecosystem: `ecosystem.config.cts` (512M bot, 512M frontend via `npm run dev`, auto-restart; the `ml-retrain` app is commented out)
+
+
+**OpenRouter provider (2026-10-19)**: JEV is called through OpenRouter by default — `POST https://openrouter.ai/api/v1/systemone` with the existing `OPENROUTER_API_KEY`, model `typesafe/jev-1.14` (`~typesafe/jev-latest` alias). Same typed body/answers as direct TypeSafe; output free, input $42/Btok ($0.042/Mtok), 262k context. Env: `JEV_PROVIDER=openrouter|typesafe`, `JEV_MODEL`. Observed: 1,549 input tokens → **$0.000065/call**, ~1.0 s; at ~96 markets/day ≈ **$0.006/day (~$0.19/month)**. First live call (shadow) logged in `bot/data/jev_log.jsonl`. Guard: JEV is only called when `ptbExact` is true and the window is 0.5–14.4 min in (poll #1 used the approximate oracle PTB and produced a bad answer). OpenRouter credits: account was at `total_usage 140.19 / total_credits 140`; top up at openrouter.ai/settings/credits to avoid 402 pauses (the advisor pauses 10 min on 401/402).
+### JEV decision advisor (TypeSafe System One, 2026-10-19)
+
+- **What**: `bot/src/ai/typesafeClient.ts` (POST https://api.typesafe.ai/v1/systemone, Bearer `TYPESAFE_API_KEY`, model `jev-latest`, retries 429/529/5xx) and `bot/src/ai/jevAdvisor.ts` (one structured call per market: `direction` choice UP/DOWN/NO_EDGE, `settle_above_ptb` noul, `regime` choice). Answers are appended to `bot/data/jev_log.jsonl`. Docs: https://docs.typesafe.ai/api, https://docs.typesafe.ai/cookbooks.
+- **Shadow by default**: `JEV_SHADOW=true` — the poll loop calls `maybeJevAnalyze()` after `decide()` (fire-and-forget, one call per market, never awaited); it never changes trade selection. `tradeFilters.ts` gate 19b calls `checkJevAdvisory()` which returns null while shadow, so active veto only exists after the operator deliberately flips `JEV_SHADOW=false` (JEV never triggers entries). Flipping it changes trade selection → reset `EVAL_WINDOW_START`.
+- **Env**: `TYPESAFE_API_KEY` (required for calls), `JEV_ENABLED`, `JEV_SHADOW` (default true), `JEV_MODEL` (`jev-latest`), `JEV_TIMEOUT_MS` (8000), `JEV_INTERVAL_MS` (0 = once per market; >0 = minimum ms between calls), `JEV_MIN_CONF` (0.60, active-veto threshold).
+- **Tools**: `node bot/scripts/jevSmokeTest.mts` (one fixed call, prints answers/usage; exit 2 without key). `node bot/scripts/jevEvaluate.mts` (joins `jev_log.jsonl` with `trade_journal.jsonl`: direction accuracy, settle Brier vs market/ML, calibration buckets).
+- **Cost**: $42 per Btok input; a state is ~500–900 input tokens, one call per 15-min market (~96/day) → ~$0.003–0.004/day. Output tokens are free.
+- Deployed on the VPS 2026-10-19 in SHADOW mode; OpenRouter LLM regime disabled there (`LLM_REGIME_ENABLED=false`) because its key is out of credits — JEV replaces the LLM layer.
+
+**JEV modes and full collaboration (2026-10-19)**: `JEV_MODE=shadow|veto|gate|primary` (default shadow; `JEV_SHADOW=false` maps to veto).
+- `shadow`: record only. `veto`: gate 19b blocks entries JEV confidently disagrees with (opposite direction, conf >= JEV_MIN_CONF).
+- `gate`: entry requires a confident JEV agreement (NO_EDGE/disagreement blocks). `primary`: a confident JEV direction overrides the side of an ENTER; entries are forced only with `JEV_PRIMARY_FORCE_ENTRY=true` (off by default). `JEV_PRIMARY_MIN_CONF` (0.70).
+- Collaborative sizing: when JEV agrees and confidence >= JEV_MIN_CONF, `computeBetSizing` result is scaled by up to `1 + JEV_SIZING_WEIGHT` (default 0.15; `getJevSizingMultiplier`).
+- Alerts: entry Telegram messages append a one-line `JEV: <dir> <conf>% | settle <p>% | <regime>` (`getJevSummary`).
+- Dashboard: the broadcast carries `jev: getJevStatus()`; `src/components/JevPanel.tsx` shows mode, provider/model, last decision, calls/errors/latency/cost.
+- Evaluation: `bot/scripts/jevEvaluate.mts` now resolves every logged market via Gamma (`/markets/slug/<slug>`, cached in `bot/data/jev_outcomes.json`) when the journal has no outcome — direction accuracy, settle Brier vs market/ML, calibration and per-regime stats.
+- 2026-10-19 first evaluation (n=3, too early): JEV settle Brier 0.238 vs market 0.339 vs ML 0.331; direction 1/1 where JEV had an opinion (NO_EDGE 2/3).
+- Ops: `/etc/systemd/system/polybot-watchdog.timer` runs `scripts/watchdog.sh` every 5 min; `botLiveness.mts` non-zero -> restart `polybtc15-bot`.

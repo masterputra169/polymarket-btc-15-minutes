@@ -34,6 +34,7 @@ import { envInt } from '../utils/env.ts';
 import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
 import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.ts';
+import { checkJevAdvisory } from '../ai/jevAdvisor.ts';
 import { readFilterThresholds, type FilterThresholds } from './filterThresholds.ts';
 
 const log = createLogger('Filter');
@@ -684,6 +685,16 @@ export function applyTradeFilters({
   }
 
   // Session quality score (used as multiplier downstream, not a hard filter)
+  // 19b. JEV (TypeSafe System One) advisory - shadow by default.
+  // checkJevAdvisory() returns null while JEV_SHADOW=true, so this is a no-op
+  // until the shadow log is scored (bot/scripts/jevEvaluate.mts) and the operator
+  // deliberately flips JEV_SHADOW=false. JEV never triggers entries.
+  if (signalSide) {
+    const jevAdvisory = checkJevAdvisory(signalSide, marketSlug);
+    if (jevAdvisory && jevAdvisory.action === 'block') {
+      reasons.push('JEV: ' + jevAdvisory.reason);
+    }
+  }
   const sessionQuality = SESSION_QUALITY[session] ?? 0.70;
 
   const pass = reasons.length === 0;

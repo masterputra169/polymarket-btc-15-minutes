@@ -73,6 +73,7 @@ import { initOpenRouter } from './src/ai/openrouterClient.ts';
 import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/postTradeAnalyst.ts';
 import { maybeOptimize } from './src/ai/selfOptimizer.ts';
 import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/regimeClassifier.ts';
+import { initJevAdvisor } from './src/ai/jevAdvisor.ts';
 
 // Monitoring / guards
 import { initMacroCalendar, fetchMacroEvents } from './src/monitoring/macroCalendar.ts';
@@ -256,6 +257,9 @@ async function main() {
   } else if (BOT_CONFIG.llmRegime?.enabled) {
     log.warn('LLM Regime enabled but AI_AGENT_ENABLED=false — classifier will not run');
   }
+
+  // 4d4. Initialize JEV / TypeSafe System One decision advisor (independent of OpenRouter).
+  initJevAdvisor();
 
   // 5. Start WebSocket streams (real-time data)
   log.info('Connecting WebSocket streams...');

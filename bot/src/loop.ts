@@ -203,6 +203,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
+import { maybeJevAnalyze, getJevPrimarySide, getJevSizingMultiplier, getJevStatus } from './ai/jevAdvisor.ts';
 
 // Execution timing optimizer
 import { evaluateExecutionTiming, getExecutionTimingStatus, resetExecutionTiming, recordSpreadTick, recordVolumeTick } from './engines/executionTiming.ts';
@@ -1946,6 +1947,34 @@ export async function pollOnce() {
     });
 
     // ── 8. Bet sizing ──
+    // JEV advisor (TypeSafe System One) - record-only in shadow mode. Fire-and-forget:
+    // one call per market by default; never blocks or mutates the decision path.
+    try {
+      maybeJevAnalyze({
+        t: Date.now(), slug: marketSlug || null, pollCounter,
+        action: rec.action, side: rec.side, confidence: rec.confidence, reason: rec.reason, phase: rec.phase,
+        timeLeftMin, session: getSessionName(),
+        btcPrice: lastPrice, priceToBeat: priceToBeat.value, ptbSource: priceToBeat.source,
+        ptbExact: isExactPtbSource(priceToBeat.source), settlePrice: settle.price,
+        delta1m, delta3m, atrPct: atr?.atrPct ?? null, atrRatio: atr?.atrRatio ?? null,
+        rsi: rsiNow, rsiSlope, macdHist: macd?.hist ?? null, vwapDist, vwapSlope,
+        bbPercentB: bb?.percentB ?? null, bbWidth: bb?.width ?? null,
+        stochK: stochRsi?.k ?? null, stochD: stochRsi?.d ?? null,
+        emaCrossSignal: emaCross?.cross ?? null, emaDistPct: emaCross?.distancePct ?? null,
+        volDeltaBuyRatio: volDelta?.buyRatio ?? null,
+        marketUp, marketDown,
+        mlProbUp: mlResult.available ? mlResult.mlProbUp : null,
+        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
+        mlSide: mlResult.available ? mlResult.mlSide : null,
+        mlAgreesWithRules, ensembleUp,
+        edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
+        regime: regimeInfo?.regime ?? null, regimeConfidence: regimeInfo?.confidence ?? null,
+        smartFlowSignal: smartFlowSignal?.direction ?? null, signalConfirmCount: getConfirmCount(),
+        recentFlips: recentFlipCount, consecutiveLosses: getConsecutiveLosses(),
+        bankroll: getBankroll(),
+      });
+    } catch { /* record-only - never disturb the poll */ }
+    // ── 8. Bet sizing ──
     const betSide = rec.side;
     const betEnsembleProb = betSide === 'UP' ? ensembleUp
       : betSide === 'DOWN' ? ensembleDown : null;
@@ -2718,6 +2747,7 @@ export async function pollOnce() {
       settlePrice, settlePriceSource: settle.source,
       twapNow: getLatestTwap()?.value ?? null,
       twapFeed: getTwapFeedHealth(),
+      jev: getJevStatus(),
 
       // Indicators (full objects)
       vwapNow, vwapDist, vwapSlope, vwapSlopeLabel,

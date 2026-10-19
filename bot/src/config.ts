@@ -285,6 +285,34 @@ const BOT_CONFIG = {
     blockMlBypass: envNum(process.env.LLM_REGIME_ML_BYPASS, 0.90, 0.70, 0.99),  // ML ≥ this overrides LLM block
     logFile: resolve(__dirname, '..', 'data', 'llm_regime.jsonl'),
   },
+
+  // JEV / TypeSafe System One decision advisor (2026-10-19).
+  // One structured call per market: direction (UP/DOWN/NO_EDGE), settle-above-PTB
+  // probability and regime. SHADOW by default - writes bot/data/jev_log.jsonl,
+  // never changes trade selection. Score it with bot/scripts/jevEvaluate.mts
+  // before flipping JEV_SHADOW=false (advisory veto only; JEV never triggers entries).
+  jev: {
+    enabled: process.env.JEV_ENABLED === 'true',
+    shadowMode: process.env.JEV_SHADOW !== 'false',
+    apiKey: process.env.TYPESAFE_API_KEY || '',
+    baseUrl: process.env.TYPESAFE_BASE_URL || 'https://api.typesafe.ai',
+    provider: process.env.JEV_PROVIDER || 'openrouter',
+    model: process.env.JEV_MODEL || 'typesafe/jev-1.14',
+    timeoutMs: envInt(process.env.JEV_TIMEOUT_MS, 8000, 1000, 30000),
+    intervalMs: envInt(process.env.JEV_INTERVAL_MS, 0, 0, 10 * 60 * 1000),
+    minConfidence: envNum(process.env.JEV_MIN_CONF, 0.60, 0.30, 0.99),
+    // shadow = log only; veto = block entries JEV disagrees with; gate = require agreement;
+    // primary = JEV may override the side of an ENTER (and force entries only if explicitly enabled).
+    mode: ((): 'shadow' | 'veto' | 'gate' | 'primary' => {
+      const m = (process.env.JEV_MODE || '').trim().toLowerCase();
+      if (m === 'shadow' || m === 'veto' || m === 'gate' || m === 'primary') return m;
+      return process.env.JEV_SHADOW === 'false' ? 'veto' : 'shadow';
+    })(),
+    primaryMinConfidence: envNum(process.env.JEV_PRIMARY_MIN_CONF, 0.70, 0.50, 0.99),
+    primaryForceEntry: process.env.JEV_PRIMARY_FORCE_ENTRY === 'true',
+    sizingWeight: envNum(process.env.JEV_SIZING_WEIGHT, 0.15, 0, 0.50),
+    logFile: resolve(__dirname, '..', 'data', 'jev_log.jsonl'),
+  },
 };
 
 export { CONFIG, BET_SIZING, BOT_CONFIG, WS_DEFAULTS, WS_POLYMARKET_LIVE, WS_CHAINLINK, envNum, envInt };

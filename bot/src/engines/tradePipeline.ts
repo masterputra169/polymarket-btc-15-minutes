@@ -16,6 +16,7 @@ import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
+import { getJevSummary } from '../ai/jevAdvisor.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -653,8 +654,11 @@ export async function executeDirectionalTrade({
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {
       const marketUrl = `https://polymarket.com/event/${marketSlug}`;
+      const jevTag = getJevSummary(marketSlug);
       deps.notifyTrade(
-        `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares} shares ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}\n<a href="${marketUrl}">View Market</a>`
+        `[DRY] ENTRY ${betSide} @ $${betMarketPrice.toFixed(3)} | ${shares} shares ($${(shares * betMarketPrice).toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}` +
+        (jevTag ? '\n' + jevTag : '') +
+        `\n<a href="${marketUrl}">View Market</a>`
       );
     }
     return true;
@@ -746,8 +750,11 @@ export async function executeDirectionalTrade({
         ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(e => log.debug(`Notify ME align: ${e.message}`));
       } else {
         const marketUrl = `https://polymarket.com/event/${marketSlug}`;
+        const jevTag = getJevSummary(marketSlug);
         deps.notifyTrade(
-          `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}\n<a href="${marketUrl}">View Market</a>`
+          `ENTRY ${betSide} @ $${actualPrice.toFixed(3)} | ${actualSize} shares ($${cost.toFixed(2)}) | Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | $${deps.getBankroll().toFixed(2)}` +
+          (jevTag ? '\n' + jevTag : '') +
+          `\n<a href="${marketUrl}">View Market</a>`
         );
       }
     }

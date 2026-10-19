@@ -19,6 +19,7 @@ import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.tsx';
 import SessionInfo from './components/SessionInfo.tsx';
 import TapePanel from './components/TapePanel.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
+import JevPanel from './components/JevPanel.tsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
 const StatusPill = memo(function StatusPill({ connected, label, dotClass }) {
@@ -467,7 +468,14 @@ export default function App() {
   // BotPanel: extract only what BotPanel needs
   // NOTE: ts/pollCounter excluded from deps — they change every ~50ms poll but are cosmetic.
   // BotPanel uses a local interval to tick the "Xs ago" display independently.
-  const botData = useMemo(() => {
+  // JevPanel: JEV / TypeSafe decision layer status (mode, last decision, calls).
+const jevData = useMemo(() => data?.jev ?? null, [
+  data?.jev?.calls, data?.jev?.errors, data?.jev?.mode, data?.jev?.configured,
+  data?.jev?.last?.ts, data?.jev?.last?.direction, data?.jev?.last?.directionConfidence,
+  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.lastCostUsd,
+]);
+
+const botData = useMemo(() => {
     if (!data) return null;
     return {
       paused: data.paused, ts: data.ts, pollCounter: data.pollCounter,
@@ -591,6 +599,9 @@ export default function App() {
 
           {/* Row 4: ML Engine (full width) */}
           <MLPanel data={mlData} />
+
+          {/* Row 4b: JEV / TypeSafe decision layer */}
+          <JevPanel data={jevData} />
 
           {/* Row 5: Bet Sizing (full width) */}
           <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />
