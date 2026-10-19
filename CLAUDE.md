@@ -271,3 +271,9 @@ Phase-based decision with regime-adaptive thresholds:
 - Evaluation: `bot/scripts/jevEvaluate.mts` now resolves every logged market via Gamma (`/markets/slug/<slug>`, cached in `bot/data/jev_outcomes.json`) when the journal has no outcome — direction accuracy, settle Brier vs market/ML, calibration and per-regime stats.
 - 2026-10-19 first evaluation (n=3, too early): JEV settle Brier 0.238 vs market 0.339 vs ML 0.331; direction 1/1 where JEV had an opinion (NO_EDGE 2/3).
 - Ops: `/etc/systemd/system/polybot-watchdog.timer` runs `scripts/watchdog.sh` every 5 min; `botLiveness.mts` non-zero -> restart `polybtc15-bot`.
+
+**Production rollout 2026-10-19 (12:0x WIB / 05:0x UTC)**:
+- CLOB V2 code deployed to the VPS (`npm ci --prefix bot` installed `@polymarket/clob-client-v2` + `viem`); bot stays DRY RUN and the V2 readiness gate is inside `if (!BOT_CONFIG.dryRun)`, so startup is unchanged. First live order still needs pUSD funding + the two approvals + a 5-share smoke order.
+- JEV switched to **veto** on the VPS (`JEV_MODE=veto`, `JEV_SHADOW=false`, `JEV_MIN_CONF=0.60`), evaluation window reset (`EVAL_WINDOW_START=2026-10-19T05:03:02Z`). The previous window is archived in `analysis/2026-10-19/eval-window-archive-before-jev-veto.json`: 260 trades, 160W/100L, 61.5% WR.
+- Railway project `polybtc15` deleted via `railway delete` (all data already exported under `data/railway-export/`); account keeps the other 12 projects untouched.
+- Dashboard tunnel is still a Cloudflare **quick** tunnel: no `cert.pem` exists on the VPS, so a named tunnel/stable hostname needs the operator to run `cloudflared tunnel login` once.

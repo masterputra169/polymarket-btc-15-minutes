@@ -242,3 +242,9 @@ sudo systemctl reload nginx
 - Go-live still needs manual steps: fund the funder with pUSD, approve CTF Exchange V2 (`pUSD.approve` + `CTF.setApprovalForAll`), then one 5-share live V2 smoke order (`bot/scripts/clobV2SmokeOrder.mts`). See `docs/CLOB_V2_MIGRATION.md`.
 - Not deployed to the VPS yet: the VPS bot node_modules would need `npm ci --prefix bot` (new `@polymarket/clob-client-v2` + `viem`); dry-run is unaffected by the code, but the dependency install + startup check should be done in a maintenance window.
 
+### Rollout 2026-10-19
+
+- CLOB V2 merged code deployed: `npm ci --prefix bot` on the VPS installed `@polymarket/clob-client-v2` + `viem`; DRY RUN is unaffected (readiness gate only runs live). Backup: `/opt/polybtc15/backups/pre-clobv2-*.tar.gz`.
+- JEV veto active: `JEV_MODE=veto`, `JEV_SHADOW=false`, `JEV_MIN_CONF=0.60`; `EVAL_WINDOW_START=2026-10-19T05:03:02Z`. Previous window archived: 260 trades, 61.5% WR.
+- Railway project `polybtc15` deleted (data exported locally); permanent dashboard hostname still pending a Cloudflare named tunnel (`cloudflared tunnel login` requires the operator).
+

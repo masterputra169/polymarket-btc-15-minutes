@@ -13,7 +13,7 @@
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| CLOB V2 merge (go-live blocker) | DONE (merged) | main `92e8deb` + PolyBolt `eda6891`; `npm run typecheck` PASS; `npx vitest run` 83 files / 893 tests PASS |
+| CLOB V2 merge (go-live blocker) | DONE (merged + deployed to VPS in DRY RUN) | main `92e8deb` + PolyBolt `eda6891`; `npm run typecheck` PASS; `npx vitest run` 83 files / 893 tests PASS |
 | Evaluation window | RUNNING | n=~260+ of 300 target, ~61% WR, PnL +$4.2 at last check |
 | JEV evaluation all markets | DONE | Gamma fallback; first n=3: settle Brier JEV 0.238 vs market 0.339 vs ML 0.331 (too early) |
 
@@ -23,8 +23,8 @@
 | --- | --- | --- |
 | External watchdog | DONE | `polybot-watchdog.timer` every 5 min, `botLiveness.mts` -> restart |
 | Dashboard JEV panel | DONE | dist rebuilt + deployed; WS `jev` verified |
-| Permanent tunnel URL | PENDING (operator) | Cloudflare named tunnel + domain; current quick tunnel is kept in sync by timer |
-| Railway cleanup | PENDING (operator) | project HOBBY PAST_DUE $24.58; data exported locally; volumes can be deleted after final review |
+| Permanent tunnel URL | PENDING (operator) — no VPS cert.pem | Cloudflare named tunnel + domain; current quick tunnel is kept in sync by timer |
+| Railway cleanup | DONE 2026-10-19 | project `polybtc15` deleted via CLI; data exported locally |
 | Maker-fill study | WAITING for data (~7 weeks) | no action |
 
 ## Commit trail
@@ -36,5 +36,5 @@
 ## Remaining operator decisions
 
 1. JEV active mode: shadow -> veto/gate/primary after >=100 markets; switching resets `EVAL_WINDOW_START`.
-2. CLOB V2 go-live: pUSD funding + two approval transactions + 5-share live smoke order, then deploy merged code to VPS (`npm ci --prefix bot`).
+2. CLOB V2 go-live (code already deployed to the VPS): pUSD funding + two approval transactions + 5-share live smoke order, then deploy merged code to VPS (`npm ci --prefix bot`).
 3. Railway project deletion / permanent dashboard tunnel.
