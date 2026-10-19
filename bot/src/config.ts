@@ -303,7 +303,9 @@ const BOT_CONFIG = {
     // When to call JEV. 'entry' = only when the bot's decide() says ENTER (relevant
     // to the actual trade, and no calls during long WAIT stretches); 'market' = the
     // old behaviour (first poll of the market, near market open).
-    callOn: ((process.env.JEV_CALL_ON || 'entry').trim().toLowerCase() === 'market' ? 'market' : 'entry') as 'entry' | 'market',
+    callOn: ((process.env.JEV_CALL_ON || 'entry').trim().toLowerCase() === 'market'
+      ? 'market'
+      : (process.env.JEV_CALL_ON || 'entry').trim().toLowerCase() === 'policy' ? 'policy' : 'entry') as 'entry' | 'market' | 'policy',
     minConfidence: envNum(process.env.JEV_MIN_CONF, 0.60, 0.30, 0.99),
     // Veto/gate/primary must also agree with JEV settle_above_ptb:
     // UP needs settleUp >= 0.5+margin, DOWN needs settleUp <= 0.5-margin.
@@ -319,6 +321,14 @@ const BOT_CONFIG = {
     primaryForceEntry: process.env.JEV_PRIMARY_FORCE_ENTRY === 'true',
     sizingWeight: envNum(process.env.JEV_SIZING_WEIGHT, 0.15, 0, 0.50),
     logFile: resolve(__dirname, '..', 'data', 'jev_log.jsonl'),
+    // Fixed-policy forward shadow: call JEV once per market at the policy checkpoint,
+    // record candidates that pass the fixed gates, and resolve them later with
+    // bot/scripts/jevPolicyReport.mts. No orders; no trade-selection impact.
+    policyShadow: process.env.JEV_POLICY_SHADOW !== 'false',
+    policyMinConfidence: envNum(process.env.JEV_POLICY_MIN_CONF, 0.60, 0.30, 0.99),
+    policyMaxAsk: envNum(process.env.JEV_POLICY_MAX_ASK, 0.70, 0.01, 0.99),
+    policyMinEdge: envNum(process.env.JEV_POLICY_MIN_EDGE, 0.10, 0, 0.50),
+    policyFile: resolve(__dirname, '..', 'data', 'jev_policy.jsonl'),
   },
 };
 

@@ -330,3 +330,10 @@ sudo systemctl reload nginx
 - Adopted policy-in-code/JEV-judgment, shadow gate policy, benchmark-first, final-fill journaling. Rejected live-threshold copying, news layer, maker entry and SDK migration for now.
 - `jevEvaluate.mts` now prints a JEV-only shadow policy simulation. 47 resolved markets: direction 61.1%; settle Brier 0.2825 vs market 0.1819. conf>0.60: 17 trades, WR 70.6%, ROI +14.3%; conf>0.70: 7 trades, WR 57.1%, ROI −5.6%; >0.80/0.90 no trades.
 - Treat as hypothesis: n=17 and threshold-sensitive. Next: fixed-policy (conf>0.60, ask≤0.70, edge≥0.10) forward shadow for ≥100 markets; do not enable live gate yet.
+
+### JEV fixed-policy forward shadow (2026-10-19)
+
+- `JEV_CALL_ON=policy`; one JEV call per market at first eligible poll. Fixed gates: conf > 0.60, ask ≤ 0.70, pSide − ask ≥ 0.10, one candidate/market. No orders.
+- Candidates: `data/jev_policy.jsonl`; report: `sudo -u ubuntu node --env-file=./.env scripts/jevPolicyReport.mts` → `data/jev_policy_report.json` (progress to 100 resolved markets, Brier, WR, PnL, bot overlap).
+- Env: `JEV_POLICY_SHADOW=true`, `JEV_POLICY_MIN_CONF=0.60`, `JEV_POLICY_MAX_ASK=0.70`, `JEV_POLICY_MIN_EDGE=0.10`.
+- 22:15 WIB call was 53% confidence, so no candidate yet; next eligible market will sample. 87 files / 922 tests PASS.

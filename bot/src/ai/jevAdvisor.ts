@@ -23,6 +23,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { isTypesafeConfigured, resolveJevProviderConfig, systemOne, TypesafeError } from './typesafeClient.ts';
+import { maybeRecordPolicyCandidate } from './jevPolicyShadow.ts';
 import type { TypesafeAnswer, TypesafeQuestion } from './typesafeClient.ts';
 
 const log = createLogger('JEV');
@@ -263,6 +264,29 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
     log.warn('JEV: cannot write log - ' + (err instanceof Error ? err.message : String(err)));
   }
   _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
+
+  // Fixed-policy forward shadow: only the designated policy/market calls, never
+  // the post-fill refresh; candidate recording is record-only and never throws.
+  if (!snapshot.entryRefresh && BOT_CONFIG.jev.callOn !== 'entry') {
+    try {
+      maybeRecordPolicyCandidate({
+        slug: record.slug,
+        ts: record.ts,
+        iso: record.iso,
+        direction: parsed.direction,
+        directionConfidence: parsed.directionConfidence,
+        directionProbabilities: parsed.directionProbabilities,
+        settleUpProbability: parsed.settleUpProbability,
+        regime: parsed.regime,
+        marketUp: snapshot.marketUp,
+        marketDown: snapshot.marketDown,
+        timeLeftMin: snapshot.timeLeftMin,
+        rulesSide: snapshot.side,
+        rulesAction: snapshot.action,
+        callOn: BOT_CONFIG.jev.callOn,
+      });
+    } catch { /* record-only */ }
+  }
   _lastSlug = snapshot.slug;
   _lastCallMs = Date.now();
   _stats.calls++;
