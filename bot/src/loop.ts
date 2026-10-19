@@ -1981,8 +1981,7 @@ export async function pollOnce() {
     // ── 8. Bet sizing ──
     // JEV advisor (TypeSafe System One) - record-only in shadow mode. Fire-and-forget:
     // one call per market by default; never blocks or mutates the decision path.
-    try {
-      maybeJevAnalyze({
+    const jevSnapshot = {
         t: Date.now(), slug: marketSlug || null, pollCounter,
         action: rec.action, side: rec.side, confidence: rec.confidence, reason: rec.reason, phase: rec.phase,
         timeLeftMin, session: getSessionName(),
@@ -2004,8 +2003,8 @@ export async function pollOnce() {
         smartFlowSignal: smartFlowSignal?.direction ?? null, signalConfirmCount: getConfirmCount(),
         recentFlips: recentFlipCount, consecutiveLosses: getConsecutiveLosses(),
         bankroll: getBankroll(),
-      });
-    } catch { /* record-only - never disturb the poll */ }
+    };
+    try { maybeJevAnalyze(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
     // ── 8. Bet sizing ──
     const betSide = rec.side;
     const betEnsembleProb = betSide === 'UP' ? ensembleUp
@@ -2667,7 +2666,19 @@ export async function pollOnce() {
           // MetEngine smart money gate (Feature 1+2) — null if disabled
           querySmartMoney: BOT_CONFIG.metEngine?.enabled ? querySmartMoney : null,
         });
-        if (tapeEntered === true) noteTapeEntered();
+        if (tapeEntered === true) {
+          noteTapeEntered();
+          // Refresh JEV once against the FINAL side that was actually filled. The
+          // candidate call above can be on a different side by the time the
+          // execution gates finish; this record is the one that matches the journal.
+          try {
+            maybeJevAnalyze({
+              ...jevSnapshot,
+              t: Date.now(), action: 'ENTER', side: betSide, confidence: rec.confidence, phase: rec.phase, timeLeftMin,
+              entryRefresh: true,
+            }, { force: true });
+          } catch { /* record-only */ }
+        }
       } catch (tradeErr) {
         log.error(`executeDirectionalTrade failed (bot kept alive): ${tradeErr.stack || tradeErr.message}`);
       }

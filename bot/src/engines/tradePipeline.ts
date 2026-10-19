@@ -16,7 +16,7 @@ import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
-import { getJevSummary } from '../ai/jevAdvisor.ts';
+import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
 import { tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 
 const log = createLogger('TradePipeline');
@@ -559,6 +559,20 @@ export async function executeDirectionalTrade({
     slippagePct: null,     // populated after fill for live orders
     avgSlippage: null,     // populated after fill for live orders
   };
+
+  // JEV snapshot at the actual directional fill: lets the journal measure
+  // conflicts between the final position and the advisor, not just reconstruct
+  // call times after the fact.
+  const jevForEntry = (() => {
+    const d = getJevLatestForTape();
+    return d && d.slug === marketSlug ? d : null;
+  })();
+  entryData.jevDirection = jevForEntry?.direction ?? null;
+  entryData.jevConfidence = jevForEntry?.directionConfidence ?? null;
+  entryData.jevSettleUp = jevForEntry?.settleUpProbability ?? null;
+  entryData.jevRegime = jevForEntry?.regime ?? null;
+  entryData.jevCallTs = jevForEntry?.ts ?? null;
+  entryData.jevConflict = jevForEntry && jevForEntry.direction !== 'NO_EDGE' ? jevForEntry.direction !== betSide : null;
 
   if (dryRun) {
     // Simulate the fill and book it through the same hooks the live path uses,

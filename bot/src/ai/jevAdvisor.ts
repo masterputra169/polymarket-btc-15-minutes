@@ -31,6 +31,8 @@ export interface JevSnapshot {
   t: number;
   slug: string | null;
   pollCounter: number;
+  /** true when this call is a forced refresh after the actual entry fill. */
+  entryRefresh?: boolean;
   action: string;
   side: string | null;
   confidence: string | null;
@@ -107,6 +109,7 @@ interface JevRecord extends JevDecision {
 let _lastSlug: string | null = null;
 let _lastCallMs = 0;
 let _inFlight = false;
+let _pendingRefresh: JevSnapshot | null = null;
 let _warnedNoKey = false;
 let _pausedUntil = 0;
 let _current: (JevDecision & { ts: number; slug: string | null; marketUp?: number | null; marketDown?: number | null }) | null = null;
@@ -251,6 +254,7 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
     ml: { probUp: snapshot.mlProbUp, confidence: snapshot.mlConfidence, side: snapshot.mlSide, agreesWithRules: snapshot.mlAgreesWithRules },
     edge: { up: snapshot.edgeUp, down: snapshot.edgeDown, best: snapshot.bestEdge },
     ...parsed,
+    ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
   };
   try {
     mkdirSync(dirname(BOT_CONFIG.jev.logFile), { recursive: true });
@@ -269,7 +273,8 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
 }
 
 /** Fire-and-forget: called from the poll loop, never awaited, never throws. */
-export function maybeJevAnalyze(snapshot: JevSnapshot): void {
+export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean } = {}): void {
+  const force = opts.force === true;
   const cfg = BOT_CONFIG.jev;
   if (!cfg || !cfg.enabled) return;
   if (!isTypesafeConfigured()) {
@@ -281,7 +286,12 @@ export function maybeJevAnalyze(snapshot: JevSnapshot): void {
     return;
   }
   if (Date.now() < _pausedUntil) return;
-  if (_inFlight) return;
+  if (_inFlight) {
+    // A forced entry refresh can arrive while the candidate call is in flight.
+    // Queue it; the in-flight promise runs it when it finishes.
+    if (force) _pendingRefresh = { ...snapshot, entryRefresh: true };
+    return;
+  }
   // Only evaluate markets with the exact TWAP price-to-beat and after the window
   // has settled: at poll #1 the PTB can still be the approximate oracle/spot value,
   // which made JEV answer against a wrong state (and cost a paid call).
@@ -291,8 +301,8 @@ export function maybeJevAnalyze(snapshot: JevSnapshot): void {
   if (!snapshot.ptbExact) return;
   if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
   const now = Date.now();
-  if (snapshot.slug && snapshot.slug === _lastSlug && cfg.intervalMs === 0) return;
-  if (cfg.intervalMs > 0 && now - _lastCallMs < cfg.intervalMs) return;
+  if (!force && snapshot.slug && snapshot.slug === _lastSlug && cfg.intervalMs === 0) return;
+  if (!force && cfg.intervalMs > 0 && now - _lastCallMs < cfg.intervalMs) return;
   _inFlight = true;
   void runAnalysis(snapshot)
     .catch((err: unknown) => {
@@ -309,7 +319,12 @@ export function maybeJevAnalyze(snapshot: JevSnapshot): void {
         log.warn('JEV call failed: ' + _stats.lastError);
       }
     })
-    .finally(() => { _inFlight = false; });
+    .finally(() => {
+      _inFlight = false;
+      const pending = _pendingRefresh;
+      _pendingRefresh = null;
+      if (pending) maybeJevAnalyze(pending, { force: true });
+    });
 }
 
 /** Age check for the cached decision (one call per market; stale after 20 min). */
@@ -419,6 +434,7 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
 }
 export function resetJevAdvisorForTests(): void {
   _lastSlug = null;
+  _pendingRefresh = null;
   _lastCallMs = 0;
   _inFlight = false;
   _warnedNoKey = false;

@@ -34,3 +34,8 @@ So the apparent “JEV contradicted my open position and was right” is mostly 
 ## Suggested next code step (not done yet)
 
 Add entry.jevDirection, entry.jevConfidence, entry.jevSettleUp, entry.jevConflict to the journal at the actual fill (tradePipeline), and optionally re-call JEV once at final entry. That makes future “JEV vs position” analysis exact instead of reconstructing call times.
+
+
+## Implemented 2026-10-19 14:56 UTC
+
+`loop.ts` now force-refreshes JEV after the actual fill (`entryRefresh: true`); `tradePipeline` writes `jevDirection/jevConfidence/jevSettleUp/jevRegime/jevCallTs/jevConflict` into the journal. The next actual entry will be the first exact row.

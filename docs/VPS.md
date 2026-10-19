@@ -318,3 +318,9 @@ sudo systemctl reload nginx
 - JEV is shadow now (`JEV_MODE=shadow`, `JEV_SHADOW=true`) and called only on ENTER candidates (`JEV_CALL_ON=entry`), not at market open. The JEV veto was the gate removed; price cap/ML/floor unchanged.
 - Dry-run-only probe: `FILTER_DRY_RUN_MAX_TIME_LEFT=13` (live stays 12). Window reset `EVAL_WINDOW_START=2026-10-19T12:58:17Z`. Revert = remove the variable.
 - Startup verified: `JEV: enabled [SHADOW]`, override `FILTER_DRY_RUN_MAX_TIME_LEFT=13`, JEV log stayed at 55 (no WAIT calls). 86 files / 917 tests PASS.
+
+### JEV final-fill refresh (2026-10-19 14:56 UTC)
+
+- `loop.ts` calls JEV on the ENTER candidate, then force-refreshes once after the actual fill (`entryRefresh: true`, final `side`). Forced calls bypass the once-per-market guard but respect in-flight/pause/PTB checks; in-flight candidates queue the forced snapshot.
+- Journal entries now carry `jevDirection`, `jevConfidence`, `jevSettleUp`, `jevRegime`, `jevCallTs`, `jevConflict` at the actual fill.
+- Deployed and service active; 86 files / 917 tests PASS. No new trade yet after deploy, so the next entry should be the first row with the new fields and an `entryRefresh` JEV log row.
