@@ -13,6 +13,7 @@ import {
 } from '../../../src/data/polymarket.ts';
 import { createLogger } from '../logger.ts';
 import { fetchJsonWithPolymarketDoh, fetchTextWithPolymarketDoh } from '../services/polymarketHttp.ts';
+import { parseOrderConstraints, recordOrderConstraints } from '../trading/orderConstraints.ts';
 
 const log = createLogger('Data');
 
@@ -165,6 +166,10 @@ export async function fetchPolymarketSnapshot() {
         ]);
         upBookSummary = summarizeOrderBook(upBook);
         downBookSummary = summarizeOrderBook(downBook);
+        // Tick size + minimum order size for the live CLOB V2 order path
+        // (record-only: nothing on the dry-run path reads them).
+        recordOrderConstraints(upTokenId, parseOrderConstraints(upBook, market));
+        recordOrderConstraints(downTokenId, parseOrderConstraints(downBook, market));
 
         if (upBookSummary.bestBid !== null && upBookSummary.bestAsk !== null)
           upBuy = (upBookSummary.bestBid + upBookSummary.bestAsk) / 2;
@@ -172,6 +177,8 @@ export async function fetchPolymarketSnapshot() {
           downBuy = (downBookSummary.bestBid + downBookSummary.bestAsk) / 2;
       } catch (err) {
         log.warn?.(`Orderbook fetch failed: ${err.message} — using Gamma prices`);
+        recordOrderConstraints(upTokenId, parseOrderConstraints(null, market));
+        recordOrderConstraints(downTokenId, parseOrderConstraints(null, market));
         upBuy = gammaYes;
         downBuy = gammaNo;
         // Mark orderbook as unavailable so arb engine doesn't see null spread as 0

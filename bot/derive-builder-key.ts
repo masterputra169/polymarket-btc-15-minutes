@@ -14,10 +14,19 @@
  *
  * NOTE: This is a one-time setup. The bot does NOT need this to function — it's
  * additive for builder rewards tracking.
+ *
+ * CLOB V2: order attribution no longer uses these HMAC keys — it is a public
+ * `builderCode` (bytes32) from the Builder Profile, attached per order. The
+ * HMAC builder key still authenticates the Relayer (gasless transactions).
+ * The bot attaches no builder code (docs.polymarket.com/v2-migration).
  */
 
-import { ClobClient, Chain, SignatureType } from "@polymarket/clob-client";
-import { Wallet } from "ethers";
+import { ClobClient } from "@polymarket/clob-client-v2";
+import {
+  buildClobClientOptions,
+  createClobSigner,
+  resolveSignatureType,
+} from "./src/trading/clobV2Config.ts";
 
 const POLYMARKET_HOST = "https://clob.polymarket.com";
 
@@ -36,35 +45,21 @@ if (!apiKey || !apiSecret || !apiPassphrase) {
   process.exit(1);
 }
 
-type WalletCompat = Wallet & { _signTypedData?: Wallet['signTypedData'] };
-const wallet = new Wallet(privateKey) as WalletCompat;
-// Ethers v6 compat shim for @polymarket SDK
-if (!wallet._signTypedData && wallet.signTypedData) {
-  wallet._signTypedData = wallet.signTypedData.bind(wallet);
-}
+const signer = createClobSigner(privateKey);
 
-const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS;
-const sigType = proxyAddress ? SignatureType.POLY_GNOSIS_SAFE : SignatureType.EOA;
-const funder = proxyAddress || undefined;
+const proxyAddress = process.env.POLYMARKET_PROXY_ADDRESS || undefined;
+const sigType = resolveSignatureType(proxyAddress, process.env.POLYMARKET_SIGNATURE_TYPE);
 
-console.log("Wallet:", wallet.address);
+console.log("Wallet:", signer.account.address);
 if (proxyAddress) console.log("Proxy:", proxyAddress);
 
-const client = new ClobClient(
-  POLYMARKET_HOST,
-  Chain.POLYGON,
-  wallet as any,
-  { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-  sigType,
-  funder,
-  undefined,
-  true,
-  undefined,
-  undefined,
-  false,
-  undefined,
-  true,
-);
+const client = new ClobClient(buildClobClientOptions({
+  host: POLYMARKET_HOST,
+  signer,
+  creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+  signatureType: sigType,
+  funderAddress: proxyAddress,
+}));
 
 console.log("\nRequesting builder API key...");
 try {
@@ -75,9 +70,8 @@ try {
   console.log("=".repeat(60));
   console.log(JSON.stringify(builderKey, null, 2));
   console.log("=".repeat(60));
-  console.log("\nNote: Bot does NOT auto-use this yet. To attach builderCode to");
-  console.log("orders, edit clobClient.ts placeBuyOrder/placeLimitBuyOrder and pass");
-  console.log("`builderCode` in the userOrder object.");
+  console.log("\nNote: in CLOB V2 order attribution uses the builderCode from your");
+  console.log("Builder Profile, not this key. The bot attaches no builder code.");
 } catch (err) {
   console.error("\n✗ Failed:", err.message);
   if (err.message.includes("already exists") || err.message.includes("duplicate")) {
