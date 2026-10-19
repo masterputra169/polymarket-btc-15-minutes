@@ -4,6 +4,7 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import { BOT_CONFIG } from './config.ts';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, earlyExitPnl, partialExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
@@ -403,11 +404,13 @@ export function startStatusServer() {
 
         // ── AI Agent commands ──
         } else if (msg.type === 'analyzeNow') {
+          if (!BOT_CONFIG.ai?.enabled) { respond('analyzeNow', { ok: false, error: 'ai_disabled' }); return; }
           if (commandThrottled('analyzeNow', 30_000)) { respond('analyzeNow', { ok: false, error: 'rate_limited' }); return; }
           maybeAnalyze(0)
             .then(() => respond('analyzeNow', { ok: true, analysis: getLastAnalysis() }))
             .catch(err => respond('analyzeNow', { ok: false, error: err.message }));
         } else if (msg.type === 'optimizeNow') {
+          if (!BOT_CONFIG.ai?.enabled) { respond('optimizeNow', { ok: false, error: 'ai_disabled' }); return; }
           if (commandThrottled('optimizeNow', 30_000)) { respond('optimizeNow', { ok: false, error: 'rate_limited' }); return; }
           maybeOptimize()
             .then(() => respond('optimizeNow', { ok: true, status: getOptimizerStatus() }))

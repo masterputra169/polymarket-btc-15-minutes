@@ -42,6 +42,9 @@ export function getLastAnalysis() {
  * Called from bot index.ts on interval. Non-blocking.
  */
 export async function maybeAnalyze(totalTrades) {
+  // Hard off: the OpenRouter/Gemini agent is disabled (2026-10-19). JEV uses the
+  // OpenRouter key independently through the System One endpoint.
+  if (!BOT_CONFIG.ai?.enabled) return;
   if (_analyzing) return;
   const now = Date.now();
   if (_lastAnalyzeMs > 0 && (now - _lastAnalyzeMs) < BOT_CONFIG.ai.analyzeIntervalMs) return;

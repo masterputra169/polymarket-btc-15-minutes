@@ -46,6 +46,7 @@ let _optimizing = false;
  * Called periodically from bot index.ts.
  */
 export async function maybeOptimize() {
+  if (!BOT_CONFIG.ai?.enabled) return;
   if (_optimizing) return;
   if (!BOT_CONFIG.ai.autoOptimize) return;
 

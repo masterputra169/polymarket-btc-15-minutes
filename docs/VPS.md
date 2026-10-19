@@ -266,3 +266,9 @@ sudo systemctl reload nginx
 - Startup alert on every boot (disable with `TELEGRAM_NOTIFY_STARTUP=false`).
 - Test: `cd /opt/polybtc15/bot && sudo -u ubuntu node --env-file=./.env scripts/alertTest.mts` (sends one real alert, exit 0 = accepted).
 - Watchdog alert is HTML and includes the dashboard URL from `/opt/polybtc15/.tunnel-url`.
+
+### Gemini/OpenRouter AI agent disabled (2026-10-19)
+
+- `AI_AGENT_ENABLED=false`; `google/gemini-3-flash-preview` is no longer called. The 4-hourly post-trade analysis was advisory only and never applied (`AI_AUTO_OPTIMIZE=false`, `LLM_REGIME_ENABLED=false`).
+- `OPENROUTER_API_KEY` is still required — JEV uses OpenRouter System One (`typesafe/jev-1.14`). Do not remove it.
+- Dashboard `analyzeNow` / `optimizeNow` return `ai_disabled`. Re-enable with `AI_AGENT_ENABLED=true`.
