@@ -299,3 +299,9 @@ sudo systemctl reload nginx
 - Snapshot: Brier/CRPS 0.2583 (n=749), logloss 0.7548; market Brier 0.2229, base-rate 0.2282; mean predicted 82.9% vs realised 64.8% → calibration, not display, is the issue.
 - Accuracy panel header/journal section shows `Brier/CRPS` and `logloss`; binary CRPS = Brier.
 - Gate audit: 20 numbered gates; binding blocker is the price cap (dry-run 75c / live 68c), not the 9 s confirmation. Indicators: 10 TA modules, 79 ML features.
+
+### Gateway blockers & JEV quality (2026-10-19)
+
+- Filter log 05:03–12:45: 113,954 filtered lines. Largest sole blockers: entry-price hard cap 19,083; "Too early >12min" 10,705; ML conf 4,231; JEV 830. Price cap protects EV; early-time gate is the only high-volume lever worth a tape/backtest probe.
+- JEV: direction 16/26 (61.5%); settle-up Brier **0.2907** vs market 0.1727; conf≥0.60 direction 14/19 (73.7%, CI wide), conf≥0.70 3/7. Keep veto-only; do not use JEV settle probability for gate/primary/edge/sizing; collect ≥100 markets.
+- Report: `analysis/2026-10-19/gateway-blockers-jev-quality.md`.
