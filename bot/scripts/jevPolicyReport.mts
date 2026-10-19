@@ -58,11 +58,16 @@ const cache: Record<string, Outcome> = existsSync(CACHE_FILE) ? (JSON.parse(read
 for (const [slug, o] of Object.entries(cache)) if (!outcomes.has(slug)) outcomes.set(slug, o as Outcome);
 
 function mapWinner(market: Row): Outcome | null {
+  // Gamma returns a live placeholder with 0.5/0.5 prices for an open market.
+  if (market.closed !== true) return null;
   let outs = market.outcomes;
   let prices = market.outcomePrices;
   try { if (typeof outs === 'string') outs = JSON.parse(outs); } catch { return null; }
   try { if (typeof prices === 'string') prices = JSON.parse(prices); } catch { return null; }
   if (!Array.isArray(outs) || !Array.isArray(prices) || outs.length !== prices.length) return null;
+  // A resolved binary market must be closed and priced 1/0, not 0.5/0.5.
+  const numericPrices = prices.map(Number);
+  if (!numericPrices.some(p => p >= 0.99) || !numericPrices.some(p => p <= 0.01)) return null;
   let best = 0;
   for (let i = 1; i < prices.length; i++) if (Number(prices[i]) > Number(prices[best])) best = i;
   const label = String(outs[best] ?? '').toLowerCase();

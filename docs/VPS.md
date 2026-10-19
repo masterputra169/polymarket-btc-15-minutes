@@ -344,3 +344,11 @@ sudo systemctl reload nginx
 - First independent call 22:30 WIB: DOWN 33% → no policy candidate (correct).
 - `calibrationStudy.mts`: 753 rows, time split 60/40. Test Brier model 0.2638 / market 0.2321 / shrunk(w=0.15) 0.2318; model mean p 78.2% vs realised 61.3%. Calibration is needed but the OOS gain vs market is a tie; no selection change.
 - 87 files / 924 tests PASS. Report: `analysis/2026-10-19/jev-independent-v2-calibration-study.md`.
+
+### Entry-time JEV decision shadow (2026-10-19)
+
+- `JEV_DECISION_SHADOW=true`: one record-only JEV call at the first `ENTER` candidate per market, separate `data/jev_decision.jsonl`; no veto/sizing/execution effect.
+- Policy sample is restricted to market open (`JEV_POLICY_MIN_TIME_LEFT=13.5`); mid-window restarts no longer add biased sample calls.
+- First decision 22:45:37 WIB: bot ENTER DOWN, JEV DOWN 37%, sample DOWN 37%, no candidate. Outcome pending.
+- Report: `sudo -u ubuntu node --env-file=./.env scripts/jevDecisionReport.mts` → `data/jev_decision_report.json`.
+- Reports now require a closed Gamma market with 1/0 prices; an open 0.5/0.5 placeholder is never resolved. 87 files / 924 tests PASS.

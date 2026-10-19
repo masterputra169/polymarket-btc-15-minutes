@@ -204,7 +204,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
-import { maybeJevAnalyze, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
+import { maybeJevAnalyze, maybeJevDecisionShadow, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -2005,6 +2005,9 @@ export async function pollOnce() {
         bankroll: getBankroll(),
     };
     try { maybeJevAnalyze(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
+    if (rec.action === 'ENTER') {
+      try { maybeJevDecisionShadow(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
+    }
     // ── 8. Bet sizing ──
     const betSide = rec.side;
     const betEnsembleProb = betSide === 'UP' ? ensembleUp

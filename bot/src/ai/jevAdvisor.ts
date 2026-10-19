@@ -102,6 +102,7 @@ interface JevRecord extends JevDecision {
   pollCounter: number;
   mode: 'shadow' | 'active';
   stateVariant?: string;
+  decisionShadow?: boolean;
   rules: { action: string; side: string | null; confidence: string | null; reason: string | null; phase: string | null };
   market: { timeLeftMin: number | null; session: string | null; btcPrice: number | null; priceToBeat: number | null; ptbSource: string | null; ptbExact: boolean; marketUp: number | null; marketDown: number | null };
   ml: { probUp: number | null; confidence: number | null; side: string | null; agreesWithRules: boolean | null };
@@ -109,6 +110,7 @@ interface JevRecord extends JevDecision {
 }
 
 let _lastSlug: string | null = null;
+let _decisionSlug: string | null = null;
 let _lastCallMs = 0;
 let _inFlight = false;
 let _pendingRefresh: JevSnapshot | null = null;
@@ -238,7 +240,8 @@ export function initJevAdvisor(): void {
   log.info('JEV: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model + ' every=' + (cfg.intervalMs > 0 ? Math.round(cfg.intervalMs / 1000) + 's' : 'market') + ' log=' + cfg.logFile);
 }
 
-async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
+async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 'normal'): Promise<void> {
+  const decision = mode === 'decision';
   const started = Date.now();
   const prov = resolveJevProviderConfig();
   const independent = BOT_CONFIG.jev.independentState;
@@ -264,18 +267,20 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
     ...(independent ? { stateVariant: 'independent_v2' } : {}),
+    ...(decision ? { decisionShadow: true } : {}),
   };
   try {
-    mkdirSync(dirname(BOT_CONFIG.jev.logFile), { recursive: true });
-    appendFileSync(BOT_CONFIG.jev.logFile, JSON.stringify(record) + '\n', 'utf8');
+    const logFile = decision ? BOT_CONFIG.jev.decisionLogFile : BOT_CONFIG.jev.logFile;
+    mkdirSync(dirname(logFile), { recursive: true });
+    appendFileSync(logFile, JSON.stringify(record) + '\n', 'utf8');
   } catch (err: unknown) {
     log.warn('JEV: cannot write log - ' + (err instanceof Error ? err.message : String(err)));
   }
-  _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
+  if (!decision) _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
 
   // Fixed-policy forward shadow: only the designated policy/market calls, never
   // the post-fill refresh; candidate recording is record-only and never throws.
-  if (!snapshot.entryRefresh && BOT_CONFIG.jev.callOn !== 'entry') {
+  if (!decision && !snapshot.entryRefresh && BOT_CONFIG.jev.callOn !== 'entry') {
     try {
       maybeRecordPolicyCandidate({
         slug: record.slug,
@@ -295,13 +300,15 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
       });
     } catch { /* record-only */ }
   }
-  _lastSlug = snapshot.slug;
-  _lastCallMs = Date.now();
+  if (!decision) {
+    _lastSlug = snapshot.slug;
+    _lastCallMs = Date.now();
+  }
   _stats.calls++;
   _stats.lastLatencyMs = parsed.latencyMs;
   _stats.lastCostUsd = parsed.costUsd ?? 0;
   _stats.totalCostUsd += parsed.costUsd ?? 0;
-  log.info('JEV ' + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up ' + Math.round(parsed.settleUpProbability * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd');
+  log.info((decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up ' + Math.round(parsed.settleUpProbability * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd');
 }
 
 /** Fire-and-forget: called from the poll loop, never awaited, never throws. */
@@ -332,6 +339,9 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
   if (cfg.callOn === 'entry' && snapshot.action !== 'ENTER') return;
   if (!snapshot.ptbExact) return;
   if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
+  // A policy sample must be at the fixed market-open checkpoint. Forced entry
+  // refreshes are analysis, not part of the sample, and are not blocked here.
+  if (!force && cfg.callOn === 'policy' && snapshot.timeLeftMin != null && snapshot.timeLeftMin < cfg.policyMinTimeLeft) return;
   const now = Date.now();
   if (!force && snapshot.slug && snapshot.slug === _lastSlug && cfg.intervalMs === 0) return;
   if (!force && cfg.intervalMs > 0 && now - _lastCallMs < cfg.intervalMs) return;
@@ -349,6 +359,40 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
           .catch(() => {});
       } else {
         log.warn('JEV call failed: ' + _stats.lastError);
+      }
+    })
+    .finally(() => {
+      _inFlight = false;
+      const pending = _pendingRefresh;
+      _pendingRefresh = null;
+      if (pending) maybeJevAnalyze(pending, { force: true });
+    });
+}
+
+/** Entry-time decision shadow: one call at the actual ENTER candidate.
+ * Record-only; never blocks, never changes the trade. Separate log from the
+ * fixed-policy sample so selection bias cannot contaminate the research sample. */
+export function maybeJevDecisionShadow(snapshot: JevSnapshot): void {
+  const cfg = BOT_CONFIG.jev;
+  if (!cfg || !cfg.enabled || !cfg.decisionShadow) return;
+  if (!isTypesafeConfigured()) return;
+  if (snapshot.action !== 'ENTER') return;
+  if (!snapshot.slug || snapshot.slug === _decisionSlug) return;
+  if (!snapshot.ptbExact) return;
+  if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
+  if (Date.now() < _pausedUntil) return;
+  // If another call is in flight, skip this attempt; a later ENTER poll retries.
+  if (_inFlight) return;
+  _decisionSlug = snapshot.slug;
+  _inFlight = true;
+  void runAnalysis(snapshot, 'decision')
+    .catch((err: unknown) => {
+      _stats.errors++;
+      _stats.lastError = err instanceof Error ? err.message : String(err);
+      log.warn('JEV decision shadow failed: ' + _stats.lastError);
+      if (err instanceof TypesafeError && (err.status === 401 || err.status === 402)) {
+        _pausedUntil = Date.now() + 10 * 60_000;
+        log.warn('JEV paused 10 min (HTTP ' + err.status + ')');
       }
     })
     .finally(() => {
