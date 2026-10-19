@@ -13,8 +13,8 @@
  * Requires .env with POLYMARKET_PRIVATE_KEY, API_KEY, API_SECRET, API_PASSPHRASE
  */
 
-import { ethers } from 'ethers';
-import { ClobClient, Chain, SignatureType } from '@polymarket/clob-client';
+import { ClobClient } from '@polymarket/clob-client-v2';
+import { buildClobClientOptions, createClobSigner, resolveSignatureType } from './src/trading/clobV2Config.ts';
 import dotenv from 'dotenv';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname, resolve } from 'path';
@@ -26,10 +26,6 @@ dotenv.config({ path: resolve(__dirname, '.env') });
 const JOURNAL_PATH = resolve(__dirname, 'data', 'verified_journal.jsonl');
 const CLOB_HOST = 'https://clob.polymarket.com';
 const CHAIN_ID = 137;
-
-type EthersV5SignerCompat = ethers.Wallet & {
-  _signTypedData?: ethers.Wallet['signTypedData'];
-};
 
 type ClobMarketResponse = {
   condition_id?: string;
@@ -55,10 +51,7 @@ function createClient() {
     console.error('ERROR: POLYMARKET_PRIVATE_KEY not set in .env');
     process.exit(1);
   }
-  const wallet = new ethers.Wallet(pk) as EthersV5SignerCompat;
-  if (!wallet._signTypedData && wallet.signTypedData) {
-    wallet._signTypedData = wallet.signTypedData.bind(wallet);
-  }
+  const signer = createClobSigner(pk);
 
   const apiKey = process.env.POLYMARKET_API_KEY;
   const apiSecret = process.env.POLYMARKET_API_SECRET;
@@ -70,26 +63,15 @@ function createClient() {
     process.exit(1);
   }
 
-  const sigType = proxyAddress ? SignatureType.POLY_GNOSIS_SAFE : SignatureType.EOA;
-  const funder = proxyAddress || undefined;
+  const client = new ClobClient(buildClobClientOptions({
+    host: CLOB_HOST,
+    signer,
+    creds: { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
+    signatureType: resolveSignatureType(proxyAddress || undefined, process.env.POLYMARKET_SIGNATURE_TYPE),
+    funderAddress: proxyAddress || undefined,
+  }));
 
-  const client = new ClobClient(
-    CLOB_HOST,
-    Chain.POLYGON,
-    wallet as any,
-    { key: apiKey, secret: apiSecret, passphrase: apiPassphrase },
-    sigType,
-    funder,
-    undefined,
-    true,
-    undefined,
-    undefined,
-    false,
-    undefined,
-    true,
-  );
-
-  log(`Wallet: ${wallet.address}${proxyAddress ? ` (proxy: ${proxyAddress})` : ''}`);
+  log(`Wallet: ${signer.account.address}${proxyAddress ? ` (proxy: ${proxyAddress})` : ''}`);
   return client;
 }
 
