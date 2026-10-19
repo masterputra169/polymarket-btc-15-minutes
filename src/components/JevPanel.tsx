@@ -11,6 +11,8 @@ interface JevLast {
   regimeConfidence?: number | null;
   latencyMs?: number | null;
   costUsd?: number | null;
+  marketUp?: number | null;
+  marketDown?: number | null;
 }
 
 export interface JevStatusData {
@@ -50,6 +52,10 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
   if (!data) return null;
   const mode = data.mode ?? (data.shadowMode === false ? 'veto' : 'shadow');
   const last = data.last ?? null;
+  const upEdge = last && last.settleUpProbability != null && last.marketUp != null
+    ? last.settleUpProbability - last.marketUp : null;
+  const downEdge = last && last.settleUpProbability != null && last.marketDown != null
+    ? (1 - last.settleUpProbability) - last.marketDown : null;
   const tone = !data.enabled || !data.configured ? 'var(--text-muted)' : MODE_COLOR[mode] ?? 'var(--text-secondary)';
   return (
     <div className="card span-2" style={{ animationDelay: '0.25s' }}>
@@ -76,6 +82,10 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
             <span className="data-row__value">{last.latencyMs != null ? Math.round(last.latencyMs) + 'ms' : '-'}</span></div>
           <div className="data-row"><span className="data-row__label">Cost</span>
             <span className="data-row__value">{last.costUsd != null ? '$' + last.costUsd.toFixed(6) : '-'}</span></div>
+          <div className="data-row"><span className="data-row__label">Edge vs mkt</span>
+            <span className="data-row__value" style={{ fontSize: '0.68rem' }}>
+              UP {upEdge != null ? (upEdge >= 0 ? '+' : '') + (upEdge * 100).toFixed(0) + 'pp' : '-'} / DOWN {downEdge != null ? (downEdge >= 0 ? '+' : '') + (downEdge * 100).toFixed(0) + 'pp' : '-'}
+            </span></div>
           <div className="data-row"><span className="data-row__label">Update</span>
             <span className="data-row__value">{ageText(last.ts)}</span></div>
         </div>

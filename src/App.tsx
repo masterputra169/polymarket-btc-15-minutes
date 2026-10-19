@@ -358,9 +358,12 @@ export default function App() {
       detailedFeedback: data.detailedFeedback,
       signalPerf: getSignalPerfStats(),
       overallCRPS: computeOverallCRPS(loadHistory()),
+      journal: data.journalAnalytics?.patterns ?? null,
+      actualPnl: data.journalAnalytics?.actualPnl ?? null,
     };
   }, [data?.feedbackStats?.accuracy, data?.feedbackStats?.streak, data?.feedbackStats?.totalPredictions,
-      data?.detailedFeedback?.totalSettled]);
+      data?.detailedFeedback?.totalSettled, data?.journalAnalytics?.patterns?.totalTrades,
+      data?.journalAnalytics?.patterns?.overallWr, data?.journalAnalytics?.patterns?.totalPnl]);
 
   // JournalTimeSeriesPanel: time-series analytics from bot
   // Granular deps — only re-render when actual data changes, NOT computedAt (which ticks every recompute)
@@ -472,7 +475,8 @@ export default function App() {
 const jevData = useMemo(() => data?.jev ?? null, [
   data?.jev?.calls, data?.jev?.errors, data?.jev?.mode, data?.jev?.configured,
   data?.jev?.last?.ts, data?.jev?.last?.direction, data?.jev?.last?.directionConfidence,
-  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.lastCostUsd, data?.jev?.totalCostUsd,
+  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.last?.marketUp, data?.jev?.last?.marketDown,
+  data?.jev?.lastCostUsd, data?.jev?.totalCostUsd,
 ]);
 
 const botData = useMemo(() => {

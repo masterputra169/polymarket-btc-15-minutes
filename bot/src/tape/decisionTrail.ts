@@ -36,6 +36,11 @@ export interface DecisionInput {
   twapP?: number | null;
   twapZ?: number | null;
   drift30?: number | null;
+  /** Latest cached JEV decision (record-only; arrives after the first poll of a market). */
+  jevDirection?: 'UP' | 'DOWN' | 'NO_EDGE' | null;
+  jevConfidence?: number | null;
+  jevSettleUp?: number | null;
+  jevRegime?: string | null;
 }
 
 /** Furthest stage wins; a later, lesser note never downgrades a record. */
@@ -101,6 +106,14 @@ export class DecisionTrail {
         ss: text(d.session, 24),
         st: 'wait',
         ...(d.twapP != null ? { tp: r(d.twapP, 4), tz: r(d.twapZ, 3), dr: r(d.drift30, 2) } : {}),
+        ...(d.jevDirection != null
+          ? {
+              jd: d.jevDirection === 'UP' ? 'U' : d.jevDirection === 'DOWN' ? 'D' : 'N',
+              jc: r(d.jevConfidence, 3),
+              js: r(d.jevSettleUp, 3),
+              jg: text(d.jevRegime, 24),
+            }
+          : {}),
       },
     };
   }

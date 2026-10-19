@@ -109,7 +109,7 @@ let _lastCallMs = 0;
 let _inFlight = false;
 let _warnedNoKey = false;
 let _pausedUntil = 0;
-let _current: (JevDecision & { ts: number; slug: string | null }) | null = null;
+let _current: (JevDecision & { ts: number; slug: string | null; marketUp?: number | null; marketDown?: number | null }) | null = null;
 const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCostUsd: 0, lastError: null as string | null };
 
 /** Compact state object. JSON structure is cheaper for JEV than prose. */
@@ -258,7 +258,7 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
   } catch (err: unknown) {
     log.warn('JEV: cannot write log - ' + (err instanceof Error ? err.message : String(err)));
   }
-  _current = { ...parsed, ts: record.ts, slug: record.slug };
+  _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
   _lastSlug = snapshot.slug;
   _lastCallMs = Date.now();
   _stats.calls++;
@@ -323,6 +323,11 @@ function settleSupports(direction: 'UP' | 'DOWN' | 'NO_EDGE', settleUp: number, 
   if (direction === 'UP') return settleUp >= 0.5 + margin;
   if (direction === 'DOWN') return settleUp <= 0.5 - margin;
   return false;
+}
+
+/** Latest cached decision for record-only consumers (tape/dashboard). */
+export function getJevLatestForTape(): (JevDecision & { ts: number; slug: string | null; marketUp?: number | null; marketDown?: number | null }) | null {
+  return _current;
 }
 
 /** Primary mode: confident JEV direction for this market, or null. */
@@ -431,6 +436,8 @@ export function __setJevDecisionForTests(partial: {
   regime: string;
   slug?: string | null;
   ts?: number;
+  marketUp?: number | null;
+  marketDown?: number | null;
 }): void {
   _current = {
     model: 'test',
@@ -446,6 +453,8 @@ export function __setJevDecisionForTests(partial: {
     costUsd: null,
     ts: partial.ts ?? Date.now(),
     slug: partial.slug ?? 'btc-updown-15m-test',
+    marketUp: partial.marketUp ?? null,
+    marketDown: partial.marketDown ?? null,
   };
 }
 

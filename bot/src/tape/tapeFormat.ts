@@ -113,6 +113,14 @@ export interface DecisionLine {
   tp?: number | null;
   tz?: number | null;
   dr?: number | null;
+  /**
+   * JEV advisory (record-only, since 2026-10-19): direction U/D/N, confidence,
+   * settle-above-PTB probability and regime from the latest cached JEV decision.
+   */
+  jd?: 'U' | 'D' | 'N' | null;
+  jc?: number | null;
+  js?: number | null;
+  jg?: string | null;
 }
 
 /** Recorder life events (connect, resync, ...), so gaps can be explained later. */

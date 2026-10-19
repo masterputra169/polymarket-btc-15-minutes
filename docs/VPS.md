@@ -279,3 +279,10 @@ sudo systemctl reload nginx
 - `SIGNAL_CONFIRM_POLLS` = 9000 / `POLL_INTERVAL_MS` → **180 polls at 50 ms ≈ 9 s** (was 3 polls ≈150 ms). Evaluation window reset: `EVAL_WINDOW_START=2026-10-19T12:04:33Z`.
 - JEV decisions must agree with `settle_above_ptb` before veto/gate/primary/sizing act: `JEV_SETTLE_MARGIN=0.05` (UP ≥55%, DOWN ≤45%).
 - Verify after deploy: loop shows `Stab:x/180`; no errors; JEV ACTIVE.
+
+### JEV tape fields + Accuracy panel (2026-10-19)
+
+- Tape `d` lines carry `jd` (U/D/N), `jc` confidence, `js` settle-up probability, `jg` regime — same-market JEV decision only, record-only. Verify with `zcat data/tape/<date>/<hour>-*.gz | grep ""jd""`.
+- JEV dashboard panel shows **Edge vs mkt** in percentage points.
+- Accuracy card: **Trade accuracy — full journal** (from journalAnalytics) + **Prediction sample — rolling (last 24h)** (bot feedback cache, `MAX_AGE_MS=24h`). The small sample is why n=5 and rolling bars can be empty.
+- Entry rarity is filters/price caps/JEV, not the 9 s confirmation (`Stab` reaches hundreds). No gateway bottleneck; MetEngine disabled.

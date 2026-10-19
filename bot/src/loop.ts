@@ -204,7 +204,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
-import { maybeJevAnalyze, getJevPrimarySide, getJevSizingMultiplier, getJevStatus } from './ai/jevAdvisor.ts';
+import { maybeJevAnalyze, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -1960,6 +1960,9 @@ export async function pollOnce() {
         });
       }
     } catch { phys = null; }
+    const jevLatestRaw = getJevLatestForTape();
+    // Tape context: only when the cached decision belongs to this market.
+    const jevLatest = jevLatestRaw && jevLatestRaw.slug === (marketSlug || null) ? jevLatestRaw : null;
     noteTapeDecision({
       t: Date.now(), slug: marketSlug || null,
       twapP: phys?.p ?? null, twapZ: phys?.z ?? null, drift30: phys?.drift30 ?? null,
@@ -1969,6 +1972,10 @@ export async function pollOnce() {
       ensembleUp, edgeUp: edge.edgeUp, edgeDown: edge.edgeDown,
       marketUp, marketDown, timeLeftMin,
       regime: regimeInfo?.regime ?? null, session: getSessionName(),
+      jevDirection: jevLatest?.direction ?? null,
+      jevConfidence: jevLatest?.directionConfidence ?? null,
+      jevSettleUp: jevLatest?.settleUpProbability ?? null,
+      jevRegime: jevLatest?.regime ?? null,
     });
 
     // ── 8. Bet sizing ──
