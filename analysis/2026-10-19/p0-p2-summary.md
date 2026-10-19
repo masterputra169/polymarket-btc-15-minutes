@@ -24,7 +24,7 @@
 | External watchdog | DONE | `polybot-watchdog.timer` every 5 min, `botLiveness.mts` -> restart |
 | Dashboard JEV panel | DONE | dist rebuilt + deployed; WS `jev` verified |
 | Permanent tunnel URL | PENDING (operator) — no VPS cert.pem | Cloudflare named tunnel + domain; current quick tunnel is kept in sync by timer |
-| Railway cleanup | DONE 2026-10-19 | project `polybtc15` deleted via CLI; data exported locally |
+| Railway cleanup | DONE (scheduled) | project `polybtc15` deletion requested; Railway `deletedAt=2026-10-21T05:03Z`; data exported locally |
 | Maker-fill study | WAITING for data (~7 weeks) | no action |
 
 ## Commit trail

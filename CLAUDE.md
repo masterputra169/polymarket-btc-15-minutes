@@ -275,5 +275,5 @@ Phase-based decision with regime-adaptive thresholds:
 **Production rollout 2026-10-19 (12:0x WIB / 05:0x UTC)**:
 - CLOB V2 code deployed to the VPS (`npm ci --prefix bot` installed `@polymarket/clob-client-v2` + `viem`); bot stays DRY RUN and the V2 readiness gate is inside `if (!BOT_CONFIG.dryRun)`, so startup is unchanged. First live order still needs pUSD funding + the two approvals + a 5-share smoke order.
 - JEV switched to **veto** on the VPS (`JEV_MODE=veto`, `JEV_SHADOW=false`, `JEV_MIN_CONF=0.60`), evaluation window reset (`EVAL_WINDOW_START=2026-10-19T05:03:02Z`). The previous window is archived in `analysis/2026-10-19/eval-window-archive-before-jev-veto.json`: 260 trades, 160W/100L, 61.5% WR.
-- Railway project `polybtc15` deleted via `railway delete` (all data already exported under `data/railway-export/`); account keeps the other 12 projects untouched.
+- Railway project `polybtc15` deletion requested via `railway delete` (all data already exported under `data/railway-export/`); Railway scheduled it (`deletedAt=2026-10-21T05:03Z`) — the project is no longer usable but the deletion is finalised on that date. The account keeps the other 12 projects untouched.
 - Dashboard tunnel is still a Cloudflare **quick** tunnel: no `cert.pem` exists on the VPS, so a named tunnel/stable hostname needs the operator to run `cloudflared tunnel login` once.
