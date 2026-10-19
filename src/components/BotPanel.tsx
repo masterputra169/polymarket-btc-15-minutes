@@ -175,7 +175,7 @@ function BotPanel({ connected, data }) {
       </div>
 
       {/* 3-column grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10 }}>
+      <div className="bot-panel-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10 }}>
 
         {/* Column 1: Decision */}
         <div style={{

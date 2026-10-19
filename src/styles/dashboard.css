@@ -407,3 +407,22 @@ body::after { opacity: 0.7; }
   .dash-widget__cat { display: none; }
   .widget-drawer { border-left: 0; }
 }
+
+
+/* Theme accent applies to every widget, so the colour dots are a real skin switch. */
+.dash-shell[data-accent='mint'] .dash-widget { --dash-accent: #34d399; --dash-accent-soft: rgba(52, 211, 153, 0.12); }
+.dash-shell[data-accent='ember'] .dash-widget { --dash-accent: #fb923c; --dash-accent-soft: rgba(251, 146, 60, 0.13); }
+.dash-shell[data-accent='violet'] .dash-widget { --dash-accent: #a78bfa; --dash-accent-soft: rgba(167, 139, 250, 0.14); }
+
+@media (max-width: 620px) {
+  .price-card-grid { grid-template-columns: 1fr !important; gap: 10px !important; }
+  .price-card-grid > div { text-align: left !important; }
+  .price-card-grid .price-big { font-size: 2rem !important; }
+  .bot-panel-grid { grid-template-columns: 1fr !important; gap: 8px !important; }
+  .dash-widget__body .card__header { flex-wrap: wrap; gap: 6px; }
+  .dash-widget__body .poly-prices { min-width: 0; }
+  .tb-market { gap: 8px; }
+  .tb-price strong { font-size: 17px; }
+  .tb-price { min-width: 88px; }
+  .tb-metric b { font-size: 9px; }
+}

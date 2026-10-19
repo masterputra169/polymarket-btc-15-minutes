@@ -352,3 +352,10 @@ sudo systemctl reload nginx
 - First decision 22:45:37 WIB: bot ENTER DOWN, JEV DOWN 37%, sample DOWN 37%, no candidate. Outcome pending.
 - Report: `sudo -u ubuntu node --env-file=./.env scripts/jevDecisionReport.mts` → `data/jev_decision_report.json`.
 - Reports now require a closed Gamma market with 1/0 prices; an open 0.5/0.5 placeholder is never resolved. 87 files / 924 tests PASS.
+
+### Dashboard v4 widget workspace (2026-10-19)
+
+- New draggable/resizable widget dashboard: 16 panels, edit mode, widget library, presets, accent themes, density, localStorage persistence and layout export/import.
+- Frontend-only change; bot/JEV/trading untouched. `npm run build` output deployed to `/opt/polybtc15/dist` behind the existing nginx Basic Auth + tunnel.
+- Verification: 88 files / 929 tests PASS; browser checks drag/resize/persistence/preset/theme; 390px mobile no horizontal overflow.
+- Report + preview: `analysis/2026-10-19/dashboard-v4-redesign.md`.

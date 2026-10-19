@@ -76,6 +76,7 @@ function CurrentPriceCard({
   return (
     <div className="card span-2" style={{ animationDelay: '0.05s' }}>
       <div
+        className="price-card-grid"
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr auto 1fr',

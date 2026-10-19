@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  bottomOf, clampRect, findFreeSlot, isAreaFree, packLayout, placeWidget, visibleLayout,
+  bottomOf, clampRect, findFreeSlot, isAreaFree, packLayout, visibleLayout,
   DASHBOARD_COLS,
 } from './layout.ts';
 import type { LayoutMap, Rect } from './layout.ts';
@@ -156,7 +156,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot }
   const colWidth = canvasWidth > 0 ? Math.max(28, (canvasWidth - GAP * (DASHBOARD_COLS - 1)) / DASHBOARD_COLS) : 72;
   const visibleWidgets = useMemo(() => widgets.filter(w => !hidden.includes(w.id)), [widgets, hidden]);
   const heightLayout = visibleLayout(layout, visibleWidgets.map(w => w.id));
-  const canvasHeight = isCompact ? 0 : Math.max(520, (bottomOf(heightLayout) + 1) * (rowHeight + GAP));
+  const canvasHeight = isCompact ? 0 : Math.max(520, bottomOf(heightLayout) * (rowHeight + GAP) + 8);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -170,6 +170,9 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot }
   }, []);
 
   useEffect(() => {
+    // On first paint the bot snapshot may not have arrived yet; do not treat that
+    // as "all widgets were removed" or the saved layout is wiped before hydration.
+    if (widgets.length === 0) return;
     const ids = new Set(widgets.map(w => w.id));
     setLayout(prev => {
       const next = { ...prev };
@@ -224,7 +227,8 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      setLayout(prev => placeWidget(prev, id, last));
+      if (isAreaFree(layout, last, id)) setLayout(prev => ({ ...prev, [id]: last }));
+      else showToast('That space is occupied — drop on a free area');
       setPreview(null);
     };
     window.addEventListener('pointermove', onMove);
@@ -257,6 +261,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot }
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       if (isAreaFree(layout, last, id)) setLayout(prev => ({ ...prev, [id]: last }));
+      else showToast('Resize blocked — the new size overlaps another widget');
       setPreview(null);
     };
     window.addEventListener('pointermove', onMove);
