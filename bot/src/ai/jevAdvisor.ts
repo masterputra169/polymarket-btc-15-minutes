@@ -285,6 +285,9 @@ export function maybeJevAnalyze(snapshot: JevSnapshot): void {
   // Only evaluate markets with the exact TWAP price-to-beat and after the window
   // has settled: at poll #1 the PTB can still be the approximate oracle/spot value,
   // which made JEV answer against a wrong state (and cost a paid call).
+  // Entry-time mode: a JEV opinion about a WAIT poll is not the decision the bot
+  // actually makes. Call only when decide() has produced an ENTER candidate.
+  if (cfg.callOn === 'entry' && snapshot.action !== 'ENTER') return;
   if (!snapshot.ptbExact) return;
   if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
   const now = Date.now();

@@ -435,8 +435,11 @@ export function applyTradeFilters({
   }
 
   // 4b. Max time remaining (early bird filter — indicators stale, BTC near PTB)
-  if (TRADE_FILTERS.MAX_TIME_LEFT_MIN && Number.isFinite(timeLeftMin) && timeLeftMin > TRADE_FILTERS.MAX_TIME_LEFT_MIN) {
-    reasons.push(`Too early: ${timeLeftMin.toFixed(1)}min left > ${TRADE_FILTERS.MAX_TIME_LEFT_MIN}min (wait for price discovery)`);
+  // Live always uses the validated 12 min. DRY_RUN may use a slightly higher
+  // ceiling (DRY_RUN_MAX_TIME_LEFT) to collect a volume probe without risking live.
+  const maxTimeLeft = BOT_CONFIG.dryRun ? T.dryRunMaxTimeLeft : TRADE_FILTERS.MAX_TIME_LEFT_MIN;
+  if (maxTimeLeft > 0 && Number.isFinite(timeLeftMin) && timeLeftMin > maxTimeLeft) {
+    reasons.push(`Too early: ${timeLeftMin.toFixed(1)}min left > ${maxTimeLeft}min (wait for price discovery)`);
   }
 
   // 4c. LATE/VERY_LATE phase ML gate — data: LATE 50% WR, -$1.63

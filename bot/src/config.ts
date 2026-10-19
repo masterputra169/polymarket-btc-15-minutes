@@ -300,6 +300,10 @@ const BOT_CONFIG = {
     model: process.env.JEV_MODEL || 'typesafe/jev-1.14',
     timeoutMs: envInt(process.env.JEV_TIMEOUT_MS, 8000, 1000, 30000),
     intervalMs: envInt(process.env.JEV_INTERVAL_MS, 0, 0, 10 * 60 * 1000),
+    // When to call JEV. 'entry' = only when the bot's decide() says ENTER (relevant
+    // to the actual trade, and no calls during long WAIT stretches); 'market' = the
+    // old behaviour (first poll of the market, near market open).
+    callOn: ((process.env.JEV_CALL_ON || 'entry').trim().toLowerCase() === 'market' ? 'market' : 'entry') as 'entry' | 'market',
     minConfidence: envNum(process.env.JEV_MIN_CONF, 0.60, 0.30, 0.99),
     // Veto/gate/primary must also agree with JEV settle_above_ptb:
     // UP needs settleUp >= 0.5+margin, DOWN needs settleUp <= 0.5-margin.

@@ -57,6 +57,9 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   ultraMl: { env: 'FILTER_ULTRA_ML', def: 0.9, min: 0, max: 1, doc: 'ultra ML confidence' },
   // 4c. Late phase
   lateTimeLeft: { env: 'FILTER_LATE_TIME_LEFT', def: 5, min: 0, max: 15, doc: 'minutes left below which the late gate applies' },
+  // Dry-run-only volume probe: the early-time gate is the second-largest blocker
+  // after the price cap. Defaults to the live 12 min; can be raised in DRY_RUN only.
+  dryRunMaxTimeLeft: { env: 'FILTER_DRY_RUN_MAX_TIME_LEFT', def: TRADE_FILTERS.MAX_TIME_LEFT_MIN, min: 0, max: 15, doc: 'dry-run only: max minutes left for an entry (live stays 12)' },
   lateMlMin: { env: 'FILTER_LATE_ML_MIN', def: 0.8, min: 0, max: 1, doc: 'late-phase ML floor' },
   lateMlRelaxed: { env: 'FILTER_LATE_ML_RELAXED', def: 0.55, min: 0, max: 1, doc: 'late-phase ML floor at high edge' },
   lateEdgeBypass: { env: 'FILTER_LATE_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that relaxes the late gate' },

@@ -311,3 +311,10 @@ sudo systemctl reload nginx
 - Fresh Gamma resolutions for all 55 calls / 38 markets: 52 calls / 36 markets resolved. Direction 22/38 = 57.9% (NO_EDGE 14/52); conf≥0.60 14/20 = 70%; conf≥0.70 4/8 = 50%.
 - All 21 calls with `rules.side` agreed with it (71.4%); calls without a rule side 7/17 = 41.2% — JEV mostly echoes the bot rules. Settle Brier 0.3017 vs market 0.1686; calibration buckets badly off (0–20% → actual 40%; 80–100% → actual 66.7%).
 - Keep JEV out of gate/primary/sizing; shadow mode is the safer default; veto counterfactual still needs tape. Full CSV: `analysis/2026-10-19/jev-call-eval.csv`; report: `analysis/2026-10-19/jev-real-resolution-audit.md`.
+
+### Entry price / JEV shadow / early-time probe (2026-10-19)
+
+- Do **not** lower the 50c entry floor: <50c journal WR 23.5% (−20.24), 50–55c 55.7% (+0.58); the 0.08 edge bypass is the only sub-50 path.
+- JEV is shadow now (`JEV_MODE=shadow`, `JEV_SHADOW=true`) and called only on ENTER candidates (`JEV_CALL_ON=entry`), not at market open. The JEV veto was the gate removed; price cap/ML/floor unchanged.
+- Dry-run-only probe: `FILTER_DRY_RUN_MAX_TIME_LEFT=13` (live stays 12). Window reset `EVAL_WINDOW_START=2026-10-19T12:58:17Z`. Revert = remove the variable.
+- Startup verified: `JEV: enabled [SHADOW]`, override `FILTER_DRY_RUN_MAX_TIME_LEFT=13`, JEV log stayed at 55 (no WAIT calls). 86 files / 917 tests PASS.
