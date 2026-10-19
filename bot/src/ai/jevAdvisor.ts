@@ -101,6 +101,7 @@ interface JevRecord extends JevDecision {
   slug: string | null;
   pollCounter: number;
   mode: 'shadow' | 'active';
+  stateVariant?: string;
   rules: { action: string; side: string | null; confidence: string | null; reason: string | null; phase: string | null };
   market: { timeLeftMin: number | null; session: string | null; btcPrice: number | null; priceToBeat: number | null; ptbSource: string | null; ptbExact: boolean; marketUp: number | null; marketDown: number | null };
   ml: { probUp: number | null; confidence: number | null; side: string | null; agreesWithRules: boolean | null };
@@ -117,8 +118,8 @@ let _current: (JevDecision & { ts: number; slug: string | null; marketUp?: numbe
 const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCostUsd: 0, lastError: null as string | null };
 
 /** Compact state object. JSON structure is cheaper for JEV than prose. */
-export function buildJevState(s: JevSnapshot): Record<string, unknown> {
-  return {
+export function buildJevState(s: JevSnapshot, independent = false): Record<string, unknown> {
+  const state: Record<string, unknown> = {
     market: {
       asset: 'BTC/USD',
       venue: 'Polymarket 15-minute up/down, settles on Chainlink BTC/USD 60s TWAP vs price-to-beat',
@@ -158,13 +159,18 @@ export function buildJevState(s: JevSnapshot): Record<string, unknown> {
       bankroll_usd: s.bankroll,
     },
   };
+  if (independent) delete state.algo_view;
+  state.state_variant = independent ? 'independent_v2' : 'collaborative';
+  return state;
 }
 
-export function buildJevQuestions(): Record<string, TypesafeQuestion> {
+export function buildJevQuestions(independent = false): Record<string, TypesafeQuestion> {
   return {
     direction: {
       type: 'choice',
-      instructions: 'This is a 15-minute BTC up/down market. The market odds and the algo view are included in the state; they already reflect public information. Which side is more likely to win: UP (BTC settles above the price to beat), DOWN (below), or NO_EDGE when there is no material edge beyond what the odds already price?',
+      instructions: independent
+        ? 'This is a 15-minute BTC up/down market. The state contains market odds and technical/order-flow features but NO bot recommendation. Form your own view. Which side is more likely to win: UP (BTC settles above the price to beat), DOWN (below), or NO_EDGE when there is no material edge beyond what the odds already price?'
+        : 'This is a 15-minute BTC up/down market. The market odds and the algo view are included in the state; they already reflect public information. Which side is more likely to win: UP (BTC settles above the price to beat), DOWN (below), or NO_EDGE when there is no material edge beyond what the odds already price?',
       criteria: {
         UP: 'BTC is more likely than the market odds imply to settle above the price to beat.',
         DOWN: 'BTC is more likely than the market odds imply to settle below the price to beat.',
@@ -235,8 +241,9 @@ export function initJevAdvisor(): void {
 async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
   const started = Date.now();
   const prov = resolveJevProviderConfig();
+  const independent = BOT_CONFIG.jev.independentState;
   const res = await systemOne(
-    { state: buildJevState(snapshot), questions: buildJevQuestions(), model: prov.model },
+    { state: buildJevState(snapshot, independent), questions: buildJevQuestions(independent), model: prov.model },
     { apiKey: prov.apiKey, baseUrl: prov.baseUrl, timeoutMs: BOT_CONFIG.jev.timeoutMs },
   );
   const parsed = parseJevAnswers(res.model, res.answers);
@@ -256,6 +263,7 @@ async function runAnalysis(snapshot: JevSnapshot): Promise<void> {
     edge: { up: snapshot.edgeUp, down: snapshot.edgeDown, best: snapshot.bestEdge },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
+    ...(independent ? { stateVariant: 'independent_v2' } : {}),
   };
   try {
     mkdirSync(dirname(BOT_CONFIG.jev.logFile), { recursive: true });

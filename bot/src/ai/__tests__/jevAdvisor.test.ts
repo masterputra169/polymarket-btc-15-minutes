@@ -35,6 +35,20 @@ describe('buildJevState', () => {
   });
 });
 
+describe('independent state v2', () => {
+  it('omits algo_view and marks the variant', () => {
+    const state = buildJevState(snapshot, true) as Record<string, any>;
+    expect(state.algo_view).toBeUndefined();
+    expect(state.state_variant).toBe('independent_v2');
+    expect(state.market_odds.up).toBe(0.56);
+  });
+  it('asks for an independent view without the algo anchor', () => {
+    const q = buildJevQuestions(true);
+    expect(String(q.direction.instructions)).toContain('NO bot recommendation');
+    expect(String(q.direction.instructions)).not.toContain('algo view are included');
+  });
+});
+
 describe('buildJevQuestions', () => {
   it('asks direction, settle and regime with correct primitive types', () => {
     const q = buildJevQuestions();

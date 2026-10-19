@@ -337,3 +337,10 @@ sudo systemctl reload nginx
 - Candidates: `data/jev_policy.jsonl`; report: `sudo -u ubuntu node --env-file=./.env scripts/jevPolicyReport.mts` → `data/jev_policy_report.json` (progress to 100 resolved markets, Brier, WR, PnL, bot overlap).
 - Env: `JEV_POLICY_SHADOW=true`, `JEV_POLICY_MIN_CONF=0.60`, `JEV_POLICY_MAX_ASK=0.70`, `JEV_POLICY_MIN_EDGE=0.10`.
 - 22:15 WIB call was 53% confidence, so no candidate yet; next eligible market will sample. 87 files / 922 tests PASS.
+
+### JEV independent v2 + calibration study (2026-10-19)
+
+- VPS: `JEV_INDEPENDENT_STATE=true`, `JEV_CALL_ON=policy`, `JEV_POLICY_SHADOW=true`. JEV state omits bot `algo_view`; log rows carry `stateVariant=independent_v2`.
+- First independent call 22:30 WIB: DOWN 33% → no policy candidate (correct).
+- `calibrationStudy.mts`: 753 rows, time split 60/40. Test Brier model 0.2638 / market 0.2321 / shrunk(w=0.15) 0.2318; model mean p 78.2% vs realised 61.3%. Calibration is needed but the OOS gain vs market is a tie; no selection change.
+- 87 files / 924 tests PASS. Report: `analysis/2026-10-19/jev-independent-v2-calibration-study.md`.

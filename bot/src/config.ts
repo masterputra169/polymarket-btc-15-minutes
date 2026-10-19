@@ -325,6 +325,9 @@ const BOT_CONFIG = {
     // record candidates that pass the fixed gates, and resolve them later with
     // bot/scripts/jevPolicyReport.mts. No orders; no trade-selection impact.
     policyShadow: process.env.JEV_POLICY_SHADOW !== 'false',
+    // Independent state v2: omit the bot's algo_view (rules/ML/edges) so JEV is
+    // forced to form its own view from market odds and features. Shadow only.
+    independentState: process.env.JEV_INDEPENDENT_STATE === 'true',
     policyMinConfidence: envNum(process.env.JEV_POLICY_MIN_CONF, 0.60, 0.30, 0.99),
     policyMaxAsk: envNum(process.env.JEV_POLICY_MAX_ASK, 0.70, 0.01, 0.99),
     policyMinEdge: envNum(process.env.JEV_POLICY_MIN_EDGE, 0.10, 0, 0.50),
