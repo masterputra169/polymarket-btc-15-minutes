@@ -20,6 +20,8 @@ import SessionInfo from './components/SessionInfo.tsx';
 import TapePanel from './components/TapePanel.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
 import JevPanel from './components/JevPanel.tsx';
+import DashboardShell from './components/dashboard/DashboardShell.tsx';
+import type { DashboardWidget, ShellStatus } from './components/dashboard/DashboardShell.tsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
 const StatusPill = memo(function StatusPill({ connected, label, dotClass }) {
@@ -518,116 +520,115 @@ const botData = useMemo(() => {
     data?.profitTargetPaused,
   ]);
 
+  const shellStatus: ShellStatus = {
+    btcPrice: data?.lastPrice ?? binancePrice ?? null,
+    priceToBeat: data?.priceToBeat ?? null,
+    timeLeftMin: smoothTimeLeft ?? data?.timeLeftMin ?? null,
+    marketUp: data?.marketUp ?? null,
+    marketDown: data?.marketDown ?? null,
+    bankroll: data?.bankroll ?? null,
+    dailyPnl: data?.stats?.dailyPnL ?? null,
+    wins: data?.stats?.wins ?? null,
+    losses: data?.stats?.losses ?? null,
+    dryRun: data?.dryRun ?? true,
+    paused: botPaused,
+    botConnected,
+    binanceConnected: data?.binanceConnected ?? false,
+    chainlinkConnected,
+    mlReady: mlStatus === 'ready',
+    clobLabel: clobLabel ? { short: clobLabel.short, dotClass: clobLabel.dotClass } : null,
+    error: error ? String(error) : null,
+  };
+
+  const dashboardWidgets: DashboardWidget[] = !data ? [] : [
+    {
+      id: 'market', title: 'Market Pulse', icon: '◉', description: 'live BTC, PTB, countdown and UP/DOWN odds',
+      category: 'market', accent: 'cyan', defaultW: 8, defaultH: 2, minW: 4, minH: 2,
+      defaultRect: { x: 0, y: 0, w: 8, h: 2 }, content: <CurrentPriceCard {...priceCardProps} />,
+    },
+    {
+      id: 'bot', title: 'Bot Core', icon: '⚙', description: 'mode, decision, risk and live sources',
+      category: 'system', accent: 'mint', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 8, y: 0, w: 4, h: 2 }, content: <BotPanel connected={botConnected} data={botData} />,
+    },
+    {
+      id: 'prediction', title: 'Prediction', icon: '◆', description: 'model probability and recommendation',
+      category: 'strategy', accent: 'cyan', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 0, y: 2, w: 4, h: 3 }, content: <PredictPanel data={predictData} />,
+    },
+    {
+      id: 'edge', title: 'Edge Analysis', icon: '⚖', description: 'edge, agreement and regime',
+      category: 'strategy', accent: 'mint', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 4, y: 2, w: 4, h: 3 }, content: <EdgePanel data={edgeData} />,
+    },
+    {
+      id: 'polymarket', title: 'Polymarket', icon: '◈', description: 'market book, liquidity and CLOB health',
+      category: 'market', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 8, y: 2, w: 4, h: 3 }, content: <PolymarketPanel data={polyData} />,
+    },
+    {
+      id: 'ta', title: 'TA Matrix', icon: '▥', description: 'trend, momentum, volatility and flow',
+      category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 0, y: 5, w: 4, h: 3 }, content: <TAIndicators data={taData} />,
+    },
+    {
+      id: 'ml', title: 'ML Engine', icon: '◍', description: 'XGBoost + LightGBM inference',
+      category: 'strategy', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 4, y: 5, w: 4, h: 3 }, content: <MLPanel data={mlData} />,
+    },
+    {
+      id: 'jev', title: 'JEV Layer', icon: '◇', description: 'independent judgment, shadow mode',
+      category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 8, y: 5, w: 4, h: 2 }, content: <JevPanel data={jevData} />,
+    },
+    {
+      id: 'betSizing', title: 'Bet Sizing', icon: '⌁', description: 'Kelly, bankroll and risk budget',
+      category: 'strategy', accent: 'mint', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 0, y: 8, w: 4, h: 2 }, content: <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />,
+    },
+    {
+      id: 'position', title: 'Positions', icon: '▣', description: 'open book, exits and recent fills',
+      category: 'system', accent: 'cyan', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 4, y: 8, w: 4, h: 2 }, content: <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />,
+    },
+    {
+      id: 'session', title: 'Session', icon: '◷', description: 'market clock and session state',
+      category: 'market', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 8, y: 8, w: 4, h: 2 }, content: <SessionInfo />,
+    },
+    {
+      id: 'accuracy', title: 'Accuracy', icon: '✓', description: 'Brier, calibration, streak and margin',
+      category: 'analytics', accent: 'mint', defaultW: 6, defaultH: 3, minW: 4, minH: 2,
+      defaultRect: { x: 0, y: 10, w: 6, h: 3 }, content: <AccuracyPanel data={accuracyData} />,
+    },
+    {
+      id: 'journal', title: 'Journal Analytics', icon: '⌁', description: 'equity, sessions, hourly edge',
+      category: 'analytics', accent: 'violet', defaultW: 6, defaultH: 3, minW: 4, minH: 2,
+      defaultRect: { x: 6, y: 10, w: 6, h: 3 }, content: <JournalTimeSeriesPanel data={journalAnalyticsData} />,
+    },
+    {
+      id: 'tape', title: 'Market Tape', icon: '◫', description: 'recorder health and coverage',
+      category: 'analytics', accent: 'cyan', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 0, y: 13, w: 4, h: 2 }, content: <TapePanel tape={tapeData} />,
+    },
+    {
+      id: 'limitOrder', title: 'Limit Order', icon: '↔', description: 'passive order lifecycle',
+      category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
+      defaultRect: { x: 4, y: 13, w: 4, h: 2 }, content: <LimitOrderPanel data={limitOrderData} />,
+    },
+    {
+      id: 'traderDiscovery', title: 'Trader Discovery', icon: '⌖', description: 'wallet scan and simulation',
+      category: 'analytics', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 8, y: 13, w: 4, h: 3 }, content: <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />,
+    },
+  ];
+
   return (
-    <div className="app-container">
-      {/* Header */}
-      <header className="app-header">
-        <div className="app-header__title">
-          <span className="btc-icon">₿</span>
-          Polymarket BTC 15m Assistant
-        </div>
-        <div className="app-header__status">
-          <StatusPill connected={data?.binanceConnected ?? false} label="Binance" />
-          <StatusPill connected={chainlinkConnected} label={`CL:${chainlinkResolved.source}`} />
-          <StatusPill connected label={clobLabel.short} dotClass={clobLabel.dotClass} />
-          <StatusPill connected={mlStatus === 'ready'} label="ML" />
-          <StatusPill connected={botConnected} label="Bot" />
-          {/* Bot START/STOP control */}
-          <button
-            className={`btn-bot-control ${
-              !botConnected
-                ? 'btn-bot-control--disabled'
-                : botPaused
-                  ? 'btn-bot-control--start'
-                  : 'btn-bot-control--stop'
-            }`}
-            disabled={!botConnected}
-            onClick={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
-          >
-            <span style={{ fontSize: '0.9em' }}>{botPaused ? '\u25B6' : '\u25A0'}</span>
-            {!botConnected ? 'OFFLINE' : botPaused ? 'START' : 'STOP'}
-          </button>
-        </div>
-      </header>
-
-      {/* Bot disconnected warning */}
-      {!botConnected && data && (
-        <div className="connection-banner connection-banner--warning">
-          Bot disconnected — showing last received data
-        </div>
-      )}
-
-      {/* Bot paused banner */}
-      {botConnected && botPaused && (
-        <div className="paused-banner">
-          BOT PAUSED — Analysis loop stopped. Click START to resume.
-        </div>
-      )}
-
-      {/* Loading */}
-      {loading && !data && (
-        <div className="loading-screen">
-          <div className="loading-screen__icon">₿</div>
-          <div className="loading-screen__spinner" />
-          <div className="loading-screen__text">
-            {botConnected ? 'Receiving data...' : 'Waiting for bot...'}
-          </div>
-        </div>
-      )}
-
-      {/* Dashboard Grid */}
-      {data && (
-        <div className="dashboard-grid">
-          {/* Row 0: Bot Status (full width) */}
-          <BotPanel connected={botConnected} data={botData} />
-
-          {/* Row 0b: Positions (full width) */}
-          <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />
-
-          {/* Row 0c: Limit Order (full width, auto-hides when idle) */}
-          <LimitOrderPanel data={limitOrderData} />
-
-          {/* Row 0d: Trader Discovery (full width) */}
-          <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />
-
-          {/* Row 1: Price + Timer (full width) */}
-          <CurrentPriceCard {...priceCardProps} />
-
-          {/* Row 2: Prediction + TA */}
-          <PredictPanel data={predictData} />
-          <TAIndicators data={taData} />
-
-          {/* Row 3: Polymarket + Edge */}
-          <PolymarketPanel data={polyData} />
-          <EdgePanel data={edgeData} />
-
-          {/* Row 4: ML Engine (full width) */}
-          <MLPanel data={mlData} />
-
-          {/* Row 4b: JEV / TypeSafe decision layer */}
-          <JevPanel data={jevData} />
-
-          {/* Row 5: Bet Sizing (full width) */}
-          <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />
-
-          {/* Row 6: Accuracy Dashboard (full width) */}
-          <AccuracyPanel data={accuracyData} />
-
-          {/* Row 7: Journal Time-Series Analytics (full width) */}
-          <JournalTimeSeriesPanel data={journalAnalyticsData} />
-
-          {/* Row 8: Market tape recorder (full width, hidden on a bot without it) */}
-          <TapePanel tape={tapeData} />
-
-          {/* Row 9: Session (full width) */}
-          <SessionInfo />
-        </div>
-      )}
-
-      {/* Footer */}
-      <footer className="app-footer">
-        Not financial advice. Use at your own risk. — created by @masterputra
-      </footer>
-    </div>
+    <DashboardShell
+      widgets={dashboardWidgets}
+      status={shellStatus}
+      loading={loading && !data}
+      onToggleBot={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
+    />
   );
 }
