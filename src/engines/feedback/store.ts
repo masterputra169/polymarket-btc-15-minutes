@@ -55,6 +55,34 @@ export function settlePrediction(marketSlug, result) {
   if (changed) markDirty();
 }
 
+/**
+ * Reconcile a prediction's outcome with the verified journal result.
+ *
+ * autoSettle() books the result from BTC spot ~3s before expiry; Polymarket can
+ * still resolve the other way (TWAP/verifier). fallbackVerifier corrects the
+ * journal, and calls this so Accuracy/streak/calibration do not keep a wrong
+ * result. Signal-performance counters are not recomputed (they were updated at
+ * first settlement); only the prediction's correctness is corrected.
+ * @returns {number} number of predictions whose correctness changed
+ */
+export function reconcilePrediction(marketSlug, result) {
+  ensureLoaded();
+  if (!marketSlug || (result !== 'UP' && result !== 'DOWN')) return 0;
+  let changed = 0;
+  for (let i = 0; i < S.cache.length; i++) {
+    const pred = S.cache[i];
+    if (pred.marketSlug !== marketSlug || !pred.settled || pred.correct === null) continue;
+    const correct = pred.side === result;
+    if (pred.correct === correct && pred.actualResult === result) continue;
+    pred.correct = correct;
+    pred.actualResult = result;
+    pred.reconciledAt = Date.now();
+    changed++;
+  }
+  if (changed > 0) markDirty();
+  return changed;
+}
+
 export function autoSettle(currentSlug, btcPrice, priceToBeat, timeLeftMin) {
   // C4: Was 0.5 min (30s) — BTC can move $50-200 in 30s, so autoSettle with live
   // price was corrupting feedback accuracy data. Reduced to 0.05 min (3s) so

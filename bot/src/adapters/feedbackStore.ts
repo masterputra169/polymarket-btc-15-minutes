@@ -22,6 +22,7 @@ import * as FeedbackState from '../../../src/engines/feedback/state.ts';
 export {
   recordPrediction,
   settlePrediction,
+  reconcilePrediction,
   autoSettle,
   loadHistory,
   flushHistory,

@@ -17,6 +17,7 @@
 import { createLogger } from '../logger.ts';
 import { readJournalRows, rewriteJournalRow } from './tradeJournal.ts';
 import { correctSettlement } from './positionTracker.ts';
+import { reconcilePrediction } from '../adapters/feedbackStore.ts';
 import { fetchResolvedOutcome } from '../engines/marketResolution.ts';
 import { computeSettlementPnl, isProvisionalSource } from '../engines/settlementMath.ts';
 import { notify } from '../monitoring/notifier.ts';
@@ -124,6 +125,11 @@ export async function verifyFallbackSettlement(
     // Keep the Postgres copy in step with the stamped/corrected local row.
     mirrorTradeJournalRecord(applied.row).catch(e => log.debug(`Mirror of verified row skipped: ${e.message}`));
   }
+
+  // Keep the Accuracy/feedback sample in step with the verified outcome, even when
+  // the journal booking was already correct: autoSettle used spot and can be wrong.
+  const reconciled = reconcilePrediction(marketSlug, resolved.outcome);
+  if (reconciled > 0) log.info(`Feedback reconciled for ${marketSlug}: ${reconciled} prediction(s) → ${resolved.outcome}`);
 
   if (applied.status === 'confirmed') {
     log.info(`${row.exit.source} confirmed by ${resolved.source}: ${marketSlug} → ${resolved.outcome}`);

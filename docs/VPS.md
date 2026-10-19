@@ -286,3 +286,9 @@ sudo systemctl reload nginx
 - JEV dashboard panel shows **Edge vs mkt** in percentage points.
 - Accuracy card: **Trade accuracy — full journal** (from journalAnalytics) + **Prediction sample — rolling (last 24h)** (bot feedback cache, `MAX_AGE_MS=24h`). The small sample is why n=5 and rolling bars can be empty.
 - Entry rarity is filters/price caps/JEV, not the 9 s confirmation (`Stab` reaches hundreds). No gateway bottleneck; MetEngine disabled.
+
+### Feedback streak reconciliation (2026-10-19)
+
+- `fallbackVerifier` now calls `reconcilePrediction(slug, verifiedOutcome)` (adapter → shared feedback store) on every verified resolution; journal corrections reach Accuracy/streak automatically.
+- One-off backlog: `cd /opt/polybtc15/bot && sudo -u ubuntu node --env-file=./.env scripts/reconcileFeedback.mts` (stop the bot first so it cannot overwrite the file). Reconciled 3 stale predictions.
+- Snapshot: accuracy 0.8 (4/5), streak 1L, `Hot (80% of last 5)`. Evaluation window reset to `2026-10-19T12:25:44Z` (feedback feeds sizing).
