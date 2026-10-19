@@ -230,3 +230,15 @@ sudo systemctl reload nginx
 - External watchdog: `polybot-watchdog.timer` (every 5 min) runs `scripts/watchdog.sh`; `botLiveness.mts` non-zero -> `systemctl restart polybtc15-bot`.
 - Switching from shadow to veto/gate/primary changes trade selection: set `EVAL_WINDOW_START` to the switch time so the evaluation report restarts cleanly.
 
+### PolyBolt price feed (P0, deployed 2026-10-19)
+
+- `TWAP_FEED=polybolt` (VPS env): `polyboltWs.ts` connects to `wss://ws-live-v2.polymarket.com/ws`, authenticates with the CLOB L2 credentials (`op:auth`), subscribes `price.crypto.twap` (`{"symbol":"btcusd","window_seconds":60}`) + `price.crypto` (provider chainlink). RTDS remains a shadow fallback until its removal (~2026-10-23); `TWAP_FEED=rtds` is the code-free rollback.
+- Read-only probe: `cd /opt/polybtc15/bot && sudo -u ubuntu node --env-file=.env src/streams/polyboltProbe.mts --seconds 20` — expected `TWAP: PASS` and `SPOT: PASS`, `provider=chainlink`.
+- Verified after cutover: first market PTB `chainlink_twap, exact, +1.8s after open`; `twapFeed.mode=polybolt`, auth/subscribed ok, 0 seqGaps; `ptb_health` exactPct 100%.
+
+### CLOB V2 (P1, code merged 2026-10-19; not yet deployed to VPS)
+
+- `feat/clob-v2` merged into main (`92e8deb`) on top of JEV + PolyBolt; verified `npm run typecheck` PASS and `npx vitest run` 83 files / 893 tests PASS.
+- Go-live still needs manual steps: fund the funder with pUSD, approve CTF Exchange V2 (`pUSD.approve` + `CTF.setApprovalForAll`), then one 5-share live V2 smoke order (`bot/scripts/clobV2SmokeOrder.mts`). See `docs/CLOB_V2_MIGRATION.md`.
+- Not deployed to the VPS yet: the VPS bot node_modules would need `npm ci --prefix bot` (new `@polymarket/clob-client-v2` + `viem`); dry-run is unaffected by the code, but the dependency install + startup check should be done in a maintenance window.
+
