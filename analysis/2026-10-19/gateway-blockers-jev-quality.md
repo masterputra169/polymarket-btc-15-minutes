@@ -1,3 +1,5 @@
+> **Update 13:00 UTC:** after the full 55-call / 38-market real-resolution audit, JEV was switched to shadow + entry-only; the veto recommendation below is superseded. See `jev-real-resolution-audit.md` and `entry-price-jev-shadow-probe.md`.
+
 # Gateway blockers & JEV quality — deep analysis 2026-10-19
 
 ## Method

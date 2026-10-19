@@ -214,11 +214,11 @@ sudo systemctl reload nginx
 ## JEV / TypeSafe advisor (deployed 2026-10-19, SHADOW)
 
 - Code: `bot/src/ai/typesafeClient.ts`, `bot/src/ai/jevAdvisor.ts`; hooked in `bot/src/loop.ts` after `decide()`.
-- Env in `/opt/polybtc15/bot/.env`: `JEV_ENABLED=true`, `JEV_SHADOW=true`, `JEV_MODEL=jev-latest`, `JEV_INTERVAL_MS=0`, `TYPESAFE_API_KEY=` (empty until a key is added).
-- Status: bot logs `JEV: enabled but TYPESAFE_API_KEY is not set` and makes no calls. Add a key from https://console.typesafe.ai/keys, then `sudo systemctl restart polybtc15-bot`.
+- Env in `/opt/polybtc15/bot/.env`: `JEV_ENABLED=true`, `JEV_MODE=shadow`, `JEV_SHADOW=true`, `JEV_CALL_ON=entry`, `JEV_MODEL=typesafe/jev-1.14`, `JEV_INTERVAL_MS=0`.
+- Status (2026-10-19 13:00 UTC): `JEV: enabled [SHADOW]` via OpenRouter; calls are made only on ENTER candidates (`JEV_CALL_ON=entry`), never during WAIT. No veto is active.
 - Verify: `ssh polyvps "cd /opt/polybtc15 && node bot/scripts/jevSmokeTest.mts"` (must print answers; exit 2 = no key).
 - Shadow log: `/opt/polybtc15/bot/data/jev_log.jsonl` (one line per market). Score later with `node bot/scripts/jevEvaluate.mts`.
-- Active veto only after `JEV_SHADOW=false`; that changes trade selection, so reset `EVAL_WINDOW_START` at the same time.
+- Veto/gate/primary are opt-in only: set `JEV_MODE=veto|gate|primary` (or `JEV_SHADOW=false` for veto) and reset `EVAL_WINDOW_START` at the same time. Current mode is **shadow**, so there is no gate impact.
 - OpenRouter LLM regime is disabled (`LLM_REGIME_ENABLED=false`) — its key was out of credits; JEV is the LLM layer now.
 
 ### JEV full-collaboration controls (2026-10-19)
@@ -245,7 +245,7 @@ sudo systemctl reload nginx
 ### Rollout 2026-10-19
 
 - CLOB V2 merged code deployed: `npm ci --prefix bot` on the VPS installed `@polymarket/clob-client-v2` + `viem`; DRY RUN is unaffected (readiness gate only runs live). Backup: `/opt/polybtc15/backups/pre-clobv2-*.tar.gz`.
-- JEV veto active: `JEV_MODE=veto`, `JEV_SHADOW=false`, `JEV_MIN_CONF=0.60`; `EVAL_WINDOW_START=2026-10-19T05:03:02Z`. Previous window archived: 260 trades, 61.5% WR.
+- JEV veto was active 05:03–13:00 UTC, then **switched to shadow + entry-only**: `JEV_MODE=shadow`, `JEV_SHADOW=true`, `JEV_CALL_ON=entry`; window reset to `2026-10-19T12:58:17Z`. Previous window archived: 260 trades, 61.5% WR.
 - Railway project `polybtc15` deletion requested (scheduled for 2026-10-21T05:03Z; data exported locally). Permanent dashboard hostname still pending a Cloudflare named tunnel (`cloudflared tunnel login` requires the operator).
 
 ### CLOB V2 preflight/smoke PASS (2026-10-19)
@@ -303,7 +303,7 @@ sudo systemctl reload nginx
 ### Gateway blockers & JEV quality (2026-10-19)
 
 - Filter log 05:03–12:45: 113,954 filtered lines. Largest sole blockers: entry-price hard cap 19,083; "Too early >12min" 10,705; ML conf 4,231; JEV 830. Price cap protects EV; early-time gate is the only high-volume lever worth a tape/backtest probe.
-- JEV: direction 16/26 (61.5%); settle-up Brier **0.2907** vs market 0.1727; conf≥0.60 direction 14/19 (73.7%, CI wide), conf≥0.70 3/7. Keep veto-only; do not use JEV settle probability for gate/primary/edge/sizing; collect ≥100 markets.
+- JEV: direction 16/26 (61.5%); settle-up Brier **0.2907** vs market 0.1727; conf≥0.60 direction 14/19 (73.7%, CI wide), conf≥0.70 3/7. The later full 55-call audit (57.9%, no-side 41.2%) led to **shadow mode**; do not use JEV settle probability for gate/primary/edge/sizing.
 - Report: `analysis/2026-10-19/gateway-blockers-jev-quality.md`.
 
 ### JEV real-resolution audit (2026-10-19)
