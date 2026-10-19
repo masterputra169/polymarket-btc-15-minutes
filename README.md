@@ -15,10 +15,12 @@
 ## Table of Contents
 
 - [What is this?](#what-is-this)
+- [Latest update (2026-10-19)](#latest-update-2026-10-19)
 - [Project status](#project-status)
 - [Key features](#key-features)
 - [Architecture](#architecture)
 - [Dashboard](#dashboard)
+- [JEV decision layer](#jev-decision-layer-typesafe-system-one)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Wallet setup](#wallet-setup)
@@ -41,6 +43,67 @@
 
 ---
 
+## Latest update (2026-10-19)
+
+> Current operational state. The September project-status table below is kept as the Railway-era baseline; this section supersedes it.
+
+### Where it runs now
+
+- **VPS:** Tencent Lighthouse, Ubuntu 26.04, Node 25.9. The bot runs as `polybtc15-bot` (systemd, DRY RUN).
+- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a Cloudflare Tunnel with HTTP Basic Auth.
+- **Railway:** shut down on 2026-10-19; all data exported locally. Railway is no longer the production target.
+- **Postgres/Redis:** local Postgres is available for the journal mirror; Redis is optional.
+
+### New since the September baseline
+
+| Area | Change |
+|------|--------|
+| Dashboard | **v4 widget workspace**: 16 draggable/resizable panels, edit mode, collision-safe drops, widget library, presets (Terminal/Focus/Analytics/Clean), 4 accent themes, density, persisted layout, JSON export/import, mobile single-column stack. |
+| JEV | **TypeSafe System One shadow layer** through OpenRouter (`typesafe/jev-1.14`), independent-v2 state (no bot rules/ML/edge anchor), fixed-policy sample calls, entry-time decision calls, separate logs and reports. |
+| CLOB | **CLOB V2** code is merged and deployed; the live path is still gated by pUSD funding, 5-share minimum and a final live smoke order. |
+| Entry research | Dry-run-only early-time probe; entry-price floor stays 50¢ and live ceiling 68¢ (dry-run 75¢). |
+| Accounting | Taker fee, settlement PnL, fallback verification, PTB health and journal analytics were corrected in earlier passes. |
+
+### JEV shadow results (read-only)
+
+| Check | Result |
+|-------|--------|
+| Historical 47-market direction | 22/36 = **61.1%** (NO_EDGE 11, coverage 76.6%) |
+| Historical settle Brier | JEV **0.2825** vs market **0.1819** |
+| In-sample fixed policy (`conf > 0.60`, `ask <= 0.70`, `pSide - ask >= 0.10`) | 17 candidates, WR **70.6%**, ROI **+14.3%** — hypothesis only, not validated |
+| First independent-v2 decision | 22:45 WIB, DOWN 37% vs actual DOWN (n=1) |
+| Bot calibration study | 753 entries; test Brier model **0.2638**, market **0.2321**, shrunk **0.2318** at w=0.15; model mean p 78.2% vs realised 61.3% |
+
+> The 17-candidate policy result is in-sample and threshold-sensitive (conf>0.70 turned negative). JEV remains **shadow**; it does not veto, size or execute. The forward sample must reach at least 100 resolved markets before any gate/primary decision.
+
+### Dashboard v4 quick start
+
+1. Open the same dashboard URL.
+2. Click **Edit layout**.
+3. Drag a widget by its header; resize it from the bottom-right corner.
+4. Use **Widgets** to show/hide panels, presets to switch workspace, and the colour dots to change the accent.
+5. **Export** / **Import** layout JSON to share a layout.
+6. **Reset** returns to the default Terminal layout.
+
+Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`.
+
+### Verification
+
+- `npm run typecheck` PASS.
+- Full suite: **88 files / 929 tests PASS**.
+- `npm run build` PASS; new hashed assets deployed to nginx.
+- Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
+- Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
+
+### Reports from this pass
+
+- [Dashboard v4 report + preview](analysis/2026-10-19/dashboard-v4-redesign.md)
+- [JEV independent v2 + calibration study](analysis/2026-10-19/jev-independent-v2-calibration-study.md)
+- [Entry-time decision shadow](analysis/2026-10-19/jev-entry-time-decision-shadow.md)
+- [Fixed-policy forward shadow](analysis/2026-10-19/jev-fixed-policy-forward-shadow.md)
+
+---
+
 ## What is this?
 
 Every 15 minutes Polymarket opens a binary market: **"Will BTC be higher at the end of this 15-minute window than at the start?"** The start price is the *Price to Beat* (PTB). You buy an UP or DOWN share at the market price (for example 63¢), and a winning share pays out $1.00 at settlement.
@@ -56,11 +119,11 @@ The bot automates that loop 24/7:
 
 ## Project status
 
-*As of September 2026:*
+*Railway-era baseline (September 2026). For the current VPS state, see [Latest update](#latest-update-2026-10-19).*
 
 | Area | State |
 |------|-------|
-| Deployment | Bot, dashboard, Postgres and Redis run on **Railway** (see [docs/RAILWAY.md](docs/RAILWAY.md)). A local Docker stack is also supported. |
+| Deployment | **VPS** (bot + nginx dashboard; see Latest update). Railway was shut down on 2026-10-19; the local Docker stack remains supported. |
 | Mode | **`DRY_RUN=true`**. Dry run simulates fills at the price a live order would really pay (see [Dry run and evaluation](#dry-run-and-evaluation)). |
 | Go-live gate | The bot needs a positive **margin over breakeven** on the clean evaluation window, scored with `--since` (not a rolling window). Plan: ~2 weeks of clean dry run to rule out a gross regression, then a mini-size live phase ($1–2 per trade) to measure real fills, then full sizing. |
 | Disabled on evidence | Pre-market long (10 trades, 30% WR, −19.88), RL bet-sizing agent (inert weights), take-profit (settlement beats early exit). |
@@ -73,6 +136,9 @@ The edge is thin. Proving a ~2.5pp edge over breakeven with 80% power takes abou
 ## Key features
 
 - **ML ensemble**: XGBoost + LightGBM with Platt calibration on logits. Ensemble weights are chosen on out-of-fold CV and trained with embargoed walk-forward validation. Inference is iterative tree traversal in TypeScript.
+- **Dashboard v4**: 16 draggable/resizable widgets, edit mode, collision-safe drops, widget library, Terminal/Focus/Analytics/Clean presets, 4 accent themes, density, localStorage persistence, JSON export/import and a mobile single-column stack.
+- **JEV / TypeSafe shadow layer**: independent-v2 state omits the bot rules/ML/edge anchor; fixed-policy sample calls and entry-time decision calls are logged separately. No JEV output can block or size a trade yet.
+- **Probability-quality tracking**: Brier/calibration/log-loss resolved from real outcomes, plus a separate model-vs-market calibration study.
 - **Entry filters**: a numbered gate stack (0–19) covering ML confidence, price floor/ceiling, time window, spread, VPIN, session quality, blackout hours, macro events and more. Gate 0 is a **hard session block** that no bypass can override.
 - **Smart order router**: LIMIT-first routing, with FOK only for high-confidence, cheap entries and WAIT otherwise.
 - **Kelly sizing**: confidence-tiered fractional Kelly with a hard per-trade cap.
@@ -115,10 +181,13 @@ Poly LiveData ──┘    arbitrage · smart flow                              
                 └──────────────────────────────────────────────────────────────────┘
                                    │ WebSocket
                                    ▼
-                ┌──────────── Dashboard (React 19 + Vite 7) ───────────┐
-                │ useBotData ← snapshot every poll → 14 memoized panels │
-                └───────────────────────────────────────────────────────┘
+                ┌──────────── Dashboard (React 19 + Vite 7) ─────────────┐
+                │ useBotData ← snapshot every poll → 16 widget panels    │
+                │ drag/drop · resize · presets · localStorage layout     │
+                └────────────────────────────────────────────────────────┘
 ```
+
+JEV runs as a **parallel shadow branch**: it reads the same snapshot and writes separate policy/decision logs; it is not inside the order path.
 
 **Each poll** (`POLL_INTERVAL_MS`; 50 ms in the deployed config), the bot:
 
@@ -133,6 +202,8 @@ Poly LiveData ──┘    arbitrage · smart flow                              
 ---
 
 ## Dashboard
+
+> **Dashboard v4 (2026-10-19):** the shell is now a draggable/resizable widget workspace. Every panel can be moved, resized, hidden or brought back; layouts persist per browser and can be exported/imported. See the quick start in [Latest update](#latest-update-2026-10-19).
 
 The dashboard connects to the bot's status WebSocket and renders one snapshot per poll. Each panel gets its own `useMemo` data slice and a `React.memo` comparator, so a panel re-renders only when its own fields change.
 
@@ -149,13 +220,55 @@ The dashboard connects to the bot's status WebSocket and renders one snapshot pe
 | `TAIndicators` | RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, EMA cross, StochRSI, volume delta |
 | `BetSizingPanel` | Kelly sizing breakdown |
 | `AccuracyPanel` | Rolling signal accuracy |
+| `JevPanel` | JEV / TypeSafe mode, provider, last direction, settle probability, latency and cost |
+| `TapePanel` | Market-tape recorder health, coverage and upload status |
 | `JournalTimeSeriesPanel` | Journal analytics: win rate, **margin vs breakeven** (lifetime + realistic fills), sessions, day of week, equity curve |
 | `TraderDiscoveryPanel` | Smart-money trader discovery and tracking |
 | `SessionInfo` | Trading session, local clock and bot-clock skew |
 
 **Server clock.** Every duration shown against a bot timestamp (countdowns, ages, "updated Xs ago") uses the bot's clock through `src/hooks/serverClock.ts`, not the browser's. A PC clock that drifts cannot freeze a countdown or show a 12-hour age.
 
-**Auth.** The status token also authorizes control commands, so it is never baked into a public bundle. Open the dashboard once with `?botStatusToken=<STATUS_AUTH_TOKEN>`. The token is stored in that browser's localStorage and reused. Visitors without it see an empty dashboard.
+**Auth.** The current VPS page is protected by nginx **HTTP Basic Auth**, and nginx injects the status token into `/ws`; no token is placed in the URL. Local dev still supports opening once with `?botStatusToken=<STATUS_AUTH_TOKEN>` (stored in that browser's localStorage). The status token also authorizes control commands, so it is never baked into a public bundle.
+
+---
+
+## JEV decision layer (TypeSafe System One)
+
+JEV is an LLM **judgment layer**, not the owner of the trading system. The deterministic bot still computes the probability, filters, size, risk and execution; JEV is currently a **shadow** observer.
+
+- Provider: OpenRouter `POST /api/v1/systemone`, model `typesafe/jev-1.14` (alias `~typesafe/jev-latest`).
+- Answers: typed `direction` (`UP` / `DOWN` / `NO_EDGE`), `settle_above_ptb` noul and `regime`, with probabilities and confidence.
+- Cost: roughly 1.4k input tokens and **~$0.00006 per call**; a market-open call every 15 minutes is ~$0.006/day.
+- Guard: only called when the Chainlink 60 s TWAP price-to-beat is **exact** (0.5–14.4 min left).
+
+### Two call paths
+
+| Path | When | Log | Effect |
+|------|------|-----|--------|
+| **Policy sample** | Once per market near open (`JEV_CALL_ON=policy`; at least `JEV_POLICY_MIN_TIME_LEFT`, default 13.5 min) | `bot/data/jev_log.jsonl` | None; measures direction/Brier on an unbiased sample |
+| **Entry decision** | Once at the first `ENTER` candidate for the market | `bot/data/jev_decision.jsonl` | Record-only; does **not** veto, size or execute |
+
+`JEV_INDEPENDENT_STATE=true` removes the bot's `algo_view` (rules, ML side, edges, provisional action) from the state and changes the prompt so JEV forms its own view. Log records carry `stateVariant=independent_v2`.
+
+### Modes (all off by default)
+
+- `JEV_MODE=shadow` — record only. **Current mode.**
+- `veto` — gate 19b blocks an entry when JEV confidently disagrees and its settle probability contradicts its direction.
+- `gate` — requires a confident JEV agreement.
+- `primary` — a confident JEV direction may override the side of an ENTER; forced entries require `JEV_PRIMARY_FORCE_ENTRY=true`.
+
+Shadow is deliberate: the historical audit did not validate a JEV gate (direction 61.1% over 47 markets, settle Brier 0.2825 vs market 0.1819). One entry-time record was correct, but n=1 is not evidence. The forward sample is still running.
+
+### Evaluation tools
+
+```bash
+node bot/scripts/jevSmokeTest.mts          # one fixed call, prints usage/answers
+node bot/scripts/jevEvaluate.mts           # direction, Brier, calibration buckets, policy simulation
+node bot/scripts/jevPolicyReport.mts       # fixed-policy candidates + outcomes/PnL, progress to 100 markets
+node bot/scripts/jevDecisionReport.mts     # entry-time direction/Brier, gate simulation, bot overlap
+```
+
+Reports require Gamma's market to be **closed** with 1/0 outcome prices; an open 0.5/0.5 placeholder is never counted.
 
 ---
 
@@ -256,6 +369,35 @@ STATUS_PORT=3099
 # REPORT_AUTH_TOKEN=<openssl rand -hex 32>
 ```
 
+### JEV / TypeSafe System One (shadow)
+
+JEV is record-only on the current deployment. It never blocks, sizes or executes a trade.
+
+```env
+JEV_ENABLED=true
+JEV_MODE=shadow                       # shadow | veto | gate | primary
+JEV_PROVIDER=openrouter               # openrouter | typesafe
+JEV_MODEL=typesafe/jev-1.14
+OPENROUTER_API_KEY=
+
+# Fixed-policy sample: one call per market near open, no selection bias.
+JEV_CALL_ON=policy                    # entry | market | policy
+JEV_POLICY_SHADOW=true
+JEV_POLICY_MIN_CONF=0.60
+JEV_POLICY_MAX_ASK=0.70
+JEV_POLICY_MIN_EDGE=0.10
+JEV_POLICY_MIN_TIME_LEFT=13.5
+
+# Independent judgment: omit the bot rules/ML/edge anchor.
+JEV_INDEPENDENT_STATE=true
+
+# Separate entry-time decision call; record-only until validated.
+JEV_DECISION_SHADOW=true
+JEV_MIN_CONF=0.60
+JEV_SETTLE_MARGIN=0.05
+```
+
+Logs: `bot/data/jev_log.jsonl` (policy sample), `bot/data/jev_decision.jsonl` (entry decision), `bot/data/jev_policy.jsonl` (fixed-policy candidates). Reports: see [JEV decision layer](#jev-decision-layer-typesafe-system-one).
 ### Risk management
 
 ```env
@@ -317,13 +459,13 @@ TELEGRAM_BOT_TOKEN=                   # from @BotFather
 TELEGRAM_CHAT_ID=
 TELEGRAM_NOTIFY_TRADES=true
 DISCORD_WEBHOOK_URL=                  # optional
-DASHBOARD_URL=https://frontend-production-d0bf1.up.railway.app   # "View Web" button (this is the default)
+DASHBOARD_URL=https://<your-dashboard-host>/   # "View Web" button; current VPS uses the Cloudflare Tunnel URL
 ```
 
 ### Optional integrations
 
 ```env
-# Postgres journal mirror + Redis cache (both optional; set automatically on Railway/Docker)
+# Postgres journal mirror + Redis cache (both optional; local Docker or VPS)
 DATABASE_URL=postgres://...
 REDIS_URL=redis://...
 
@@ -411,9 +553,18 @@ docker compose up -d --build
 
 Full guide: **[docs/DOCKER_STACK.md](docs/DOCKER_STACK.md)**. On Windows, `scripts/install-watchdog.ps1` schedules `scripts/stack-watchdog.ps1` every 10 minutes. The watchdog restarts a container that is "Up" but has stopped polling, and escalates to a Docker Desktop restart if that does not help.
 
-### Railway (cloud)
+### VPS (current deployment)
 
-Production runs on Railway as four services: `bot` (private network, volume at `/app/bot/data`), `frontend` (public, nginx proxying `/ws` and `/api/reports` to the bot), and the `Postgres` and `Redis` plugins. The bot's `/health` endpoint is the Railway healthcheck.
+The production target is a single Tencent Lighthouse VPS (`Ubuntu 26.04`, 2 vCPU, 2 GB RAM, Node 25.9):
+
+- Bot: `polybtc15-bot` systemd service, `DRY_RUN=true`, working directory `/opt/polybtc15/bot`.
+- Dashboard: static `dist/` on nginx `127.0.0.1:8080`, exposed by `cloudflared-quick.service` through a Cloudflare Tunnel. nginx enforces HTTP Basic Auth and proxies `/ws` + `/api/reports` with the bot token injected server-side.
+- Postgres 18 local for the optional journal mirror; report API on `127.0.0.1:3101`; watchdog timer every 5 minutes.
+- Deploy a dashboard build: `npm run build` then copy `dist/index.html` and `dist/assets/*` to `/opt/polybtc15/dist/`; nginx serves static files, no reload needed.
+- Operational runbook: [docs/VPS.md](docs/VPS.md). The old Railway project was deleted on 2026-10-19.
+### Railway (historical)
+
+Railway was the previous cloud deployment. It is shut down; all bot data was exported before deletion. This section is kept for the historical Docker/Railway setup only.
 
 Runbook, variables and CLI gotchas: **[docs/RAILWAY.md](docs/RAILWAY.md)**.
 
@@ -786,7 +937,7 @@ Alerts are rate-limited. Every Telegram message carries inline buttons:
 └──────────────────────┘
 ```
 
-The View Web link never includes the status token. The first time you open the dashboard in a browser (including Telegram's in-app browser), log in once with `?botStatusToken=<token>`.
+The View Web link never includes the status token. On the VPS the page is protected by nginx **HTTP Basic Auth**; local dev opens the dashboard once with `?botStatusToken=<token>`.
 
 ### Status WebSocket (`:3099`)
 
@@ -798,7 +949,7 @@ The server broadcasts the full state every poll and accepts operator RPCs (all r
 
 | Route | Auth | Returns |
 |-------|------|---------|
-| `GET /health` | none | Liveness, used as the Railway healthcheck |
+| `GET /health` | none | Liveness, used by nginx/health checks |
 | `GET /reports`, `GET /reports/summary` | `Authorization: Bearer <REPORT_AUTH_TOKEN>` or `?token=` | Journal reports (`?days=30&limit=50`) |
 
 ### Health data
@@ -818,6 +969,8 @@ Postgres helpers: `npm run pg:backfill`, `npm run pg:report`.
 ---
 
 ## Testing and CI
+
+Current suite (2026-10-19): **88 files / 929 tests PASS**, plus typecheck and Vite build.
 
 ```bash
 npm run typecheck      # frontend + bot + bot core + scripts
@@ -840,7 +993,10 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and on 
 .
 ├── src/                              # React 19 dashboard
 │   ├── App.tsx                       # Root; per-panel useMemo slices
-│   ├── components/                   # 14 panels (see Dashboard)
+│   ├── components/                   # 16 widget panels + dashboard shell
+│   │   └── dashboard/                # DashboardShell, layout engine, widget library
+│   │   └── dashboard/                # DashboardShell, layout engine, widget library
+│   ├── styles/dashboard.css          # v4 visual system + responsive widget skin
 │   ├── engines/                      # Mlpredictor, edge, regime, probability, feedback, ...
 │   ├── indicators/                   # RSI, MACD, VWAP, Bollinger, ATR, Heiken Ashi, ...
 │   ├── hooks/                        # useBotData, serverClock, useCountdown, useClock, ...
@@ -848,10 +1004,11 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and on 
 │
 ├── bot/                              # Node.js trading bot
 │   ├── index.ts                      # Entry: polyfills, CLOB client, models, streams, servers
-│   ├── scripts/                      # dryRunReport, reportWindow, botLiveness, pg + audit tools
+│   ├── scripts/                      # dryRunReport, JEV policy/decision reports, botLiveness, pg tools
 │   ├── data/                         # Runtime state + journals (gitignored)
 │   └── src/
 │       ├── loop.ts                   # Main poll orchestrator
+│       ├── ai/                       # JEV/TypeSafe client, independent state, policy/decision shadow
 │       ├── config.ts                 # BOT_CONFIG (bounded env parsing)
 │       ├── statusServer.ts           # WS :3099: state broadcast + operator RPC
 │       ├── autoRetrain.ts            # Retrain orchestrator with fail-closed gates
@@ -870,7 +1027,8 @@ GitHub Actions (`.github/workflows/ci.yml`) runs on every push to `main` and on 
 ├── public/ml/                        # Deployed models: xgboost, lightgbm, norm_browser.json
 ├── backtest/ml_training/             # Training pipeline + mltrain/ package + pytest suite
 ├── docker/                           # nginx template, Postgres init schema
-├── docs/                             # DOCKER_STACK.md, RAILWAY.md, audits, specs
+├── docs/                             # VPS, Docker, CLOB V2, audits, runbooks
+├── analysis/                         # dated research reports + dashboard/JEV previews
 ├── scripts/                          # Windows stack watchdog (PowerShell)
 ├── docker-compose.yml
 ├── Dockerfile.bot / Dockerfile.frontend
@@ -924,6 +1082,10 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-10-19 | **Dashboard v4 widget workspace**: 16 draggable/resizable panels, edit mode, collision-safe drops, widget library, Terminal/Focus/Analytics/Clean presets, 4 accent themes, density, localStorage persistence, JSON export/import, mobile single-column stack. Frontend-only; bot logic untouched. |
+| 2026-10-19 | **JEV TypeSafe layer in shadow**: independent-v2 state (no bot rules/ML/edge anchor), fixed-policy sample calls at market open, separate entry-time decision calls, policy/decision reports. No veto/size/execution impact. Historical 47-market direction 61.1%, settle Brier 0.2825 vs market 0.1819; forward sample still open. |
+| 2026-10-19 | **VPS production**: bot + nginx dashboard on Tencent Lighthouse behind Cloudflare Tunnel + Basic Auth; Railway shut down and data exported. CLOB V2 code merged/deployed but live orders remain gated by pUSD, 5-share minimum and a final smoke test. |
+| 2026-10-19 | **Accounting/research fixes**: real Brier/CRPS from the journal, entry-price/JEV audits, final-fill JEV refresh, taker-fee-aware early exits, resolution guard so open Gamma markets are never scored as resolved. |
 | 2026-09-25 | **Every hour and session trades**: ET blackout hours, the weekend floor and the Asia ML floors are behind `TIME_GATES_ENABLED` (default off), and Europe is unblocked. |
 | 2026-09-25 | **Price to beat fixed**: these markets settle on Chainlink's 60-second TWAP (since 2026-08-07), and the bot had been using the spot price (0 of 130 markets exact, median $9.28 off). The PTB now comes from the TWAP tick stamped at the window open (RTDS `crypto_prices_twap_sixty`), with Polymarket's TWAP `openPrice` as fallback; entries wait for it. Distance to the PTB is measured from Chainlink instead of Binance (which sat ~$24 higher), the settlement fallback uses the closing TWAP, and every closed market's PTB is checked against Polymarket's. |
 | 2026-09-25 | Entry-filter thresholds move to `bot/src/safety/filterThresholds.ts`, overridable as `FILTER_*` (golden test: no decision changed). Daily Telegram **evaluation report** (`EVAL_WINDOW_START`). Dashboard **Market Tape** panel. Decision-trail study (`decisionTrailStudy.mts`) and v2+v3 hybrid backtest (no gain). The RL bet-sizing agent is deleted. |
