@@ -37,7 +37,7 @@ const StatusPill = memo(function StatusPill({ connected, label, dotClass }) {
 
 export default function App() {
   // ═══ Single data source: bot via WebSocket ═══
-  const { data, loading, error, setBankroll, sendBotCommand, botConnected, binancePrice, binancePrevPrice } = useBotData();
+  const { data, loading, error, setBankroll, sendBotCommand, botConnected, reconnect, binancePrice, binancePrevPrice } = useBotData();
 
   // One verdict for the header pill and the Polymarket panel — they used to
   // read different signals and could contradict each other on screen.
@@ -628,6 +628,7 @@ const botData = useMemo(() => {
       widgets={dashboardWidgets}
       status={shellStatus}
       loading={loading && !data}
+      onReconnect={reconnect}
       onToggleBot={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
     />
   );

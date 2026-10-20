@@ -359,3 +359,12 @@ sudo systemctl reload nginx
 - Frontend-only change; bot/JEV/trading untouched. `npm run build` output deployed to `/opt/polybtc15/dist` behind the existing nginx Basic Auth + tunnel.
 - Verification: 88 files / 929 tests PASS; browser checks drag/resize/persistence/preset/theme; 390px mobile no horizontal overflow.
 - Report + preview: `analysis/2026-10-19/dashboard-v4-redesign.md`.
+
+### Dashboard auth sync + reconnect (2026-10-20)
+
+- nginx injects `STATUS_AUTH_TOKEN` into `/ws` and the report bearer token into `/api/reports`; both are synced from `bot/.env` by `scripts/nginx-token-sync.sh`.
+- systemd: `polybot-dashboard-auth-sync.service` (oneshot) + `.timer` every 2 minutes. It reloads nginx only when the config changes.
+- `/ws` stays behind nginx HTTP Basic Auth; the browser sends cached Basic credentials on the WS handshake.
+- Frontend reconnect never stops; it retries at the 30s ceiling and shows a **Reconnect now** button in the disconnected banner.
+- If the dashboard is empty but the page opens: check `/ws` for 401 first, then run `systemctl start polybot-dashboard-auth-sync.service`.
+- Quick-tunnel URL can change when cloudflared restarts; a stable hostname needs a named tunnel (`cloudflared tunnel login`).

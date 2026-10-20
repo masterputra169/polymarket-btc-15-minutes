@@ -1,0 +1,7 @@
+[Unit]
+Description=Sync nginx dashboard auth tokens from bot/.env
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/polybtc15/scripts/nginx-token-sync.sh

@@ -21,7 +21,7 @@ const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const STALE_TIMEOUT_MS = 15_000;
 const FLUSH_MS = 500; // Parse + flush to React 2x/sec
-const BACKOFF_PAUSE_AFTER = 5; // After N failures, stop auto-reconnect (only retry on tab focus)
+const BACKOFF_PAUSE_AFTER = 5; // After N failures, retry at the slow ceiling instead of stopping
 
 export function useBotData() {
   const [connected, setConnected] = useState(false);
@@ -166,10 +166,10 @@ export function useBotData() {
         wsRef.current = null;
         stopStaleCheck();
         failCountRef.current++;
-        // After too many failures, stop auto-reconnect (only tab focus retries)
-        if (failCountRef.current >= BACKOFF_PAUSE_AFTER) return;
-        const wait = reconMsRef.current;
-        reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
+        // Never give up: after repeated failures keep probing at the slow ceiling,
+        // so a token sync, tunnel restart or Wi-Fi change recovers without a reload.
+        const wait = failCountRef.current >= BACKOFF_PAUSE_AFTER ? RECONNECT_MAX_MS : reconMsRef.current;
+        if (failCountRef.current < BACKOFF_PAUSE_AFTER) reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
         reconnectRef.current = setTimeout(connect, wait);
       };
 
@@ -178,12 +178,23 @@ export function useBotData() {
       };
     } catch (_e) {
       failCountRef.current++;
-      if (failCountRef.current >= BACKOFF_PAUSE_AFTER) return;
-      const wait = reconMsRef.current;
-      reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
+      const wait = failCountRef.current >= BACKOFF_PAUSE_AFTER ? RECONNECT_MAX_MS : reconMsRef.current;
+      if (failCountRef.current < BACKOFF_PAUSE_AFTER) reconMsRef.current = Math.min(RECONNECT_MAX_MS, Math.floor(wait * 2));
       reconnectRef.current = setTimeout(connect, wait);
     }
   }, []);
+
+  const reconnect = useCallback(() => {
+    clearTimeout(reconnectRef.current);
+    reconnectRef.current = null;
+    failCountRef.current = 0;
+    reconMsRef.current = RECONNECT_MIN_MS;
+    const old = wsRef.current;
+    wsRef.current = null;
+    setConnected(false);
+    try { old?.close(); } catch (_e) { /* */ }
+    connect();
+  }, [connect]);
 
   useEffect(() => {
     connect();
@@ -270,6 +281,7 @@ export function useBotData() {
     forceSync,
     sendBotCommand,
     botConnected: connected,
+    reconnect,
     binancePrice,
     binancePrevPrice,
   };

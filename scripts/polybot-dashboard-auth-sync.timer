@@ -1,0 +1,10 @@
+[Unit]
+Description=Keep nginx dashboard auth tokens in sync with bot/.env
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=2min
+Unit=polybot-dashboard-auth-sync.service
+
+[Install]
+WantedBy=timers.target

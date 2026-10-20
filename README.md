@@ -93,6 +93,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Full suite: **88 files / 929 tests PASS**.
 - `npm run build` PASS; new hashed assets deployed to nginx.
 - Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
+- Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 
 ### Reports from this pass
@@ -1082,6 +1083,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-10-20 | **Public dashboard recovery**: stale nginx WS token caused 401/empty dashboard; synced nginx tokens from `bot/.env` and installed `polybot-dashboard-auth-sync.timer`. `/ws` remains Basic-Auth protected. Frontend auto-reconnect no longer stops after 5 failures; added Reconnect now. Verified 16 widgets through the public tunnel. |
 | 2026-10-19 | **Dashboard v4 widget workspace**: 16 draggable/resizable panels, edit mode, collision-safe drops, widget library, Terminal/Focus/Analytics/Clean presets, 4 accent themes, density, localStorage persistence, JSON export/import, mobile single-column stack. Frontend-only; bot logic untouched. |
 | 2026-10-19 | **JEV TypeSafe layer in shadow**: independent-v2 state (no bot rules/ML/edge anchor), fixed-policy sample calls at market open, separate entry-time decision calls, policy/decision reports. No veto/size/execution impact. Historical 47-market direction 61.1%, settle Brier 0.2825 vs market 0.1819; forward sample still open. |
 | 2026-10-19 | **VPS production**: bot + nginx dashboard on Tencent Lighthouse behind Cloudflare Tunnel + Basic Auth; Railway shut down and data exported. CLOB V2 code merged/deployed but live orders remain gated by pUSD, 5-share minimum and a final smoke test. |

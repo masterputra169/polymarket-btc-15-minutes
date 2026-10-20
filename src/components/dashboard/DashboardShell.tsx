@@ -50,6 +50,7 @@ interface DashboardShellProps {
   status: ShellStatus;
   loading: boolean;
   onToggleBot: () => void;
+  onReconnect?: () => void;
 }
 
 const STORAGE_KEY = 'btc15.dashboard.layout.v4';
@@ -133,7 +134,7 @@ function rectStyle(rect: Rect, colWidth: number, rowHeight: number): CSSProperti
   };
 }
 
-export default function DashboardShell({ widgets, status, loading, onToggleBot }: DashboardShellProps) {
+export default function DashboardShell({ widgets, status, loading, onToggleBot, onReconnect }: DashboardShellProps) {
   const initialSaved = useRef<SavedLayout | null | undefined>(undefined);
   if (initialSaved.current === undefined) initialSaved.current = loadSaved();
   const [layout, setLayout] = useState<LayoutMap>(() => {
@@ -413,7 +414,10 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot }
         </div>
       )}
       {!status.botConnected && (
-        <div className="dash-banner dash-banner--warn">Bot disconnected — showing the last received snapshot.</div>
+        <div className="dash-banner dash-banner--warn">
+          <span>Bot disconnected — retrying automatically; showing the last received snapshot.</span>
+          {onReconnect && <button onClick={onReconnect}>Reconnect now</button>}
+        </div>
       )}
       {status.error && <div className="dash-banner dash-banner--error">{status.error}</div>}
 

@@ -426,3 +426,6 @@ body::after { opacity: 0.7; }
   .tb-price { min-width: 88px; }
   .tb-metric b { font-size: 9px; }
 }
+
+.dash-banner--warn button { border: 1px solid rgba(251, 191, 36, 0.28); background: rgba(251, 191, 36, 0.1); color: #fde68a; border-radius: 6px; padding: 5px 9px; font: inherit; font-size: 9px; cursor: pointer; white-space: nowrap; }
+.dash-banner--warn button:hover { background: rgba(251, 191, 36, 0.18); }
