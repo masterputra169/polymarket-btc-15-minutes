@@ -52,6 +52,7 @@ interface DashboardShellProps {
   loading: boolean;
   onToggleBot: () => void;
   onReconnect?: () => void;
+  onLogout?: () => void;
 }
 
 const STORAGE_KEY = 'btc15.dashboard.layout.v4';
@@ -135,7 +136,7 @@ function rectStyle(rect: Rect, colWidth: number, rowHeight: number): CSSProperti
   };
 }
 
-export default function DashboardShell({ widgets, status, loading, onToggleBot, onReconnect }: DashboardShellProps) {
+export default function DashboardShell({ widgets, status, loading, onToggleBot, onReconnect, onLogout }: DashboardShellProps) {
   const initialSaved = useRef<SavedLayout | null | undefined>(undefined);
   if (initialSaved.current === undefined) initialSaved.current = loadSaved();
   const [layout, setLayout] = useState<LayoutMap>(() => {
@@ -371,6 +372,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
             <span className={cx('tb-pill', status.mlReady ? 'is-on' : 'is-off')}><i />ML</span>
             <span className={cx('tb-pill', status.botConnected ? 'is-on' : 'is-off')}><i />BOT</span>
           </div>
+          {onLogout && <button className="tb-logout" onClick={onLogout} title="Sign out">⏻</button>}
           <button
             className={cx('tb-bot', status.paused ? 'is-resume' : 'is-pause')}
             disabled={!status.botConnected}

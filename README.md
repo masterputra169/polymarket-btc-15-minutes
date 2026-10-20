@@ -50,7 +50,7 @@
 ### Where it runs now
 
 - **VPS:** Tencent Lighthouse, Ubuntu 26.04, Node 25.9. The bot runs as `polybtc15-bot` (systemd, DRY RUN).
-- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a **named Cloudflare Tunnel** at **https://poly15.dollarkilat.xyz/** with HTTP Basic Auth. Quick Tunnel is disabled. Setup: [docs/DOMAIN.md](docs/DOMAIN.md).
+- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a **named Cloudflare Tunnel** at **https://poly15.dollarkilat.xyz/**. A custom Motion login page issues a session cookie; nginx `auth_request` protects `/ws` and report APIs. Quick Tunnel is disabled. Setup: [docs/DOMAIN.md](docs/DOMAIN.md).
 - **Railway:** shut down on 2026-10-19; all data exported locally. Railway is no longer the production target.
 - **Postgres/Redis:** local Postgres is available for the journal mirror; Redis is optional.
 
@@ -96,6 +96,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
+- Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
 - Bot restart loop fixed: the liveness heartbeat now advances on every completed poll, so a long signal-confirmation hold is no longer mistaken for a blind bot. Verified `liveness: fresh` after deploy.
 
 ### Reports from this pass
@@ -231,7 +232,7 @@ The dashboard connects to the bot's status WebSocket and renders one snapshot pe
 
 **Server clock.** Every duration shown against a bot timestamp (countdowns, ages, "updated Xs ago") uses the bot's clock through `src/hooks/serverClock.ts`, not the browser's. A PC clock that drifts cannot freeze a countdown or show a 12-hour age.
 
-**Auth.** The current VPS page is protected by nginx **HTTP Basic Auth**, and nginx injects the status token into `/ws`; no token is placed in the URL. Local dev still supports opening once with `?botStatusToken=<STATUS_AUTH_TOKEN>` (stored in that browser's localStorage). The status token also authorizes control commands, so it is never baked into a public bundle.
+**Auth.** The current VPS page is protected by a custom login page + server-side session (`scripts/dashboard-auth-server.mjs`); nginx `auth_request` gates `/ws` and report APIs. The session cookie is HttpOnly/Secure and lasts 12 h; sign-out is in the topbar. Local dev can still use `?botStatusToken=<STATUS_AUTH_TOKEN>` (stored in that browser's localStorage).
 
 ---
 
@@ -1085,6 +1086,7 @@ To reset only the daily baseline, send the `resetDailyBaseline` RPC instead.
 
 | Date | Change |
 |------|--------|
+| 2026-10-20 | **Custom animated login page + session auth**: Motion login UI, scrypt password check, HttpOnly/Secure 12h cookie, nginx `auth_request` for `/ws`/reports, topbar sign-out. Basic Auth prompt removed. |
 | 2026-10-20 | **Bot restart loop fixed**: `ptb_health` only advanced after `applyTradeFilters`, so a 10+ minute signal-confirmation hold made the watchdog restart a healthy bot. Added `recordPollHeartbeat()` after each completed poll; watchdog liveness is now fresh during holds. |
 | 2026-10-20 | **Public dashboard recovery**: stale nginx WS token caused 401/empty dashboard; synced nginx tokens from `bot/.env` and installed `polybot-dashboard-auth-sync.timer`. `/ws` remains Basic-Auth protected. Frontend auto-reconnect no longer stops after 5 failures; added Reconnect now. Verified 16 widgets through the public tunnel. |
 | 2026-10-19 | **Dashboard v4 widget workspace**: 16 draggable/resizable panels, edit mode, collision-safe drops, widget library, Terminal/Focus/Analytics/Clean presets, 4 accent themes, density, localStorage persistence, JSON export/import, mobile single-column stack. Frontend-only; bot logic untouched. |

@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App.tsx';
 import './styles/global.css';
 import './styles/dashboard.css';
+import './styles/login.css';
 
 const root = document.getElementById('root');
 

@@ -381,3 +381,13 @@ sudo systemctl reload nginx
 - Quick Tunnel `cloudflared-quick` is disabled; `polybot-tunnel-sync.timer` is disabled so the old URL cannot overwrite `DASHBOARD_URL`.
 - Origin: nginx `127.0.0.1:8080`, Basic Auth. To roll back, re-enable `cloudflared-quick` and run `sync-tunnel-url.sh` manually; do not leave both timers enabled.
 - Cloudflare certificate/credentials live under `/home/ubuntu/.cloudflared/` (never commit).
+
+### Dashboard login gate (2026-10-20)
+
+- URL: https://poly15.dollarkilat.xyz/
+- Custom Motion login page; auth gateway `polybot-dashboard-auth.service` on `127.0.0.1:3102`.
+- Password hash + session secret: `/opt/polybtc15/auth.env` (0600; never commit).
+- nginx `/auth/` proxies login/me/logout; internal `/_dashboard_auth` is used by `auth_request` on `/ws` and report APIs.
+- Session cookie: HttpOnly, Secure, SameSite=Lax, 12h; topbar sign-out.
+- Basic Auth prompt was removed; static bundle is public, market data/control is not.
+- To reset the password: regenerate `DASHBOARD_PASSWORD_HASH` and restart `polybot-dashboard-auth.service`.

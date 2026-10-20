@@ -21,6 +21,8 @@ import TapePanel from './components/TapePanel.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
 import JevPanel from './components/JevPanel.tsx';
 import DashboardShell from './components/dashboard/DashboardShell.tsx';
+import LoginPage, { AuthSplash } from './components/auth/LoginPage.tsx';
+import { useDashboardAuth } from './hooks/useDashboardAuth.ts';
 import type { DashboardWidget, ShellStatus } from './components/dashboard/DashboardShell.tsx';
 
 // ═══ React.memo: StatusPill — rounded pill with dot + label ═══
@@ -35,7 +37,7 @@ const StatusPill = memo(function StatusPill({ connected, label, dotClass }) {
   );
 });
 
-export default function App() {
+function DashboardApp({ onLogout }: { onLogout: () => void }) {
   // ═══ Single data source: bot via WebSocket ═══
   const { data, loading, error, setBankroll, sendBotCommand, botConnected, reconnect, binancePrice, binancePrevPrice } = useBotData();
 
@@ -639,7 +641,14 @@ const botData = useMemo(() => {
       status={shellStatus}
       loading={loading && !data}
       onReconnect={reconnect}
+      onLogout={onLogout}
       onToggleBot={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
     />
   );
+}
+export default function App() {
+  const auth = useDashboardAuth();
+  if (auth.state === 'checking') return <AuthSplash />;
+  if (auth.state === 'out') return <LoginPage onLogin={auth.login} authError={auth.error} />;
+  return <DashboardApp onLogout={auth.logout} />;
 }

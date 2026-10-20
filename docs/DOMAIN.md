@@ -54,7 +54,7 @@ Then configure `/etc/cloudflared/config.yml` with the tunnel UUID and ingress to
 
 ### Security
 
-- Keep nginx Basic Auth on the page and `/ws` (the browser sends the cached credentials on the WebSocket handshake).
+- The VPS now uses the custom login page/session cookie; nginx `auth_request` protects `/ws`. Do not reintroduce a global Basic Auth prompt.
 - Prefer **Cloudflare Access** (email OTP or service token) for `poly15.dollarkilat.xyz`.
 - Do not expose `:8080` directly to the public internet.
 
