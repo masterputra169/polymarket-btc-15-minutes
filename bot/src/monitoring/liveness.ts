@@ -6,10 +6,11 @@
  * 11.8 hours. The watchdog checks "engine up" and "container running" and saw
  * nothing wrong, so the observation period silently collected nothing.
  *
- * ptb_health.jsonl is appended roughly once a minute by a poll that got far
- * enough to evaluate the trade filters (see ptbHealth.ts). Its last `to`
- * timestamp is therefore a cheap heartbeat for "the bot can see the market":
- * if it stops advancing while the container runs, the bot is alive but blind.
+ * ptb_health.jsonl is appended roughly once a minute. A completed loop iteration
+ * now emits a `heartbeat` count even when the bot is holding for signal
+ * confirmation, while filter counts remain separate. Its last `to` timestamp is
+ * therefore a cheap heartbeat for "the bot is still polling": if it stops
+ * advancing while the container runs, the bot is alive but blind.
  *
  * Pure: takes the file's content, returns a verdict. The CLI wrapper in
  * bot/scripts/botLiveness.mts turns that into an exit code for the watchdog.

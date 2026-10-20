@@ -368,3 +368,9 @@ sudo systemctl reload nginx
 - Frontend reconnect never stops; it retries at the 30s ceiling and shows a **Reconnect now** button in the disconnected banner.
 - If the dashboard is empty but the page opens: check `/ws` for 401 first, then run `systemctl start polybot-dashboard-auth-sync.service`.
 - Quick-tunnel URL can change when cloudflared restarts; a stable hostname needs a named tunnel (`cloudflared tunnel login`).
+
+### Liveness heartbeat fix (2026-10-20)
+
+- `ptb_health.jsonl` used to be written only after `applyTradeFilters`, so a long signal-confirmation hold looked like a blind bot and `polybot-watchdog` restarted it every few minutes.
+- `recordPollHeartbeat()` now runs after every completed poll that has a Polymarket snapshot; it advances the watchdog's `to` timestamp without counting as a filter evaluation.
+- Verified: heartbeat line every ~60s (`heartbeat=569, total=0`), `botLiveness` fresh, no watchdog restart.

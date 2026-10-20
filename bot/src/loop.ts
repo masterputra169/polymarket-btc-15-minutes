@@ -221,7 +221,7 @@ import { broadcast } from './statusServer.ts';
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
 import { beatLiveness } from './monitoring/processLiveness.ts';
-import { recordIdleHeartbeat } from './monitoring/ptbHealth.ts';
+import { recordIdleHeartbeat, recordPollHeartbeat } from './monitoring/ptbHealth.ts';
 import { parseClobAmount } from './utils/clobAmount.ts';
 
 // Live Polymarket data logger
@@ -1252,6 +1252,11 @@ export async function pollOnce() {
       log.warn(`Polymarket: ${poly?.reason ?? 'no snapshot'}`);
       return;
     }
+
+    // The loop has a market snapshot and is running. Advance the same durable
+    // heartbeat the watchdog reads before any hold/confirmation/expiry return,
+    // so a normal 180-poll signal-confirmation hold is not a restart trigger.
+    recordPollHeartbeat();
 
     // Notify CLOB WS of token IDs
     if (poly.tokens && !tokenIdsNotified) {

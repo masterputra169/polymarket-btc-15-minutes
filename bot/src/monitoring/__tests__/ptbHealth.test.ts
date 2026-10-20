@@ -23,7 +23,7 @@ const TMP_DIR = mkdtempSync(join(tmpdir(), 'ptbhealth-'));
 const HEALTH_PATH = join(TMP_DIR, 'ptb_health.jsonl');
 process.env.PTB_HEALTH_PATH = HEALTH_PATH;
 
-const { recordPtbSource, recordIdleHeartbeat, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES, recordPtbVerification, getPendingVerification } = await import('../ptbHealth.ts');
+const { recordPtbSource, recordIdleHeartbeat, recordPollHeartbeat, flush, getPendingCounts, _reset, EXACT_PTB_SOURCES, recordPtbVerification, getPendingVerification } = await import('../ptbHealth.ts');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -133,5 +133,18 @@ describe('idle heartbeat', () => {
     recordPtbSource('chainlink_twap');
     flush();
     expect(readLines().at(-1).idle).toBeUndefined();
+  });
+});
+
+describe('poll heartbeat', () => {
+  test('a completed poll advances the watchdog file without counting as a filter evaluation', () => {
+    recordPollHeartbeat();
+    recordPollHeartbeat();
+    flush();
+    const line = readLines().at(-1);
+    expect(line.heartbeat).toBe(2);
+    expect(line.total).toBe(0);
+    expect(line.exactPct).toBeNull();
+    expect(typeof line.to).toBe('number');
   });
 });

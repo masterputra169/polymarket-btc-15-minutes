@@ -45,6 +45,7 @@ let counts: Record<string, number> = {};
 // Polls where the bot was deliberately idle (operator pause, circuit-breaker halt). Kept out of
 // `total`/`exactPct`, which describe filter evaluations; they exist so the line still advances.
 let idle: Record<string, number> = {};
+let pollHeartbeats = 0;
 let verified = freshVerified();
 
 interface Verified { checked: number; exact: number; mismatch: number; maxAbsDiff: number; bySource: Record<string, { checked: number; exact: number }> }
@@ -85,6 +86,16 @@ export function recordPtbSource(source: string | null | undefined): void {
 }
 
 /**
+ * A completed loop iteration, regardless of whether it reached the filter gate.
+ * The external liveness check must not interpret a long signal-confirmation hold
+ * as a blind bot. This does not count as a filter evaluation.
+ */
+export function recordPollHeartbeat(): void {
+  pollHeartbeats++;
+  if (Date.now() - lastFlush >= FLUSH_MS) flush();
+}
+
+/**
  * A poll that ended early on purpose (paused / halted). The external watchdog reads this file's
  * newest `to` as "the bot can still see the market" (monitoring/liveness.ts); a bot that is
  * idle by choice never evaluates a filter, so without this it looked blind, got restarted every
@@ -99,7 +110,7 @@ export function recordIdleHeartbeat(kind: string): void {
 export function flush(): void {
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
   const idleTotal = Object.values(idle).reduce((a, b) => a + b, 0);
-  if (total === 0 && verified.checked === 0 && idleTotal === 0) { lastFlush = Date.now(); return; }
+  if (total === 0 && verified.checked === 0 && idleTotal === 0 && pollHeartbeats === 0) { lastFlush = Date.now(); return; }
 
   const exact = Object.entries(counts)
     .filter(([src]) => EXACT_PTB_SOURCES.includes(src))
@@ -113,6 +124,8 @@ export function flush(): void {
     exactPct: total ? Number(((exact / total) * 100).toFixed(2)) : null,
     bySource: counts,
     ...(idleTotal ? { idle } : {}),
+    ...(pollHeartbeats ? { heartbeat: pollHeartbeats } : {}),
+    ...(pollHeartbeats ? { heartbeat: pollHeartbeats } : {}),
     ...(verified.checked ? { verified: { ...verified, maxAbsDiff: Number(verified.maxAbsDiff.toFixed(2)) } } : {}),
   };
 
@@ -130,6 +143,7 @@ export function flush(): void {
 
   counts = {};
   idle = {};
+  pollHeartbeats = 0;
   verified = freshVerified();
   windowStart = Date.now();
   lastFlush = windowStart;
@@ -149,6 +163,7 @@ export function getPendingVerification(): Readonly<Verified> {
 export function _reset(): void {
   counts = {};
   idle = {};
+  pollHeartbeats = 0;
   verified = freshVerified();
   windowStart = Date.now();
   lastFlush = windowStart;
