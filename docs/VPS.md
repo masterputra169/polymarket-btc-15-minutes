@@ -131,7 +131,7 @@ curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
 
 ## Update final 2026-10-19 00:05 WIB — semua opsi dijalankan
 
-### Dashboard publik (Cloudflare Quick Tunnel)
+### Dashboard publik (Cloudflare named tunnel)
 
 - URL publik: **https://goto-invitations-suitable-metal.trycloudflare.com** (diverifikasi: index 200, asset 200, WebSocket `wss` OPEN, report API 200).
 - Login: buka URL + `?botStatusToken=<STATUS_AUTH_TOKEN>` sekali (token di `bot/.env`); setelah itu browser menyimpannya.
@@ -353,7 +353,7 @@ sudo systemctl reload nginx
 - Report: `sudo -u ubuntu node --env-file=./.env scripts/jevDecisionReport.mts` → `data/jev_decision_report.json`.
 - Reports now require a closed Gamma market with 1/0 prices; an open 0.5/0.5 placeholder is never resolved. 87 files / 924 tests PASS.
 
-### Dashboard v4 widget workspace (2026-10-19)
+#### Dashboard v4 widget workspace (2026-10-19)
 
 - New draggable/resizable widget dashboard: 16 panels, edit mode, widget library, presets, accent themes, density, localStorage persistence and layout export/import.
 - Frontend-only change; bot/JEV/trading untouched. `npm run build` output deployed to `/opt/polybtc15/dist` behind the existing nginx Basic Auth + tunnel.
@@ -374,3 +374,10 @@ sudo systemctl reload nginx
 - `ptb_health.jsonl` used to be written only after `applyTradeFilters`, so a long signal-confirmation hold looked like a blind bot and `polybot-watchdog` restarted it every few minutes.
 - `recordPollHeartbeat()` now runs after every completed poll that has a Polymarket snapshot; it advances the watchdog's `to` timestamp without counting as a filter evaluation.
 - Verified: heartbeat line every ~60s (`heartbeat=569, total=0`), `botLiveness` fresh, no watchdog restart.
+
+### Public domain cutover (2026-10-20)
+
+- URL: https://poly15.dollarkilat.xyz/ (Cloudflare named tunnel `polybtc15`, service `cloudflared-named.service`).
+- Quick Tunnel `cloudflared-quick` is disabled; `polybot-tunnel-sync.timer` is disabled so the old URL cannot overwrite `DASHBOARD_URL`.
+- Origin: nginx `127.0.0.1:8080`, Basic Auth. To roll back, re-enable `cloudflared-quick` and run `sync-tunnel-url.sh` manually; do not leave both timers enabled.
+- Cloudflare certificate/credentials live under `/home/ubuntu/.cloudflared/` (never commit).

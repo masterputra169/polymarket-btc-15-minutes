@@ -50,7 +50,7 @@
 ### Where it runs now
 
 - **VPS:** Tencent Lighthouse, Ubuntu 26.04, Node 25.9. The bot runs as `polybtc15-bot` (systemd, DRY RUN).
-- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a Cloudflare Tunnel with HTTP Basic Auth. Stable custom-domain plan: [docs/DOMAIN.md](docs/DOMAIN.md).
+- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a **named Cloudflare Tunnel** at **https://poly15.dollarkilat.xyz/** with HTTP Basic Auth. Quick Tunnel is disabled. Setup: [docs/DOMAIN.md](docs/DOMAIN.md).
 - **Railway:** shut down on 2026-10-19; all data exported locally. Railway is no longer the production target.
 - **Postgres/Redis:** local Postgres is available for the journal mirror; Redis is optional.
 
@@ -95,6 +95,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
 - Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
+- Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Bot restart loop fixed: the liveness heartbeat now advances on every completed poll, so a long signal-confirmation hold is no longer mistaken for a blind bot. Verified `liveness: fresh` after deploy.
 
 ### Reports from this pass
