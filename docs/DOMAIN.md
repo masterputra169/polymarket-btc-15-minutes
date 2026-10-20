@@ -1,3 +1,64 @@
+## Already own a domain on Cloudflare? (current case: `dollarkilat.xyz`)
+
+`dollarkilat.xyz` already delegates to Cloudflare (`clay.ns.cloudflare.com`, `emma.ns.cloudflare.com`). Do **not** register another free domain and do not change the registrar nameservers.
+
+Use a dedicated subdomain:
+
+```text
+poly15.dollarkilat.xyz   (recommended; neutral, no “Polymarket” trademark)
+dashboard.dollarkilat.xyz
+```
+
+Current wildcard answers for those names point at Vercel and return `DEPLOYMENT_NOT_FOUND`; creating the tunnel hostname overrides the wildcard only for that name. The apex site is untouched.
+
+### Create the named tunnel (Cloudflare dashboard)
+
+1. Cloudflare Zero Trust → **Networks → Tunnels → Create a tunnel**.
+2. Choose **Cloudflared**, name it `polybtc15`.
+3. Add a **Public Hostname**:
+   - Subdomain: `poly15`
+   - Domain: `dollarkilat.xyz`
+   - Service: `http://127.0.0.1:8080`
+4. Copy the connector token and install it on the VPS:
+
+```bash
+sudo cloudflared service install <TUNNEL_TOKEN>
+sudo systemctl enable --now cloudflared
+```
+
+5. Cloudflare creates the DNS record automatically. Verify:
+
+```bash
+dig poly15.dollarkilat.xyz +short
+curl -I https://poly15.dollarkilat.xyz/
+```
+
+6. Open the URL in a browser and confirm 16 widgets + live data.
+7. Only after that, stop the quick tunnel:
+
+```bash
+sudo systemctl disable --now cloudflared-quick
+sudo sed -i "s|^DASHBOARD_URL=.*|DASHBOARD_URL=https://poly15.dollarkilat.xyz/|" /opt/polybtc15/bot/.env
+sudo systemctl restart polybtc15-bot
+```
+
+### Alternative: CLI login
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create polybtc15
+cloudflared tunnel route dns polybtc15 poly15.dollarkilat.xyz
+```
+
+Then configure `/etc/cloudflared/config.yml` with the tunnel UUID and ingress to `http://127.0.0.1:8080`, and run it as a systemd service.
+
+### Security
+
+- Keep nginx Basic Auth on the page and `/ws` (the browser sends the cached credentials on the WebSocket handshake).
+- Prefer **Cloudflare Access** (email OTP or service token) for `poly15.dollarkilat.xyz`.
+- Do not expose `:8080` directly to the public internet.
+
+---
 # Custom domain for the dashboard (DigitalPlat FreeDomain + Cloudflare Tunnel)
 
 ## Why this path
