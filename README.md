@@ -50,7 +50,7 @@
 ### Where it runs now
 
 - **VPS:** Tencent Lighthouse, Ubuntu 26.04, Node 25.9. The bot runs as `polybtc15-bot` (systemd, DRY RUN).
-- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a Cloudflare Tunnel with HTTP Basic Auth.
+- **Dashboard:** nginx on `127.0.0.1:8080`, exposed through a Cloudflare Tunnel with HTTP Basic Auth. Stable custom-domain plan: [docs/DOMAIN.md](docs/DOMAIN.md).
 - **Railway:** shut down on 2026-10-19; all data exported locally. Railway is no longer the production target.
 - **Postgres/Redis:** local Postgres is available for the journal mirror; Redis is optional.
 
