@@ -520,6 +520,15 @@ const botData = useMemo(() => {
     data?.profitTargetPaused,
   ]);
 
+  const botPosition = data?.positions?.botPosition ?? null;
+  const openSize = Number(botPosition?.size ?? 0);
+  const markPrice = botPosition?.side === 'UP' ? data?.marketUp
+    : botPosition?.side === 'DOWN' ? data?.marketDown : null;
+  const paperPositionValue = openSize > 0 && Number.isFinite(markPrice) ? openSize * Number(markPrice) : null;
+  const paperEquity = data?.bankroll != null
+    ? data.bankroll + (paperPositionValue ?? 0)
+    : null;
+
   const shellStatus: ShellStatus = {
     btcPrice: data?.lastPrice ?? binancePrice ?? null,
     priceToBeat: data?.priceToBeat ?? null,
@@ -527,6 +536,7 @@ const botData = useMemo(() => {
     marketUp: data?.marketUp ?? null,
     marketDown: data?.marketDown ?? null,
     bankroll: data?.bankroll ?? null,
+    equity: paperEquity,
     dailyPnl: data?.stats?.dailyPnL ?? null,
     wins: data?.stats?.wins ?? null,
     losses: data?.stats?.losses ?? null,

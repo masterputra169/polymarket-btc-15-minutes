@@ -32,6 +32,7 @@ export interface ShellStatus {
   marketUp: number | null;
   marketDown: number | null;
   bankroll: number | null;
+  equity: number | null;
   dailyPnl: number | null;
   wins: number | null;
   losses: number | null;
@@ -486,7 +487,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       <footer className="dash-footer">
         <span>POLY//15 · operator console</span>
         <span>Not financial advice · built for the BTC 15m book</span>
-        <span>{status.wins != null && status.losses != null ? String(status.wins) + 'W / ' + String(status.losses) + 'L' : '—'} · {status.dryRun ? 'PAPER BANKROLL ' : 'BANKROLL '}{fmtMoney(status.bankroll)} · {status.dryRun ? 'PAPER PnL ' : 'PnL '}{fmtMoney(status.dailyPnl)}</span>
+        <span>{status.wins != null && status.losses != null ? String(status.wins) + 'W / ' + String(status.losses) + 'L' : '—'} · {status.dryRun ? 'PAPER CASH ' : 'CASH '}{fmtMoney(status.bankroll)} · {status.dryRun ? 'PAPER EQUITY ' : 'EQUITY '}{fmtMoney(status.equity ?? status.bankroll)} · {status.dryRun ? 'PAPER PnL ' : 'PnL '}{fmtMoney(status.dailyPnl)}</span>
       </footer>
 
       {libraryOpen && (

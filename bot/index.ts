@@ -94,7 +94,7 @@ log.info('='.repeat(60));
 log.info('  Polymarket BTC 15m Auto-Trading Bot (MAX SPEED)');
 log.info('='.repeat(60));
 log.info(`Mode: ${BOT_CONFIG.dryRun ? 'DRY RUN (no real orders)' : 'LIVE TRADING'}`);
-log.info(`Bankroll: $${BOT_CONFIG.bankroll}`);
+log.info(`Configured bankroll: ${BOT_CONFIG.bankroll} (state.json may override after load)`);
 log.info(`Poll interval: ${POLL_MS}ms (+ real-time WS streams)`);
 log.info(`Max daily loss: ${BOT_CONFIG.maxDailyLossPct}%`);
 log.info(`Max consecutive losses: ${BOT_CONFIG.maxConsecutiveLosses}`);
