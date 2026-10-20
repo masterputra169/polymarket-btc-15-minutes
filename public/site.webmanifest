@@ -1,0 +1,28 @@
+{
+  "name": "POLY//15 — BTC 15m Control Terminal",
+  "short_name": "POLY//15",
+  "description": "Private operator console for the BTC 15m Polymarket bot.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#05090f",
+  "theme_color": "#07121f",
+  "icons": [
+    {
+      "src": "/brand/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

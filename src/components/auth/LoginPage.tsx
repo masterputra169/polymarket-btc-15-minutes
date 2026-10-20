@@ -20,7 +20,7 @@ export function AuthSplash() {
       <motion.div className="login-orb login-orb--one" animate={{ scale: [1, 1.18, 1], opacity: [0.35, 0.55, 0.35] }} transition={{ duration: 8, repeat: Infinity }} />
       <motion.div className="login-orb login-orb--two" animate={{ scale: [1.1, 0.9, 1.1], opacity: [0.25, 0.45, 0.25] }} transition={{ duration: 11, repeat: Infinity }} />
       <div className="auth-splash">
-        <motion.div className="auth-splash__mark" animate={{ rotate: 360 }} transition={{ duration: 16, repeat: Infinity, ease: 'linear' }}>₿</motion.div>
+        <motion.img className="auth-splash__mark" src="/brand/poly15-mark.svg?v=20261020" alt="" animate={{ scale: [1, 1.035, 1] }} transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }} />
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
           <strong>POLY//15</strong>
           <span>VERIFYING OPERATOR SESSION</span>
@@ -59,7 +59,7 @@ export default function LoginPage({ onLogin, authError = null }: LoginPageProps)
       </div>
       <motion.main className="login-card" initial={{ opacity: 0, y: 18, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}>
         <div className="login-card__top">
-          <motion.div className="login-mark" initial={{ rotate: -8 }} animate={{ rotate: 0 }} transition={{ type: 'spring', stiffness: 180, damping: 14 }}>₿</motion.div>
+          <motion.img className="login-mark" src="/brand/poly15-mark.svg?v=20261020" alt="" draggable={false} initial={{ rotate: -8, scale: 0.92 }} animate={{ rotate: 0, scale: 1 }} transition={{ type: 'spring', stiffness: 180, damping: 14 }} />
           <div className="login-brand"><strong>POLY<span>//</span>15</strong><small>PRIVATE OPERATOR CONSOLE</small></div>
           <span className="login-secure"><i /> SECURE</span>
         </div>

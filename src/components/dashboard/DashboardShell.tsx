@@ -606,7 +606,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     <div className="dash-shell" data-accent={accent} data-density={density}>
       <header className="dash-topbar">
         <div className="tb-brand">
-          <div className="tb-mark">₿</div>
+          <img className="tb-mark" src="/brand/poly15-mark.svg?v=20261020" alt="" draggable={false} />
           <div className="tb-brand__text">
             <strong>POLY<span>//</span>15</strong>
             <small>BTC 15m control terminal</small>
