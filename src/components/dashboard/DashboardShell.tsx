@@ -346,7 +346,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
             <strong>POLY<span>//</span>15</strong>
             <small>BTC 15m control terminal</small>
           </div>
-          <span className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')}>{status.dryRun ? 'DRY RUN' : 'LIVE'}</span>
+          <span className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')} title={status.dryRun ? 'DRY RUN: simulated bankroll, no real orders' : 'LIVE orders enabled'}>{status.dryRun ? 'DRY RUN' : 'LIVE'}</span>
         </div>
 
         <div className="tb-market">
@@ -486,7 +486,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       <footer className="dash-footer">
         <span>POLY//15 · operator console</span>
         <span>Not financial advice · built for the BTC 15m book</span>
-        <span>{status.wins != null && status.losses != null ? String(status.wins) + 'W / ' + String(status.losses) + 'L' : '—'} · {fmtMoney(status.bankroll)} bankroll · PnL {fmtMoney(status.dailyPnl)}</span>
+        <span>{status.wins != null && status.losses != null ? String(status.wins) + 'W / ' + String(status.losses) + 'L' : '—'} · {status.dryRun ? 'PAPER BANKROLL ' : 'BANKROLL '}{fmtMoney(status.bankroll)} · {status.dryRun ? 'PAPER PnL ' : 'PnL '}{fmtMoney(status.dailyPnl)}</span>
       </footer>
 
       {libraryOpen && (
