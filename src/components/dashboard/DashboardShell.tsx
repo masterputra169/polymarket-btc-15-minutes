@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import type { CSSProperties, ReactNode } from 'react';
 import {
   bottomOf, clampRect, findFreeSlot, isAreaFree, packLayout, visibleLayout,
@@ -66,6 +67,8 @@ interface SavedLayout {
   hidden: string[];
   accent: AccentName;
   density: DensityName;
+  order?: string[];
+  heights?: Record<string, number>;
 }
 
 const PRESETS: { id: string; label: string; ids: string[] }[] = [
@@ -93,11 +96,15 @@ function loadSaved(): SavedLayout | null {
     const parsed = JSON.parse(raw) as Partial<SavedLayout>;
     if (!parsed || typeof parsed !== 'object' || !parsed.layout) return null;
     return {
-      version: 4,
+      version: 5,
       layout: parsed.layout as LayoutMap,
       hidden: Array.isArray(parsed.hidden) ? parsed.hidden.filter((x): x is string => typeof x === 'string') : [],
       accent: (parsed.accent === 'mint' || parsed.accent === 'ember' || parsed.accent === 'violet') ? parsed.accent : 'cyan',
       density: parsed.density === 'compact' ? 'compact' : 'comfortable',
+      order: Array.isArray(parsed.order) ? parsed.order.filter((x): x is string => typeof x === 'string') : undefined,
+      heights: parsed.heights && typeof parsed.heights === 'object'
+        ? Object.fromEntries(Object.entries(parsed.heights).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number' && Number.isFinite(entry[1])))
+        : undefined,
     };
   } catch { return null; }
 }
@@ -126,6 +133,17 @@ function defaultLayout(widgets: DashboardWidget[]): LayoutMap {
   }
   return layout;
 }
+type FrameTask<T> = (value: T) => void;
+function frameThrottle<T>(fn: FrameTask<T>): FrameTask<T> {
+  let frame = 0;
+  let pending: T;
+  return value => {
+    pending = value;
+    if (frame) return;
+    frame = requestAnimationFrame(() => { frame = 0; fn(pending); });
+  };
+}
+
 function rectStyle(rect: Rect, colWidth: number, rowHeight: number): CSSProperties {
   return {
     left: rect.x * (colWidth + GAP),
@@ -148,16 +166,26 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const [density, setDensity] = useState<DensityName>(initialSaved.current?.density ?? 'comfortable');
   const [editMode, setEditMode] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
-  const [preview, setPreview] = useState<{ id: string; rect: Rect } | null>(null);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [resizeId, setResizeId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ rect: Rect; valid: boolean } | null>(null);
+  const [compactDragId, setCompactDragId] = useState<string | null>(null);
+  const [compactTargetId, setCompactTargetId] = useState<string | null>(null);
+  const [order, setOrder] = useState<string[]>(() => initialSaved.current?.order ?? widgets.map(w => w.id));
+  const [heights, setHeights] = useState<Record<string, number>>(() => initialSaved.current?.heights ?? {});
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const gestureRef = useRef<{ el: HTMLElement; transform?: string; width?: number; height?: number; minHeight?: number } | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const widgetsKey = widgets.map(w => w.id + ':' + w.defaultW + ':' + w.defaultH).join('|');
   const rowHeight = density === 'compact' ? ROW_COMPACT : ROW_COMFORT;
   const isCompact = canvasWidth > 0 && canvasWidth < 980;
   const colWidth = canvasWidth > 0 ? Math.max(28, (canvasWidth - GAP * (DASHBOARD_COLS - 1)) / DASHBOARD_COLS) : 72;
-  const visibleWidgets = useMemo(() => widgets.filter(w => !hidden.includes(w.id)), [widgets, hidden]);
+  const orderIndex = useMemo(() => new Map(order.map((id, i) => [id, i])), [order]);
+  const visibleWidgets = useMemo(() => widgets
+    .filter(w => !hidden.includes(w.id))
+    .sort((a, b) => (orderIndex.get(a.id) ?? 999) - (orderIndex.get(b.id) ?? 999)), [widgets, hidden, orderIndex]);
   const heightLayout = visibleLayout(layout, visibleWidgets.map(w => w.id));
   const canvasHeight = isCompact ? 0 : Math.max(520, bottomOf(heightLayout) * (rowHeight + GAP) + 8);
 
@@ -193,13 +221,43 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   }, [widgetsKey]);
 
   useEffect(() => {
+    // App only builds the widget list after the first bot snapshot. Do not
+    // persist (or reorder) the empty pre-hydration canvas over a saved layout.
+    if (widgets.length === 0) return;
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 4, layout, hidden, accent, density }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 5, layout, hidden, accent, density, order, heights }));
       } catch { /* localStorage disabled */ }
     }, 250);
     return () => clearTimeout(t);
-  }, [layout, hidden, accent, density]);
+  }, [layout, hidden, accent, density, order, heights, widgets.length]);
+
+  useEffect(() => {
+    if (widgets.length === 0) return;
+    const ids = widgets.map(w => w.id);
+    const idSet = new Set(ids);
+    setOrder(prev => {
+      const kept = prev.filter(id => idSet.has(id));
+      const next = [...kept, ...ids.filter(id => !kept.includes(id))];
+      return next.length === prev.length && next.every((id, i) => id === prev[i]) ? prev : next;
+    });
+    setHeights(prev => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([id]) => idSet.has(id)));
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+  }, [widgetsKey]);
+
+  // React can re-render every 50 ms from the bot snapshot. Re-apply the direct
+  // gesture styles after each commit so that the live feed cannot reset a
+  // resize frame while the pointer is down.
+  useLayoutEffect(() => {
+    const g = gestureRef.current;
+    if (!g) return;
+    if (g.transform !== undefined) g.el.style.transform = g.transform;
+    if (g.width !== undefined) g.el.style.width = g.width + 'px';
+    if (g.height !== undefined) g.el.style.height = g.height + 'px';
+    if (g.minHeight !== undefined) g.el.style.minHeight = g.minHeight + 'px';
+  });
 
   useEffect(() => {
     if (!toast) return;
@@ -209,67 +267,268 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
 
   const showToast = (msg: string) => setToast(msg);
 
+  const beginBodyDragClass = () => document.body.classList.add('is-widget-dragging');
+  const endBodyDragClass = () => document.body.classList.remove('is-widget-dragging');
+
   const startDrag = useCallback((event: React.PointerEvent<HTMLElement>, id: string) => {
     if (!editMode || isCompact || event.button !== 0) return;
     const target = event.target as HTMLElement;
     if (target.closest('button, a, input, select, textarea')) return;
+    const el = (event.currentTarget as HTMLElement).closest('.dash-widget') as HTMLElement | null;
     const origin = layout[id];
-    if (!origin) return;
+    if (!el || !origin) return;
     event.preventDefault();
     event.stopPropagation();
+    const pointerId = event.pointerId;
+    const handle = event.currentTarget as HTMLElement;
+    try { handle.setPointerCapture?.(pointerId); } catch { /* ignore */ }
     const startX = event.clientX;
     const startY = event.clientY;
+    let active = true;
+    let moved = false;
     let last = origin;
-    setPreview({ id, rect: origin });
-    const onMove = (e: PointerEvent) => {
-      const nx = Math.round(origin.x + (e.clientX - startX) / (colWidth + GAP));
-      const ny = Math.round(origin.y + (e.clientY - startY) / (rowHeight + GAP));
+    let lastCell = origin.x + ':' + origin.y;
+    el.style.transition = 'none';
+    el.style.willChange = 'transform';
+    gestureRef.current = { el, transform: 'translate3d(0px, 0px, 0)' };
+    setDragId(id);
+    setDropTarget({ rect: origin, valid: true });
+    beginBodyDragClass();
+
+    const schedule = frameThrottle((point: { x: number; y: number }) => {
+      if (!active) return;
+      const dx = point.x - startX;
+      const dy = point.y - startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+      const transform = 'translate3d(' + dx + 'px, ' + dy + 'px, 0)';
+      gestureRef.current = { el, transform };
+      // Direct DOM update: the 20 Hz bot snapshot must not turn this into a React render loop.
+      el.style.transform = transform;
+      const nx = Math.round(origin.x + dx / (colWidth + GAP));
+      const ny = Math.round(origin.y + dy / (rowHeight + GAP));
       last = clampRect({ ...origin, x: nx, y: ny });
-      setPreview({ id, rect: last });
+      const cell = nx + ':' + ny;
+      if (cell !== lastCell) {
+        lastCell = cell;
+        setDropTarget({ rect: last, valid: isAreaFree(layout, last, id) });
+      }
+    });
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      schedule({ x: e.clientX, y: e.clientY });
     };
-    const onUp = () => {
+    const finish = (cancelled: boolean) => {
+      if (!active) return;
+      active = false;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      if (isAreaFree(layout, last, id)) setLayout(prev => ({ ...prev, [id]: last }));
-      else showToast('That space is occupied — drop on a free area');
-      setPreview(null);
+      window.removeEventListener('pointercancel', onCancel);
+      try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      const valid = isAreaFree(layout, last, id);
+      gestureRef.current = null;
+      setDragId(null);
+      setDropTarget(null);
+      endBodyDragClass();
+      if (!cancelled && moved && valid) {
+        flushSync(() => setLayout(prev => ({ ...prev, [id]: last })));
+        el.style.transform = '';
+      } else {
+        // Leaving the old transform in place until the class is removed would
+        // freeze the panel mid-air; reset it so the base transition snaps back.
+        el.style.transform = '';
+        if (!cancelled && moved) showToast('That space is occupied — drop on a free area');
+      }
+      el.style.transition = '';
+      el.style.willChange = '';
     };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
-  }, [editMode, isCompact, layout, colWidth, rowHeight]);
+    window.addEventListener('pointercancel', onCancel, { once: true });
+  }, [editMode, isCompact, layout, colWidth, rowHeight, showToast]);
+
+  const startCompactDrag = useCallback((event: React.PointerEvent<HTMLElement>, id: string) => {
+    if (!editMode || !isCompact || event.button !== 0) return;
+    const target = event.target as HTMLElement;
+    if (target.closest('button, a, input, select, textarea, .dash-widget__resize')) return;
+    const el = (event.currentTarget as HTMLElement).closest('.dash-widget') as HTMLElement | null;
+    if (!el) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const pointerId = event.pointerId;
+    const handle = event.currentTarget as HTMLElement;
+    try { handle.setPointerCapture?.(pointerId); } catch { /* ignore */ }
+    const startY = event.clientY;
+    let active = true;
+    let targetId: string | null = null;
+    let targetBefore = true;
+    el.style.transition = 'none';
+    el.style.willChange = 'transform';
+    gestureRef.current = { el, transform: 'translate3d(0px, 0px, 0)' };
+    setCompactDragId(id);
+    beginBodyDragClass();
+
+    const schedule = frameThrottle((y: number) => {
+      if (!active) return;
+      const dy = y - startY;
+      gestureRef.current = { el, transform: 'translate3d(0px, ' + dy + 'px, 0)' };
+      el.style.transform = gestureRef.current.transform;
+      // Auto-scroll while the finger is near a viewport edge.
+      if (y < 90) window.scrollBy(0, -14);
+      else if (y > window.innerHeight - 90) window.scrollBy(0, 14);
+      const nodes = Array.from(el.parentElement?.querySelectorAll<HTMLElement>('.dash-widget[data-widget-id]') ?? [])
+        .filter(node => node !== el && node.dataset.widgetId);
+      let chosen: HTMLElement | null = null;
+      for (const node of nodes) {
+        const r = node.getBoundingClientRect();
+        if (y < r.top + r.height / 2) { chosen = node; targetBefore = true; break; }
+      }
+      if (!chosen && nodes.length) { chosen = nodes[nodes.length - 1]; targetBefore = false; }
+      targetId = chosen?.dataset.widgetId ?? null;
+      setCompactTargetId(prev => prev === targetId ? prev : targetId);
+    });
+
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      schedule(e.clientY);
+    };
+    const finish = (cancelled: boolean) => {
+      if (!active) return;
+      active = false;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
+      try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      gestureRef.current = null;
+      el.style.transform = '';
+      el.style.transition = '';
+      el.style.willChange = '';
+      setCompactDragId(null);
+      setCompactTargetId(null);
+      endBodyDragClass();
+      if (cancelled || !targetId) return;
+      const chosen = targetId;
+      const before = targetBefore;
+      setOrder(prev => {
+        const next = prev.filter(x => x !== id);
+        const index = next.indexOf(chosen);
+        if (index < 0) return prev;
+        next.splice(index + (before ? 0 : 1), 0, id);
+        return next;
+      });
+      showToast('Widget moved');
+    };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { once: true });
+    window.addEventListener('pointercancel', onCancel, { once: true });
+  }, [editMode, isCompact, showToast]);
 
   const startResize = useCallback((event: React.PointerEvent<HTMLElement>, id: string, widget: DashboardWidget) => {
-    if (!editMode || isCompact || event.button !== 0) return;
-    const origin = layout[id];
-    if (!origin) return;
+    if (!editMode || event.button !== 0) return;
+    const el = (event.currentTarget as HTMLElement).closest('.dash-widget') as HTMLElement | null;
+    if (!el) return;
     event.preventDefault();
     event.stopPropagation();
+    const pointerId = event.pointerId;
+    const handle = event.currentTarget as HTMLElement;
+    try { handle.setPointerCapture?.(pointerId); } catch { /* ignore */ }
     const startX = event.clientX;
     const startY = event.clientY;
-    let last = origin;
-    setPreview({ id, rect: origin });
-    const onMove = (e: PointerEvent) => {
-      const dw = Math.round((e.clientX - startX) / (colWidth + GAP));
-      const dh = Math.round((e.clientY - startY) / (rowHeight + GAP));
-      const minW = widget.minW ?? 3;
-      const minH = widget.minH ?? 2;
-      last = clampRect({
-        ...origin,
-        w: Math.max(minW, Math.min(DASHBOARD_COLS - origin.x, origin.w + dw)),
-        h: Math.max(minH, origin.h + dh),
+    const startRect = el.getBoundingClientRect();
+    let active = true;
+    el.style.transition = 'none';
+    setResizeId(id);
+
+    if (isCompact) {
+      const startHeight = Math.max(220, Math.round(startRect.height));
+      let nextHeight = startHeight;
+      gestureRef.current = { el, minHeight: startHeight };
+      setHeights(prev => ({ ...prev, [id]: startHeight }));
+      const schedule = frameThrottle((y: number) => {
+        if (!active) return;
+        nextHeight = Math.max(220, Math.round(startHeight + (y - startY)));
+        gestureRef.current = { el, minHeight: nextHeight };
+        el.style.minHeight = nextHeight + 'px';
       });
-      setPreview({ id, rect: last });
+      const onMove = (e: PointerEvent) => { if (e.pointerId === pointerId) schedule(e.clientY); };
+      const finish = () => {
+        if (!active) return;
+        active = false;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onCancel);
+        try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+        gestureRef.current = null;
+        setHeights(prev => ({ ...prev, [id]: nextHeight }));
+        setResizeId(null);
+        el.style.minHeight = nextHeight + 'px';
+        el.style.transition = '';
+      };
+      const onUp = () => finish();
+      const onCancel = () => finish();
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp, { once: true });
+      window.addEventListener('pointercancel', onCancel, { once: true });
+      return;
+    }
+
+    const origin = layout[id];
+    if (!origin) { setResizeId(null); return; }
+    const minW = widget.minW ?? 3;
+    const minH = widget.minH ?? 2;
+    const minWpx = minW * colWidth + (minW - 1) * GAP;
+    const minHpx = minH * rowHeight + (minH - 1) * GAP;
+    let last = origin;
+    gestureRef.current = { el, width: startRect.width, height: startRect.height };
+    const schedule = frameThrottle((point: { x: number; y: number }) => {
+      if (!active) return;
+      const width = Math.max(minWpx, startRect.width + (point.x - startX));
+      const height = Math.max(minHpx, startRect.height + (point.y - startY));
+      gestureRef.current = { el, width, height };
+      el.style.width = width + 'px';
+      el.style.height = height + 'px';
+      const w = Math.max(minW, Math.min(DASHBOARD_COLS - origin.x, Math.round((width + GAP) / (colWidth + GAP))));
+      const h = Math.max(minH, Math.round((height + GAP) / (rowHeight + GAP)));
+      last = clampRect({ ...origin, w, h });
+    });
+    const onMove = (e: PointerEvent) => {
+      if (e.pointerId !== pointerId) return;
+      schedule({ x: e.clientX, y: e.clientY });
     };
-    const onUp = () => {
+    const finish = (cancelled: boolean) => {
+      if (!active) return;
+      active = false;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      if (isAreaFree(layout, last, id)) setLayout(prev => ({ ...prev, [id]: last }));
-      else showToast('Resize blocked — the new size overlaps another widget');
-      setPreview(null);
+      window.removeEventListener('pointercancel', onCancel);
+      try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
+      gestureRef.current = null;
+      setResizeId(null);
+      const valid = !cancelled && isAreaFree(layout, last, id);
+      if (valid) {
+        flushSync(() => setLayout(prev => ({ ...prev, [id]: last })));
+      } else if (!cancelled && (last.w !== origin.w || last.h !== origin.h)) {
+        showToast('Resize blocked — the new size overlaps another widget');
+      }
+      // React only writes a style property when its previous prop changed. We
+      // mutated width/height directly, so clearing them here would leave the
+      // panel at its shrink-to-fit size. Pin them to the committed grid size;
+      // a later viewport/density change still overrides them through the style prop.
+      const finalRect = valid ? last : origin;
+      el.style.width = (finalRect.w * colWidth + (finalRect.w - 1) * GAP) + 'px';
+      el.style.height = (finalRect.h * rowHeight + (finalRect.h - 1) * GAP) + 'px';
+      el.style.transition = '';
     };
+    const onUp = () => finish(false);
+    const onCancel = () => finish(true);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
-  }, [editMode, isCompact, layout, colWidth, rowHeight]);
+    window.addEventListener('pointercancel', onCancel, { once: true });
+  }, [editMode, isCompact, layout, colWidth, rowHeight, showToast]);
 
   const applyPreset = (preset: { id: string; label: string; ids: string[] }) => {
     const wanted = widgets.filter(w => preset.ids.includes(w.id));
@@ -291,6 +550,8 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const resetLayout = () => {
     setHidden([]);
     setLayout(defaultLayout(widgets));
+    setOrder(widgets.map(w => w.id));
+    setHeights({});
     showToast('Layout reset');
   };
 
@@ -308,7 +569,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   };
 
   const exportLayout = () => {
-    const payload = { version: 4, exportedAt: new Date().toISOString(), accent, density, layout, hidden };
+    const payload = { version: 5, exportedAt: new Date().toISOString(), accent, density, layout, hidden, order, heights };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -329,6 +590,8 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       setHidden(Array.isArray(parsed.hidden) ? parsed.hidden.filter(id => widgets.some(w => w.id === id)) : []);
       if (parsed.accent === 'mint' || parsed.accent === 'ember' || parsed.accent === 'violet' || parsed.accent === 'cyan') setAccent(parsed.accent);
       if (parsed.density === 'compact' || parsed.density === 'comfortable') setDensity(parsed.density);
+      if (Array.isArray(parsed.order)) setOrder(parsed.order.filter((id): id is string => typeof id === 'string' && widgets.some(w => w.id === id)));
+      if (parsed.heights && typeof parsed.heights === 'object') setHeights(Object.fromEntries(Object.entries(parsed.heights).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number' && Number.isFinite(entry[1]))));
       showToast('Layout imported');
     } catch {
       showToast('Import failed — invalid layout file');
@@ -412,7 +675,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
 
       {editMode && (
         <div className="edit-banner">
-          <span>⠿ Drag any widget header to move it. Pull the bottom-right corner to resize. Use Widgets to show or hide panels.</span>
+          <span>⠿ Drag any widget header to move it — on narrow screens, drag to reorder. Pull the bottom-right corner to resize. Use Widgets to show or hide panels.</span>
           <button onClick={() => setEditMode(false)}>Done editing</button>
         </div>
       )}
@@ -428,21 +691,38 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
         <div className="canvas-scroll">
           <div ref={canvasRef} className={cx('dash-canvas', isCompact ? 'is-compact' : false)} style={{ height: isCompact ? undefined : canvasHeight }}>
 
+            {!isCompact && dropTarget && (
+              <div
+                className={cx('dash-drop-ghost', dropTarget.valid ? 'is-valid' : 'is-invalid')}
+                style={rectStyle(dropTarget.rect, colWidth, rowHeight)}
+                aria-hidden
+              />
+            )}
+
             {visibleWidgets.map(widget => {
-              const rect = (preview?.id === widget.id ? preview.rect : layout[widget.id]) ?? { x: 0, y: 0, w: widget.defaultW, h: widget.defaultH };
-              const style = isCompact ? undefined : rectStyle(rect, colWidth, rowHeight);
-              const isPreview = preview?.id === widget.id;
+              const rect = layout[widget.id] ?? { x: 0, y: 0, w: widget.defaultW, h: widget.defaultH };
+              const style = isCompact
+                ? (heights[widget.id] ? { minHeight: heights[widget.id] } : undefined)
+                : rectStyle(rect, colWidth, rowHeight);
+              const className = cx(
+                'dash-widget',
+                'dash-widget--' + (widget.accent ?? 'cyan'),
+                dragId === widget.id ? 'is-dragging' : false,
+                resizeId === widget.id ? 'is-resizing' : false,
+                compactDragId === widget.id ? 'is-compact-dragging' : false,
+                compactTargetId === widget.id ? 'is-compact-target' : false,
+              );
               return (
                 <section
                   key={widget.id}
-                  className={cx('dash-widget', 'dash-widget--' + (widget.accent ?? 'cyan'), isPreview ? 'is-preview' : false)}
+                  className={className}
                   style={style}
                   data-widget-id={widget.id}
                 >
                   <header
                     className="dash-widget__head"
-                    onPointerDown={e => startDrag(e, widget.id)}
-                    title={editMode ? 'Drag to move' : widget.description}
+                    onPointerDown={e => (isCompact ? startCompactDrag(e, widget.id) : startDrag(e, widget.id))}
+                    title={editMode ? (isCompact ? 'Drag to reorder' : 'Drag to move') : widget.description}
                   >
                     <span className="dash-widget__grip">⠿</span>
                     <span className="dash-widget__icon">{widget.icon}</span>
@@ -456,11 +736,11 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
                     )}
                   </header>
                   <div className="dash-widget__body">{widget.content}</div>
-                  {editMode && !isCompact && (
+                  {editMode && (
                     <div
                       className="dash-widget__resize"
                       onPointerDown={e => startResize(e, widget.id, widget)}
-                      title="Drag to resize"
+                      title={isCompact ? 'Drag to change height' : 'Drag to resize'}
                     >
                       <span />
                     </div>

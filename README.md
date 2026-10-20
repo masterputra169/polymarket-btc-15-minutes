@@ -97,6 +97,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
+- **Drag/resize rework**: direct `translate3d` + requestAnimationFrame during drag (no React render per pointer move), snap ghost, compact (mobile/tablet) drag-to-reorder and height resize, layout v5 persistence. Verified desktop, tablet, mobile and real touch.
 - Bot restart loop fixed: the liveness heartbeat now advances on every completed poll, so a long signal-confirmation hold is no longer mistaken for a blind bot. Verified `liveness: fresh` after deploy.
 
 ### Reports from this pass
