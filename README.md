@@ -49,7 +49,8 @@
 
 > Current operational state. The September project-status table below is kept as the Railway-era baseline; this section supersedes it.
 >
-> **Consolidated update:** [UPDATE-2026-10-21.md](UPDATE-2026-10-21.md) — status, security, live/dry mode, ML metrics, verification and operations.
+> **Living update log:** [UPDATES.md](UPDATES.md) — date-stamped changes, current status, verification and operations.  
+> **Archived snapshot:** [docs/updates/2026-10-21.md](docs/updates/2026-10-21.md).
 
 ### Where it runs now
 
