@@ -13,7 +13,7 @@
 ## Full suite
 
 - `clobClient.v2` cold-import timeouts under full-suite CPU load raised from 30s to 120s; isolated 15/15 passes, and the final full suite is green.
-- Full suite result: **90 files / 938 tests passed** (98 s).
+- Full suite result: **91 files / 941 tests passed** (98 s).
 
 ## Frontend delivery
 

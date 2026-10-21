@@ -93,7 +93,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 ### Verification
 
 - `npm run typecheck` PASS.
-- Full suite: **90 files / 938 tests PASS**.
+- Full suite: **91 files / 941 tests PASS**.
 - `npm run build` PASS; new hashed assets deployed to nginx.
 - Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
 - Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.

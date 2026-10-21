@@ -44,6 +44,7 @@ Mode paths are separate:
 - `setTradingMode dry DRY` while already dry → `{ok:false,error:"Already in dry-run mode"}`; no restart.
 - Live-mode config paths verified: `state.live.json`, `state_audit.live.jsonl`, `trade_journal.live.jsonl`, `verified_journal.live.jsonl`.
 - Mode guard tests: unknown mode, wrong phrase, already-active mode — all pass.
+- Full suite after the feature: **91 files / 941 tests PASS**.
 - Bot remains **DRY RUN**; no live order was placed.
 
 ## Remaining live blockers
