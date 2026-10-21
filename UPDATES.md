@@ -43,6 +43,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-21 — Auto-deploy push detection verified
+
+**Status:** verified
+**Area:** ops / deployment
+**What changed:** pushed docs commit `bffb86a`; the VPS timer detected it at 22:08:10 WIB after CI success and classified it as **docs-only**, so the bot was not restarted. State kept `deployed_sha=c24fa17` and advanced `last_seen_sha=bffb86a`.
+**Files / commits:** UPDATES.md; docs/AUTO_DEPLOY.md; `bffb86a`.
+**Verification:** `.auto-deploy/auto-deploy.log` shows `docs-only; no server deploy`; bot remained active; source stayed at `c24fa17`.
+**Deployment:** timer active every 5 minutes.
+**Risks / follow-up:** code commits still wait for no open position; live mode and paused state block auto deploy by design.
+
+---
 ### 2026-10-21 — Auto-deploy active and verified
 
 **Status:** deployed / verified

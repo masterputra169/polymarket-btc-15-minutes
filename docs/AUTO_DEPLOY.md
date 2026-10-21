@@ -90,6 +90,11 @@ On a switch failure the script automatically:
 
 If the VPS itself is lost, use the daily secrets/data backups. The source is always recoverable from GitHub.
 
+## Push-detection verification
+
+- **2026-10-21 22:03 WIB** — code commit `c24fa17` auto-deployed after the open paper position settled; health checks passed.
+- **2026-10-21 22:08 WIB** — docs commit `bffb86a` detected, CI-green, classified docs-only; bot stayed up and source stayed on `c24fa17`.
+
 ## Troubleshooting
 
 | Symptom | Check |
