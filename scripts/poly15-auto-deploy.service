@@ -1,0 +1,20 @@
+[Unit]
+Description=POLY//15 auto-deploy from GitHub main (CI-gated)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/polybtc15
+Environment=HOME=/home/ubuntu
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/sbin/poly15-auto-deploy
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=1200
+
+[Install]
+WantedBy=multi-user.target

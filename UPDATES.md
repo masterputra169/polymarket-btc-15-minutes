@@ -42,6 +42,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-21 — GitHub auto-deploy (pull timer)
+
+**Status:** implemented; bootstrap pending
+**Area:** ops / deployment / security
+**What changed:** VPS systemd timer checks origin/main every 5 minutes; requires all GitHub Actions checks green, builds in a temp worktree, refuses live/paused/open-position deploys, switches source/node_modules/dist with rollback, and sends Telegram alerts.
+**Files / commits:** scripts/auto-deploy.sh; scripts/poly15-auto-deploy.service; scripts/poly15-auto-deploy.timer; scripts/install-auto-deploy.sh; docs/AUTO_DEPLOY.md.
+**Verification:** bash -n PASS; CI will run on the commit; end-to-end deploy test pending.
+**Deployment:** not yet installed/timer not yet active.
+**Risks / follow-up:** live mode is deliberately manual; dirty worktree blocks deploy; installed script must be refreshed manually when the script itself changes.
+
+---
 ### 2026-10-21 — Update-log policy enforced
 
 **Status:** implemented
