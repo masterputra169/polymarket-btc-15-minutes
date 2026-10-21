@@ -7,6 +7,7 @@
  */
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 const PORT = Number(process.env.AUTH_PORT || 3102);
 const BIND = process.env.AUTH_BIND || '127.0.0.1';
@@ -15,13 +16,14 @@ const TTL = Math.max(300, Math.min(7 * 24 * 3600, Number(process.env.AUTH_TTL_SE
 const MAX_ATTEMPTS = Math.max(1, Math.min(50, Number(process.env.AUTH_MAX_ATTEMPTS || 8)));
 const WINDOW_MS = Math.max(10_000, Number(process.env.AUTH_WINDOW_MS || 300_000));
 const SECURE_COOKIE = process.env.AUTH_INSECURE_COOKIE !== 'true';
-const PASSWORD_HASH = (process.env.DASHBOARD_PASSWORD_HASH || '').trim();
+const ENV_PASSWORD_HASH = (process.env.DASHBOARD_PASSWORD_HASH || '').trim();
+const PASSWORD_HASH_FILE = process.env.AUTH_PASSWORD_HASH_FILE || '/opt/polybtc15/dashboard-password.hash';
 const SESSION_SECRET = (process.env.AUTH_SESSION_SECRET || '').trim();
 const sessions = new Map();
 const attempts = new Map();
 
-if (!PASSWORD_HASH || !SESSION_SECRET) {
-  console.error('dashboard-auth: DASHBOARD_PASSWORD_HASH and AUTH_SESSION_SECRET are required');
+if (!SESSION_SECRET) {
+  console.error('dashboard-auth: AUTH_SESSION_SECRET is required');
   process.exit(2);
 }
 if (SESSION_SECRET.length < 32) {
@@ -39,13 +41,27 @@ function parseHash(value) {
   if (parts.length !== 3 || parts[0] !== 'scrypt') return null;
   return { salt: Buffer.from(parts[1], 'hex'), hash: Buffer.from(parts[2], 'hex') };
 }
-const HASH = parseHash(PASSWORD_HASH);
-if (!HASH) { console.error('dashboard-auth: invalid DASHBOARD_PASSWORD_HASH'); process.exit(2); }
+function loadPasswordHash() {
+  // The daily rotation job writes this file; reading it per login means a
+  // rotation does not need an auth-service restart or invalidate sessions.
+  let value = '';
+  try { value = readFileSync(PASSWORD_HASH_FILE, 'utf8').trim(); } catch { /* fall back to env */ }
+  if (!value) value = ENV_PASSWORD_HASH;
+  return parseHash(value);
+}
+
+const INITIAL_HASH = loadPasswordHash();
+if (!INITIAL_HASH) {
+  console.error('dashboard-auth: no valid password hash file or DASHBOARD_PASSWORD_HASH');
+  process.exit(2);
+}
 
 function verifyPassword(password) {
   if (typeof password !== 'string' || password.length === 0 || password.length > 256) return false;
-  const candidate = crypto.scryptSync(password, HASH.salt, HASH.hash.length);
-  return timingEqual(candidate, HASH.hash);
+  const hash = loadPasswordHash();
+  if (!hash) return false;
+  const candidate = crypto.scryptSync(password, hash.salt, hash.hash.length);
+  return timingEqual(candidate, hash.hash);
 }
 function sign(payload) {
   const body = Buffer.from(JSON.stringify(payload)).toString('base64url');

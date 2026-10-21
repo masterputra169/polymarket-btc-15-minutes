@@ -93,13 +93,17 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 ### Verification
 
 - `npm run typecheck` PASS.
-- Full suite: **88 files / 929 tests PASS**.
+- Full suite: **90 files / 938 tests PASS**.
 - `npm run build` PASS; new hashed assets deployed to nginx.
 - Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
 - Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
+- **Clean UI pass**: one compact health indicator instead of five source pills; secondary layout actions moved into a `⋯` menu; duplicate widget descriptions/categories/titles removed; long reason strings removed; softer canvas background. Verified desktop/tablet/mobile.
+- **Security hardening**: dashboard password rotated; **daily 07:00 WIB rotation via Telegram** with hot-reloaded hash (no auth-service restart), root-only fallback, previous password message deleted when possible; daily root-only secrets backup + restore drill.
+- **Test hardening**: 5 drift-gate regression tests + auth gateway HTTP tests; CLOB cold-import timeout fixed under full-suite load.
+- **Delivery**: Cloudflare Insights CSP fixed; Vite bundles split into app/react/motion/vendor (no >500 KB warning).
 - **Drift detector fix**: it now compares the recent ML window against an older **live same-model** baseline, not offline test accuracy. The 2026-10-21 alert (64.52% vs 76.84%) was a false positive from that mismatch + a 31-trade file-mtime horizon; live 50/100/200 accuracy was 64.0/64.0/66.0%. Confidence is advisory, not a trigger.
 - **Price-source clarity**: the topbar now leads with the Chainlink/PolyWS ORACLE used against PTB; Binance is a secondary metric with a BASIS label. Direction color is calculated from oracle vs PTB, not Binance vs PTB.
 - **Scroll veil**: sticky header is nearly opaque and a blurred fixed veil fades in after scrolling, so widget content no longer smears through the top bar.

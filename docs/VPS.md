@@ -74,6 +74,8 @@ sudo systemctl restart polybtc15-bot
 `/home/ubuntu/backups/polybtc15-data-YYYY-MM-DD.tar.gz` (retensi 14 hari, mode 600).
 Tape di R2 sudah lengkap dan lokal (599+ objek); file lokal di VPS dihapus setelah upload per jam.
 
+**Daily password rotation:** `polybot-dashboard-password-rotate.timer` runs at 07:00 WIB; `rotate-dashboard-password.mjs` writes `/opt/polybtc15/dashboard-password.hash` (auth service hot-reads it; no restart), keeps `auth.env` in sync, sends the password to Telegram, deletes the previous password message when possible, and writes a root-only fallback `/root/.poly15-dashboard-password-latest`. Recovery: read the fallback via SSH; Telegram test: `node /opt/polybtc15/scripts/rotate-dashboard-password.mjs --test-notify`.
+
 **Secure secrets backup (current):** `/opt/polybtc15/scripts/backup-secrets.sh` + `polybot-secrets-backup.timer` (daily 06:35) writes `/home/ubuntu/backups/secure/polybtc15-secrets-YYYY-MM-DD.tar.gz` (0600 root, 30-day retention). It contains `auth.env`, Cloudflare tunnel credentials/cert/config, the nginx site config, and auth/tunnel systemd units. Off-site local copy: `C:\Users\Asus\.poly15\backup\`. Restore drill: extract to a temp dir, compare `auth.env` SHA-256, then restore only the files you need.
 
 ## Yang belum ada (opsional)

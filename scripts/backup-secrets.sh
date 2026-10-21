@@ -12,6 +12,7 @@ install -d -m 700 -o root -g root "$OUT"
 
 tar -czf "$TMP" -C / --dereference \
   opt/polybtc15/auth.env \
+  opt/polybtc15/dashboard-password.hash \
   home/ubuntu/.cloudflared \
   etc/cloudflared/config.yml \
   etc/nginx/sites-available/polybtc15 \
