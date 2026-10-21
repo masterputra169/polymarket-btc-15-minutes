@@ -1,5 +1,9 @@
 # Auto-deploy (GitHub -> VPS)
 
+## Status
+
+**Active since 2026-10-21 22:03 WIB.** Last deployed commit: `c24fa17`. Timer runs every 5 minutes. The first end-to-end run was blocked twice by an open paper position, then deployed automatically after settlement.
+
 ## What it does
 
 A systemd timer on the VPS checks <code>origin/main</code> every **5 minutes**. When a new commit appears, it:

@@ -13,12 +13,13 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Area | State |
 |---|---|
 | Bot | active, **DRY_RUN=true**, no real orders |
-| Paper bankroll | $59.27 · 777 trades · 502W / 275L |
+| Paper bankroll | $59.74 · 778 trades · 503W / 275L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live not activated** |
 | Drift | no drift at last check |
 | Tests | 91 files / 941 tests PASS |
+| Auto-deploy | active; VPS deployed `c24fa17`; timer every 5 min |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -42,6 +43,22 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-21 — Auto-deploy active and verified
+
+**Status:** deployed / verified
+**Area:** ops / deployment / security
+**What changed:**
+- VPS was bootstrapped from the stale 370-commit-behind worktree to a clean `c24fa17` checkout; source backup was taken first.
+- Installed the CI-gated pull timer `poly15-auto-deploy.timer` (every 5 minutes).
+- The timer refused to deploy while a paper position was open (21:52 and 21:57) and deployed automatically after settlement.
+- Successful auto-deploy at 22:02:43–22:03:05 WIB: temp-worktree build, guarded switch, health checks, state `success`.
+- Bot restarted in DRY RUN; auth, nginx and password timer remain active.
+**Files / commits:** scripts/auto-deploy.sh; systemd units; scripts/install-auto-deploy.sh; docs/AUTO_DEPLOY.md; feature commit `c24fa17`.
+**Verification:** full auto path observed in the journal and `.auto-deploy/auto-deploy.log`; git worktree clean at `c24fa17`; auth/bot health OK; current password login 200; Telegram success alert sent.
+**Deployment:** active on the VPS.
+**Risks / follow-up:** auto-deploy is deliberately disabled in live mode and while paused; deploy script changes require re-running the installer; dirty tracked worktree blocks deploy.
+
+---
 ### 2026-10-21 — GitHub auto-deploy (pull timer)
 
 **Status:** implemented; bootstrap pending
