@@ -68,11 +68,11 @@
 .login-mark {
   width: 42px; height: 42px; flex: 0 0 42px; display: block; object-fit: contain;
   border-radius: 12px; background: #07121f;
-  box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.12), 0 0 28px rgba(34, 211, 238, 0.1), 0 8px 22px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 0 0 1px rgba(242, 238, 229, 0.16), 0 8px 22px rgba(0, 0, 0, 0.32);
 }
 .login-brand { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .login-brand strong { font-family: 'Space Grotesk', 'Inter', sans-serif; font-size: 15px; letter-spacing: 0.12em; color: #edf6ff; }
-.login-brand strong span { color: #22d3ee; }
+.login-brand strong span { color: #ff5a1f; }
 .login-brand small { color: #607089; font-size: 7px; font-weight: 800; letter-spacing: 0.16em; }
 .login-secure { display: inline-flex; align-items: center; gap: 5px; color: #6ee7b7; font-size: 7px; font-weight: 800; letter-spacing: 0.12em; }
 .login-secure i, .dot-green { width: 5px; height: 5px; border-radius: 50%; background: #34d399; box-shadow: 0 0 8px rgba(52, 211, 153, 0.8); display: inline-block; }

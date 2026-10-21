@@ -1,3 +1,5 @@
+> **Superseded 2026-10-21** by the flat monogram in [brand-mark-v2.md](../2026-10-21/brand-mark-v2.md).
+
 # POLY//15 brand identity — 2026-10-20
 
 ## Concept

@@ -1,6 +1,6 @@
 # Polymarket BTC 15-Minute Trading Bot
 
-<p align="center"><img src="analysis/2026-10-20/brand/poly15-logo.png" width="128" alt="POLY//15 mark"></p>
+<p align="center"><img src="analysis/2026-10-21/brand/poly15-logo.png" width="128" alt="POLY//15 mark"></p>
 
 [![CI](https://github.com/masterputra169/polymarket-btc-15-minutes/actions/workflows/ci.yml/badge.svg)](https://github.com/masterputra169/polymarket-btc-15-minutes/actions/workflows/ci.yml)
 
@@ -60,7 +60,7 @@
 
 | Area | Change |
 |------|--------|
-| Brand | New **POLY//15** mark: a 15-minute clock ring, amber BTC candlestick and cyan P arc. Favicon, PWA icons, OG image, login mark and topbar mark all use it. |
+| Brand | New **POLY//15** flat monogram: warm-paper tile, ink P, one signal-orange square. No gradients/glow. Favicon, PWA icons, OG image, login mark and topbar mark all use it. |
 | Dashboard | **v4 widget workspace**: 16 draggable/resizable panels, edit mode, collision-safe drops, widget library, presets (Terminal/Focus/Analytics/Clean), 4 accent themes, density, persisted layout, JSON export/import, mobile single-column stack. |
 | JEV | **TypeSafe System One shadow layer** through OpenRouter (`typesafe/jev-1.14`), independent-v2 state (no bot rules/ML/edge anchor), fixed-policy sample calls, entry-time decision calls, separate logs and reports. |
 | CLOB | **CLOB V2** code is merged and deployed; the live path is still gated by pUSD funding, 5-share minimum and a final live smoke order. |
