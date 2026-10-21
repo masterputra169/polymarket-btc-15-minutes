@@ -20,7 +20,9 @@
  *
  * Config (bot/.env):
  *   DRIFT_WINDOW=50              Rolling window for accuracy (trades)
- *   DRIFT_MIN_TRADES=30          Min trades before evaluation
+ *   DRIFT_BASELINE_WINDOW=200    Older same-model trades used as the live baseline
+ *   DRIFT_MIN_REFERENCE=50       Minimum live baseline trades before a check
+ *   DRIFT_MIN_TRADES=30          Min window trades before evaluation
  *   DRIFT_WR_DROP_PP=15          Hard threshold: pp drop from baseline
  *   DRIFT_CUSUM_THRESHOLD=5      CUSUM threshold (higher = less sensitive)
  *   DRIFT_CONF_DROP=0.08         Confidence drop to flag (e.g. 0.08 = 8pp)
@@ -55,6 +57,8 @@ function envNum(key, def, min = -Infinity, max = Infinity) {
 
 const CFG = {
   window:          envNum('DRIFT_WINDOW', 50, 10, 500),
+  baselineWindow:  envNum('DRIFT_BASELINE_WINDOW', 200, 50, 1000),
+  minReference:    envNum('DRIFT_MIN_REFERENCE', 50, 20, 500),
   minTrades:       envNum('DRIFT_MIN_TRADES', 30, 10, 200),
   wrDropPp:        envNum('DRIFT_WR_DROP_PP', 15, 5, 50),          // hard threshold pp
   cusumThreshold:  envNum('DRIFT_CUSUM_THRESHOLD', 5, 1, 30),       // CUSUM sensitivity
@@ -76,6 +80,15 @@ let cusumState = {
 };
 
 // ── Load model baseline accuracy ──
+function loadCurrentModelId(): string | null {
+  try {
+    const norm = JSON.parse(readFileSync(resolve(ML_DIR, 'norm_browser.json'), 'utf-8'));
+    return typeof norm?.model_id === 'string' && norm.model_id ? norm.model_id : null;
+  } catch {
+    return null;
+  }
+}
+
 function loadBaseline() {
   // Try reading from deployed model's embedded metrics
   try {
@@ -104,40 +117,46 @@ function modelDeployedAtMs(): number {
 }
 
 // ── Load recent trades with ML accuracy data from journal ──
-function loadRecentMlTrades(windowSize) {
-  const trades = [];
-  const minTs = Math.max(Date.now() - CFG.maxTradeAgeDays * 86_400_000, modelDeployedAtMs());
+function loadRecentMlTrades(limit: number) {
+  const trades: { ts: number; mlWasRight: boolean; mlConf: number | null; outcome?: string }[] = [];
+  const minTs = Date.now() - CFG.maxTradeAgeDays * 86_400_000;
+  const currentModelId = loadCurrentModelId();
+  const deployedAt = modelDeployedAtMs();
   let staleSkipped = 0;
+  let otherModelSkipped = 0;
 
   try {
     if (!existsSync(BOT_CONFIG.journalFile)) return trades;
     const content = readFileSync(BOT_CONFIG.journalFile, 'utf-8').trim();
     if (!content) return trades;
-
     const lines = content.split('\n').filter(Boolean);
 
-    // Scan from end (most recent) until we have windowSize ML trades
-    for (let i = lines.length - 1; i >= 0 && trades.length < windowSize; i--) {
+    // Scan from the newest trade backwards. A model swap must not make the old
+    // model's trades look like drift of the new one, so match the deployed model
+    // id first. The file mtime is only a fallback when a model has no model_id.
+    for (let i = lines.length - 1; i >= 0 && trades.length < limit; i--) {
       try {
         const entry = JSON.parse(lines[i]);
         const mlWasRight = entry.analysis?.mlWasRight;
-        const mlConf     = entry.entry?.mlConfidence ?? null;
-
-        // Dry-run rows count: the question is whether the model's prediction
-        // matched the market, and that is the same whether money moved or not.
-        // Skipping them left a dry-run bot with no drift guard at all.
+        const mlConf = entry.entry?.mlConfidence ?? null;
         if (mlWasRight == null) continue;
 
-        // Skip trades older than the freshness window or the deployed model —
-        // the journal is append-only and outlives many model generations.
-        const ts = entry._ts ?? entry.entry?.enteredAt ?? 0;
+        const ts = Number(entry._ts ?? entry.entry?.enteredAt ?? 0);
         if (ts && ts < minTs) { staleSkipped++; continue; }
+
+        const modelId = entry.entry?.modelId ?? null;
+        if (currentModelId) {
+          if (modelId !== currentModelId) { otherModelSkipped++; continue; }
+        } else if (deployedAt && ts && ts < deployedAt) {
+          staleSkipped++;
+          continue;
+        }
 
         trades.unshift({
           ts,
-          mlWasRight:  mlWasRight === true,
-          mlConf:      mlConf,
-          outcome:     entry.analysis?.outcome,
+          mlWasRight: mlWasRight === true,
+          mlConf: Number.isFinite(Number(mlConf)) ? Number(mlConf) : null,
+          outcome: entry.analysis?.outcome,
         });
       } catch { /* skip malformed */ }
     }
@@ -145,10 +164,13 @@ function loadRecentMlTrades(windowSize) {
     log.warn(`Failed to load journal for drift check: ${err.message}`);
   }
 
+  if (otherModelSkipped > 0) {
+    log.debug(`Drift check ignored ${otherModelSkipped} trades from other model generations`);
+  }
   if (staleSkipped > 0 && trades.length === 0) {
     log.info(
-      `Drift check skipped: journal has no trades newer than ${CFG.maxTradeAgeDays}d ` +
-      `(${staleSkipped} older entries ignored). Waiting for trades on the current model.`
+      `Drift check skipped: journal has no current-model trades newer than ${CFG.maxTradeAgeDays}d ` +
+      `(${staleSkipped} older entries ignored). Waiting for live evidence.`
     );
   }
 
@@ -240,25 +262,45 @@ function updateCusum(mlWasRight, baseline) {
 // ── Main check function (called from perfMonitor.monitorCycle) ──
 export function checkDrift() {
   const state = loadDriftState();
-  const baseline = loadBaseline();
-  const trades   = loadRecentMlTrades(CFG.window);
+
+  // The detector must compare like with like. The model file contains offline
+  // test accuracy (76.8% for the deployed v2 model); live accuracy after the
+  // entry filters is structurally lower (~65%). Comparing the two produced a
+  // permanent false alarm at the 30-trade mark. Use a live reference window of
+  // older trades from the SAME deployed model instead.
+  const history = loadRecentMlTrades(CFG.window + CFG.baselineWindow);
+  const trades = history.slice(-CFG.window);
+  const reference = history.slice(0, Math.max(0, history.length - CFG.window));
 
   if (trades.length < CFG.minTrades) {
     log.debug(`Drift check skipped: only ${trades.length}/${CFG.minTrades} ML trades available`);
-    return { status: 'insufficient_data', trades: trades.length };
+    return { status: 'insufficient_data', trades: trades.length, reference: reference.length };
+  }
+  if (reference.length < CFG.minReference) {
+    log.info(
+      `Drift check skipped: ${reference.length}/${CFG.minReference} live reference trades ` +
+      `(need a same-model baseline before comparing a ${trades.length}-trade window)`
+    );
+    return { status: 'insufficient_baseline', trades: trades.length, reference: reference.length };
   }
 
-  // ── Compute metrics over rolling window ──
-  const correct = trades.filter(t => t.mlWasRight).length;
-  const accuracy = correct / trades.length;
+  const pct = (x: number) => Math.round(x * 10000) / 100;
+  const accuracyOf = (rows: typeof trades) => rows.length ? rows.filter(t => t.mlWasRight).length / rows.length : null;
+  const confOf = (rows: typeof trades) => {
+    const confs = rows.map(t => t.mlConf).filter((c): c is number => c != null);
+    return confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
+  };
 
-  const confs = trades.map(t => t.mlConf).filter(c => c != null);
-  const avgConf = confs.length > 0 ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
+  // ── Live baseline: the recent window is scored against the older same-model trades ──
+  const baseline = accuracyOf(reference) as number;
+  const baselineConf = confOf(reference);
+  const accuracy = accuracyOf(trades) as number;
+  const avgConf = confOf(trades);
 
   // Recent 20 trades for faster signal
   const recent = trades.slice(-20);
-  const recentCorrect = recent.filter(t => t.mlWasRight).length;
-  const recentAccuracy = recentCorrect / recent.length;
+  const recentAccuracy = accuracyOf(recent) as number;
+  const recentConf = confOf(recent);
 
   // ── Update CUSUM with newest trade ──
   const latestTrade = trades[trades.length - 1];
@@ -267,26 +309,31 @@ export function checkDrift() {
   }
 
   // ── Gate 1: Hard threshold ──
-  const drop     = baseline - accuracy;         // pp drop from baseline (full window)
-  const dropRecent = baseline - recentAccuracy; // pp drop from baseline (recent 20)
+  const drop = baseline - accuracy;
+  const dropRecent = baseline - recentAccuracy;
   const hardFire = drop >= (CFG.wrDropPp / 100) || dropRecent >= ((CFG.wrDropPp + 5) / 100);
 
   // ── Gate 2: CUSUM threshold ──
   const cusumFire = cusumState.sum >= CFG.cusumThreshold;
 
   // ── Gate 3: Confidence drop ──
-  const baselineConf = 0.78; // typical avg confidence for v16 (84% acc → more extreme probs than v20)
-  const confFire = avgConf != null && (baselineConf - avgConf) >= CFG.confDrop;
+  // Confidence is only a secondary warning: the detector's hard/CUSUM gates
+  // decide drift. Use the same-model live baseline, never a hardcoded v16 value.
+  const confFire = avgConf != null && baselineConf != null && (baselineConf - avgConf) >= CFG.confDrop;
 
   // ── Build result object ──
   const result: Record<string, any> = {
     status: 'ok',
     trades:          trades.length,
-    accuracy:        Math.round(accuracy * 10000) / 100,        // pct
-    recentAccuracy:  Math.round(recentAccuracy * 10000) / 100,
-    baseline:        Math.round(baseline * 10000) / 100,
-    drop:            Math.round(drop * 10000) / 100,
-    avgConf:         avgConf != null ? Math.round(avgConf * 10000) / 100 : null,
+    referenceTrades: reference.length,
+    accuracy:        pct(accuracy),
+    recentAccuracy:  pct(recentAccuracy),
+    baseline:        pct(baseline),
+    baselineSource:  'live-same-model',
+    drop:            pct(drop),
+    avgConf:         avgConf != null ? pct(avgConf) : null,
+    baselineConf:    baselineConf != null ? pct(baselineConf) : null,
+    recentConf:      recentConf != null ? pct(recentConf) : null,
     cusumScore:      Math.round(cusumState.sum * 100) / 100,
     hardFire,
     cusumFire,
@@ -295,20 +342,26 @@ export function checkDrift() {
   };
 
   log.info(
-    `Drift check: acc=${result.accuracy}% (${result.drop > 0 ? '-' : '+'}${Math.abs(result.drop).toFixed(1)}pp vs baseline) ` +
+    `Drift check: acc=${result.accuracy}% (${result.drop > 0 ? '-' : '+'}${Math.abs(result.drop).toFixed(1)}pp vs live baseline ${result.baseline}%) ` +
     `| recent=${result.recentAccuracy}% | CUSUM=${result.cusumScore} | ` +
     `conf=${result.avgConf != null ? result.avgConf + '%' : 'N/A'} | ` +
-    `${trades.length} trades | drift=${result.driftDetected ? '⚠️ YES' : 'NO'}`
+    `${trades.length} window / ${reference.length} ref | drift=${result.driftDetected ? '⚠️ YES' : 'NO'}`
   );
 
-  // ── Confidence drop warning (non-blocking) ──
+  // ── Confidence drop is advisory only; never mix it into the trigger list ──
   if (confFire && !result.driftDetected) {
     log.warn(
-      `ML confidence drop detected: avg=${result.avgConf}% ` +
-      `(baseline ~${Math.round(baselineConf * 100)}%). ` +
-      `Possible regime change — monitoring closely.`
+      `ML confidence drop detected: avg=${result.avgConf}% vs live baseline ${result.baselineConf}%. ` +
+      `Monitoring only; no drift trigger.`
     );
-    logDriftEvent({ type: 'CONF_DROP', avgConf, baseline: baselineConf, trades: trades.length });
+    logDriftEvent({
+      type: 'CONF_DROP',
+      avgConf,
+      baselineConf,
+      recentConf,
+      trades: trades.length,
+      referenceTrades: reference.length,
+    });
   }
 
   // ── No drift ──
@@ -324,10 +377,12 @@ export function checkDrift() {
   const timeSinceLast = Date.now() - (state.lastDriftTs ?? 0);
   const onCooldown = timeSinceLast < cooldownMs;
 
+  // Only the gates that actually trigger a drift can appear in the alert.
+  // Confidence is advisory; it used to be listed here even when it was not a
+  // trigger, which made the Telegram message look like three gates had fired.
   const gates = [
     hardFire  && `hard(drop=${result.drop.toFixed(1)}pp)`,
     cusumFire && `CUSUM(score=${result.cusumScore})`,
-    confFire  && `conf(drop=${result.avgConf != null ? (baselineConf * 100 - result.avgConf).toFixed(1) : '?'}pp)`,
   ].filter(Boolean).join(', ');
 
   log.warn(
@@ -340,7 +395,7 @@ export function checkDrift() {
   const notifyMsg =
     `⚠️ Concept Drift: ML acc=${result.accuracy}% vs baseline=${result.baseline}% ` +
     `(drop ${result.drop.toFixed(1)}pp, ${trades.length} trades). ` +
-    `Gates: ${gates}. Market may have regime-shifted.`;
+    `Gates: ${gates}. Live baseline ${result.baseline}% from ${reference.length} same-model trades. Market may have regime-shifted.`;
   notify('warn', notifyMsg, { key: 'drift' });
 
   logDriftEvent({
@@ -351,6 +406,9 @@ export function checkDrift() {
     drop: result.drop,
     recentAccuracy: result.recentAccuracy,
     avgConf,
+    baselineConf: result.baselineConf,
+    referenceTrades: reference.length,
+    baselineSource: 'live-same-model',
     cusumScore: cusumState.sum,
     trades: trades.length,
     onCooldown,
@@ -395,30 +453,36 @@ export function resetDriftState() {
  */
 export function getDriftStatus() {
   const state = loadDriftState();
-  const baseline = loadBaseline();
-  const trades   = loadRecentMlTrades(Math.min(CFG.window, 50));
-
+  const history = loadRecentMlTrades(CFG.window + CFG.baselineWindow);
+  const trades = history.slice(-CFG.window);
+  const reference = history.slice(0, Math.max(0, history.length - CFG.window));
   if (trades.length === 0) return { available: false };
 
-  const correct  = trades.filter(t => t.mlWasRight).length;
-  const accuracy = Math.round((correct / trades.length) * 10000) / 100;
-  const drop     = Math.round((baseline - correct / trades.length) * 10000) / 100;
-  const confs    = trades.map(t => t.mlConf).filter(c => c != null);
-  const avgConf  = confs.length > 0
-    ? Math.round(confs.reduce((a, b) => a + b, 0) / confs.length * 10000) / 100
+  const pct = (x: number) => Math.round(x * 10000) / 100;
+  const accuracy = trades.filter(t => t.mlWasRight).length / trades.length;
+  const baseline = reference.length >= CFG.minReference
+    ? reference.filter(t => t.mlWasRight).length / reference.length
     : null;
+  const confs = trades.map(t => t.mlConf).filter((c): c is number => c != null);
+  const avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
+  const refConfs = reference.map(t => t.mlConf).filter((c): c is number => c != null);
+  const baselineConf = refConfs.length ? refConfs.reduce((a, b) => a + b, 0) / refConfs.length : null;
 
   return {
-    available:    true,
-    trades:       trades.length,
-    accuracy,
-    baseline:     Math.round(baseline * 10000) / 100,
-    drop,
-    avgConf,
-    cusumScore:   Math.round(cusumState.sum * 100) / 100,
-    cusumThreshold: CFG.cusumThreshold,
-    lastDriftTs:  state.lastDriftTs || null,
-    lastRetrainTs: state.lastRetrainTs || null,
-    autoRetrain:  CFG.autoRetrain,
+    available:       true,
+    trades:          trades.length,
+    referenceTrades: reference.length,
+    accuracy:        pct(accuracy),
+    baseline:        baseline != null ? pct(baseline) : null,
+    baselineSource:  baseline != null ? 'live-same-model' : 'insufficient',
+    drop:            baseline != null ? pct(baseline - accuracy) : null,
+    avgConf:         avgConf != null ? pct(avgConf) : null,
+    baselineConf:    baselineConf != null ? pct(baselineConf) : null,
+    modelBaseline:   pct(loadBaseline()),
+    cusumScore:      Math.round(cusumState.sum * 100) / 100,
+    cusumThreshold:  CFG.cusumThreshold,
+    lastDriftTs:     state.lastDriftTs || null,
+    lastRetrainTs:   state.lastRetrainTs || null,
+    autoRetrain:     CFG.autoRetrain,
   };
 }

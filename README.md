@@ -100,6 +100,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
+- **Drift detector fix**: it now compares the recent ML window against an older **live same-model** baseline, not offline test accuracy. The 2026-10-21 alert (64.52% vs 76.84%) was a false positive from that mismatch + a 31-trade file-mtime horizon; live 50/100/200 accuracy was 64.0/64.0/66.0%. Confidence is advisory, not a trigger.
 - **Price-source clarity**: the topbar now leads with the Chainlink/PolyWS ORACLE used against PTB; Binance is a secondary metric with a BASIS label. Direction color is calculated from oracle vs PTB, not Binance vs PTB.
 - **Scroll veil**: sticky header is nearly opaque and a blurred fixed veil fades in after scrolling, so widget content no longer smears through the top bar.
 - **Drag/resize rework**: direct `translate3d` + requestAnimationFrame during drag (no React render per pointer move), snap ghost, compact (mobile/tablet) drag-to-reorder and height resize, layout v5 persistence. Verified desktop, tablet, mobile and real touch.
