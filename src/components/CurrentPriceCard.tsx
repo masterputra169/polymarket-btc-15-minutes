@@ -90,6 +90,7 @@ function CurrentPriceCard({
         {/* Chainlink / Current price */}
         <div ref={priceRef}>
           <div
+            title={`Chainlink via ${oracleLabel}`}
             style={{
               fontSize: '0.68rem',
               color: 'var(--text-muted)',
@@ -105,7 +106,7 @@ function CurrentPriceCard({
               className={`status-dot ${chainlinkConnected ? '' : 'status-dot--warning'}`}
               style={{ width: 5, height: 5 }}
             />
-            Current Price · {oracleLabel}
+            ORACLE
           </div>
           <div className={`price-big ${priceColor}`}>
             {displayPrice !== null ? `$${formatNumber(displayPrice, 2)}` : '-'}
@@ -146,7 +147,7 @@ function CurrentPriceCard({
               gap: 6,
             }}
           >
-            BTC Binance Spot
+            BINANCE
             <span
               className={`status-dot ${binanceConnected ? '' : 'status-dot--error'}`}
               style={{ width: 5, height: 5 }}
@@ -186,7 +187,7 @@ function CurrentPriceCard({
                 letterSpacing: '0.08em',
               }}
             >
-              🎯 Price to Beat
+              PTB
             </span>
             {ptbExact !== null && (
               <span
@@ -229,7 +230,7 @@ function CurrentPriceCard({
                     letterSpacing: '0.06em',
                   }}
                 >
-                  Distance
+                  Δ
                 </span>
                 <span
                   className={ptbColor}

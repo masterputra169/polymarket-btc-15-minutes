@@ -245,7 +245,7 @@ Phase-based decision with regime-adaptive thresholds:
 
 ### Environment Notes
 
-- Dashboard VPS (Cloudflare Tunnel + HTTP Basic Auth): kredensial ada di `.claude/memory/polybtc15-vps-dashboard.md` (gitignored; jangan dicommit). URL terbaru: `ssh polyvps "cat /opt/polybtc15/.tunnel-url"`. Runbook: `docs/VPS.md`.
+- Dashboard VPS (named Cloudflare Tunnel + custom login/session auth): URL **https://poly15.dollarkilat.xyz/**; secret/password locations live in `.claude/memory/polybtc15-vps-dashboard.md` (gitignored; jangan dicommit). Runbook: `docs/VPS.md`, `docs/DOMAIN.md`.
 - Windows (MSYS/Git Bash), `.bashrc` has encoding errors (harmless, ignore)
 - Binance FAPI + Bybit both blocked in user's region — funding rate defaults to neutral
 - Python 3.13.0, Node 25.1.0, xgboost 3.1.3

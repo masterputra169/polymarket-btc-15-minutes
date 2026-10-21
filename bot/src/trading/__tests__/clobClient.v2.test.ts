@@ -49,7 +49,7 @@ vi.mock('@polymarket/clob-client-v2', async (importOriginal) => {
 });
 
 // The first import of clobClient.ts (config, viem, SDK) is slow on a cold transform cache.
-vi.setConfig({ testTimeout: 30_000 });
+vi.setConfig({ testTimeout: 120_000, hookTimeout: 120_000 });
 
 const ENV_KEYS = [
   'POLYMARKET_PRIVATE_KEY', 'POLYMARKET_API_KEY', 'POLYMARKET_API_SECRET',

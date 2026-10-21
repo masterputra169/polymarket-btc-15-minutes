@@ -17,7 +17,7 @@
 ## Table of Contents
 
 - [What is this?](#what-is-this)
-- [Latest update (2026-10-19)](#latest-update-2026-10-19)
+- [Latest update (2026-10-21)](#latest-update-2026-10-21)
 - [Project status](#project-status)
 - [Key features](#key-features)
 - [Architecture](#architecture)
@@ -45,7 +45,7 @@
 
 ---
 
-## Latest update (2026-10-19)
+## Latest update (2026-10-21)
 
 > Current operational state. The September project-status table below is kept as the Railway-era baseline; this section supersedes it.
 
@@ -569,7 +569,7 @@ Full guide: **[docs/DOCKER_STACK.md](docs/DOCKER_STACK.md)**. On Windows, `scrip
 The production target is a single Tencent Lighthouse VPS (`Ubuntu 26.04`, 2 vCPU, 2 GB RAM, Node 25.9):
 
 - Bot: `polybtc15-bot` systemd service, `DRY_RUN=true`, working directory `/opt/polybtc15/bot`.
-- Dashboard: static `dist/` on nginx `127.0.0.1:8080`, exposed by `cloudflared-quick.service` through a Cloudflare Tunnel. nginx enforces HTTP Basic Auth and proxies `/ws` + `/api/reports` with the bot token injected server-side.
+- Dashboard: static `dist/` on nginx `127.0.0.1:8080`, exposed by `cloudflared-named.service` through the named Cloudflare Tunnel at `https://poly15.dollarkilat.xyz/`. A custom login page issues a session cookie; nginx `auth_request` protects `/ws` + `/api/reports` with the bot tokens injected server-side.
 - Postgres 18 local for the optional journal mirror; report API on `127.0.0.1:3101`; watchdog timer every 5 minutes.
 - Deploy a dashboard build: `npm run build` then copy `dist/index.html` and `dist/assets/*` to `/opt/polybtc15/dist/`; nginx serves static files, no reload needed.
 - Operational runbook: [docs/VPS.md](docs/VPS.md). The old Railway project was deleted on 2026-10-19.
@@ -948,7 +948,7 @@ Alerts are rate-limited. Every Telegram message carries inline buttons:
 └──────────────────────┘
 ```
 
-The View Web link never includes the status token. On the VPS the page is protected by nginx **HTTP Basic Auth**; local dev opens the dashboard once with `?botStatusToken=<token>`.
+The View Web link never includes the status token. On the VPS the page is protected by the custom login page + session cookie (nginx `auth_request`); local dev opens the dashboard once with `?botStatusToken=<token>`.
 
 ### Status WebSocket (`:3099`)
 

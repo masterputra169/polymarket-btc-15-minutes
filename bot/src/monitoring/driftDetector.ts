@@ -246,6 +246,66 @@ function triggerRetrain(reason) {
   }
 }
 
+// ── Pure assessment (unit-testable; no file/state access) ──
+export interface MlDriftTrade {
+  ts: number;
+  mlWasRight: boolean;
+  mlConf: number | null;
+  outcome?: string;
+}
+
+export interface DriftThresholds {
+  wrDropPp: number;
+  cusumThreshold: number;
+  confDrop: number;
+}
+
+export interface DriftAssessment {
+  trades: number;
+  accuracy: number;
+  recentAccuracy: number;
+  avgConf: number | null;
+  drop: number;
+  hardFire: boolean;
+  cusumFire: boolean;
+  confFire: boolean;
+  driftDetected: boolean;
+}
+
+/** Compare a recent ML window with a live same-model baseline. */
+export function assessDrift(
+  trades: MlDriftTrade[],
+  baseline: number,
+  baselineConf: number | null,
+  cusumScore: number,
+  cfg: DriftThresholds,
+): DriftAssessment {
+  const accuracyOf = (rows: MlDriftTrade[]) => rows.length ? rows.filter(t => t.mlWasRight).length / rows.length : 0;
+  const confOf = (rows: MlDriftTrade[]) => {
+    const confs = rows.map(t => t.mlConf).filter((c): c is number => c != null);
+    return confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
+  };
+  const accuracy = accuracyOf(trades);
+  const recentAccuracy = accuracyOf(trades.slice(-20));
+  const avgConf = confOf(trades);
+  const drop = baseline - accuracy;
+  const dropRecent = baseline - recentAccuracy;
+  const hardFire = drop >= (cfg.wrDropPp / 100) || dropRecent >= ((cfg.wrDropPp + 5) / 100);
+  const cusumFire = cusumScore >= cfg.cusumThreshold;
+  const confFire = avgConf != null && baselineConf != null && (baselineConf - avgConf) >= cfg.confDrop;
+  return {
+    trades: trades.length,
+    accuracy,
+    recentAccuracy,
+    avgConf,
+    drop,
+    hardFire,
+    cusumFire,
+    confFire,
+    driftDetected: hardFire || cusumFire,
+  };
+}
+
 // ── CUSUM update ──
 // Each correct prediction = +1 deviation from (baseline - slack)
 // Each wrong prediction   = -(baseline - slack)
@@ -285,60 +345,45 @@ export function checkDrift() {
   }
 
   const pct = (x: number) => Math.round(x * 10000) / 100;
-  const accuracyOf = (rows: typeof trades) => rows.length ? rows.filter(t => t.mlWasRight).length / rows.length : null;
-  const confOf = (rows: typeof trades) => {
+  const accuracyOf = (rows: MlDriftTrade[]) => rows.filter(t => t.mlWasRight).length / rows.length;
+  const confOf = (rows: MlDriftTrade[]) => {
     const confs = rows.map(t => t.mlConf).filter((c): c is number => c != null);
     return confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
   };
 
   // ── Live baseline: the recent window is scored against the older same-model trades ──
-  const baseline = accuracyOf(reference) as number;
+  const baseline = accuracyOf(reference);
   const baselineConf = confOf(reference);
-  const accuracy = accuracyOf(trades) as number;
-  const avgConf = confOf(trades);
+  const recentConf = confOf(trades.slice(-20));
 
-  // Recent 20 trades for faster signal
-  const recent = trades.slice(-20);
-  const recentAccuracy = accuracyOf(recent) as number;
-  const recentConf = confOf(recent);
-
-  // ── Update CUSUM with newest trade ──
+  // ── Update CUSUM with newest trade, using the live baseline ──
   const latestTrade = trades[trades.length - 1];
   if (latestTrade && latestTrade.ts > (state.cusumLastReset ?? 0)) {
     updateCusum(latestTrade.mlWasRight, baseline);
   }
 
-  // ── Gate 1: Hard threshold ──
-  const drop = baseline - accuracy;
-  const dropRecent = baseline - recentAccuracy;
-  const hardFire = drop >= (CFG.wrDropPp / 100) || dropRecent >= ((CFG.wrDropPp + 5) / 100);
+  const assessment = assessDrift(trades, baseline, baselineConf, cusumState.sum, {
+    wrDropPp: CFG.wrDropPp,
+    cusumThreshold: CFG.cusumThreshold,
+    confDrop: CFG.confDrop,
+  });
 
-  // ── Gate 2: CUSUM threshold ──
-  const cusumFire = cusumState.sum >= CFG.cusumThreshold;
+  const { hardFire, cusumFire, confFire, avgConf } = assessment;
 
-  // ── Gate 3: Confidence drop ──
-  // Confidence is only a secondary warning: the detector's hard/CUSUM gates
-  // decide drift. Use the same-model live baseline, never a hardcoded v16 value.
-  const confFire = avgConf != null && baselineConf != null && (baselineConf - avgConf) >= CFG.confDrop;
-
-  // ── Build result object ──
   const result: Record<string, any> = {
+    ...assessment,
     status: 'ok',
     trades:          trades.length,
     referenceTrades: reference.length,
-    accuracy:        pct(accuracy),
-    recentAccuracy:  pct(recentAccuracy),
+    accuracy:        pct(assessment.accuracy),
+    recentAccuracy:  pct(assessment.recentAccuracy),
     baseline:        pct(baseline),
     baselineSource:  'live-same-model',
-    drop:            pct(drop),
-    avgConf:         avgConf != null ? pct(avgConf) : null,
+    drop:            pct(assessment.drop),
+    avgConf:         assessment.avgConf != null ? pct(assessment.avgConf) : null,
     baselineConf:    baselineConf != null ? pct(baselineConf) : null,
     recentConf:      recentConf != null ? pct(recentConf) : null,
     cusumScore:      Math.round(cusumState.sum * 100) / 100,
-    hardFire,
-    cusumFire,
-    confFire,
-    driftDetected:   hardFire || cusumFire,
   };
 
   log.info(

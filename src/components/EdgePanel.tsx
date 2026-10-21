@@ -206,12 +206,7 @@ function EdgePanel({ data }) {
         </div>
       </div>
 
-      {/* Recommendation */}
-      {rec?.reason && (
-        <div style={{ marginTop: 8, fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-          {rec.reason}
-        </div>
-      )}
+      {/* Recommendation reason is intentionally not rendered; it is verbose and duplicate context lives in Prediction. */}
     </div>
   );
 }

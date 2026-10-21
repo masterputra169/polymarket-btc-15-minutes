@@ -169,6 +169,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const [density, setDensity] = useState<DensityName>(initialSaved.current?.density ?? 'comfortable');
   const [editMode, setEditMode] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -199,6 +200,15 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest('.subbar-menu')) setMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', close);
+    return () => window.removeEventListener('pointerdown', close);
+  }, [menuOpen]);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -613,6 +623,15 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const priceTone = tonePrice != null && status.priceToBeat != null
     ? (tonePrice >= status.priceToBeat ? 'up' : 'down')
     : 'flat';
+  const feedChecks = [
+    { label: 'Binance', ok: status.binanceConnected },
+    { label: 'Chainlink', ok: status.chainlinkConnected },
+    { label: 'CLOB', ok: !!status.clobLabel },
+    { label: 'ML', ok: status.mlReady },
+    { label: 'Bot', ok: status.botConnected },
+  ];
+  const allFeedsOk = feedChecks.every(f => f.ok);
+  const feedTitle = feedChecks.map(f => `${f.label}: ${f.ok ? 'up' : 'down'}`).join(' · ');
   const oracleSourceLabel = status.oracleSource === 'polymarket_ws' ? 'POLYWS'
     : status.oracleSource === 'chainlink_wss' ? 'WSS'
       : status.oracleSource === 'RPC' ? 'RPC' : 'CHAINLINK';
@@ -625,18 +644,14 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
           <img className="tb-mark" src="/brand/poly15-mark.svg?v=20261021" alt="" draggable={false} />
           <div className="tb-brand__text">
             <strong>POLY<span>//</span>15</strong>
-            <small>BTC 15m control terminal</small>
           </div>
           <span className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')} title={status.dryRun ? 'DRY RUN: simulated bankroll, no real orders' : 'LIVE orders enabled'}>{status.dryRun ? 'DRY RUN' : 'LIVE'}</span>
         </div>
 
         <div className="tb-market">
-          <div className={cx('tb-price', 'tb-price--' + priceTone)} title="Chainlink spot (oracle) — the feed compared with PTB">
-            <span className="tb-kicker">ORACLE · {oracleSourceLabel}</span>
+          <div className={cx('tb-price', 'tb-price--' + priceTone)} title={`Oracle ${oracleSourceLabel} — the Chainlink feed compared with PTB`}>
+            <span className="tb-kicker">ORACLE</span>
             <strong>{fmtNum(status.oraclePrice ?? status.binancePrice ?? status.btcPrice)}</strong>
-          </div>
-          <div className="tb-metric tb-metric--binance" title="Binance spot — fast exchange feed, not the settlement feed">
-            <span>BINANCE</span><b>{fmtNum(status.binancePrice)}</b>
           </div>
           <div className="tb-metric"><span>PTB</span><b>{fmtNum(status.priceToBeat)}</b></div>
           <div className="tb-metric"><span>LEFT</span><b className={status.timeLeftMin != null && status.timeLeftMin < 2 ? 'is-warn' : ''}>{fmtClock(status.timeLeftMin)}</b></div>
@@ -647,12 +662,8 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
         </div>
 
         <div className="tb-actions">
-          <div className="tb-pills">
-            <span className={cx('tb-pill', status.binanceConnected ? 'is-on' : 'is-off')}><i />BINANCE</span>
-            <span className={cx('tb-pill', status.chainlinkConnected ? 'is-on' : 'is-off')}><i />CHAINLINK</span>
-            <span className={cx('tb-pill', status.clobLabel ? 'is-on' : 'is-warn')}><i />{status.clobLabel?.short ?? 'CLOB'}</span>
-            <span className={cx('tb-pill', status.mlReady ? 'is-on' : 'is-off')}><i />ML</span>
-            <span className={cx('tb-pill', status.botConnected ? 'is-on' : 'is-off')}><i />BOT</span>
+          <div className={cx('tb-health', allFeedsOk ? 'is-ok' : 'is-warn')} title={feedTitle} aria-label={feedTitle}>
+            <i />{allFeedsOk ? 'OK' : 'CHECK'}
           </div>
           {onLogout && <button className="tb-logout" onClick={onLogout} title="Sign out">⏻</button>}
           <button
@@ -667,8 +678,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       </header>
 
       <div className="dash-subbar">
-        <div className="preset-group">
-          <span className="subbar-label">WORKSPACE</span>
+        <div className="preset-group" aria-label="Workspace presets">
           {PRESETS.map(preset => (
             <button key={preset.id} className="preset-btn" onClick={() => applyPreset(preset)}>{preset.label}</button>
           ))}
@@ -678,29 +688,43 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
             <span className="subbar-btn__icon">⠿</span>{editMode ? 'Editing' : 'Edit layout'}
           </button>
           <button className="subbar-btn" onClick={() => setLibraryOpen(true)}>Widgets <span className="count-badge">{widgets.length - hidden.length}</span></button>
-          <button className="subbar-btn" onClick={autoArrange}>Auto arrange</button>
-          <button className="subbar-btn" onClick={resetLayout}>Reset</button>
-          <button className="subbar-btn" onClick={exportLayout}>Export</button>
-          <button className="subbar-btn" onClick={() => fileRef.current?.click()}>Import</button>
-          <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void importLayout(f); e.currentTarget.value = ''; }} />
-          <div className="accent-group" aria-label="Accent theme">
-            {ACCENTS.map(a => <button key={a.id} className={cx('accent-dot', 'accent-dot--' + a.id, accent === a.id ? 'is-active' : false)} title={a.label} onClick={() => setAccent(a.id)} />)}
+          <div className="subbar-menu">
+            <button
+              className={cx('subbar-btn subbar-icon', menuOpen ? 'is-active' : false)}
+              onClick={() => setMenuOpen(v => !v)}
+              aria-label="More layout actions"
+              aria-expanded={menuOpen}
+            >⋯</button>
+            {menuOpen && (
+              <div className="subbar-popover" role="menu">
+                <button role="menuitem" onClick={() => { autoArrange(); setMenuOpen(false); }}>Auto arrange</button>
+                <button role="menuitem" onClick={() => { resetLayout(); setMenuOpen(false); }}>Reset layout</button>
+                <div className="subbar-popover__row">
+                  <span>Accent</span>
+                  <div className="accent-group" aria-label="Accent theme">
+                    {ACCENTS.map(a => <button key={a.id} className={cx('accent-dot', 'accent-dot--' + a.id, accent === a.id ? 'is-active' : false)} title={a.label} onClick={() => { setAccent(a.id); setMenuOpen(false); }} />)}
+                  </div>
+                </div>
+                <button role="menuitem" onClick={() => { setDensity(d => d === 'compact' ? 'comfortable' : 'compact'); setMenuOpen(false); }}>
+                  {density === 'compact' ? 'Comfort spacing' : 'Compact spacing'}
+                </button>
+                <button role="menuitem" onClick={() => { setMenuOpen(false); exportLayout(); }}>Export layout</button>
+                <button role="menuitem" onClick={() => { setMenuOpen(false); fileRef.current?.click(); }}>Import layout</button>
+              </div>
+            )}
           </div>
-          <button className="subbar-btn subbar-btn--density" onClick={() => setDensity(d => d === 'compact' ? 'comfortable' : 'compact')}>
-            {density === 'compact' ? 'Comfort' : 'Compact'}
-          </button>
+          <input ref={fileRef} type="file" accept="application/json,.json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void importLayout(f); e.currentTarget.value = ''; }} />
         </div>
       </div>
-
       {editMode && (
         <div className="edit-banner">
-          <span>⠿ Drag any widget header to move it — on narrow screens, drag to reorder. Pull the bottom-right corner to resize. Use Widgets to show or hide panels.</span>
+          <span>Drag to arrange · pull the corner to resize</span>
           <button onClick={() => setEditMode(false)}>Done editing</button>
         </div>
       )}
       {!status.botConnected && (
         <div className="dash-banner dash-banner--warn">
-          <span>Bot disconnected — retrying automatically; showing the last received snapshot.</span>
+          <span>Connection lost · retrying</span>
           {onReconnect && <button onClick={onReconnect}>Reconnect now</button>}
         </div>
       )}
@@ -743,13 +767,9 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
                     onPointerDown={e => (isCompact ? startCompactDrag(e, widget.id) : startDrag(e, widget.id))}
                     title={editMode ? (isCompact ? 'Drag to reorder' : 'Drag to move') : widget.description}
                   >
-                    <span className="dash-widget__grip">⠿</span>
+                    {editMode && <span className="dash-widget__grip">⠿</span>}
                     <span className="dash-widget__icon">{widget.icon}</span>
-                    <div className="dash-widget__titles">
-                      <h3>{widget.title}</h3>
-                      {widget.description && <p>{widget.description}</p>}
-                    </div>
-                    <span className="dash-widget__cat">{widget.category}</span>
+                    <div className="dash-widget__titles"><h3>{widget.title}</h3></div>
                     {editMode && (
                       <button className="dash-widget__hide" onPointerDown={e => e.stopPropagation()} onClick={() => toggleWidget(widget.id)} title="Hide widget">×</button>
                     )}
@@ -786,9 +806,8 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       </main>
 
       <footer className="dash-footer">
-        <span>POLY//15 · operator console</span>
-        <span>Not financial advice · built for the BTC 15m book</span>
-        <span>{status.wins != null && status.losses != null ? String(status.wins) + 'W / ' + String(status.losses) + 'L' : '—'} · {status.dryRun ? 'PAPER CASH ' : 'CASH '}{fmtMoney(status.bankroll)} · {status.dryRun ? 'PAPER EQUITY ' : 'EQUITY '}{fmtMoney(status.equity ?? status.bankroll)} · {status.dryRun ? 'PAPER PnL ' : 'PnL '}{fmtMoney(status.dailyPnl)}</span>
+        <span>POLY//15</span>
+        <span>{status.wins != null && status.losses != null ? `${status.wins}W/${status.losses}L` : '—'} · {status.dryRun ? 'PAPER' : 'LIVE'} · cash {fmtMoney(status.bankroll)} · pnl {fmtMoney(status.dailyPnl)}</span>
       </footer>
 
       {libraryOpen && (

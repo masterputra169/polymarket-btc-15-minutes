@@ -1,3 +1,5 @@
+> **Current state (2026-10-21).** Public URL: https://poly15.dollarkilat.xyz/ (named Cloudflare Tunnel, not Quick Tunnel). Auth: custom login page + HttpOnly session cookie; nginx `auth_request` protects `/ws` and report APIs. Secure secrets backup: `polybot-secrets-backup.timer` at 06:35 to `/home/ubuntu/backups/secure/`. Some older sections below describe the former quick tunnel / Basic Auth setup and are kept as history.
+
 # VPS Deployment (Tencent Lighthouse)
 
 Bot Polymarket BTC-15m sekarang berjalan di VPS Tencent Lighthouse, menggantikan Railway.
@@ -71,6 +73,8 @@ sudo systemctl restart polybtc15-bot
 `/etc/cron.daily/polybtc15-backup` menyimpan `bot/data` + `bot/.env` harian ke
 `/home/ubuntu/backups/polybtc15-data-YYYY-MM-DD.tar.gz` (retensi 14 hari, mode 600).
 Tape di R2 sudah lengkap dan lokal (599+ objek); file lokal di VPS dihapus setelah upload per jam.
+
+**Secure secrets backup (current):** `/opt/polybtc15/scripts/backup-secrets.sh` + `polybot-secrets-backup.timer` (daily 06:35) writes `/home/ubuntu/backups/secure/polybtc15-secrets-YYYY-MM-DD.tar.gz` (0600 root, 30-day retention). It contains `auth.env`, Cloudflare tunnel credentials/cert/config, the nginx site config, and auth/tunnel systemd units. Off-site local copy: `C:\Users\Asus\.poly15\backup\`. Restore drill: extract to a temp dir, compare `auth.env` SHA-256, then restore only the files you need.
 
 ## Yang belum ada (opsional)
 

@@ -46,7 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resetDriftState();
   vi.mocked(readFileSync).mockImplementation((p: any) => {
-    if (String(p) === JOURNAL_PATH) return dryRunJournal(50);
+    if (String(p) === JOURNAL_PATH) return dryRunJournal(250);
     throw new Error(`unexpected read: ${p}`); // model json → baseline falls back to its default
   });
 });
