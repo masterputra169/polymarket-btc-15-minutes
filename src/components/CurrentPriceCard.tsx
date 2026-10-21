@@ -29,6 +29,9 @@ function CurrentPriceCard({
     prevRef.current = chainlinkPrice;
   }, [chainlinkPrice]);
 
+  const oracleLabel = chainlinkSource === 'polymarket_ws' ? 'PolyWS'
+    : chainlinkSource === 'chainlink_wss' ? 'Chainlink WSS'
+      : chainlinkSource === 'RPC' ? 'RPC' : 'Chainlink';
   const displayPrice = chainlinkPrice ?? binancePrice;
   const prevDisplay = chainlinkPrevPrice ?? binancePrevPrice;
 
@@ -102,7 +105,7 @@ function CurrentPriceCard({
               className={`status-dot ${chainlinkConnected ? '' : 'status-dot--warning'}`}
               style={{ width: 5, height: 5 }}
             />
-            Current Price ({chainlinkSource || 'Chainlink'})
+            Current Price · {oracleLabel}
           </div>
           <div className={`price-big ${priceColor}`}>
             {displayPrice !== null ? `$${formatNumber(displayPrice, 2)}` : '-'}
@@ -154,7 +157,7 @@ function CurrentPriceCard({
           </div>
           {diffText && (
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>
-              {diffText}
+              BASIS {diffText}
             </div>
           )}
         </div>

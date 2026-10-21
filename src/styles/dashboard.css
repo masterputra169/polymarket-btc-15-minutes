@@ -131,6 +131,8 @@ body::after { opacity: 0.7; }
 .tb-metric span { color: var(--dash-dim); font-size: 8px; letter-spacing: 0.14em; font-weight: 700; }
 .tb-metric b { font-family: 'IBM Plex Mono', monospace; font-size: 12px; font-weight: 600; color: var(--dash-text); font-variant-numeric: tabular-nums; }
 .tb-metric b.is-warn { color: var(--dash-amber); }
+.tb-metric--binance span { color: #8a9aaf; }
+.tb-metric--binance b { color: #dbe7f3; }
 .tb-odds { display: flex; gap: 5px; }
 .tb-odds span { padding: 5px 7px; border-radius: 6px; font-size: 8px; font-weight: 800; letter-spacing: 0.05em; }
 .tb-odds .is-up { color: var(--dash-green); background: rgba(52, 211, 153, 0.08); border: 1px solid rgba(52, 211, 153, 0.16); }

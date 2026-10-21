@@ -28,6 +28,9 @@ export interface DashboardWidget {
 
 export interface ShellStatus {
   btcPrice: number | null;
+  binancePrice: number | null;
+  oraclePrice: number | null;
+  oracleSource: string | null;
   priceToBeat: number | null;
   timeLeftMin: number | null;
   marketUp: number | null;
@@ -606,9 +609,13 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     }
   };
 
-  const priceTone = status.btcPrice != null && status.priceToBeat != null
-    ? (status.btcPrice >= status.priceToBeat ? 'up' : 'down')
+  const tonePrice = status.oraclePrice ?? status.btcPrice;
+  const priceTone = tonePrice != null && status.priceToBeat != null
+    ? (tonePrice >= status.priceToBeat ? 'up' : 'down')
     : 'flat';
+  const oracleSourceLabel = status.oracleSource === 'polymarket_ws' ? 'POLYWS'
+    : status.oracleSource === 'chainlink_wss' ? 'WSS'
+      : status.oracleSource === 'RPC' ? 'RPC' : 'CHAINLINK';
 
   return (
     <div className="dash-shell" data-accent={accent} data-density={density}>
@@ -624,9 +631,12 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
         </div>
 
         <div className="tb-market">
-          <div className={cx('tb-price', 'tb-price--' + priceTone)}>
-            <span className="tb-kicker">BTC / USD</span>
-            <strong>{fmtNum(status.btcPrice)}</strong>
+          <div className={cx('tb-price', 'tb-price--' + priceTone)} title="Chainlink spot (oracle) — the feed compared with PTB">
+            <span className="tb-kicker">ORACLE · {oracleSourceLabel}</span>
+            <strong>{fmtNum(status.oraclePrice ?? status.binancePrice ?? status.btcPrice)}</strong>
+          </div>
+          <div className="tb-metric tb-metric--binance" title="Binance spot — fast exchange feed, not the settlement feed">
+            <span>BINANCE</span><b>{fmtNum(status.binancePrice)}</b>
           </div>
           <div className="tb-metric"><span>PTB</span><b>{fmtNum(status.priceToBeat)}</b></div>
           <div className="tb-metric"><span>LEFT</span><b className={status.timeLeftMin != null && status.timeLeftMin < 2 ? 'is-warn' : ''}>{fmtClock(status.timeLeftMin)}</b></div>

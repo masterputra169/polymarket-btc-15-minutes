@@ -533,6 +533,9 @@ const botData = useMemo(() => {
 
   const shellStatus: ShellStatus = {
     btcPrice: data?.lastPrice ?? binancePrice ?? null,
+    binancePrice: data?.lastPrice ?? binancePrice ?? null,
+    oraclePrice: chainlinkResolved.price ?? null,
+    oracleSource: chainlinkResolved.source ?? null,
     priceToBeat: data?.priceToBeat ?? null,
     timeLeftMin: smoothTimeLeft ?? data?.timeLeftMin ?? null,
     marketUp: data?.marketUp ?? null,
