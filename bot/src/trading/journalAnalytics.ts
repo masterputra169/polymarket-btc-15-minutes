@@ -42,7 +42,7 @@ export function getJournalAnalytics(currentTradeCount) {
 
   // Check if data actually changed (trade count OR file modification time)
   const journalMtime = _safeFileMtime(BOT_CONFIG.journalFile);
-  const auditFile = BOT_CONFIG.stateFile.replace('state.json', 'state_audit.jsonl');
+  const auditFile = (BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl'));
   const auditMtime = _safeFileMtime(auditFile);
 
   const dataChanged =
@@ -263,7 +263,7 @@ function loadVerifiedJournal() {
 }
 
 function loadStateAudit() {
-  const auditFile = BOT_CONFIG.stateFile.replace('state.json', 'state_audit.jsonl');
+  const auditFile = (BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl'));
   try {
     if (!existsSync(auditFile)) return [];
     const raw = readFileSync(auditFile, 'utf-8');

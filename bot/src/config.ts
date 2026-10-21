@@ -25,8 +25,11 @@ const CONFIG = {
 // envNum/envInt now live in ./utils/env.ts (shared with services + scripts).
 // Re-exported below so existing consumers keep importing from config.
 
+const DRY_RUN = process.env.DRY_RUN !== 'false';
+const MODE_SUFFIX = DRY_RUN ? '' : '.live';
+
 const BOT_CONFIG = {
-  dryRun: process.env.DRY_RUN !== 'false',
+  dryRun: DRY_RUN,
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
   maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 7, 1, 50),  // Audit v4 C4: 5→7 — P(7 losses at 56% WR) = 0.32%, avoids false halt ~4x/year
@@ -44,10 +47,11 @@ const BOT_CONFIG = {
   dataDir: resolve(__dirname, '..', 'data'),
   tradesFile: resolve(__dirname, '..', 'data', 'trades.json'),
   feedbackFile: resolve(__dirname, '..', 'data', 'feedback.json'),
-  stateFile: resolve(__dirname, '..', 'data', 'state.json'),
+  stateFile: resolve(__dirname, '..', 'data', `state${MODE_SUFFIX}.json`),
+  stateAuditFile: resolve(__dirname, '..', 'data', `state_audit${MODE_SUFFIX}.jsonl`),
   signalPerfFile: resolve(__dirname, '..', 'data', 'signal_perf.json'),
   // RC1 Fix: entry snapshot persisted to disk so bot restart doesn't lose it
-  entrySnapshotFile: resolve(__dirname, '..', 'data', 'entry_snapshot.json'),
+  entrySnapshotFile: resolve(__dirname, '..', 'data', `entry_snapshot${MODE_SUFFIX}.json`),
 
   // ML model paths (read from frontend public/)
   modelPath: resolve(__dirname, '..', '..', 'public', 'ml', 'xgboost_model.json'),
@@ -62,10 +66,10 @@ const BOT_CONFIG = {
   maxTrackedTraders: 20,
 
   // Trade journal (post-trade analysis)
-  journalFile: resolve(__dirname, '..', 'data', 'trade_journal.jsonl'),
+  journalFile: resolve(__dirname, '..', 'data', `trade_journal${MODE_SUFFIX}.jsonl`),
 
   // Verified journal (on-chain reconciliation via CLOB getTrades)
-  verifiedJournalFile: resolve(__dirname, '..', 'data', 'verified_journal.jsonl'),
+  verifiedJournalFile: resolve(__dirname, '..', 'data', `verified_journal${MODE_SUFFIX}.jsonl`),
   reconcileIntervalMs: 30 * 60 * 1000,  // 30 minutes
 
   // Auto-redeem resolved positions

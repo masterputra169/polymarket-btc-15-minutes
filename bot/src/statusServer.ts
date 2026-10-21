@@ -20,6 +20,7 @@ import { maybeOptimize, getOptimizerStatus } from './ai/selfOptimizer.ts';
 import { cacheStatusSnapshot } from './services/runtimeIntegrations.ts';
 import { isLocalBindHost } from './utils/net.ts';
 import { parseClobAmount } from './utils/clobAmount.ts';
+import { requestTradingMode } from './trading/tradingMode.ts';
 
 const log = createLogger('StatusWS');
 
@@ -232,7 +233,15 @@ export function startStatusServer() {
           try { ws.send(JSON.stringify({ type: 'response', cmd, data })); } catch (_e) { /* */ }
         };
 
-        if (msg.type === 'setBankroll' && typeof msg.value === 'number' &&
+        if (msg.type === 'setTradingMode') {
+          if (commandThrottled('setTradingMode', 5_000)) {
+            respond('setTradingMode', { ok: false, error: 'rate_limited' });
+          } else {
+            requestTradingMode(msg.mode, msg.confirm)
+              .then(result => respond('setTradingMode', result))
+              .catch(err => respond('setTradingMode', { ok: false, error: String(err?.message ?? err).slice(0, 200) }));
+          }
+        } else if (msg.type === 'setBankroll' && typeof msg.value === 'number' &&
             Number.isFinite(msg.value) && msg.value > 0 && msg.value <= 1_000_000) {
           const now = Date.now();
           if (now - lastSetBankrollMs < SET_BANKROLL_COOLDOWN_MS) {

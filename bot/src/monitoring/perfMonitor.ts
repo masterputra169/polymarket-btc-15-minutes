@@ -309,7 +309,7 @@ function loadJournalEntries(dateStr) {
  */
 function loadAuditEntries(dateStr) {
   try {
-    const auditPath = BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl');
+    const auditPath = (BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl'));
     if (!existsSync(auditPath)) return [];
     const content = readFileSync(auditPath, 'utf-8').trim();
     if (!content) return [];

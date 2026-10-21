@@ -32,6 +32,13 @@ Login password masih aktif untuk sementara. **Segera ganti password** karena per
 (Lighthouse console → instance → Reset password), lalu opsional matikan `PasswordAuthentication` setelah
 login key (`ssh polyvps`) dipastikan berjalan.
 
+## Trading-mode switch (2026-10-21)
+
+- UI: click the topbar `DRY RUN`/`LIVE` badge, type `LIVE` or `DRY`, confirm. Bot restarts via systemd in the new mode.
+- Live state/journal are isolated: `state.live.json`, `state_audit.live.jsonl`, `trade_journal.live.jsonl`, `verified_journal.live.jsonl`. Dry-run keeps the original files.
+- Live startup seeds bankroll from pUSD and auto-reverts to `DRY_RUN=true` if CLOB init/readiness/pUSD sync fails. Open positions and paused state block switching.
+- Still gated by real pUSD balance, 5-share minimum, JEV shadow, and the live-readiness checklist.
+
 ## Kontrol bot
 
 ```bash

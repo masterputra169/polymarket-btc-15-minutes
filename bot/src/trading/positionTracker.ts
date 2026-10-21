@@ -164,7 +164,7 @@ function rotateAuditLog(auditPath) {
 
 function auditLog(entry) {
   try {
-    const auditPath = BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl');
+    const auditPath = (BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl'));
     // Rotate if file exceeds size limit
     try {
       if (existsSync(auditPath) && statSync(auditPath).size > AUDIT_MAX_BYTES) {

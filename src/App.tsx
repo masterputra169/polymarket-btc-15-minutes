@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect, useRef, memo } from 'react';
+import React, { useCallback, useMemo, useEffect, useRef, memo } from 'react';
 import { useBotData } from './hooks/useBotData.ts';
 import { describeClobSource } from './components/clobSourceLabel.ts';
 import { useCountdown } from './hooks/useCountdown.ts';
@@ -531,6 +531,10 @@ const botData = useMemo(() => {
     ? data.bankroll + (paperPositionValue ?? 0)
     : null;
 
+  const setTradingMode = useCallback(async (mode: 'live' | 'dry', confirm: string) => {
+    return sendBotCommand('setTradingMode', { mode, confirm });
+  }, [sendBotCommand]);
+
   const shellStatus: ShellStatus = {
     btcPrice: data?.lastPrice ?? binancePrice ?? null,
     binancePrice: data?.lastPrice ?? binancePrice ?? null,
@@ -645,6 +649,7 @@ const botData = useMemo(() => {
       loading={loading && !data}
       onReconnect={reconnect}
       onLogout={onLogout}
+      onSetTradingMode={setTradingMode}
       onToggleBot={() => sendBotCommand(botPaused ? 'botResume' : 'botPause')}
     />
   );

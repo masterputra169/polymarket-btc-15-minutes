@@ -44,7 +44,8 @@ import { setLogLevel, log } from './src/logger.ts';
 import { loadMLModelFromDisk } from './src/adapters/mlLoader.ts';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.ts';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
-import { loadState, saveState as savePositionState, getStats, getCurrentPosition, getBankroll, resetDailyBaseline } from './src/trading/positionTracker.ts';
+import { loadState, saveState as savePositionState, getStats, getCurrentPosition, getBankroll, setBankroll, resetDailyBaseline } from './src/trading/positionTracker.ts';
+import { forceDryRunEnv } from './src/trading/tradingMode.ts';
 import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
 import { GTD_MIN_LEAD_SEC, worstCaseLimitLeadSec } from './src/trading/orderConstraints.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
@@ -99,6 +100,17 @@ log.info(`Poll interval: ${POLL_MS}ms (+ real-time WS streams)`);
 log.info(`Max daily loss: ${BOT_CONFIG.maxDailyLossPct}%`);
 log.info(`Max consecutive losses: ${BOT_CONFIG.maxConsecutiveLosses}`);
 
+async function failLiveStartup(reason: string, err?: unknown): Promise<void> {
+  const detail = String((err as any)?.message ?? err ?? '').replace(/\s+/g, ' ').slice(0, 240);
+  log.error('LIVE startup failed: ' + reason + (detail ? ' — ' + detail : ''));
+  log.error('Reverting to DRY_RUN and restarting; no live orders were placed.');
+  forceDryRunEnv();
+  try {
+    await notify('critical', '🚨 LIVE startup failed: ' + reason + (detail ? ' — ' + detail : '') + '. Reverted to DRY RUN.', { key: 'trading_mode' });
+  } catch { /* best effort */ }
+  process.exit(1);
+}
+
 async function main() {
   startReportServer();
 
@@ -107,9 +119,8 @@ async function main() {
     try {
       await initClobClient();
     } catch (err) {
-      log.error(`Failed to init CLOB client: ${err.message}`);
-      log.error('Cannot trade without CLOB client. Exiting.');
-      process.exit(1);
+      await failLiveStartup('CLOB client init failed', err);
+      return;
     }
 
     // 1a. Cancel orphan orders from previous session BEFORE first poll.
@@ -168,9 +179,8 @@ async function main() {
     try {
       await verifyClobV2Readiness();
     } catch (err) {
-      log.error(`CLOB V2 readiness check failed: ${err.message}`);
-      log.error('Not trading live until the wallet is ready (docs/CLOB_V2_MIGRATION.md). Exiting.');
-      process.exit(1);
+      await failLiveStartup('CLOB V2 readiness check failed', err);
+      return;
     }
     // GTD orders need >= 180 s of lead on CLOB V2. Warn (do not change config)
     // when the limit window can place later than that allows.
@@ -235,7 +245,26 @@ async function main() {
   loadEntrySnapshotFromDisk();
 
   const stats = getStats();
-  log.info(`Position state: bankroll=$${stats.bankroll.toFixed(2)}, trades=${stats.totalTrades}, W/L=${stats.wins}/${stats.losses}`);
+  log.info(`Position state: bankroll=${stats.bankroll.toFixed(2)}, trades=${stats.totalTrades}, W/L=${stats.wins}/${stats.losses}`);
+
+  // Live accounting must start from the real pUSD collateral, never the paper
+  // bankroll. Live state/journal use separate files (state.live.json /
+  // trade_journal.live.jsonl), so this is also the first live-mode seed.
+  if (!BOT_CONFIG.dryRun) {
+    try {
+      const balance = await getUsdcBalance();
+      const onChain = Number(balance?.balance);
+      if (!Number.isFinite(onChain) || onChain <= 0) {
+        throw new Error('pUSD balance is zero or unreadable');
+      }
+      setBankroll(onChain);
+      resetDailyBaseline();
+      log.info(`Live bankroll seeded from pUSD: ${onChain.toFixed(2)}`);
+    } catch (err) {
+      await failLiveStartup('pUSD bankroll sync failed', err);
+      return;
+    }
+  }
 
   // 4b. Re-check settlements that were booked from price_fallback (the market
   // switch aborts the oracle retries at expiry) against Polymarket's real

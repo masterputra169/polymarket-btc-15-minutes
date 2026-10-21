@@ -101,6 +101,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
 - **Clean UI pass**: one compact health indicator instead of five source pills; secondary layout actions moved into a `⋯` menu; duplicate widget descriptions/categories/titles removed; long reason strings removed; softer canvas background. Verified desktop/tablet/mobile.
+- **Live/dry switch**: topbar mode badge opens a confirmation dialog (type LIVE/DRY); live preflight checks CLOB V2 + pUSD, refuses open positions, separates live state/journal (`state.live.json`), seeds bankroll from pUSD and auto-reverts to dry if live startup fails. Bot remains dry.
 - **Security hardening**: dashboard password rotated; **daily 07:00 WIB rotation via Telegram** with hot-reloaded hash (no auth-service restart), root-only fallback, previous password message deleted when possible; daily root-only secrets backup + restore drill.
 - **Test hardening**: 5 drift-gate regression tests + auth gateway HTTP tests; CLOB cold-import timeout fixed under full-suite load.
 - **Delivery**: Cloudflare Insights CSP fixed; Vite bundles split into app/react/motion/vendor (no >500 KB warning).

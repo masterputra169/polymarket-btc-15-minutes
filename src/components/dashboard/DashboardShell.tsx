@@ -57,6 +57,7 @@ interface DashboardShellProps {
   onToggleBot: () => void;
   onReconnect?: () => void;
   onLogout?: () => void;
+  onSetTradingMode?: (mode: 'live' | 'dry', confirm: string) => Promise<any>;
 }
 
 const STORAGE_KEY = 'btc15.dashboard.layout.v4';
@@ -157,7 +158,7 @@ function rectStyle(rect: Rect, colWidth: number, rowHeight: number): CSSProperti
   };
 }
 
-export default function DashboardShell({ widgets, status, loading, onToggleBot, onReconnect, onLogout }: DashboardShellProps) {
+export default function DashboardShell({ widgets, status, loading, onToggleBot, onReconnect, onLogout, onSetTradingMode }: DashboardShellProps) {
   const initialSaved = useRef<SavedLayout | null | undefined>(undefined);
   if (initialSaved.current === undefined) initialSaved.current = loadSaved();
   const [layout, setLayout] = useState<LayoutMap>(() => {
@@ -170,6 +171,10 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const [editMode, setEditMode] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [modeDialog, setModeDialog] = useState<'live' | 'dry' | null>(null);
+  const [modeConfirm, setModeConfirm] = useState('');
+  const [modeBusy, setModeBusy] = useState(false);
+  const [modeError, setModeError] = useState<string | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -645,7 +650,12 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
           <div className="tb-brand__text">
             <strong>POLY<span>//</span>15</strong>
           </div>
-          <span className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')} title={status.dryRun ? 'DRY RUN: simulated bankroll, no real orders' : 'LIVE orders enabled'}>{status.dryRun ? 'DRY RUN' : 'LIVE'}</span>
+          <button
+            className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')}
+            onClick={() => { setModeDialog(status.dryRun ? 'live' : 'dry'); setModeConfirm(''); setModeError(null); }}
+            disabled={!onSetTradingMode || !status.botConnected || status.paused}
+            title={status.dryRun ? 'DRY RUN: simulated bankroll, no real orders — click to switch' : 'LIVE orders enabled — click to switch'}
+          >{status.dryRun ? 'DRY RUN' : 'LIVE'}</button>
         </div>
 
         <div className="tb-market">
@@ -836,6 +846,75 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
               <button className="drawer-primary" onClick={() => setLibraryOpen(false)}>Done</button>
             </div>
           </aside>
+        </div>
+      )}
+
+      {modeDialog && (
+        <div className="mode-scrim" onClick={() => { if (!modeBusy) setModeDialog(null); }}>
+          <div className="mode-dialog" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+            <div className="mode-dialog__head">
+              <span className="mode-dialog__kicker">TRADING MODE</span>
+              <h2>{modeDialog === 'live' ? 'Enable live money?' : 'Return to dry run?'}</h2>
+            </div>
+            <p className="mode-dialog__copy">
+              {modeDialog === 'live'
+                ? 'This restarts the bot with real orders enabled. The bot preflights CLOB V2 readiness and pUSD balance first; if startup fails it automatically reverts to DRY RUN.'
+                : 'This restarts the bot with simulated orders only. An open live position must be settled before switching.'}
+            </p>
+            <ul className="mode-dialog__list">
+              {modeDialog === 'live' ? (
+                <>
+                  <li>Real pUSD will be used for entries and settlements.</li>
+                  <li>Live journal and live position value use real fills, separate from paper history.</li>
+                  <li>Open positions must be flat before switching.</li>
+                </>
+              ) : (
+                <>
+                  <li>New entries become simulated.</li>
+                  <li>Live state and journal are kept separately.</li>
+                  <li>Open positions must be settled first.</li>
+                </>
+              )}
+            </ul>
+            <label className="mode-dialog__label" htmlFor="mode-confirm">
+              Type <b>{modeDialog === 'live' ? 'LIVE' : 'DRY'}</b> to confirm
+            </label>
+            <input
+              id="mode-confirm"
+              className="mode-dialog__input"
+              value={modeConfirm}
+              onChange={e => setModeConfirm(e.target.value)}
+              placeholder={modeDialog === 'live' ? 'LIVE' : 'DRY'}
+              autoComplete="off"
+              autoFocus
+              disabled={modeBusy}
+            />
+            {modeError && <div className="mode-dialog__error">{modeError}</div>}
+            <div className="mode-dialog__actions">
+              <button className="mode-dialog__cancel" onClick={() => setModeDialog(null)} disabled={modeBusy}>Cancel</button>
+              <button
+                className="mode-dialog__go"
+                disabled={modeBusy || modeConfirm !== (modeDialog === 'live' ? 'LIVE' : 'DRY')}
+                onClick={async () => {
+                  if (!onSetTradingMode || !modeDialog) return;
+                  setModeBusy(true); setModeError(null);
+                  try {
+                    const result = await onSetTradingMode(modeDialog, modeConfirm);
+                    if (result?.ok) {
+                      setModeDialog(null);
+                      showToast(result?.restarting ? 'Restarting bot in ' + modeDialog.toUpperCase() + ' mode…' : 'Trading mode updated');
+                    } else {
+                      setModeError(result?.error || 'Mode switch rejected');
+                    }
+                  } catch (err) {
+                    setModeError(err instanceof Error ? err.message : 'Mode switch failed');
+                  } finally {
+                    setModeBusy(false);
+                  }
+                }}
+              >{modeBusy ? 'CHECKING…' : modeDialog === 'live' ? 'ENABLE LIVE' : 'RETURN TO DRY'}</button>
+            </div>
+          </div>
         </div>
       )}
       {toast && <div className="dash-toast">{toast}</div>}
