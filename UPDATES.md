@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-10-21 21:10 WIB_
+_Last updated: 2026-10-21 21:25 WIB_
 
 | Area | State |
 |---|---|
@@ -42,6 +42,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-21 — Update-log policy enforced
+
+**Status:** implemented
+**Area:** docs / process
+**What changed:** added a mandatory update-log policy to CLAUDE.md. Every future change affecting behaviour, deployment, security, data, configuration or user-visible docs must append a dated entry to UPDATES.md in the same session, newest first; a task is not complete until that entry exists.
+**Files / commits:** CLAUDE.md; UPDATES.md.
+**Verification:** policy is at the top of CLAUDE.md; entry format follows the template below; no secrets included.
+**Deployment:** docs only.
+**Risks / follow-up:** keep entries factual and secret-free; corrections are new entries, not rewrites.
+
+---
 ### 2026-10-21 — Living update log
 
 **Status:** implemented
@@ -203,3 +214,4 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 6. **Link evidence** — detailed report, screenshot, test count, commit hash.
 7. **Update the current status table** when bot/security/ops state changes.
 8. **Use WIB** for times; include UTC in parentheses only when needed.
+9. **Definition of done:** before the final response, confirm the new UPDATES.md entry exists and matches the deployed state.

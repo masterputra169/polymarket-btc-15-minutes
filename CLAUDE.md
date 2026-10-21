@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Update log policy
+
+Every change that affects behaviour, deployment, security, data, configuration, or user-visible documentation must append a dated entry to [UPDATES.md](UPDATES.md) **in the same session**, newest first, and update its Current status table when applicable. A task is not complete until that entry exists. Corrections are new entries; never rewrite history. Do not put passwords, tokens, keys, cookies, or tunnel credentials in the log.
+
 ## Commands
 
 ```bash
