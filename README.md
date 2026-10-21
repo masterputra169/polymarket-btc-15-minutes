@@ -48,6 +48,8 @@
 ## Latest update (2026-10-21)
 
 > Current operational state. The September project-status table below is kept as the Railway-era baseline; this section supersedes it.
+>
+> **Consolidated update:** [UPDATE-2026-10-21.md](UPDATE-2026-10-21.md) — status, security, live/dry mode, ML metrics, verification and operations.
 
 ### Where it runs now
 
@@ -96,7 +98,7 @@ Layout is stored per browser in `localStorage` under `btc15.dashboard.layout.v4`
 - Full suite: **91 files / 941 tests PASS**.
 - `npm run build` PASS; new hashed assets deployed to nginx.
 - Browser checks through the public URL: drag, resize, hide, persist after reload, presets, theme, widget library, no page errors.
-- Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays Basic-Auth protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
+- Public dashboard recovery: nginx's injected `STATUS_AUTH_TOKEN` was stale and `/ws` returned 401; token sync now runs every 2 minutes, `/ws` stays session-protected, and the frontend retries at the 30s ceiling with a manual Reconnect button.
 - Mobile 390×844: no horizontal overflow; price and Bot Core stack correctly.
 - Public URL moved to **https://poly15.dollarkilat.xyz/** (Cloudflare named tunnel; Quick Tunnel disabled). Verified 16 widgets + WebSocket through the new hostname.
 - Custom animated login page + session auth gateway: wrong password rejected, correct login opens the dashboard, reload keeps the session, logout returns to login. nginx `auth_request` protects `/ws` and report APIs.
