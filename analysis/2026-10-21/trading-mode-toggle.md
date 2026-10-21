@@ -7,6 +7,8 @@
 - The button is disabled while the bot is paused or disconnected.
 - After confirmation the bot restarts in the new mode (systemd, ~10s); the dashboard reconnects and the badge updates.
 
+![Mode confirmation](mode-dialog.png)
+
 ## Safety model
 
 - **Live preflight:** before enabling live money the bot initializes CLOB V2, runs the readiness/allowance check, and requires a non-zero pUSD balance. If preflight fails, the mode does not change.
