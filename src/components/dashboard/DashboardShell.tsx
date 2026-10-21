@@ -165,6 +165,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const [accent, setAccent] = useState<AccentName>(initialSaved.current?.accent ?? 'cyan');
   const [density, setDensity] = useState<DensityName>(initialSaved.current?.density ?? 'comfortable');
   const [editMode, setEditMode] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [canvasWidth, setCanvasWidth] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
@@ -188,6 +189,13 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     .sort((a, b) => (orderIndex.get(a.id) ?? 999) - (orderIndex.get(b.id) ?? 999)), [widgets, hidden, orderIndex]);
   const heightLayout = visibleLayout(layout, visibleWidgets.map(w => w.id));
   const canvasHeight = isCompact ? 0 : Math.max(520, bottomOf(heightLayout) * (rowHeight + GAP) + 8);
+
+  useEffect(() => {
+    const onScroll = () => setIsScrolled(window.scrollY > 6);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   useEffect(() => {
     const el = canvasRef.current;
@@ -604,6 +612,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
 
   return (
     <div className="dash-shell" data-accent={accent} data-density={density}>
+      <div className={cx('dash-scroll-veil', isScrolled ? 'is-visible' : false)} aria-hidden />
       <header className="dash-topbar">
         <div className="tb-brand">
           <img className="tb-mark" src="/brand/poly15-mark.svg?v=20261021" alt="" draggable={false} />
