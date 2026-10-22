@@ -13,14 +13,14 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Area | State |
 |---|---|
 | Bot | active, **DRY_RUN=true**, no real orders; no open position |
-| Paper bankroll | $61.45 · 814 trades · 525W / 289L |
+| Paper bankroll | $62.18 · 815 trades · 526W / 289L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live not activated** |
 | Drift | no drift at last check |
 | Tests | 91 files / 941 tests PASS |
-| Disk | 8.2 GB used / 39 GB (22%); 29 GB free; logrotate daily/maxsize 100M |
-| Auto-deploy | active; VPS deployed `c24fa17`; docs-only `c39f55a` seen |
+| Disk | 8.2 GB used / 39 GB (22%); 29 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
+| Auto-deploy | active; VPS deployed `4311ea4`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -44,6 +44,25 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-22 — Log-throttle release auto-deployed
+
+**Status:** deployed / verified
+**Area:** bot / ops / monitoring
+**What changed:**
+- Auto-deployed commit `4311ea4` at 23:50:14 WIB after CI success; source is clean at `4311ea4`.
+- The per-poll INFO summary is now emitted once every 200 polls (debug mode keeps every poll), reducing syslog generation drastically.
+- `scripts/nginx-token-sync.sh` mode is fixed in git (0755); auth-sync service now completes successfully.
+- Logrotate is daily + maxsize 100M + rotate 7 with `su root syslog`; old syslog compressed to 68 MB.
+**Verification:**
+- Bot 815 trades, 526W/289L, paper bankroll $62.18, no open position, DRY RUN.
+- Services active: bot, auth, nginx, rsyslog, auto-deploy timer; `systemctl --failed` clean.
+- Disk 8.2 GB used / 39 GB (22%), 29 GB free; journal 940 MB; active syslog 2.1 MB.
+- The dirty-worktree guard also caught the temporary manual `chmod` at 23:48 and blocked the deploy until it was cleaned.
+**Files / commits:** bot/src/loop.ts; scripts/nginx-token-sync.sh; UPDATES.md; `4311ea4`.
+**Deployment:** active via auto-deploy.
+**Risks / follow-up:** logrotate is host-local; old source backups remain intentionally.
+
+---
 ### 2026-10-22 — Disk pressure root cause, auth-sync repair, log throttle
 
 **Status:** implemented; auto-deploy verification pending

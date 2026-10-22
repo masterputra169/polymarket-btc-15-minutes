@@ -2,7 +2,7 @@
 
 ## Status
 
-**Active since 2026-10-21 22:03 WIB.** Last deployed commit: `c24fa17`. Timer runs every 5 minutes. The first end-to-end run was blocked twice by an open paper position, then deployed automatically after settlement.
+**Active since 2026-10-21 22:03 WIB.** Last deployed commit: `4311ea4` (2026-10-22 23:50 WIB). Timer runs every 5 minutes. The first end-to-end run was blocked twice by an open paper position, then deployed automatically after settlement.
 
 ## What it does
 
@@ -91,6 +91,8 @@ On a switch failure the script automatically:
 If the VPS itself is lost, use the daily secrets/data backups. The source is always recoverable from GitHub.
 
 ## Push-detection verification
+
+- **2026-10-22 23:50 WIB** — code commit `4311ea4` auto-deployed; dirty-worktree guard blocked the first attempt after a manual chmod, then the clean release deployed successfully.
 
 - **2026-10-21 22:03 WIB** — code commit `c24fa17` auto-deployed after the open paper position settled; health checks passed.
 - **2026-10-21 22:08 WIB** — docs commit `bffb86a` detected, CI-green, classified docs-only; bot stayed up and source stayed on `c24fa17`.
