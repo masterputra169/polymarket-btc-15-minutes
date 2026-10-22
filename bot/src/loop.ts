@@ -2735,13 +2735,18 @@ export async function pollOnce() {
     const recTag = rec.action === 'WAIT' && rec.reason
       ? `${rec.action} [${rec.confidence}] ${rec.phase} (${rec.reason})`
       : `${rec.action}${rec.side ? ' ' + rec.side : ''} [${rec.confidence}] ${rec.phase}`;
-    log.info(
-      `#${pollCounter} [${_pollMs}ms] | BTC $${lastPrice.toFixed(0)} | PTB $${(priceToBeat.value ?? 0).toFixed(0)} | ` +
-      `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
-      `${recTag} | ` +
-      `T:${timeLeftMin?.toFixed(1) ?? '?'}m | $${bankroll.toFixed(0)} | ` +
-      `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} ${mcTag} | ${srcTag}`
-    );
+    // Per-poll summaries are useful for debugging but at 50ms they generate
+    // ~1.7M lines/day and filled /var/log/syslog (1.4GB in 4 days). Keep a
+    // 10-second INFO summary; debug mode still gets every poll.
+    if (pollCounter % 200 === 0 || BOT_CONFIG.logLevel === 'debug') {
+      log.info(
+        `#${pollCounter} [${_pollMs}ms] | BTC ${lastPrice.toFixed(0)} | PTB ${(priceToBeat.value ?? 0).toFixed(0)} | ` +
+        `P:${(ensembleUp * 100).toFixed(0)}% E:${edgeTag} ${mlTag} | ` +
+        `${recTag} | ` +
+        `T:${timeLeftMin?.toFixed(1) ?? '?'}m | ${bankroll.toFixed(0)} | ` +
+        `${regimeInfo.regime} | ${stabTag} ${arbTag} ${fillTag} ${flowTag} ${sfTag} ${mcTag} | ${srcTag}`
+      );
+    }
     // A poll that reached its summary line saw prices, the market and the model:
     // that is the heartbeat the in-process liveness watch (index.ts) waits for.
     beatLiveness();

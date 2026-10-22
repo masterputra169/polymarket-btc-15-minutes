@@ -19,7 +19,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Live/dry switch | available; **live not activated** |
 | Drift | no drift at last check |
 | Tests | 91 files / 941 tests PASS |
-| Disk | 10 GB used / 39 GB (27%); 28 GB free; journal capped at 1 GB |
+| Disk | 8.2 GB used / 39 GB (22%); 29 GB free; logrotate daily/maxsize 100M |
 | Auto-deploy | active; VPS deployed `c24fa17`; docs-only `c39f55a` seen |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
@@ -44,6 +44,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-22 — Disk pressure root cause, auth-sync repair, log throttle
+
+**Status:** implemented; auto-deploy verification pending
+**Area:** ops / monitoring / bot
+**What changed:**
+- Found `/var/log/syslog` at 1.4 GB because the bot logged a full poll summary every ~50 ms; `/var/log` was also group-writable, so logrotate had been refusing to rotate.
+- Fixed logrotate: daily + maxsize 100M + rotate 7 + `su root syslog`; rotated and compressed old syslog (1.4 GB → 68 MB). Journal capped/vacuumed to ~940 MB; apt cache cleaned.
+- Fixed `polybot-dashboard-auth-sync.service`: `scripts/nginx-token-sync.sh` lost its execute bit after the bootstrap reset; restored 0755 and reset the failed quick-tunnel unit.
+- Reduced per-poll INFO logging to one summary every 200 polls (debug mode still logs every poll); this is the code change deployed by auto-deploy.
+**Files / commits:** bot/src/loop.ts; scripts/nginx-token-sync.sh mode; UPDATES.md; VPS logrotate config.
+**Verification:** auth-sync service completes 0/SUCCESS; `systemctl --failed` clean; disk 8.2 GB used (22%); syslog rotation debug clean; bot still DRY RUN.
+**Deployment:** ops fixes active; bot log-throttle code awaiting CI/auto-deploy.
+**Risks / follow-up:** logrotate config is host-local; re-check after OS upgrades. Old bootstrap source backups remain intentionally.
+
+---
 ### 2026-10-22 — Daily health check and storage cleanup
 
 **Status:** verified
