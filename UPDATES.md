@@ -12,14 +12,15 @@ _Last updated: 2026-10-21 21:25 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **DRY_RUN=true**, no real orders |
-| Paper bankroll | $59.74 · 778 trades · 503W / 275L |
+| Bot | active, **DRY_RUN=true**, no real orders; no open position |
+| Paper bankroll | $61.45 · 814 trades · 525W / 289L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live not activated** |
 | Drift | no drift at last check |
 | Tests | 91 files / 941 tests PASS |
-| Auto-deploy | active; VPS deployed `c24fa17`; timer every 5 min |
+| Disk | 10 GB used / 39 GB (27%); 28 GB free; journal capped at 1 GB |
+| Auto-deploy | active; VPS deployed `c24fa17`; docs-only `c39f55a` seen |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -43,6 +44,24 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-22 — Daily health check and storage cleanup
+
+**Status:** verified
+**Area:** ops / docs
+**What changed:**
+- Rotated dashboard password ran successfully at 07:00 WIB; old local password returned 401, new fallback password returned 200; local password file resynced without exposing it in chat.
+- Journald capped at 1 GB (`/etc/systemd/journald.conf.d/90-poly15.conf`); journal usage went from 2.4 GB to ~981 MB, disk from 32% to 27% used.
+- Reviewed the latest dry-run report and services.
+**Files / commits:** UPDATES.md; VPS config `/etc/systemd/journald.conf.d/90-poly15.conf`.
+**Verification:**
+- Bot: 814 trades, 525W/289L, WR 64.6%, paper bankroll $61.45, no open position, DRY RUN.
+- Latest report: 813 resolved, +$16.20; current model 355 trades, 61.4% WR, +$5.02; Brier skill vs market -5.6% (still negative).
+- Services active: bot, auth, nginx, tunnel, watchdog, auto-deploy timer; bot NRestarts=0 since 2026-10-21 22:02 WIB.
+- Daily data backups through 2026-10-22 and secure secrets backups through 2026-10-22 exist.
+**Deployment:** docs/ops only; no code change.
+**Risks / follow-up:** model still has negative Brier skill and Europe remains weak; keep DRY RUN. Auto-deploy remains dry-only/guarded.
+
+---
 ### 2026-10-21 — Auto-deploy push detection verified
 
 **Status:** verified
