@@ -15,7 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
-import { getSentimentStats } from '../engines/sentimentSignal.ts';
+import { fetchSentiment, getSentimentStats } from '../engines/sentimentSignal.ts';
 import { getMacroStats, checkMacroEvent } from './macroCalendar.ts';
 
 const log = createLogger('GlobalRisk');
@@ -134,8 +134,8 @@ async function fetchText(url, timeoutMs = 10_000) {
 }
 async function fetchHeadlines() {
   const feeds = [
-    ['GoogleNews-Crypto', 'https://news.google.com/rss/search?q=bitcoin%20OR%20crypto&hl=en-US&gl=US&ceid=US:en'],
-    ['GoogleNews-Geo', 'https://news.google.com/rss/search?q=geopolitics%20OR%20war%20OR%20sanctions%20OR%20tariff&hl=en-US&gl=US&ceid=US:en'],
+    ['GoogleNews-Crypto', 'https://news.google.com/rss/search?q=bitcoin%20OR%20crypto%20when%3A24h&hl=en-US&gl=US&ceid=US:en'],
+    ['GoogleNews-Geo', 'https://news.google.com/rss/search?q=geopolitics%20OR%20war%20OR%20sanctions%20OR%20tariff%20when%3A24h&hl=en-US&gl=US&ceid=US:en'],
     ['Cointelegraph', 'https://cointelegraph.com/rss'],
   ];
   const all = [];
@@ -148,10 +148,12 @@ async function fetchHeadlines() {
       errors.push(name + ': ' + err.message);
     }
   }));
-  // Deduplicate by title, newest first, cap at 24.
+  // Deduplicate by title; keep only the last 24h where a publish time exists.
+  const cutoff = Date.now() - 24 * 60 * 60_000;
+  const fresh = all.filter((h) => h.publishedAt == null || Date.parse(h.publishedAt) >= cutoff);
   const seen = new Set();
   const dedup = [];
-  for (const h of all.sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''))) {
+  for (const h of fresh.sort((a, b) => (b.publishedAt || '').localeCompare(a.publishedAt || ''))) {
     const key = h.title.toLowerCase().slice(0, 100);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -176,11 +178,16 @@ export async function refreshGlobalRisk() {
   refreshing = true;
   const now = Date.now();
   try {
-    const [news, macroStats, sentimentStats] = await Promise.all([
+    const [news, macroStats, initialSentiment] = await Promise.all([
       fetchHeadlines(),
       Promise.resolve(getMacroStats()),
       Promise.resolve(getSentimentStats()),
     ]);
+    let sentimentStats = initialSentiment;
+    if (!sentimentStats.current) {
+      await fetchSentiment();
+      sentimentStats = getSentimentStats();
+    }
     const headlines = news.headlines;
     const negative = headlines.filter((h) => h.tone < 0).length;
     const positive = headlines.filter((h) => h.tone > 0).length;

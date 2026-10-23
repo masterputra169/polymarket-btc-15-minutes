@@ -25,10 +25,11 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.18 (from default 0.5) |
 | Health state | no health issues; `systemctl --failed` clean |
+| Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; record-only |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `4345b9f`; last result success |
+| Auto-deploy | active; VPS deployed `9073fb2`; global-risk patch pending |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -52,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global risk collector live
+
+**Status:** deployed; quality patch pending auto-deploy
+**Area:** monitoring / analytics
+**What changed:**
+- `globalRisk.ts` started with the bot: 5-minute snapshots, RSS headlines, existing macro calendar and F&G sentiment.
+- First snapshot: MEDIUM, 24 headlines, 11 negative; stored in `bot/data/global_risk.jsonl`.
+- Global Risk panel is visible in the dashboard and shows macro, sentiment, headlines and freshness.
+- Follow-up patch filters headlines to the last 24h and fetches sentiment on first refresh.
+**Files / commits:** bot/src/monitoring/globalRisk.ts; src/components/GlobalRiskPanel.tsx; bot/scripts/globalRiskStudy.mjs; analysis/2026-10-23/global-risk-pilot.md; UPDATES.md.
+**Verification:** collector log + JSONL observed; panel rendered; no page errors; bot/frontend typecheck/build PASS.
+**Deployment:** collector deployed at 22:08 WIB; quality patch pending CI/auto-deploy.
+**Risks / follow-up:** keyword scoring is noisy; GDELT was 429 from VPS; no historical snapshots yet. Record-only, not a gate.
+
+---
 ### 2026-10-23 — Global risk pilot (record-only)
 
 **Status:** implemented; deploy/verification pending
