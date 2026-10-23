@@ -25,11 +25,11 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.18 (from default 0.5) |
 | Health state | no health issues; `systemctl --failed` clean |
-| Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; record-only |
+| Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `9073fb2`; global-risk patch pending |
+| Auto-deploy | active; VPS deployed `80ca37a`; relevance patch pending |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global-risk relevance filter
+
+**Status:** implemented; deploy pending
+**Area:** monitoring / analytics
+**What changed:**
+- Geopolitical RSS results now require a market/policy relevance keyword (oil, energy, dollar, Fed, sanctions, tariff, trade, China, Russia, etc.).
+- Generic conflict headlines no longer inflate the risk score.
+- The Global Risk panel remains record-only; no trading rule uses it.
+**Files / commits:** bot/src/monitoring/globalRisk.ts; UPDATES.md.
+**Verification:** build/typecheck pending; snapshot after deploy will show the filtered count.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** keyword filtering is a heuristic; continue collecting forward snapshots.
+
+---
 ### 2026-10-23 — Global risk collector live
 
 **Status:** deployed; quality patch pending auto-deploy

@@ -102,6 +102,9 @@ function parseRss(xml, feedName) {
     const b = m[1];
     const title = tag(b, 'title');
     if (!title) continue;
+    // The geopolitics query is broad; keep only headlines with a market/policy
+    // angle so generic conflict stories do not inflate the risk score.
+    if (feedName === 'GoogleNews-Geo' && !/market|oil|energy|dollar|currency|fed|inflation|sanction|tariff|trade|economy|shipping|bitcoin|crypto|stock|bank|nato|russia|ukraine|china|taiwan|iran|israel|middle east|opec/i.test(title)) continue;
     const pub = tag(b, 'pubDate');
     let publishedAt = null;
     if (pub) {
