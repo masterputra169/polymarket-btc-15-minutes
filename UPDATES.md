@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `34ef67d`; layout fix pending |
+| Auto-deploy | active; VPS deployed `bad63db`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global Risk layout gap fixed
+
+**Status:** deployed / verified
+**Area:** dashboard / UX
+**What changed:**
+- Removed the fixed y:16 default slot that placed Global Risk at the bottom of saved layouts.
+- Added a one-time migration for layouts that already stored the old y:16 position.
+- Auto-placement for new widgets now uses the **visible** widget layout, so hidden widgets no longer reserve old slots and create a large vertical gap.
+**Files / commits:** src/App.tsx; src/components/dashboard/DashboardShell.tsx; UPDATES.md; `bad63db`.
+**Verification:** simulated saved layout with 11 hidden widgets + Global Risk at y:16 → after reload Global Risk is at y:5, only 14px below the last visible widget; no page errors.
+**Deployment:** active via auto-deploy.
+**Risks / follow-up:** the migration runs once per browser; a hard refresh is required to load the new bundle.
+
+---
 ### 2026-10-23 — Global Risk layout placement fix
 
 **Status:** implemented; deploy pending
