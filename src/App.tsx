@@ -19,6 +19,7 @@ import TraderDiscoveryPanel from './components/TraderDiscoveryPanel.tsx';
 import SessionInfo from './components/SessionInfo.tsx';
 import TapePanel from './components/TapePanel.tsx';
 import JournalTimeSeriesPanel from './components/JournalTimeSeriesPanel.tsx';
+import GlobalRiskPanel from './components/GlobalRiskPanel.tsx';
 import JevPanel from './components/JevPanel.tsx';
 import DashboardShell from './components/dashboard/DashboardShell.tsx';
 import LoginPage, { AuthSplash } from './components/auth/LoginPage.tsx';
@@ -371,6 +372,8 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
 
   // JournalTimeSeriesPanel: time-series analytics from bot
   // Granular deps — only re-render when actual data changes, NOT computedAt (which ticks every recompute)
+  const globalRiskData = data?.globalRisk ?? null;
+
   const journalAnalyticsData = useMemo(() => {
     if (!data?.journalAnalytics) return null;
     const ja = data.journalAnalytics;
@@ -639,6 +642,11 @@ const botData = useMemo(() => {
       id: 'traderDiscovery', title: 'Trader Discovery', icon: '⌖', description: 'wallet scan and simulation',
       category: 'analytics', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
       defaultRect: { x: 8, y: 13, w: 4, h: 3 }, content: <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />,
+    },
+    {
+      id: 'globalRisk', title: 'Global Risk', icon: '◈', description: 'macro, geopolitics and news',
+      category: 'market', accent: 'ember', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
+      defaultRect: { x: 0, y: 16, w: 4, h: 3 }, content: <GlobalRiskPanel data={globalRiskData} />,
     },
   ];
 

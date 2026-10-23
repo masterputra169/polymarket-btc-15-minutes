@@ -81,6 +81,7 @@ import { startupAlert } from './src/monitoring/alertTemplates.ts';
 
 // Monitoring / guards
 import { initMacroCalendar, fetchMacroEvents } from './src/monitoring/macroCalendar.ts';
+import { startGlobalRiskMonitor, stopGlobalRiskMonitor } from './src/monitoring/globalRisk.ts';
 
 import { envInt } from './src/utils/env.ts';
 
@@ -307,6 +308,9 @@ async function main() {
   // 4d2. Initialize Macro Event Guard (free FF calendar, runs regardless of AI agent).
   initMacroCalendar();
 
+  // 4d2b. Global-risk pilot: record-only macro/geopolitical/news context.
+  startGlobalRiskMonitor();
+
   // 4d3. Initialize LLM Regime Classifier (requires AI agent + OpenRouter).
   if (BOT_CONFIG.ai.enabled) {
     initLLMRegime();
@@ -455,6 +459,7 @@ async function main() {
     stopReconciler();
     stopRedeemer();
     stopMonitor();
+    stopGlobalRiskMonitor();
     stopDailySummary();
     stopEvaluationReport();
     try { await shutdownDataStreams(); } catch { /* ignore */ }

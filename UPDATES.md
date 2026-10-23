@@ -52,6 +52,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global risk pilot (record-only)
+
+**Status:** implemented; deploy/verification pending
+**Area:** monitoring / analytics
+**What changed:**
+- Added `bot/src/monitoring/globalRisk.ts`: 5-minute keyless RSS collector (Google News crypto/geopolitics + Cointelegraph), combining existing ForexFactory macro and F&G/CoinGecko sentiment.
+- Stores timestamped snapshots in `bot/data/global_risk.jsonl`; no trading behavior uses it.
+- Added `GlobalRiskPanel` to the dashboard (risk level, macro window, sentiment, headlines, freshness).
+- Added `bot/scripts/globalRiskStudy.mjs` to evaluate trades during risk windows once forward data exists.
+**Files / commits:** bot/src/monitoring/globalRisk.ts; bot/index.ts; bot/src/loop.ts; src/components/GlobalRiskPanel.tsx; src/App.tsx; bot/scripts/globalRiskStudy.mjs; analysis/2026-10-23/global-risk-pilot.md; UPDATES.md.
+**Verification:** bot/frontend typecheck PASS; RSS endpoints tested from VPS; GDELT returned 429 and is deferred.
+**Deployment:** pending CI + auto-deploy.
+**Risks / follow-up:** keyword scoring is noisy; no historical snapshots; do not use as a gate until forward evidence.
+
+---
 ### 2026-10-23 — Shadow study release auto-deployed
 
 **Status:** deployed / verified

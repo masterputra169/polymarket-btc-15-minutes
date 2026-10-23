@@ -203,6 +203,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
+import { getGlobalRisk } from './monitoring/globalRisk.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, maybeJevDecisionShadow, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
@@ -2874,6 +2875,7 @@ export async function pollOnce() {
       aiOptimizer: getOptimizerStatus(),
       aiStats: getOpenRouterStats(),
       sentiment: getSentimentStats(),
+      globalRisk: getGlobalRisk(),
       executionTiming: getExecutionTimingStatus(),
 
       // Volume features
