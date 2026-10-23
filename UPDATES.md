@@ -28,7 +28,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `9878a22`; last result success |
+| Auto-deploy | active; VPS deployed `4345b9f`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -52,6 +52,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Shadow study release auto-deployed
+
+**Status:** deployed / verified
+**Area:** analytics / deployment
+**What changed:**
+- Auto-deployed commit `4345b9f` at 21:21:11 WIB; source is clean at `4345b9f`.
+- Shadow decision study script and pre-registered filter rules are now on the VPS.
+- Auto-deploy used the normal CI-gated path; no manual source copy was needed after the worktree was clean.
+**Verification:** bot/auth/nginx/tunnel/health/auto-deploy active; `systemctl --failed` clean; source clean; study JSON written; bot still DRY RUN, 833 trades, no open position.
+**Deployment:** active.
+**Risks / follow-up:** forward checkpoints, a real challenger candidate, remote offsite/Cloudflare credentials, and live readiness remain.
+
+---
 ### 2026-10-23 — Shadow decision study and pre-registration
 
 **Status:** implemented / record-only
