@@ -27,7 +27,8 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Health state | no health issues; `systemctl --failed` clean |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
-| Auto-deploy | active; VPS deployed `751bbb2`; backup-encryption commit pending |
+| Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
+| Auto-deploy | active; VPS deployed `9878a22`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -51,6 +52,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Encrypted backup release auto-deployed
+
+**Status:** deployed / verified
+**Area:** backup / security / deployment
+**What changed:**
+- Auto-deployed commit `9878a22` at 14:38:16 WIB after CI success; source is clean at `9878a22`.
+- Encrypted secrets and data backup scripts are now the live versions.
+- Dirty-worktree guard blocked the first attempt because the scripts had been installed manually; after cleaning, the normal release path succeeded.
+**Verification:** bot/auth/nginx/tunnel/health/auto-deploy active; `systemctl --failed` clean; `DRY_RUN=true`; Kelly 0.18; no open position; backup scripts executable.
+**Deployment:** active.
+**Risks / follow-up:** key loss means backup loss; remote offsite still needs credentials. Confidence guard/champion and forward filters still need a forward sample.
+
+---
 ### 2026-10-23 — Encrypted data backup and local offsite copy
 
 **Status:** deployed / verified
