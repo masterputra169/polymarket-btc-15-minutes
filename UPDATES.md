@@ -52,6 +52,24 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Shadow decision study and pre-registration
+
+**Status:** implemented / record-only
+**Area:** ML / analytics
+**What changed:**
+- Added `bot/scripts/shadowDecisionStudy.mjs`: current-model time split 60/40, Wilson intervals, candidate filter comparison, and a champion/challenger gate.
+- On 374 current-model trades (train 224 / test 150):
+  - `no-Europe+MID`: test 80 trades, 67.5% WR, +7.04pp margin, +$12.93
+  - `no-sideProb-0.6`: test 81 trades, 71.6% WR, +9.86pp margin, +$16.29
+  - `no-LATE` and `no-sideProb-0.8`: failed the split
+  - combined small filter: 75.8% but only 33 test trades — not promoted
+- Added `analysis/2026-10-23/pre-registered-filter-rules.md` with frozen candidates, sequential checkpoints, promotion rules and champion gate.
+**Files / commits:** bot/scripts/shadowDecisionStudy.mjs; analysis/2026-10-23/shadow-decision-study.md; analysis/2026-10-23/pre-registered-filter-rules.md; UPDATES.md.
+**Verification:** script executed on the VPS journal and wrote `bot/data/shadow_decision_study.json`; no trading rule was changed.
+**Deployment:** record-only; source will be deployed by the normal auto-deploy path.
+**Risks / follow-up:** split results are selection/validation on the same model history; forward checkpoints are still required. No champion candidate exists yet.
+
+---
 ### 2026-10-23 — Encrypted backup release auto-deployed
 
 **Status:** deployed / verified
