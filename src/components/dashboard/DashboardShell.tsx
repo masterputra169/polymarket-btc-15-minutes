@@ -325,7 +325,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     const target = event.target as HTMLElement;
     if (target.closest('button, a, input, select, textarea')) return;
     const el = (event.currentTarget as HTMLElement).closest('.dash-widget') as HTMLElement | null;
-    const origin = layout[id];
+    const origin = heightLayout[id];
     if (!el || !origin) return;
     event.preventDefault();
     event.stopPropagation();
@@ -360,7 +360,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       const cell = nx + ':' + ny;
       if (cell !== lastCell) {
         lastCell = cell;
-        setDropTarget({ rect: last, valid: isAreaFree(layout, last, id) });
+        setDropTarget({ rect: last, valid: isAreaFree(heightLayout, last, id) });
       }
     });
 
@@ -375,7 +375,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
       try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
-      const valid = isAreaFree(layout, last, id);
+      const valid = isAreaFree(heightLayout, last, id);
       gestureRef.current = null;
       setDragId(null);
       setDropTarget(null);
@@ -384,7 +384,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
         // If the exact drop cell is occupied, move to the nearest free slot
         // instead of snapping back. A nearly-full grid otherwise looks like
         // "custom drag is broken".
-        const target = valid ? last : placeWidget(layout, id, last)[id];
+        const target = valid ? last : placeWidget(heightLayout, id, last)[id];
         flushSync(() => setLayout(prev => ({ ...prev, [id]: target })));
         el.style.transform = '';
         if (!valid) showToast('Moved to nearest free area');
@@ -399,7 +399,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp, { once: true });
     window.addEventListener('pointercancel', onCancel, { once: true });
-  }, [editMode, isCompact, layout, colWidth, rowHeight, showToast]);
+  }, [editMode, isCompact, heightLayout, colWidth, rowHeight, showToast]);
 
   const startCompactDrag = useCallback((event: React.PointerEvent<HTMLElement>, id: string) => {
     if (!editMode || !isCompact || event.button !== 0) return;
@@ -560,7 +560,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       try { handle.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
       gestureRef.current = null;
       setResizeId(null);
-      const valid = !cancelled && isAreaFree(layout, last, id);
+      const valid = !cancelled && isAreaFree(heightLayout, last, id);
       if (valid) {
         flushSync(() => setLayout(prev => ({ ...prev, [id]: last })));
       } else if (!cancelled && (last.w !== origin.w || last.h !== origin.h)) {

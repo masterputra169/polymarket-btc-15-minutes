@@ -53,6 +53,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Hidden widgets no longer block drag
+
+**Status:** implemented; deploy pending
+**Area:** dashboard / UX
+**What changed:**
+- Drag/resize collision checks now use only visible widgets; slots occupied by hidden widgets are treated as free.
+- This removes the red “occupied” guideline over visually empty areas.
+**Files / commits:** src/components/dashboard/DashboardShell.tsx; UPDATES.md.
+**Verification:** frontend typecheck/build PASS; browser test after deploy.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** hard refresh; hidden widgets remain recoverable from the widget library.
+
+---
 ### 2026-10-23 — Drag fallback deployed
 
 **Status:** deployed / verified
