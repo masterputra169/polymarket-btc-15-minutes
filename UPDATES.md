@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `bad63db`; last result success |
+| Auto-deploy | active; VPS deployed `4cafe74`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global Risk migration v2
+
+**Status:** deployed
+**Area:** dashboard / UX
+**What changed:** bumped the one-time layout migration key so browsers that already ran the first migration also re-flow Global Risk after the visible-layout placement fix.
+**Files / commits:** src/components/dashboard/DashboardShell.tsx; `4cafe74`.
+**Verification:** auto-deployed at 22:35:56 WIB; source clean; services active.
+**Deployment:** active.
+**Risks / follow-up:** hard refresh required once; drag/auto-arrange remains available for custom layouts.
+
+---
 ### 2026-10-23 — Global Risk layout gap fixed
 
 **Status:** deployed / verified
