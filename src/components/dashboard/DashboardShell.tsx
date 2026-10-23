@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { flushSync } from 'react-dom';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  bottomOf, clampRect, findFreeSlot, isAreaFree, packLayout, visibleLayout,
+  bottomOf, clampRect, findFreeSlot, isAreaFree, packLayout, placeWidget, visibleLayout,
   DASHBOARD_COLS,
 } from './layout.ts';
 import type { LayoutMap, Rect } from './layout.ts';
@@ -380,14 +380,16 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       setDragId(null);
       setDropTarget(null);
       endBodyDragClass();
-      if (!cancelled && moved && valid) {
-        flushSync(() => setLayout(prev => ({ ...prev, [id]: last })));
+      if (!cancelled && moved) {
+        // If the exact drop cell is occupied, move to the nearest free slot
+        // instead of snapping back. A nearly-full grid otherwise looks like
+        // "custom drag is broken".
+        const target = valid ? last : placeWidget(layout, id, last)[id];
+        flushSync(() => setLayout(prev => ({ ...prev, [id]: target })));
         el.style.transform = '';
+        if (!valid) showToast('Moved to nearest free area');
       } else {
-        // Leaving the old transform in place until the class is removed would
-        // freeze the panel mid-air; reset it so the base transition snaps back.
         el.style.transform = '';
-        if (!cancelled && moved) showToast('That space is occupied — drop on a free area');
       }
       el.style.transition = '';
       el.style.willChange = '';

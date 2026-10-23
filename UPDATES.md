@@ -53,6 +53,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Drag fallback for occupied cells
+
+**Status:** implemented; deploy pending
+**Area:** dashboard / UX
+**What changed:** dragging a widget onto an occupied 12-column cell now moves it to the nearest free slot instead of snapping back and showing “occupied”.
+**Files / commits:** src/components/dashboard/DashboardShell.tsx; UPDATES.md.
+**Verification:** frontend typecheck/build PASS; full-grid drag test after deploy.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** drop-to-nearest is more forgiving but less precise; use Edit layout + Auto arrange for a clean layout.
+
+---
 ### 2026-10-23 — Global Risk migration v2
 
 **Status:** deployed
