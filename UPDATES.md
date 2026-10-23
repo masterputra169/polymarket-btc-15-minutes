@@ -13,7 +13,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Area | State |
 |---|---|
 | Bot | active, **DRY_RUN=true**, no real orders; no open position |
-| Paper bankroll | $62.18 · 815 trades · 526W / 289L |
+| Paper bankroll | $61.00 · 829 trades · 534W / 295L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live not activated** |
@@ -21,7 +21,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Tests | 91 files / 941 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
-| Auto-deploy | active; VPS deployed `4311ea4`; last result success |
+| Auto-deploy | active; VPS deployed `4311ea4`; docs `8ba8282` seen |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -45,6 +45,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Logrotate repair and manual password rotation
+
+**Status:** deployed / verified
+**Area:** ops / security
+**What changed:**
+- Removed `rsyslog.bak-*` from `/etc/logrotate.d`; logrotate was failing because the backup was parsed as a duplicate config.
+- `logrotate.service` now exits successfully; `systemctl --failed` is clean.
+- An audit command exposed a password fallback; the password was rotated immediately, the old password invalidated, and the local password file resynced without printing the new value.
+**Files / commits:** UPDATES.md; VPS `/root/rsyslog.bak-*`; rotation script output.
+**Verification:** logrotate debug has no errors; old local password 401, new password 200; services active; bot 829 trades / 534W-295L, WR 64.5%, PnL +$15.75, no open position, DRY RUN.
+**Deployment:** active.
+**Risks / follow-up:** never print secret-file contents in audit output. Consider a safer password sync mechanism. Model Brier remains -5.7% vs market.
+
+---
 ### 2026-10-23 — Swap increased to 4 GB
 
 **Status:** deployed / verified
