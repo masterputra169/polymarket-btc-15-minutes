@@ -77,8 +77,7 @@ sudo systemctl restart polybtc15-bot
 
 ## Backup
 
-`/etc/cron.daily/polybtc15-backup` menyimpan `bot/data` + `bot/.env` harian ke
-`/home/ubuntu/backups/polybtc15-data-YYYY-MM-DD.tar.gz` (retensi 14 hari, mode 600).
+`polybot-backup.timer` (07:15 WIB) menjalankan `/opt/polybtc15/scripts/backup-data.sh` yang menyimpan `bot/data` harian ke `/opt/polybtc15/backups/data-YYYYMMDD-HHMMSS.tar.gz.enc` (AES-256, retensi 14 hari, mode 600).
 Tape di R2 sudah lengkap dan lokal (599+ objek); file lokal di VPS dihapus setelah upload per jam.
 
 **Daily password rotation:** `polybot-dashboard-password-rotate.timer` runs at 07:00 WIB; `rotate-dashboard-password.mjs` writes `/opt/polybtc15/dashboard-password.hash` (auth service hot-reads it; no restart), keeps `auth.env` in sync, sends the password to Telegram, deletes the previous password message when possible, and writes a root-only fallback `/root/.poly15-dashboard-password-latest`. Recovery: read the fallback via SSH; Telegram test: `node /opt/polybtc15/scripts/rotate-dashboard-password.mjs --test-notify`.

@@ -26,6 +26,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Kelly shrink | 0.18 (from default 0.5) |
 | Health state | no health issues; `systemctl --failed` clean |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
+| Data backup | AES-256 encrypted archive; local offsite copy |
 | Auto-deploy | active; VPS deployed `751bbb2`; backup-encryption commit pending |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
@@ -50,6 +51,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Encrypted data backup and local offsite copy
+
+**Status:** deployed / verified
+**Area:** backup / security
+**What changed:**
+- `backup-data.sh` now writes `/opt/polybtc15/backups/data-YYYYMMDD-HHMMSS.tar.gz.enc` with the same root-only AES-256 key.
+- Old plaintext data archives are retained until normal 14-day retention.
+- Latest encrypted secrets and data archives were copied to the local machine as a simple offsite copy.
+**Files / commits:** scripts/backup-data.sh; docs/VPS.md; UPDATES.md.
+**Verification:** manual run produced a 905 KB encrypted archive; decrypt + tar-list check passed; local key is ACL-restricted to the current user.
+**Deployment:** active; next timer run uses the encrypted script.
+**Risks / follow-up:** key loss means archive loss. Remote offsite storage still requires credentials.
+
+---
 ### 2026-10-23 — Encrypted secrets backup
 
 **Status:** deployed / verified
