@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `f54856f`; last result success |
+| Auto-deploy | active; VPS deployed `25cd873`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,17 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Hidden widgets no longer block drag (deployed)
+
+**Status:** deployed / verified
+**Area:** dashboard / UX
+**What changed:** collision checks for drag/resize now use the visible layout. Slots occupied by hidden widgets are treated as free.
+**Files / commits:** src/components/dashboard/DashboardShell.tsx; `25cd873`.
+**Verification:** hid `limitOrder`, dragged Global Risk from x0/y15 into its old x4/y13 slot — move succeeded; no red occupied guideline.
+**Deployment:** active at 22:54:36 WIB.
+**Risks / follow-up:** hard refresh; hidden widgets remain recoverable from Widgets library.
+
+---
 ### 2026-10-23 — Hidden widgets no longer block drag
 
 **Status:** implemented; deploy pending
