@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `80ca37a`; relevance patch pending |
+| Auto-deploy | active; VPS deployed `34ef67d`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,22 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global risk pilot deployed
+
+**Status:** deployed / verified
+**Area:** monitoring / analytics
+**What changed:**
+- Auto-deployed `34ef67d` at 22:17:55 WIB; collector, panel and event-study script are live.
+- Collector pulls Google News RSS (crypto + market-relevant geopolitics) and Cointelegraph, combines existing ForexFactory macro and F&G sentiment, and writes 5-minute snapshots to `bot/data/global_risk.jsonl`.
+- First live snapshot: risk MEDIUM (48), F&G 50 neutral, macro clear, 14 negative headlines.
+- Headlines are filtered to the last 24h and geopolitical items require a market/policy relevance keyword.
+- Dashboard Global Risk panel renders with no page errors. No entry/sizing/exit rule uses this data.
+**Files / commits:** bot/src/monitoring/globalRisk.ts; src/components/GlobalRiskPanel.tsx; bot/scripts/globalRiskStudy.mjs; analysis/2026-10-23/global-risk-pilot.md; `34ef67d`.
+**Verification:** source clean at `34ef67d`; bot/auth/nginx/health/auto-deploy active; no failed units; collector log + JSONL observed; panel rendered; event study currently 0 joined trades (snapshots younger than trades).
+**Deployment:** active.
+**Risks / follow-up:** GDELT returned 429 from the VPS; FRED/CryptoPanic/ACLED/UCDP need credentials/approval; keyword risk scoring is heuristic. Do not use as a gate until forward evaluation.
+
+---
 ### 2026-10-23 — Global-risk relevance filter
 
 **Status:** implemented; deploy pending
