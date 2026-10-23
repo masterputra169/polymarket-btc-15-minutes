@@ -19,7 +19,8 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Live/dry switch | available; **live not activated** |
 | Drift | no drift at last check |
 | Tests | 91 files / 941 tests PASS |
-| Disk | 8.2 GB used / 39 GB (22%); 29 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
+| Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
+| Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Auto-deploy | active; VPS deployed `4311ea4`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
@@ -44,6 +45,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Swap increased to 4 GB
+
+**Status:** deployed / verified
+**Area:** ops / capacity
+**What changed:**
+- Added `/swap2.img` 2 GB, enabled it, and persisted it in `/etc/fstab`.
+- Existing `/swap.img` 2 GB is unchanged.
+- Total swap is now 4 GB; no application or service change.
+**Files / commits:** UPDATES.md; VPS `/swap2.img`; `/etc/fstab`.
+**Verification:** `free -h` shows 4.0 GiB total; `swapon --show` lists both files; `/proc/swaps` active; disk 11 GB used / 39 GB (29%), 27 GB free; bot/auth/nginx/auto-deploy all active.
+**Deployment:** active; persistent across reboot.
+**Risks / follow-up:** swap is slower than RAM; monitor `free -h` and `vmstat` (`si/so`). If swap is heavily active, add RAM instead. Disk cost is 2 GB.
+
+---
 ### 2026-10-22 — Log-throttle release auto-deployed
 
 **Status:** deployed / verified
