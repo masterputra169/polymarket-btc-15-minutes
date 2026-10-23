@@ -250,8 +250,17 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       const next = { ...prev };
       let changed = false;
       for (const id of Object.keys(next)) if (!ids.has(id)) { delete next[id]; changed = true; }
+      // A hidden widget should not reserve its old slot when a newly added
+      // widget is auto-placed; otherwise it lands at the bottom of a saved
+      // layout and leaves a large empty gap.
+      const visibleIds = [...ids].filter(id => next[id] && !hidden.includes(id));
+      const occupied = visibleLayout(next, visibleIds);
       for (const w of widgets) {
-        if (!next[w.id]) { next[w.id] = w.defaultRect ? clampRect(w.defaultRect) : findFreeSlot(next, w.defaultW, w.defaultH); changed = true; }
+        if (!next[w.id]) {
+          next[w.id] = w.defaultRect ? clampRect(w.defaultRect) : findFreeSlot(occupied, w.defaultW, w.defaultH);
+          if (!hidden.includes(w.id)) occupied[w.id] = next[w.id];
+          changed = true;
+        }
       }
       return changed ? next : prev;
     });
