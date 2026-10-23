@@ -95,6 +95,21 @@ function cx(...parts: (string | false | null | undefined)[]): string {
 
 function loadSaved(): SavedLayout | null {
   try {
+    // One-time migration for the first Global Risk widget: it was introduced
+    // with a fixed y:16 slot, which left a large gap in already-saved layouts.
+    // Remove that fixed slot once so the normal free-slot placement runs.
+    try {
+      const rawLayout = localStorage.getItem(STORAGE_KEY);
+      if (rawLayout && localStorage.getItem('btc15.dashboard.globalRiskMigrated') !== '1') {
+        const saved = JSON.parse(rawLayout) as Partial<SavedLayout>;
+        const gr = saved && saved.layout ? (saved.layout as any).globalRisk : null;
+        if (gr && (gr.y ?? 0) >= 16) {
+          delete (saved.layout as any).globalRisk;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        }
+        localStorage.setItem('btc15.dashboard.globalRiskMigrated', '1');
+      }
+    } catch { /* best effort */ }
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<SavedLayout>;

@@ -646,7 +646,7 @@ const botData = useMemo(() => {
     {
       id: 'globalRisk', title: 'Global Risk', icon: '◈', description: 'macro, geopolitics and news',
       category: 'market', accent: 'ember', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 0, y: 16, w: 4, h: 3 }, content: <GlobalRiskPanel data={globalRiskData} />,
+      content: <GlobalRiskPanel data={globalRiskData} />,
     },
   ];
 

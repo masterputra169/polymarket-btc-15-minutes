@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `34ef67d`; last result success |
+| Auto-deploy | active; VPS deployed `34ef67d`; layout fix pending |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Global Risk layout placement fix
+
+**Status:** implemented; deploy pending
+**Area:** dashboard / UX
+**What changed:**
+- Removed the fixed `y:16` default position from the Global Risk widget; new widgets now use the first free 4x3 slot.
+- Added a one-time migration for already-saved layouts that placed Global Risk at the old y:16 slot, so it is re-flowed instead of leaving a large gap.
+**Files / commits:** src/App.tsx; src/components/dashboard/DashboardShell.tsx; UPDATES.md.
+**Verification:** frontend typecheck/build PASS; needs browser verification after deploy.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** users with heavily customized layouts may still prefer to drag the widget; the migration only removes the old default position once.
+
+---
 ### 2026-10-23 — Global risk pilot deployed
 
 **Status:** deployed / verified
