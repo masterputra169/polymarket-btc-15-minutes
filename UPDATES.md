@@ -13,7 +13,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Area | State |
 |---|---|
 | Bot | active, **DRY_RUN=true**, no real orders; no open position |
-| Paper bankroll | $61.00 · 829 trades · 534W / 295L |
+| Paper bankroll | $60.12 · 833 trades · 536W / 297L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live not activated** |
@@ -21,6 +21,9 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Tests | 91 files / 941 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
+| Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
+| Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
+| Kelly shrink | 0.18 (from default 0.5) |
 | Auto-deploy | active; VPS deployed `4311ea4`; docs `8ba8282` seen |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
@@ -45,6 +48,36 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Health alerting and daily password sync
+
+**Status:** deployed / verified
+**Area:** ops / security
+**What changed:**
+- Added `poly15-health-alert.timer`: checks failed systemd units, critical services, disk >=85%, swap >=80%, bot/auth health endpoints and auto-deploy last result. Sends Telegram only when the issue set changes.
+- Installed and tested the health timer; current state has zero issues.
+- Added `scripts/sync-dashboard-password.ps1` and a Windows scheduled task at 07:05 WIB to pull the rotated password fallback without printing it.
+- Updated the local SSH known-host entry after verifying the VPS ED25519 fingerprint via an authenticated channel.
+**Files / commits:** scripts/health-alert.sh; scripts/poly15-health-alert.service; .timer; scripts/install-health-alert.sh; scripts/sync-dashboard-password.ps1; UPDATES.md.
+**Verification:** health service exit 0, timer active, `systemctl --failed` clean; scheduled task last result 0. New task next run 2026-10-24 07:05 WIB.
+**Deployment:** active.
+**Risks / follow-up:** health alert is host-local; password task depends on the local SSH key.
+
+---
+
+### 2026-10-23 — Calibration study and Kelly shrink 0.18
+
+**Status:** analysis complete; sizing applied
+**Area:** ML / risk
+**What changed:**
+- Ran the 60/40 calibration study on 832 rows: best shrink 0.15; test Brier model 0.2561, market 0.2286, shrunk 0.2277.
+- Set `KELLY_PROB_SHRINK=0.18` on the VPS (was absent/default 0.5); bot restarted cleanly in DRY RUN.
+- Documented current-model forward buckets: Europe and MID negative; side-probability 0.6 and 0.8 buckets negative; 0.7 bucket positive. No hard entry filter was added.
+**Files / commits:** analysis/2026-10-23/calibration-filter-study.md; UPDATES.md; VPS `bot/.env`.
+**Verification:** bot active, 833 trades / 536W-297L, no open position; calibration report generated; no code entry-rule change.
+**Deployment:** sizing active; analysis record-only.
+**Risks / follow-up:** confidence guard and champion/challenger still need a held-out forward sample; do not hardcode Europe/MID filters yet.
+
+---
 ### 2026-10-23 — Logrotate repair and manual password rotation
 
 **Status:** deployed / verified

@@ -1,0 +1,10 @@
+[Unit]
+Description=POLY//15 health alert (failed units, disk, swap, endpoints, auto-deploy)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/poly15-health-alert
+Nice=10
