@@ -25,7 +25,8 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.18 (from default 0.5) |
 | Health state | no health issues; `systemctl --failed` clean |
-| Auto-deploy | active; VPS deployed `751bbb2`; last result success |
+| Secrets backup | AES-256 encrypted local archive; key copied locally |
+| Auto-deploy | active; VPS deployed `751bbb2`; backup-encryption commit pending |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -49,6 +50,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Encrypted secrets backup
+
+**Status:** deployed / verified
+**Area:** security / backup
+**What changed:**
+- `backup-secrets.sh` now encrypts the archive with AES-256-CBC/PBKDF2 and verifies it can be decrypted before reporting success.
+- New archive format: `/home/ubuntu/backups/secure/polybtc15-secrets-YYYY-MM-DD.tar.gz.enc`.
+- Key generated root-only at `/root/.poly15-backup.key`; a secure local copy was written to `C:\Users\Asus\.poly15\backup\backup.key` without printing it.
+- Existing unencrypted archives are retained until normal 30-day retention; new backups are encrypted.
+**Files / commits:** scripts/backup-secrets.sh; docs/VPS.md; UPDATES.md.
+**Verification:** manual run produced `.enc`; decrypt + tar-list check passed; key length/ownership verified; no secret printed.
+**Deployment:** active on VPS; next timer uses it.
+**Risks / follow-up:** key loss means backup loss; key must be stored securely. Off-site replication still needs a destination/credentials. Data backups remain separate.
+
+---
 ### 2026-10-23 — Monitoring/calibration release auto-deployed
 
 **Status:** deployed / verified
