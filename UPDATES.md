@@ -24,7 +24,8 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.18 (from default 0.5) |
-| Auto-deploy | active; VPS deployed `4311ea4`; docs `8ba8282` seen |
+| Health state | no health issues; `systemctl --failed` clean |
+| Auto-deploy | active; VPS deployed `751bbb2`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -48,6 +49,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-23 — Monitoring/calibration release auto-deployed
+
+**Status:** deployed / verified
+**Area:** ops / monitoring / risk
+**What changed:**
+- Auto-deployed commit `751bbb2` at 13:10:31 WIB after CI success; source is clean at `751bbb2`.
+- Health alert timer is active (failed units, critical services, disk/swap, bot/auth endpoints, auto-deploy result).
+- Windows password sync task is tested (last result 0; next run 2026-10-24 07:05 WIB).
+- `KELLY_PROB_SHRINK=0.18` remains active after restart.
+- Calibration/filter study is stored at analysis/2026-10-23/calibration-filter-study.md.
+**Verification:** bot active in DRY RUN, 833 trades / 536W-297L, no open position; boot/auth/nginx/tunnel/health/auto-deploy timers active; `systemctl --failed` clean; no health issues recorded.
+**Deployment:** active via auto-deploy.
+**Risks / follow-up:** confidence guard and champion/challenger need a forward holdout; session filters were not hardcoded; external Cloudflare/offsite credentials and live-readiness work remain separate.
+
+---
 ### 2026-10-23 — Health alerting and daily password sync
 
 **Status:** deployed / verified
