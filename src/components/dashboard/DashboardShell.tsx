@@ -100,14 +100,14 @@ function loadSaved(): SavedLayout | null {
     // Remove that fixed slot once so the normal free-slot placement runs.
     try {
       const rawLayout = localStorage.getItem(STORAGE_KEY);
-      if (rawLayout && localStorage.getItem('btc15.dashboard.globalRiskMigrated') !== '1') {
+      if (rawLayout && localStorage.getItem('btc15.dashboard.globalRiskMigratedV2') !== '1') {
         const saved = JSON.parse(rawLayout) as Partial<SavedLayout>;
         const gr = saved && saved.layout ? (saved.layout as any).globalRisk : null;
         if (gr && (gr.y ?? 0) >= 16) {
           delete (saved.layout as any).globalRisk;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
         }
-        localStorage.setItem('btc15.dashboard.globalRiskMigrated', '1');
+        localStorage.setItem('btc15.dashboard.globalRiskMigratedV2', '1');
       }
     } catch { /* best effort */ }
     const raw = localStorage.getItem(STORAGE_KEY);
