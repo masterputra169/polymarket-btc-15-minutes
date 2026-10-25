@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `376de5b`; last result success |
+| Auto-deploy | active; VPS deployed `799814b`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - JEV feature update deployed
+
+**Status:** deployed / verified
+**Area:** AI / data collection
+**What changed:**
+- JEV logs now include 30 snapshot features (momentum, volatility, oscillators, order-flow proxies, regime, ML/market state).
+- Settle prompt now requests a calibrated probability with market odds as prior and warns against extremes.
+- JEV remains shadow; no gate/veto/sizing change.
+**Verification:** deployed `799814b` at 21:44:21 WIB; next JEV call at 14:45:36Z logged 30 feature keys; bot/auth/nginx active; no failed units.
+**Files / commits:** bot/src/ai/jevAdvisor.ts; `799814b`.
+**Deployment:** active.
+**Risks / follow-up:** prompt change is not validated edge; target study still failed. Wait for enough feature-rich forward samples before refitting.
+
+---
 ### 2026-10-26 - JEV feature collection and prompt update
 
 **Status:** implemented; deploy pending
