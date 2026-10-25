@@ -206,6 +206,7 @@ import { initMetEngine, querySmartMoney, clearMetEngineCache, getMetEngineStats 
 // Sentiment signal (free APIs: Fear & Greed, BTC Dominance)
 import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment } from './engines/sentimentSignal.ts';
 import { getGlobalRisk } from './monitoring/globalRisk.ts';
+import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, maybeJevDecisionShadow, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
@@ -2014,6 +2015,16 @@ export async function pollOnce() {
         orderFlow: getOrderFlowFeatures(),
     };
     try { maybeJevAnalyze(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
+    // Dedicated 15s order-flow history, independent of JEV call cadence.
+    try {
+      maybeRecordOrderFlow({
+        slug: marketSlug || null,
+        orderFlow: getOrderFlowFeatures(),
+        market: { marketUp, marketDown, btcPrice: lastPrice, priceToBeat: priceToBeat.value, timeLeftMin, phase: rec.phase, session: getSessionName() },
+        ml: mlResult.available ? { probUp: mlResult.mlProbUp, confidence: mlResult.mlConfidence, side: mlResult.mlSide } : null,
+        jev: jevLatest ? { direction: jevLatest.direction, directionConfidence: jevLatest.directionConfidence, settleUpProbability: jevLatest.settleUpProbability, settleUpCalibrated: jevLatest.settleUpCalibrated, regime: jevLatest.regime } : null,
+      });
+    } catch { /* record-only */ }
     if (rec.action === 'ENTER') {
       try { maybeJevDecisionShadow(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
     }

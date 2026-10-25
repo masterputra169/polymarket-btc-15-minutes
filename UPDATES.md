@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Order-flow history logger + backup
+
+**Status:** implemented; deploy pending
+**Area:** data collection / backup
+**What changed:**
+- Added bot/src/monitoring/orderFlowLogger.ts: writes bot/data/orderflow.jsonl every 15 seconds per market with order-flow, market/ML and JEV baseline fields.
+- Logger is independent of JEV call cadence; record-only and never throws.
+- Added orderflow.jsonl to the daily encrypted data backup list.
+**Why:** audit found only 5 order-flow rows, all created as a side effect of JEV calls. That is too sparse for feature research and would lose data if JEV were disabled.
+**Files / commits:** bot/src/monitoring/orderFlowLogger.ts; bot/src/loop.ts; scripts/backup-data.sh; analysis/2026-10-26/order-flow-features.md; UPDATES.md.
+**Verification:** bot typecheck PASS; 24 tests PASS; build PASS.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** old JEV rows lack orderFlow; only new order-flow rows can train the new features. The 100 MB rotation keeps about a month at current cadence.
+
+---
 ### 2026-10-26 - Order-flow features deployed
 
 **Status:** deployed / verified

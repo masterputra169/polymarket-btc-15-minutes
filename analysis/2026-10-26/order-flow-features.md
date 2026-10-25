@@ -21,6 +21,8 @@ Record-only. No entry, sizing, or exit rule uses these features yet.
 
 - Broadcast field: orderFlow.
 - JEV log features.orderFlow.
+- Dedicated history: bot/data/orderflow.jsonl, every 15 seconds per market, with market/ML/JEV baseline.
+- Backed up daily by scripts/backup-data.sh.
 - Values: ok, sampleCount, updatedAt, spread, mid, microprice, micropriceEdgePct, ofi, depthImbalance, topImbalance, tradeImbalance, vpin, tradeCount, buyVolume, sellVolume.
 
 ## Next validation

@@ -16,7 +16,7 @@ TMP=$(mktemp)
 trap 'rm -f "$TMP"' EXIT
 cd "$DATA"
 FILES=""
-for f in state.json trade_journal.jsonl verified_journal.jsonl ptb_health.jsonl feedback.json jev_log.jsonl jev_outcomes.json; do
+for f in state.json trade_journal.jsonl verified_journal.jsonl ptb_health.jsonl feedback.json jev_log.jsonl jev_outcomes.json orderflow.jsonl; do
   [ -f "$f" ] && FILES="$FILES $f"
 done
 if [ -z "$FILES" ]; then
