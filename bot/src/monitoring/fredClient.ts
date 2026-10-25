@@ -42,15 +42,14 @@ export type FredSnapshot = {
 };
 
 const RELEASES: Array<{ re: RegExp; label: string }> = [
-  { re: /consumer price index/i, label: 'CPI' },
-  { re: /employment situation/i, label: 'NFP' },
-  { re: /fomc/i, label: 'FOMC' },
-  { re: /gross domestic product/i, label: 'GDP' },
-  { re: /personal income and outlays/i, label: 'PCE' },
-  { re: /producer price index/i, label: 'PPI' },
-  { re: /retail sales/i, label: 'RETAIL' },
-  { re: /university of michigan/i, label: 'UMICH' },
-  { re: /initial claims/i, label: 'CLAIMS' },
+  { re: /^Consumer Price Index/i, label: 'CPI' },
+  { re: /^Employment Situation/i, label: 'NFP' },
+  { re: /^Gross Domestic Product$/i, label: 'GDP' },
+  { re: /^Personal Income and Outlays/i, label: 'PCE' },
+  { re: /^Producer Price Index/i, label: 'PPI' },
+  { re: /^Retail Sales/i, label: 'RETAIL' },
+  { re: /^University of Michigan/i, label: 'UMICH' },
+  { re: /^Initial Claims$/i, label: 'CLAIMS' },
 ];
 const SERIES: Array<{ id: string; label: string; unit: string; limit: number; yoy?: boolean }> = [
   { id: 'CPIAUCSL', label: 'CPI', unit: '% y/y', limit: 24, yoy: true },
@@ -161,7 +160,13 @@ async function fetchReleases(key: string): Promise<FredRelease[]> {
     const days = Math.max(0, Math.round((Date.parse(date + 'T00:00:00Z') - today) / 86400_000));
     out.push({ date, name, label: matcher.label, daysUntil: days });
   }
-  return out.sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8);
+  // One entry per release type; FRED can return multiple rows for a release.
+  const byLabel = new Map<string, FredRelease>();
+  for (const r of out) {
+    const existing = byLabel.get(r.label);
+    if (!existing || r.date < existing.date) byLabel.set(r.label, r);
+  }
+  return [...byLabel.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8);
 }
 async function load(): Promise<FredSnapshot> {
   const key = loadKey();
