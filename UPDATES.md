@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `799814b`; last result success |
+| Auto-deploy | active; VPS deployed `f216792`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Order-flow features deployed
+
+**Status:** deployed / verified
+**Area:** signal features / AI data
+**What changed:**
+- OFI, top imbalance, depth imbalance, microprice edge, trade imbalance and VPIN proxy now flow from CLOB book/trades into the orderFlow broadcast and JEV features.
+- No entry/sizing/exit rule reads these values.
+**Verification:** deployed f216792 at 21:58:16 WIB; bot active; no errors; live JEV call at 15:00:36Z logged orderFlow.ok=true, sampleCount 265, tradeCount 55, vpin 0.4984, depthImbalance 0.0835.
+**Files / commits:** f216792; analysis/2026-10-26/order-flow-features.md.
+**Deployment:** active.
+**Risks / follow-up:** OFI can be zero when best-level sizes did not change between polls; trade-side labels can be missing. Validate incremental Brier before using in decisions.
+
+---
 ### 2026-10-26 - Order-flow features P0 (record-only)
 
 **Status:** implemented; deploy pending
