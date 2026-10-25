@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `848a6cb`; last result success |
+| Auto-deploy | active; VPS deployed `376de5b`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 — JEV calibration deployed
+
+**Status:** deployed / verified
+**Area:** AI / evaluation
+**What changed:**
+- Monotone PAVA calibration for JEV settle probabilities is live (`2026-10-26-pava-70`).
+- Raw and calibrated settle values are both recorded; gate/veto/sizing use calibrated when available.
+- Dashboard JEV panel shows calibrated settle and calibrated edge vs market.
+- Evaluator now prints raw vs calibrated Brier, calibrated buckets and direction-normalized Brier.
+**Verification:** deployed `376de5b` at 21:12:46 WIB; bot active; JEV shadow; evaluator matched 617 markets: raw settle Brier 0.3331 → calibrated 0.2331; market 0.2279; ML 0.2317; direction 59.8% vs rule 61.3%.
+**Files / commits:** bot/src/ai/jevSettleCalibration.ts; bot/src/ai/jevAdvisor.ts; bot/scripts/jevEvaluate.mts; src/components/JevPanel.tsx; tests; analysis/2026-10-26/jev-calibration.md; `376de5b`.
+**Deployment:** active.
+**Risks / follow-up:** calibrated probability is still worse than the market and the OOS test was 0.2437. Do not activate JEV gate/veto; collect 100+ policy entries and re-fit on a future slice.
+
+---
 ### 2026-10-26 — JEV settle calibration + shadow guard
 
 **Status:** implemented; deploy pending
