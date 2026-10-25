@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - JEV walk-forward target study (record-only)
+
+**Status:** completed; no production change
+**Area:** AI / evaluation
+**What changed:**
+- Added bot/scripts/jevTargetStudy.mts: 6 expanding walk-forward folds, 372 OOF predictions, market/stack models, paired bootstrap, coverage-aware Brier.
+- Primary target failed: stack Brier 0.2349/0.2350 vs market 0.2290; bootstrap lower bound above zero (stack significantly worse).
+- Secondary target failed for stack at n>=100; 30% slice (n=111) is market 0.1953, stack 0.2121/0.2148. 20% stack slice is 0.1997 but n=74.
+- JEV remains shadow; no gate/veto/sizing change.
+**Files / commits:** bot/scripts/jevTargetStudy.mts; analysis/2026-10-26/jev-target-study.md; UPDATES.md.
+**Verification:** bot typecheck PASS; study run on VPS with 619 markets.
+**Deployment:** analysis-only; no runtime behavior change.
+**Risks / follow-up:** current JEV features do not beat market. Add new features and retrain/refit on future data; do not activate JEV.
+
+---
 ### 2026-10-26 - JEV stacking study (record-only)
 
 **Status:** completed; no production change
