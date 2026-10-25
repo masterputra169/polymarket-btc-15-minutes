@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 — FRED macro integration
+
+**Status:** implemented; deploy pending
+**Area:** monitoring / data
+**What changed:**
+- Added `bot/src/monitoring/fredClient.ts`: reads `FRED_API_KEY` from env or protected `/etc/poly15/global-risk.env` / `~/.poly15/global-risk.env`.
+- Caches CPI, Fed funds, 10Y, VIX, unemployment and upcoming CPI/NFP/FOMC/GDP/PCE/PPI/retail releases for 6 hours.
+- Global Risk snapshots now include `fred`; dashboard panel shows the latest series and next release.
+- No trading behavior changed; event gate remains inactive.
+**Files / commits:** bot/src/monitoring/fredClient.ts; bot/src/monitoring/globalRisk.ts; src/components/GlobalRiskPanel.tsx; UPDATES.md.
+**Verification:** bot/frontend typecheck PASS; production build PASS; live FRED CPIAUCSL and release-dates requests returned HTTP 200.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** released values are latest revisions, not point-in-time vintages; release dates have no time-of-day. Key was exposed in chat earlier; rotate later if desired.
+
+---
 ### 2026-10-25 — Global Risk paused; FRED credential stored
 
 **Status:** paused; credential stored and validated

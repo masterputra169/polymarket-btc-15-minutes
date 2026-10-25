@@ -17,6 +17,8 @@ import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { fetchSentiment, getSentimentStats } from '../engines/sentimentSignal.ts';
 import { getMacroStats, checkMacroEvent } from './macroCalendar.ts';
+import { fetchFredSnapshot } from './fredClient.ts';
+import type { FredSnapshot } from './fredClient.ts';
 
 const log = createLogger('GlobalRisk');
 const DATA_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data');
@@ -51,7 +53,8 @@ export type GlobalRiskSnapshot = {
   };
   headlines: GlobalRiskHeadline[];
   counts: { negative: number; positive: number; total: number };
-  sources: { rss: string; macro: string; sentiment: string };
+  fred: FredSnapshot;
+  sources: { rss: string; macro: string; sentiment: string; fred: string };
 };
 
 const NEGATIVE = [
@@ -74,7 +77,8 @@ let snapshot: GlobalRiskSnapshot = {
   sentiment: { fng: null, classification: null, composite: null },
   headlines: [],
   counts: { negative: 0, positive: 0, total: 0 },
-  sources: { rss: 'not fetched', macro: 'not fetched', sentiment: 'not fetched' },
+  fred: { status: 'disabled', fetchedAt: 0, series: [], cpiYoY: null, releases: [] },
+  sources: { rss: 'not fetched', macro: 'not fetched', sentiment: 'not fetched', fred: 'not fetched' },
 };
 let timer = null;
 let refreshing = false;
@@ -181,10 +185,11 @@ export async function refreshGlobalRisk() {
   refreshing = true;
   const now = Date.now();
   try {
-    const [news, macroStats, initialSentiment] = await Promise.all([
+    const [news, macroStats, initialSentiment, fred] = await Promise.all([
       fetchHeadlines(),
       Promise.resolve(getMacroStats()),
       Promise.resolve(getSentimentStats()),
+      fetchFredSnapshot(),
     ]);
     let sentimentStats = initialSentiment;
     if (!sentimentStats.current) {
@@ -221,14 +226,16 @@ export async function refreshGlobalRisk() {
       },
       headlines: headlines.slice(0, 8),
       counts: { negative, positive, total: headlines.length },
+      fred,
       sources: {
         rss: news.error ? 'partial: ' + news.error : 'ok (' + headlines.length + ')',
         macro: macroStats.enabled ? 'ok' : 'disabled',
         sentiment: fng == null ? 'stale' : 'ok',
+        fred: fred.status,
       },
     };
     appendSnapshot(snapshot);
-    log.debug('risk ' + level + ' score=' + score + ' headlines=' + headlines.length);
+    log.debug('risk ' + level + ' score=' + score + ' headlines=' + headlines.length + ' fred=' + fred.status);
     return snapshot;
   } catch (err) {
     log.debug('refresh failed: ' + err.message);

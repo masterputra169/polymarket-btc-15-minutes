@@ -1,6 +1,8 @@
 import React from 'react';
 
 type Headline = { title: string; source: string; url: string; publishedAt: string | null; tone: number };
+type FredSeries = { id: string; label: string; value: number | null; unit: string; date: string | null };
+type FredRelease = { date: string; name: string; label: string; daysUntil: number };
 type Data = {
   score?: number;
   level?: 'low' | 'medium' | 'high';
@@ -10,6 +12,7 @@ type Data = {
   sentiment?: { fng?: number | null; classification?: string | null; composite?: number | null };
   headlines?: Headline[];
   counts?: { negative?: number; positive?: number; total?: number };
+  fred?: { status?: string; series?: FredSeries[]; cpiYoY?: number | null; releases?: FredRelease[] };
 };
 
 function ago(ms?: number) {
@@ -55,6 +58,31 @@ export default function GlobalRiskPanel({ data }: { data?: Data | null }) {
                 {data.counts?.negative ?? 0} negative / {data.counts?.total ?? 0} headlines
               </div>
             </div>
+          </div>
+          <div style={{ borderTop: '1px solid var(--dash-line)', paddingTop: 6 }}>
+            <div style={{ color: 'var(--dash-dim)', fontSize: 8, letterSpacing: '.1em', marginBottom: 3 }}>FRED</div>
+            {data.fred?.status === 'ok' && (data.fred.series?.length ?? 0) > 0 ? (
+              <>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
+                  {(data.fred.series || []).slice(0, 5).map((s) => (
+                    <span key={s.id} style={{ color: 'var(--dash-text)', fontSize: 9 }}>
+                      <span style={{ color: 'var(--dash-dim)' }}>{s.label}</span>{' '}
+                      {s.value == null ? '—' : s.value.toFixed(2)}<span style={{ color: 'var(--dash-muted)' }}>{s.unit}</span>
+                    </span>
+                  ))}
+                </div>
+                {data.fred.releases?.[0] && (
+                  <div style={{ color: 'var(--dash-muted)', fontSize: 8, marginTop: 3 }}>
+                    next {data.fred.releases[0].label} · {data.fred.releases[0].date}
+                    {data.fred.releases[0].daysUntil != null ? ' · in ' + data.fred.releases[0].daysUntil + 'd' : ''}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div style={{ color: 'var(--dash-muted)', fontSize: 9 }}>
+                {data.fred?.status === 'disabled' ? 'key not configured' : 'unavailable'}
+              </div>
+            )}
           </div>
           {data.headlines && data.headlines.length > 0 && (
             <div style={{ borderTop: '1px solid var(--dash-line)', paddingTop: 6 }}>
