@@ -53,6 +53,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-25 — Dry-run entry cap raised to 80c
+
+**Status:** active
+**Area:** configuration / trade selection
+**What changed:**
+- `DRY_RUN_HARD_ENTRY_CAP` changed from `0.75` to `0.80` in `/opt/polybtc15/bot/.env`; bot restarted with no open position.
+- `EVAL_WINDOW_START` reset to `2026-10-25T13:54:17Z` because the entry selection changed.
+- `TIME_GATES_ENABLED=false` and `BLOCKED_SESSIONS=","`; there is no weekend or session blackout gate.
+**Files / commits:** `/opt/polybtc15/bot/.env` (VPS only); UPDATES.md.
+**Verification:** startup warning confirms dry-run hard cap 68c → 80c; bot active; no position at restart; feed startup normal.
+**Risks / follow-up:** dry-run only—live base cap remains 0.68; soft 63c ceiling still applies unless the high-edge/ML bypass clears it. Raising the cap adds lower-quality trades; evaluate the new window separately.
+
+---
 ### 2026-10-26 — FRED integration deployed
 
 **Status:** deployed / verified
