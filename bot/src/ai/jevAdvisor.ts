@@ -110,6 +110,17 @@ interface JevRecord extends JevDecision {
   market: { timeLeftMin: number | null; session: string | null; btcPrice: number | null; priceToBeat: number | null; ptbSource: string | null; ptbExact: boolean; marketUp: number | null; marketDown: number | null };
   ml: { probUp: number | null; confidence: number | null; side: string | null; agreesWithRules: boolean | null };
   edge: { up: number | null; down: number | null; best: number | null };
+  features: {
+    timeLeftMin: number | null; session: string | null; phase: string | null;
+    btcPrice: number | null; priceToBeat: number | null; settlePrice: number | null;
+    delta1m: number | null; delta3m: number | null; atrPct: number | null; atrRatio: number | null;
+    rsi: number | null; rsiSlope: number | null; macdHist: number | null;
+    vwapDist: number | null; vwapSlope: number | null; bbPercentB: number | null; bbWidth: number | null;
+    stochK: number | null; stochD: number | null; emaCrossSignal: string | null; emaDistPct: number | null;
+    volDeltaBuyRatio: number | null; smartFlowSignal: string | null; signalConfirmCount: number | null;
+    regime: string | null; regimeConfidence: number | null;
+    mlProbUp: number | null; mlConfidence: number | null; marketUp: number | null; marketDown: number | null;
+  };
 }
 
 let _lastSlug: string | null = null;
@@ -184,7 +195,7 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
     },
     settle_above_ptb: {
       type: 'noul',
-      instructions: 'Will BTC settle above the price to beat at the end of this 15-minute window?',
+      instructions: 'Will BTC settle above the price to beat at the end of this 15-minute window? Return a calibrated probability. The market odds and the noisiness of a 15-minute BTC move are part of the state; use the odds as a prior and avoid extreme 0 or 1 answers unless the evidence is overwhelming.',
       criteria: {
         true: 'The expected settlement price is above the price to beat.',
         false: 'The expected settlement price is at or below the price to beat.',
@@ -268,6 +279,17 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
     market: { timeLeftMin: snapshot.timeLeftMin, session: snapshot.session, btcPrice: snapshot.btcPrice, priceToBeat: snapshot.priceToBeat, ptbSource: snapshot.ptbSource, ptbExact: snapshot.ptbExact, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown },
     ml: { probUp: snapshot.mlProbUp, confidence: snapshot.mlConfidence, side: snapshot.mlSide, agreesWithRules: snapshot.mlAgreesWithRules },
     edge: { up: snapshot.edgeUp, down: snapshot.edgeDown, best: snapshot.bestEdge },
+    features: {
+      timeLeftMin: snapshot.timeLeftMin, session: snapshot.session, phase: snapshot.phase,
+      btcPrice: snapshot.btcPrice, priceToBeat: snapshot.priceToBeat, settlePrice: snapshot.settlePrice,
+      delta1m: snapshot.delta1m, delta3m: snapshot.delta3m, atrPct: snapshot.atrPct, atrRatio: snapshot.atrRatio,
+      rsi: snapshot.rsi, rsiSlope: snapshot.rsiSlope, macdHist: snapshot.macdHist,
+      vwapDist: snapshot.vwapDist, vwapSlope: snapshot.vwapSlope, bbPercentB: snapshot.bbPercentB, bbWidth: snapshot.bbWidth,
+      stochK: snapshot.stochK, stochD: snapshot.stochD, emaCrossSignal: snapshot.emaCrossSignal, emaDistPct: snapshot.emaDistPct,
+      volDeltaBuyRatio: snapshot.volDeltaBuyRatio, smartFlowSignal: snapshot.smartFlowSignal, signalConfirmCount: snapshot.signalConfirmCount,
+      regime: snapshot.regime, regimeConfidence: snapshot.regimeConfidence,
+      mlProbUp: snapshot.mlProbUp, mlConfidence: snapshot.mlConfidence, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown,
+    },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
     ...(independent ? { stateVariant: 'independent_v2' } : {}),

@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - JEV feature collection and prompt update
+
+**Status:** implemented; deploy pending
+**Area:** AI / data collection
+**What changed:**
+- JEV log records now include the full available snapshot feature set: momentum, volatility, oscillators, order-flow proxies, regime, signals, ML and market state.
+- Settle question now explicitly asks for a calibrated probability, using market odds as prior and warning against extreme 0/1 answers.
+- No runtime decision changes; JEV remains shadow.
+**Why:** target study failed with the old feature set, and historical tape is unavailable (only the current hour). New enriched logs are required before a dedicated outcome model can be tested.
+**Files / commits:** bot/src/ai/jevAdvisor.ts; UPDATES.md.
+**Verification:** bot typecheck PASS; JEV tests 20/20 PASS; build PASS.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** prompt change affects future JEV outputs only; do not interpret it as validated edge. Re-run the target study after enough feature-rich forward samples.
+
+---
 ### 2026-10-26 - JEV walk-forward target study (record-only)
 
 **Status:** completed; no production change
