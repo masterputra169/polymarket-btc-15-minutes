@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `f216792`; last result success |
+| Auto-deploy | active; VPS deployed `ec82dde`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Order-flow history logger deployed
+
+**Status:** deployed / verified
+**Area:** data collection / backup
+**What changed:**
+- bot/data/orderflow.jsonl now receives a record every 15 seconds per market, independent of JEV calls.
+- Each line contains orderFlow, market baseline, ML baseline and current JEV baseline.
+- scripts/backup-data.sh now includes orderflow.jsonl in the encrypted daily backup.
+**Verification:** deployed ec82dde at 23:05:00 WIB; file created immediately; 2 samples in the first ~35 seconds; first live sample has orderFlow.ok=true, marketUp 0.105, mlProbUp 0.0489, sampleCount 119; bot active with no errors.
+**Files / commits:** bot/src/monitoring/orderFlowLogger.ts; bot/src/loop.ts; scripts/backup-data.sh; ec82dde.
+**Deployment:** active.
+**Risks / follow-up:** old JEV rows have no orderFlow; only new rows can train the new features. Sample is far too small for model training; wait for enough forward markets.
+
+---
 ### 2026-10-26 - Order-flow history logger + backup
 
 **Status:** implemented; deploy pending
