@@ -23,6 +23,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { isTypesafeConfigured, resolveJevProviderConfig, systemOne, TypesafeError } from './typesafeClient.ts';
+import { calibrateJevSettleUp, JEV_SETTLE_CALIBRATION_VERSION } from './jevSettleCalibration.ts';
 import { maybeRecordPolicyCandidate } from './jevPolicyShadow.ts';
 import type { TypesafeAnswer, TypesafeQuestion } from './typesafeClient.ts';
 
@@ -87,6 +88,8 @@ export interface JevDecision {
   directionProbabilities: Record<string, number>;
   directionConfidence: number;
   settleUpProbability: number;
+  /** Calibrated settle probability; optional for older tests/records. */
+  settleUpCalibrated?: number;
   regime: string;
   regimeConfidence: number;
   latencyMs: number;
@@ -215,6 +218,7 @@ export function parseJevAnswers(model: string, answers: Record<string, TypesafeA
     directionProbabilities: directionAnswer.probabilities,
     directionConfidence: directionAnswer.confidence,
     settleUpProbability: settleAnswer.noul,
+    settleUpCalibrated: calibrateJevSettleUp(settleAnswer.noul),
     regime: regimeAnswer.choice,
     regimeConfidence: regimeAnswer.confidence,
     latencyMs: 0,
@@ -308,7 +312,7 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
   _stats.lastLatencyMs = parsed.latencyMs;
   _stats.lastCostUsd = parsed.costUsd ?? 0;
   _stats.totalCostUsd += parsed.costUsd ?? 0;
-  log.info((decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up ' + Math.round(parsed.settleUpProbability * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd');
+  log.info((decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up raw ' + Math.round(parsed.settleUpProbability * 100) + '% -> cal ' + Math.round((parsed.settleUpCalibrated ?? parsed.settleUpProbability) * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd | cal ' + JEV_SETTLE_CALIBRATION_VERSION);
 }
 
 /** Fire-and-forget: called from the poll loop, never awaited, never throws. */
@@ -432,7 +436,7 @@ export function getJevPrimarySide(slug?: string | null): 'UP' | 'DOWN' | null {
   if (!d) return null;
   if (d.direction !== 'UP' && d.direction !== 'DOWN') return null;
   if (d.directionConfidence < cfg.primaryMinConfidence) return null;
-  if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return null;
+  if (!settleSupports(d.direction, d.settleUpCalibrated ?? d.settleUpProbability, cfg.settleMargin)) return null;
   return d.direction;
 }
 
@@ -443,7 +447,7 @@ export function getJevSizingMultiplier(side: string, slug?: string | null): numb
   const d = freshDecision(slug);
   if (!d || d.direction !== side) return 1;
   if (d.directionConfidence < cfg.minConfidence) return 1;
-  if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return 1;
+  if (!settleSupports(d.direction, d.settleUpCalibrated ?? d.settleUpProbability, cfg.settleMargin)) return 1;
   const span = Math.max(0.001, 1 - cfg.minConfidence);
   const k = Math.min(1, (d.directionConfidence - cfg.minConfidence) / span);
   return 1 + cfg.sizingWeight * k;
@@ -453,7 +457,7 @@ export function getJevSizingMultiplier(side: string, slug?: string | null): numb
 export function getJevSummary(slug?: string | null): string | null {
   const d = freshDecision(slug);
   if (!d) return null;
-  return 'JEV: ' + d.direction + ' ' + Math.round(d.directionConfidence * 100) + '% | settle ' + Math.round(d.settleUpProbability * 100) + '% | ' + d.regime;
+  return 'JEV: ' + d.direction + ' ' + Math.round(d.directionConfidence * 100) + '% | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '% | ' + d.regime;
 }
 
 export function getJevStatus() {
@@ -491,8 +495,8 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
     if (d.directionConfidence < cfg.minConfidence) return null;
     if (d.direction !== side) {
       // Only veto when JEV's settle probability also supports the opposite side.
-      if (!settleSupports(d.direction, d.settleUpProbability, cfg.settleMargin)) return null;
-      return { action: 'block', reason: 'JEV ' + d.direction + ' (' + conf + '%) disagrees with ' + side + ' | settle ' + Math.round(d.settleUpProbability * 100) + '%' };
+      if (!settleSupports(d.direction, d.settleUpCalibrated ?? d.settleUpProbability, cfg.settleMargin)) return null;
+      return { action: 'block', reason: 'JEV ' + d.direction + ' (' + conf + '%) disagrees with ' + side + ' | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '%' };
     }
     return null;
   }
@@ -503,8 +507,8 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
   if (d.directionConfidence < cfg.minConfidence) {
     return { action: 'block', reason: 'JEV gate: confidence ' + conf + '% < ' + Math.round(cfg.minConfidence * 100) + '%' };
   }
-  if (!settleSupports(side === 'UP' ? 'UP' : 'DOWN', d.settleUpProbability, cfg.settleMargin)) {
-    return { action: 'block', reason: 'JEV gate: settle ' + Math.round(d.settleUpProbability * 100) + '% contradicts ' + side };
+  if (!settleSupports(side === 'UP' ? 'UP' : 'DOWN', d.settleUpCalibrated ?? d.settleUpProbability, cfg.settleMargin)) {
+    return { action: 'block', reason: 'JEV gate: settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '% contradicts ' + side };
   }
   return null;
 }
@@ -528,6 +532,7 @@ export function __setJevDecisionForTests(partial: {
   direction: 'UP' | 'DOWN' | 'NO_EDGE';
   directionConfidence: number;
   settleUpProbability: number;
+  settleUpCalibrated?: number;
   regime: string;
   slug?: string | null;
   ts?: number;
@@ -540,6 +545,7 @@ export function __setJevDecisionForTests(partial: {
     directionProbabilities: {},
     directionConfidence: partial.directionConfidence,
     settleUpProbability: partial.settleUpProbability,
+    settleUpCalibrated: partial.settleUpCalibrated,
     regime: partial.regime,
     regimeConfidence: 0,
     latencyMs: 0,

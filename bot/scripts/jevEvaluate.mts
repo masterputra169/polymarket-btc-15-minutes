@@ -11,6 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { config as loadEnv } from 'dotenv';
+import { calibrateJevSettleUp, JEV_SETTLE_CALIBRATION_VERSION } from '../src/ai/jevSettleCalibration.ts';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 loadEnv({ path: resolve(ROOT, 'bot', '.env'), quiet: true });
@@ -103,7 +104,8 @@ if (scored.length === 0) { console.log('No matched entries yet: jev=' + rows.len
 
 function brier(prob: number, actualUp: boolean): number { return Math.pow(prob - (actualUp ? 1 : 0), 2); }
 let dirN = 0, dirOk = 0, noEdge = 0, ruleN = 0, ruleOk = 0;
-let settleN = 0, jevBrier = 0, marketN = 0, marketBrier = 0, mlN = 0, mlBrier = 0;
+let settleN = 0, jevBrier = 0, jevCalBrier = 0, marketN = 0, marketBrier = 0, mlN = 0, mlBrier = 0;
+let dirProbN = 0, dirProbBrier = 0;
 const buckets: Record<string, { n: number; hits: number; conf: number }> = {};
 const byRegime: Record<string, { n: number; ok: number; pnl: number }> = {};
 for (const row of scored) {
@@ -115,14 +117,19 @@ for (const row of scored) {
   const ruleSide = row.rules?.side;
   if (ruleSide === 'UP' || ruleSide === 'DOWN') { ruleN++; if (ruleSide === actual) ruleOk++; }
   const sp = Number(row.settleUpProbability);
-  if (Number.isFinite(sp)) { settleN++; jevBrier += brier(sp, actualUp); }
+  if (Number.isFinite(sp)) { settleN++; jevBrier += brier(sp, actualUp); jevCalBrier += brier(calibrateJevSettleUp(sp), actualUp); }
+  const dup = Number(row.directionProbabilities?.UP), ddn = Number(row.directionProbabilities?.DOWN);
+  if (Number.isFinite(dup) && Number.isFinite(ddn) && dup + ddn > 0) { dirProbN++; dirProbBrier += brier(dup / (dup + ddn), actualUp); }
   const mp = Number(row.market?.marketUp);
   if (Number.isFinite(mp)) { marketN++; marketBrier += brier(mp, actualUp); }
   const mlp = Number(row.ml?.probUp);
   if (Number.isFinite(mlp)) { mlN++; mlBrier += brier(mlp, actualUp); }
-  const key = sp < 0.2 ? '0-20' : sp < 0.4 ? '20-40' : sp < 0.6 ? '40-60' : sp < 0.8 ? '60-80' : '80-100';
-  const b = buckets[key] ?? { n: 0, hits: 0, conf: 0 };
-  b.n++; b.conf += sp; if (actualUp) b.hits++; buckets[key] = b;
+  if (Number.isFinite(sp)) {
+    const cp = calibrateJevSettleUp(sp);
+    const key = cp < 0.2 ? '0-20' : cp < 0.4 ? '20-40' : cp < 0.6 ? '40-60' : cp < 0.8 ? '60-80' : '80-100';
+    const b = buckets[key] ?? { n: 0, hits: 0, conf: 0 };
+    b.n++; b.conf += cp; if (actualUp) b.hits++; buckets[key] = b;
+  }
   const rg = String(row.regime ?? 'unknown');
   const rr = byRegime[rg] ?? { n: 0, ok: 0, pnl: 0 };
   rr.n++; if ((dir === 'UP' || dir === 'DOWN') && dir === actual) rr.ok++;
@@ -133,10 +140,11 @@ console.log('JEV evaluation (all resolvable markets)');
 console.log('  matched markets: ' + scored.length + ' (from ' + rows.length + ' unique markets)');
 console.log('  direction: ' + dirOk + '/' + dirN + ' = ' + pct(dirOk, dirN) + ' (NO_EDGE ' + noEdge + ', coverage ' + pct(dirN, scored.length) + ')');
 console.log('  rule side: ' + ruleOk + '/' + ruleN + ' = ' + pct(ruleOk, ruleN));
-console.log('  Brier settle-up: JEV ' + (settleN ? (jevBrier / settleN).toFixed(4) : 'n/a') + ' (n=' + settleN + ')' +
+console.log('  Brier settle-up: JEV raw ' + (settleN ? (jevBrier / settleN).toFixed(4) : 'n/a') + ' | calibrated ' + (settleN ? (jevCalBrier / settleN).toFixed(4) : 'n/a') + ' (' + JEV_SETTLE_CALIBRATION_VERSION + ', n=' + settleN + ')' +
   ' | market ' + (marketN ? (marketBrier / marketN).toFixed(4) : 'n/a') + ' (n=' + marketN + ')' +
   ' | ML ' + (mlN ? (mlBrier / mlN).toFixed(4) : 'n/a') + ' (n=' + mlN + ')');
-console.log('  calibration (JEV settle-up):');
+console.log('  Brier direction-normalized: ' + (dirProbN ? (dirProbBrier / dirProbN).toFixed(4) : 'n/a') + ' (n=' + dirProbN + ')');
+console.log('  calibration (JEV settle-up, calibrated):');
 for (const key of Object.keys(buckets).sort()) { const b = buckets[key]; console.log('    ' + key + '%: n=' + b.n + ' avg=' + (b.conf / b.n).toFixed(2) + ' up-rate=' + (b.hits / b.n).toFixed(2)); }
 console.log('  by JEV regime:');
 for (const [rg, v] of Object.entries(byRegime).sort()) console.log('    ' + rg + ': n=' + v.n + ' dir-acc=' + pct(v.ok, v.n));

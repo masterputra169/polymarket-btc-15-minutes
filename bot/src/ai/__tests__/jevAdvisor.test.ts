@@ -163,8 +163,8 @@ describe('JEV mode collaboration', () => {
   });
 
   it('formats a compact summary for alerts', () => {
-    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.7, settleUpProbability: 0.66, regime: 'trending_up' });
-    expect(getJevSummary('btc-updown-15m-test')).toBe('JEV: UP 70% | settle 66% | trending_up');
+    __setJevDecisionForTests({ direction: 'UP', directionConfidence: 0.7, settleUpProbability: 0.66, settleUpCalibrated: 0.45, regime: 'trending_up' });
+    expect(getJevSummary('btc-updown-15m-test')).toBe('JEV: UP 70% | settle 45% | trending_up');
   });
 
   it('veto ignores a direction whose settle probability contradicts it', () => {

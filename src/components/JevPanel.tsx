@@ -7,6 +7,7 @@ interface JevLast {
   direction?: string | null;
   directionConfidence?: number | null;
   settleUpProbability?: number | null;
+  settleUpCalibrated?: number | null;
   regime?: string | null;
   regimeConfidence?: number | null;
   latencyMs?: number | null;
@@ -52,10 +53,9 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
   if (!data) return null;
   const mode = data.mode ?? (data.shadowMode === false ? 'veto' : 'shadow');
   const last = data.last ?? null;
-  const upEdge = last && last.settleUpProbability != null && last.marketUp != null
-    ? last.settleUpProbability - last.marketUp : null;
-  const downEdge = last && last.settleUpProbability != null && last.marketDown != null
-    ? (1 - last.settleUpProbability) - last.marketDown : null;
+  const settle = last?.settleUpCalibrated ?? last?.settleUpProbability ?? null;
+  const upEdge = settle != null && last?.marketUp != null ? settle - last.marketUp : null;
+  const downEdge = settle != null && last?.marketDown != null ? (1 - settle) - last.marketDown : null;
   const tone = !data.enabled || !data.configured ? 'var(--text-muted)' : MODE_COLOR[mode] ?? 'var(--text-secondary)';
   return (
     <div className="card span-2" style={{ animationDelay: '0.25s' }}>
@@ -75,7 +75,7 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
               {last.direction ?? '-'} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>({pct(last.directionConfidence)})</span>
             </span></div>
           <div className="data-row"><span className="data-row__label">Settle UP</span>
-            <span className="data-row__value">{pct(last.settleUpProbability)}</span></div>
+            <span className="data-row__value">{pct(settle)}</span></div>
           <div className="data-row"><span className="data-row__label">Regime</span>
             <span className="data-row__value">{last.regime ?? '-'}</span></div>
           <div className="data-row"><span className="data-row__label">Latency</span>

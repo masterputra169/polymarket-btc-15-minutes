@@ -53,6 +53,22 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 — JEV settle calibration + shadow guard
+
+**Status:** implemented; deploy pending
+**Area:** AI / evaluation
+**What changed:**
+- Added monotone PAVA calibration for JEV settle probabilities (`jevSettleCalibration.ts`); raw and calibrated values are both recorded.
+- JEV gate/veto/sizing now uses the calibrated value when present; older injected/test decisions fall back to raw.
+- JEV panel shows the calibrated settle value and calibrated edge vs market.
+- `jevEvaluate.mts` now reports raw vs calibrated Brier, calibration buckets and direction-normalized Brier.
+**Evidence:** time-split (431 train / 186 test) raw Brier 0.3451 → calibrated 0.2437; market 0.2279. Calibration improves overconfidence but JEV remains worse than market.
+**Files / commits:** bot/src/ai/jevSettleCalibration.ts; bot/src/ai/jevAdvisor.ts; bot/src/ai/__tests__/jevSettleCalibration.test.ts; bot/src/ai/__tests__/jevAdvisor.test.ts; bot/scripts/jevEvaluate.mts; src/components/JevPanel.tsx; analysis/2026-10-26/jev-calibration.md; UPDATES.md.
+**Verification:** bot/frontend typecheck PASS; JEV tests 20/20 PASS; build PASS.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** calibration is fitted on a short 2026-10-19..25 sample and does not create an edge. Keep JEV in shadow; JEV gate/veto must not be activated until 100+ forward entries show incremental value.
+
+---
 ### 2026-10-25 — Dry-run entry cap raised to 80c
 
 **Status:** active
