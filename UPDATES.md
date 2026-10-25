@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-25 — Global Risk paused; FRED credential stored
+
+**Status:** paused; credential stored and validated
+**Area:** monitoring / configuration / security
+**What changed:**
+- Global Risk work paused per operator request; no further ACLED/GDELT integration or event-gate changes.
+- FRED API credential stored outside the repository in `/etc/poly15/global-risk.env` (VPS, mode 640 root:ubuntu) and a local user-only copy under `%USERPROFILE%\.poly15`.
+- FRED key validated with a read-only CPIAUCSL series request (HTTP 200).
+- No trading behavior changed; collector remains record-only.
+**Files / commits:** UPDATES.md only; no code changes.
+**Verification:** VPS file mode 640 root:ubuntu; local ACL only current user; FRED series lookup returned CPIAUCSL; key not written to git.
+**Deployment:** docs-only; auto-deploy will skip server restart.
+**Risks / follow-up:** FRED key was exposed in chat; rotate it later if desired and update both stored copies. Global Risk panel remains present but paused.
+
+---
 ### 2026-10-23 — Hidden widgets no longer block drag (deployed)
 
 **Status:** deployed / verified
