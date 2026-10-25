@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - JEV stacking study (record-only)
+
+**Status:** completed; no production change
+**Area:** AI / evaluation
+**What changed:**
+- Added bot/scripts/jevStackStudy.mts: time-split logistic stacking of market, JEV calibrated and ML, with paired bootstrap and coverage-aware Brier.
+- Test Brier: market 0.2409, JEV 0.2444, ML 0.2496, best stack 0.2407 (skill +0.07%, 95% CI -0.00644 to +0.00607).
+- All-market Brier below 0.20 not achieved; only top 10% confidence slice is below 0.20 (n=18).
+- JEV remains shadow; gate/veto/sizing unchanged.
+**Files / commits:** bot/scripts/jevStackStudy.mts; analysis/2026-10-26/jev-stacking-study.md; UPDATES.md.
+**Verification:** bot typecheck PASS; study run on VPS with 618 matched markets (432 train / 186 test).
+**Deployment:** analysis-only script; no runtime behavior change.
+**Risks / follow-up:** CI includes zero; do not activate JEV. Re-run on 100+ future policy entries and require the lower CI below zero.
+
+---
 ### 2026-10-26 — JEV calibration deployed
 
 **Status:** deployed / verified
