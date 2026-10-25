@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `25cd873`; last result success |
+| Auto-deploy | active; VPS deployed `848a6cb`; last result success |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 — FRED integration deployed
+
+**Status:** deployed / verified
+**Area:** monitoring / data
+**What changed:**
+- FRED macro adapter is live on the VPS; credential read from protected `/etc/poly15/global-risk.env`.
+- Snapshot now carries CPI, Fed funds, 10Y, VIX and unemployment, plus upcoming CPI/NFP/GDP/PCE/PPI/retail releases (6-hour cache).
+- Release calendar is deduplicated and filtered to real release names; noisy daily FOMC rows were removed.
+- Global Risk panel shows the FRED series and next release. No trading behavior uses this data.
+**Files / commits:** bot/src/monitoring/fredClient.ts; bot/src/monitoring/globalRisk.ts; src/components/GlobalRiskPanel.tsx; `2e2df4e`, `848a6cb`.
+**Verification:** FRED status `ok`; CPI 3.72% y/y, FED 3.75%, 10Y 4.96%, VIX 19.03, unemployment 4.20%; next releases GDP/PCE on 2026-10-29; panel rendered with no page errors; auto-deploy success at 20:07:36 WIB.
+**Deployment:** active.
+**Risks / follow-up:** FRED observations are latest revisions (not vintage/point-in-time); release dates have no time-of-day; key was exposed in chat and should be rotated later.
+
+---
 ### 2026-10-26 — FRED macro integration
 
 **Status:** implemented; deploy pending
