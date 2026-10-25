@@ -53,6 +53,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Order-flow features P0 (record-only)
+
+**Status:** implemented; deploy pending
+**Area:** signal features / AI data
+**What changed:**
+- Added orderFlowFeatures.ts: OFI, top imbalance, depth imbalance, microprice, microprice edge, trade imbalance, VPIN proxy.
+- clobWs now exposes best-level sizes and a 500-trade ring buffer of last_trade_price prints for followed tokens.
+- signalComputation feeds the order-flow state every poll; loop broadcasts orderFlow and writes it to JEV features.
+- No entry/sizing/exit rule reads these features.
+**Files / commits:** bot/src/engines/orderFlowFeatures.ts; bot/src/streams/clobWs.ts; bot/src/engines/signalComputation.ts; bot/src/loop.ts; bot/src/ai/jevAdvisor.ts; bot/src/engines/__tests__/orderFlowFeatures.test.ts; analysis/2026-10-26/order-flow-features.md; UPDATES.md.
+**Verification:** bot typecheck PASS; 24 tests PASS; production build PASS.
+**Deployment:** pending CI/auto-deploy.
+**Risks / follow-up:** record-only. Validate incremental Brier before using it in decisions. Trade-side data may be missing on some prints; features fail soft to zero.
+
+---
 ### 2026-10-26 - JEV feature update deployed
 
 **Status:** deployed / verified

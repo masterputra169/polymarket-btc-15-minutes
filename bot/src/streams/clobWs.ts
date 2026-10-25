@@ -74,13 +74,19 @@ let _downPrice = null;
 let _connected = false;
 let _lastUpdate = 0;
 const _orderbook = {
-  up: { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 },
-  down: { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 },
+  up: { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0, bidSize: 0, askSize: 0 },
+  down: { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0, bidSize: 0, askSize: 0 },
 };
+
+// Recent trade prints, followed tokens only. Record-only feed for order-flow features.
+const RECENT_TRADES_MAX = 500;
+const _recentTrades: Array<{ t: number; token: 'up' | 'down'; side: 'BUY' | 'SELL' | null; price: number; size: number }> = [];
 
 export function getUpPrice() { return _upPrice; }
 export function getDownPrice() { return _downPrice; }
 export function getOrderbook() { return { up: { ..._orderbook.up }, down: { ..._orderbook.down } }; }
+export function getRecentTrades() { return _recentTrades.slice(); }
+export function getTokenIds() { return { ...tokenIds }; }
 export function getLastUpdate() { return _lastUpdate; }
 export function isClobConnected() { return _connected; }
 
@@ -103,16 +109,21 @@ export function getFeedHealth() {
   };
 }
 
-function bestFromLevels(levels, side) {
+function bestLevelFromLevels(levels, side) {
   if (!Array.isArray(levels) || levels.length === 0) return null;
   let best = null;
   for (const lvl of levels) {
     const p = toNumber(lvl.price);
     if (p === null) continue;
-    if (best === null) { best = p; continue; }
-    best = side === 'bid' ? Math.max(best, p) : Math.min(best, p);
+    const size = toNumber(lvl.size) ?? 0;
+    if (best === null || (side === 'bid' ? p > best.price : p < best.price)) best = { price: p, size };
   }
   return best;
+}
+
+function bestFromLevels(levels, side) {
+  const best = bestLevelFromLevels(levels, side);
+  return best ? best.price : null;
 }
 
 /** Is this asset one of the two we currently follow? */
@@ -140,11 +151,13 @@ function handleBookEvent(data) {
   markQuote();
   const bids = Array.isArray(data.bids) ? data.bids : [];
   const asks = Array.isArray(data.asks) ? data.asks : [];
-  const bestBid = bestFromLevels(bids, 'bid');
-  const bestAsk = bestFromLevels(asks, 'ask');
+  const bidLevel = bestLevelFromLevels(bids, 'bid');
+  const askLevel = bestLevelFromLevels(asks, 'ask');
+  const bestBid = bidLevel?.price ?? null;
+  const bestAsk = askLevel?.price ?? null;
   const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
   // Best levels first: the market channel lists both sides worst-first (see depthNearTop).
-  const bookData = { bestBid, bestAsk, spread, bidLiquidity: depthNearTop(bids, 'bid'), askLiquidity: depthNearTop(asks, 'ask') };
+  const bookData = { bestBid, bestAsk, spread, bidLiquidity: depthNearTop(bids, 'bid'), askLiquidity: depthNearTop(asks, 'ask'), bidSize: bidLevel?.size ?? 0, askSize: askLevel?.size ?? 0 };
 
   if (assetId === tokenIds.up) {
     Object.assign(_orderbook.up, bookData);
@@ -195,6 +208,14 @@ function handleLastTradePrice(data) {
 
   const p = toNumber(data.price);
   if (p === null) return;
+  const token = assetId === tokenIds.up ? 'up' : assetId === tokenIds.down ? 'down' : null;
+  if (token) {
+    const sideRaw = String(data.side ?? '').toUpperCase();
+    const side = sideRaw === 'BUY' || sideRaw === 'SELL' ? sideRaw : null;
+    const size = toNumber(data.size) ?? toNumber(data.amount) ?? 0;
+    _recentTrades.push({ t: Date.now(), token, side, price: p, size });
+    if (_recentTrades.length > RECENT_TRADES_MAX) _recentTrades.shift();
+  }
   if (assetId === tokenIds.up && _upPrice === null) { _upPrice = p; _lastUpdate = Date.now(); }
   else if (assetId === tokenIds.down && _downPrice === null) { _downPrice = p; _lastUpdate = Date.now(); }
 }
@@ -324,8 +345,9 @@ function invalidateOrderbook() {
   // Only use orderbook data once fresh data arrives after reconnection.
   _upPrice = null;
   _downPrice = null;
-  _orderbook.up = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
-  _orderbook.down = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0 };
+  _orderbook.up = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0, bidSize: 0, askSize: 0 };
+  _orderbook.down = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0, bidSize: 0, askSize: 0 };
+  _recentTrades.length = 0;
   _lastUpdate = 0;
 }
 
@@ -464,6 +486,7 @@ export function setTokenIds(upTokenId, downTokenId) {
   if (!changed) return;
   log.info('Token IDs changed — re-subscribing');
   tokenIds = { up: upTokenId, down: downTokenId };
+  _recentTrades.length = 0;
   invalidateOrderbook();
   lastDataMsgMs = 0;
 

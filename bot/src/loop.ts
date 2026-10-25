@@ -38,6 +38,7 @@ import {
   getUpPrice as getClobUpPrice,
   getDownPrice as getClobDownPrice,
   getOrderbook as getClobOrderbook,
+  getRecentTrades as getClobRecentTrades,
   getFeedHealth as getClobFeedHealth,
   isClobConnected,
   setTokenIds,
@@ -51,6 +52,7 @@ import {
   getSpotTicksBetween,
 } from './streams/polymarketLiveWs.ts';
 import { getTwapAt, getLatestTwap, requestTwapReplay, getTwapFeedHealth } from './streams/chainlinkTwap.ts';
+import { getOrderFlowFeatures } from './engines/orderFlowFeatures.ts';
 import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
@@ -1353,7 +1355,7 @@ export async function pollOnce() {
       settlePrice,
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
       clobUsable: clobFeed.usable,
-      getClobUpPrice, getClobDownPrice, getClobOrderbook,
+      getClobUpPrice, getClobDownPrice, getClobOrderbook, getClobRecentTrades,
       feedbackStats, timeLeftMin,
       candleWindowMinutes: CONFIG.candleWindowMinutes,
       getMLPrediction, fundingRate,
@@ -2009,6 +2011,7 @@ export async function pollOnce() {
         smartFlowSignal: smartFlowSignal?.direction ?? null, signalConfirmCount: getConfirmCount(),
         recentFlips: recentFlipCount, consecutiveLosses: getConsecutiveLosses(),
         bankroll: getBankroll(),
+        orderFlow: getOrderFlowFeatures(),
     };
     try { maybeJevAnalyze(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
     if (rec.action === 'ENTER') {
@@ -2875,6 +2878,7 @@ export async function pollOnce() {
       aiOptimizer: getOptimizerStatus(),
       aiStats: getOpenRouterStats(),
       sentiment: getSentimentStats(),
+      orderFlow: getOrderFlowFeatures(),
       globalRisk: getGlobalRisk(),
       executionTiming: getExecutionTimingStatus(),
 

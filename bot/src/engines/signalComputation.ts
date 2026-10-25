@@ -14,6 +14,7 @@ import { analyzeOrderbook } from '../../../src/engines/orderbook.ts';
 import { getSessionName } from '../../../src/utils.ts';
 import { detectArbitrage } from './arbitrage.ts';
 import { recordOrderbookSnapshot, getOrderbookFlow } from './orderbookFlow.ts';
+import { recordOrderFlowBook, recordOrderFlowTrades } from './orderFlowFeatures.ts';
 import { getSignalModifiers } from '../adapters/signalPerfStore.ts';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
@@ -121,7 +122,7 @@ function candleOpenAt(klines: Array<{ openTime?: number; open: number }> | null 
  */
 export function computeSignals({
   klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
-  clobUsable, getClobUpPrice, getClobDownPrice, getClobOrderbook,
+  clobUsable, getClobUpPrice, getClobDownPrice, getClobOrderbook, getClobRecentTrades,
   feedbackStats, timeLeftMin, candleWindowMinutes,
   getMLPrediction, fundingRate, smartFlowSignal, oraclePrice,
   featurePipeline = 1,
@@ -184,6 +185,9 @@ export function computeSignals({
   // ── Orderbook flow tracking ──
   recordOrderbookSnapshot(orderbookSignal, orderbookUp, orderbookDown);
   const obFlow = getOrderbookFlow();
+  // P0 order-flow features: record-only, fed by the existing CLOB feed.
+  recordOrderFlowBook(orderbookUp, orderbookDown, marketSlug, now);
+  try { recordOrderFlowTrades(getClobRecentTrades?.() ?? [], marketSlug, now); } catch { /* record-only */ }
 
   recordMarketUp(marketSlug, now, marketUp);
 

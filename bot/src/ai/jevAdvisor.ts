@@ -24,6 +24,7 @@ import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { isTypesafeConfigured, resolveJevProviderConfig, systemOne, TypesafeError } from './typesafeClient.ts';
 import { calibrateJevSettleUp, JEV_SETTLE_CALIBRATION_VERSION } from './jevSettleCalibration.ts';
+import type { OrderFlowFeatures } from '../engines/orderFlowFeatures.ts';
 import { maybeRecordPolicyCandidate } from './jevPolicyShadow.ts';
 import type { TypesafeAnswer, TypesafeQuestion } from './typesafeClient.ts';
 
@@ -80,6 +81,7 @@ export interface JevSnapshot {
   recentFlips: number | null;
   consecutiveLosses: number | null;
   bankroll: number | null;
+  orderFlow?: OrderFlowFeatures;
 }
 
 export interface JevDecision {
@@ -120,6 +122,7 @@ interface JevRecord extends JevDecision {
     volDeltaBuyRatio: number | null; smartFlowSignal: string | null; signalConfirmCount: number | null;
     regime: string | null; regimeConfidence: number | null;
     mlProbUp: number | null; mlConfidence: number | null; marketUp: number | null; marketDown: number | null;
+    orderFlow?: OrderFlowFeatures;
   };
 }
 
@@ -289,6 +292,7 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
       volDeltaBuyRatio: snapshot.volDeltaBuyRatio, smartFlowSignal: snapshot.smartFlowSignal, signalConfirmCount: snapshot.signalConfirmCount,
       regime: snapshot.regime, regimeConfidence: snapshot.regimeConfidence,
       mlProbUp: snapshot.mlProbUp, mlConfidence: snapshot.mlConfidence, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown,
+      orderFlow: snapshot.orderFlow,
     },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
