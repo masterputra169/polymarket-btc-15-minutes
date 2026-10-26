@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Dry-run soft entry cap 70c
+
+**Status:** active
+**Area:** configuration / trade selection
+**What changed:**
+- Added `FILTER_SOFT_ENTRY_CAP=0.70` on the VPS (previous default 0.63).
+- Reset `EVAL_WINDOW_START` to 2026-10-26T03:24:51Z because trade selection changed.
+- Restarted the bot with no open position.
+**Why:** after raising the dry-run hard cap to 80c, 807 ENTER signals still failed; the dominant binding gates were the 63c soft ceiling, ML confidence/dead-zone and late-phase gates.
+**Verification:** startup log confirms override FILTER_SOFT_ENTRY_CAP=0.7 (default 0.63); bot active DRY RUN. At 10:26 WIB the live market was 81c, still above the 80c hard cap, so no entry yet.
+**Files / commits:** /opt/polybtc15/bot/.env (VPS only); UPDATES.md.
+**Risks / follow-up:** this is a dry-run selection experiment, not validated edge. Do not lower all gates together. If there is still no entry after 24h, review the hard cap/ML dead-zone/LATE gates separately.
+
+---
 ### 2026-10-26 - Order-flow history logger deployed
 
 **Status:** deployed / verified
