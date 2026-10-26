@@ -29,7 +29,7 @@ _Last updated: 2026-10-21 21:25 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; VPS deployed `ec82dde`; last result success |
+| Auto-deploy | active but **blocked in live mode**; source at `ec82dde` |
 | Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -53,6 +53,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - LIVE mode activated
+
+**Status:** live; no live trades yet
+**Area:** trading mode / risk
+**What changed:**
+- Operator switched the dashboard from DRY RUN to LIVE at 10:34 WIB; live preflight passed.
+- pUSD balance 25.36, CTF Exchange V2 allowance max, L2 auth OK, open orders 0.
+- `MAX_BET_AMOUNT_USD` raised 2.50 -> 3.50 because the market minimum is 5 shares (5 x 0.70 = 3.50).
+- Live state is separate (`state.live.json`); no live journal/position yet.
+**Verification:** service log shows Mode: LIVE TRADING; pUSD seeded 25.36; CLOB V2 readiness OK; no open orders/positions.
+**Files / commits:** /opt/polybtc15/bot/.env (VPS only); UPDATES.md.
+**Risks / follow-up:** auto-deploy now refuses to deploy while DRY_RUN=false, so code updates need manual deployment. Live risk: max daily loss 15% (~$3.80), max bet $3.50, min 5 shares. JEV/order-flow are not validated gates; filters remain in control. Monitor the first live fill and reconcile fee/settlement.
+
+---
 ### 2026-10-26 - Dry-run soft entry cap 70c
 
 **Status:** active
