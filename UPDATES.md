@@ -53,6 +53,19 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Browser console warning cleanup
+
+**Status:** implemented; deploy pending
+**Area:** frontend meta
+**What changed:**
+- Added the standard `mobile-web-app-capable` meta tag alongside the legacy Apple tag.
+**Why:** Chrome reported the Apple-only tag as deprecated; this removes that console warning without changing app behavior.
+**Files / commits:** index.html; UPDATES.md.
+**Verification:** frontend build/CI pending.
+**Deployment:** pending auto-deploy.
+**Risks / follow-up:** the other console lines are external: wallet extension `requestProvider.js` and an adblock-blocked Cloudflare Insights beacon. They are not app code.
+
+---
 ### 2026-10-26 - Live-state pollution incident and repair
 
 **Status:** repaired; bot running in DRY RUN
