@@ -53,6 +53,25 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Entries
 
+### 2026-10-26 - Live-state pollution incident and repair
+
+**Status:** repaired; bot running in DRY RUN
+**Area:** state integrity / circuit breaker
+**What happened:**
+- At 10:34 WIB the dashboard changed the dry `state.json` bankroll from 60.12 to 25.36 (`SET_BANKROLL source=dashboard`).
+- The daily baseline remained 60.12, so the circuit breaker computed -57.8% and halted trading for 240 min.
+- CLOB WS reconnect loop was a symptom: the halted loop did not finish market subscription.
+- No live trade was placed; live state remained 25.36 with 0 trades.
+**Repair:**
+- Stopped the bot and backed up state.json outside the repo.
+- Restored dry bankroll 60.12, start-of-day 60.12, peak 63.76.
+- Restarted DRY RUN; loop resumed (#200, ENTER signal evaluated), CLOB returned to WS+WS+CL.
+- Appended a STATE_REPAIRED audit entry.
+**Files / commits:** VPS state/audit data only; UPDATES.md.
+**Verification:** Mode DRY RUN; bankroll 60.12; no active position; no new halt; CLOB feed normal.
+**Risks / follow-up:** do not set dry bankroll to the live balance; that recreates the circuit-breaker false positive. Live state is preserved separately, but live mode is not active now.
+
+---
 ### 2026-10-26 - LIVE mode activated
 
 **Status:** live; no live trades yet
