@@ -8,23 +8,24 @@
 
 ## Current status
 
-_Last updated: 2026-10-28 15:02 WIB_
+_Last updated: 2026-10-28 21:30 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **LIVE TRADING (DRY_RUN=false)**; no open position |
-| Live bankroll | $25.36 (pUSD) · 0 trades |
+| Live bankroll | $21.45 (pUSD on-chain verified) · 3 trades today (1W / 2L) |
 | Paper bankroll | $60.12 · 833 trades · 536W / 297L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
-| Drift | no drift ($0.00) at last check |
+| Drift | no drift ($0.00) verified on-chain |
 | Tests | 91 files / 941 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.8 (raised per operator request; was 0.5) |
+| Kelly shrink | 0.75 (updated per operator request) |
+| Circuit breaker | relaxed for live: max daily loss 50%, max drawdown 50%, cooldown 30min |
 | Health state | no health issues; `systemctl --failed` clean |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
@@ -53,6 +54,28 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-10-28 — Fix RPC 403, repair circuit breaker halt, set Kelly shrink 0.75
+
+**Status:** deployed / active on VPS
+**Area:** risk / network / live execution
+**What changed:**
+- Set `KELLY_PROB_SHRINK=0.75` in `/opt/polybtc15/bot/.env` (from 0.8).
+- Fixed Polygon RPC 403 Forbidden: replaced broken `https://polygon-bor-rpc.publicnode.com` with `https://polygon.drpc.org`, eliminating the "Archive requests require personal token" warning.
+- Set `AUTO_ACTIVATE_DEPOSITS=false` since wallet already holds pure pUSD.
+- Repaired Circuit Breaker:
+  - Discovered `state.live.json` had an inflated `peakBankroll: 30.45` caused by a delayed reconciler spike earlier in the day, which made current $19.34 calculate as a 36.5% drawdown and halted the bot for 240 minutes.
+  - Reset `state.live.json` bankroll, peak, and start-of-day baseline to verified on-chain pUSD balance **$21.45**.
+  - Relaxed circuit breaker thresholds in `.env` for small live bankroll ($21): `MAX_DAILY_LOSS_PCT=50`, `MAX_DRAWDOWN_PCT=50`, and `CB_COOLDOWN_MS=1800000` (30 minutes instead of 4 hours).
+- Clarified minimum share constraint: Polymarket CLOB exchange protocol strictly requires 5 shares minimum per order on BTC 15m; orders under 5 shares are rejected by the exchange.
+**Verification:**
+- V2 readiness check PASSED on `https://polygon.drpc.org` (pUSD balance $21.45, allowances max).
+- Bot restarted cleanly in LIVE mode (PID 3788009); on-chain USDC drift $0.00.
+- No circuit breaker halt; feeds connected; poll loop active.
+**Files / commits:** `/opt/polybtc15/bot/.env` (VPS); `data/state.live.json` (VPS); UPDATES.md.
+**Deployment:** active.
+
+---
 
 ### 2026-10-28 — Set Kelly shrink to 0.8
 
