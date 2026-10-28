@@ -8,22 +8,23 @@
 
 ## Current status
 
-_Last updated: 2026-10-21 21:25 WIB_
+_Last updated: 2026-10-28 14:27 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **DRY_RUN=true**, no real orders; no open position |
+| Bot | active, **LIVE TRADING (DRY_RUN=false)**; no open position |
+| Live bankroll | $25.36 (pUSD) · 0 trades |
 | Paper bankroll | $60.12 · 833 trades · 536W / 297L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
-| Live/dry switch | available; **live not activated** |
-| Drift | no drift at last check |
+| Live/dry switch | available; **live active** |
+| Drift | no drift ($0.00) at last check |
 | Tests | 91 files / 941 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.18 (from default 0.5) |
+| Kelly shrink | 0.5 (restored from 0.18) |
 | Health state | no health issues; `systemctl --failed` clean |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
@@ -52,6 +53,27 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-10-28 — Restore Kelly shrink 0.5 and align FOK min shares to 5
+
+**Status:** deployed / active on VPS
+**Area:** risk / bet sizing / live execution
+**What changed:**
+- Restored `KELLY_PROB_SHRINK=0.5` in `/opt/polybtc15/bot/.env` (was 0.18).
+- Set `FOK_MIN_SHARES_MEDIUM=5`, `FOK_MIN_SHARES_HIGH=5`, and `FOK_MIN_SHARES_VERY_HIGH=5` (were 2) to match exchange minimum 5 shares.
+- Restarted `polybtc15-bot.service` cleanly in LIVE mode with $25.36 bankroll.
+**Why:**
+- `KELLY_PROB_SHRINK=0.18` pulled model probabilities so close to market that adjusted Kelly fell below `MIN_BET_PCT=0.02` on all candidate trades since 2026-10-23, causing 0 entries for 5 days.
+- In live mode, Polymarket CLOB requires a 5-share minimum order; having medium/high confidence floors at 2 shares caused risk of order rejection.
+**Verification:**
+- .env backup created at `/opt/polybtc15/bot/.env.bak_20261028_142624`.
+- Service restarted cleanly; PID 3671221; feed authenticated, connected WS+WS+CL.
+- No active position; USDC on-chain and local synced at $25.36; loop running.
+**Files / commits:** `/opt/polybtc15/bot/.env` (VPS only); UPDATES.md.
+**Deployment:** active.
+**Risks / follow-up:** Monitor the first live fill with Kelly shrink 0.5; max daily loss remains protected by circuit breaker.
+
+---
 
 ### 2026-10-26 - Browser console warning cleanup
 
