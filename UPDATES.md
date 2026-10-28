@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-10-28 14:27 WIB_
+_Last updated: 2026-10-28 15:02 WIB_
 
 | Area | State |
 |---|---|
@@ -24,7 +24,7 @@ _Last updated: 2026-10-28 14:27 WIB_
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.5 (restored from 0.18) |
+| Kelly shrink | 0.8 (raised per operator request; was 0.5) |
 | Health state | no health issues; `systemctl --failed` clean |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
@@ -53,6 +53,23 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-10-28 — Set Kelly shrink to 0.8
+
+**Status:** deployed / active on VPS
+**Area:** risk / bet sizing
+**What changed:**
+- Set `KELLY_PROB_SHRINK=0.8` in `/opt/polybtc15/bot/.env` (raised from 0.5 per operator request).
+- Restarted `polybtc15-bot.service` cleanly in LIVE mode with $25.36 bankroll.
+**Why:**
+- Operator requested higher model conviction weighting in the Kelly sizing equation ($p = \text{price} + 0.8 \times (\text{model} - \text{price})$), which yields higher Kelly fractions and clears the 2% min bet threshold on qualifying signals.
+**Verification:**
+- Service restarted cleanly; PID 3681125.
+- Feeds connected WS+WS+CL; no open position; signal evaluation active.
+**Files / commits:** `/opt/polybtc15/bot/.env` (VPS only); UPDATES.md.
+**Deployment:** active.
+
+---
 
 ### 2026-10-28 — Restore Kelly shrink 0.5 and align FOK min shares to 5
 
