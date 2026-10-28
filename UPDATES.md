@@ -8,12 +8,12 @@
 
 ## Current status
 
-_Last updated: 2026-10-28 21:30 WIB_
+_Last updated: 2026-10-28 22:33 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **LIVE TRADING (DRY_RUN=false)**; no open position |
-| Live bankroll | $21.45 (pUSD on-chain verified) · 3 trades today (1W / 2L) |
+| Live bankroll | $18.61 (pUSD) · 4 trades today (1W / 3L) |
 | Paper bankroll | $60.12 · 833 trades · 536W / 297L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
@@ -24,7 +24,7 @@ _Last updated: 2026-10-28 21:30 WIB_
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.75 (updated per operator request) |
+| Kelly shrink | 0.9 (updated per operator request; was 0.75) |
 | Circuit breaker | relaxed for live: max daily loss 50%, max drawdown 50%, cooldown 30min |
 | Health state | no health issues; `systemctl --failed` clean |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
@@ -54,6 +54,23 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-10-28 — Set Kelly shrink to 0.9
+
+**Status:** deployed / active on VPS
+**Area:** risk / bet sizing
+**What changed:**
+- Set `KELLY_PROB_SHRINK=0.9` in `/opt/polybtc15/bot/.env` (raised from 0.75 per operator request).
+- Restarted `polybtc15-bot.service` cleanly in LIVE mode with $18.61 bankroll.
+**Why:**
+- Operator requested increasing model conviction weighting to 90% in the Kelly sizing equation ($p = \text{price} + 0.9 \times (\text{model} - \text{price})$).
+**Verification:**
+- Service restarted cleanly; PID 3804608.
+- Feeds connected WS+WS+CL; no open position; loop running normally.
+**Files / commits:** `/opt/polybtc15/bot/.env` (VPS); UPDATES.md.
+**Deployment:** active.
+
+---
 
 ### 2026-10-28 — Fix RPC 403, repair circuit breaker halt, set Kelly shrink 0.75
 
