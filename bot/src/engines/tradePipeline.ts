@@ -303,6 +303,7 @@ export async function executeDirectionalTrade({
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
     mlAvailable: mlResult.available,
+    mlSide: mlResult.available ? mlResult.mlSide : null,
     marketPrice: betMarketPrice,
     atrRatio: atr?.atrRatio ?? null,
     timeLeftMin,

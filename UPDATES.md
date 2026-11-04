@@ -19,7 +19,7 @@ _Last updated: 2026-11-04 09:20 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 92 files / 945 tests PASS |
+| Tests | 94 files / 952 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -55,6 +55,22 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-04 — Strengthen trade filters with ML direction consensus gate and VPS threshold hardening
+
+- **What:**
+  1. Added **Gate 1d (ML Direction Consensus)** in `bot/src/safety/tradeFilters.ts`: If the ML model is available and has an active side prediction (`mlSide`), the bot is strictly prevented from entering in the opposing direction (`mlSide !== signalSide`).
+  2. Plumbed `mlSide` through `bot/src/engines/tradePipeline.ts` into `applyTradeFilters()`.
+  3. Extended tape decision trail category in `backtest/ml_training/decisionTrailCore.mts` to recognize `ML direction conflict:` as `ml_conf`.
+  4. Added unit test in `bot/tests/tradeFilters.test.ts` verifying that directional conflict triggers a filter block.
+  5. Hardened VPS `.env` threshold overrides: tightened loose values that permitted coin-flip and opposing-direction entries during live trading.
+- **Why:**
+  Analysis of the 11 live trades (4W / 7L, 36.4% WR) revealed that Trade 11 entered `UP` while the ML model predicted `DOWN` (`mlProbUp = 39.2%`, `mlSide = "DOWN"`) due to a rule-engine oscillator spike (`ruleUp = 0.89`) and a loose VPS bypass (`FILTER_ML_CONF_RELAXED=0.20`, `FILTER_HIGH_EDGE_BYPASS=0.09`). The new gate ensures the bot never trades against the ML model.
+- **Verification:**
+  - `npm run typecheck` passed (frontend, bot, bot:core, scripts).
+  - `npm test`: 94 test files / 952 tests PASS, including `tradeFilters.golden.test.ts` (0 hash drift) and `tradeFilters.test.ts`.
+- **Deployed:** Yes (code committed, pushed, pulled to VPS, `.env` updated, bot restarted).
+
 
 ### 2026-11-04 — Fix win-rate alert spam with trade-aware deduplication and cooldown
 
@@ -960,7 +976,23 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Rules
 
-1. **Newest first** under `## Entries`.
+1. **Newest first** under `## Entries
+
+### 2026-11-04 — Strengthen trade filters with ML direction consensus gate and VPS threshold hardening
+
+- **What:**
+  1. Added **Gate 1d (ML Direction Consensus)** in `bot/src/safety/tradeFilters.ts`: If the ML model is available and has an active side prediction (`mlSide`), the bot is strictly prevented from entering in the opposing direction (`mlSide !== signalSide`).
+  2. Plumbed `mlSide` through `bot/src/engines/tradePipeline.ts` into `applyTradeFilters()`.
+  3. Extended tape decision trail category in `backtest/ml_training/decisionTrailCore.mts` to recognize `ML direction conflict:` as `ml_conf`.
+  4. Added unit test in `bot/tests/tradeFilters.test.ts` verifying that directional conflict triggers a filter block.
+  5. Hardened VPS `.env` threshold overrides: tightened loose values that permitted coin-flip and opposing-direction entries during live trading.
+- **Why:**
+  Analysis of the 11 live trades (4W / 7L, 36.4% WR) revealed that Trade 11 entered `UP` while the ML model predicted `DOWN` (`mlProbUp = 39.2%`, `mlSide = "DOWN"`) due to a rule-engine oscillator spike (`ruleUp = 0.89`) and a loose VPS bypass (`FILTER_ML_CONF_RELAXED=0.20`, `FILTER_HIGH_EDGE_BYPASS=0.09`). The new gate ensures the bot never trades against the ML model.
+- **Verification:**
+  - `npm run typecheck` passed (frontend, bot, bot:core, scripts).
+  - `npm test`: 94 test files / 952 tests PASS, including `tradeFilters.golden.test.ts` (0 hash drift) and `tradeFilters.test.ts`.
+- **Deployed:** Yes (code committed, pushed, pulled to VPS, `.env` updated, bot restarted).
+`.
 2. **Append-only**: old entries stay; corrections are new entries titled `YYYY-MM-DD — Correction: ...`.
 3. **One entry per change set**, not one per commit.
 4. **State the truth**: if it is coded but not deployed, say so. If verified, say how.

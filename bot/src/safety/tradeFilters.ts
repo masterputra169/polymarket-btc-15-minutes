@@ -257,6 +257,7 @@ log.info(TIME_GATES_ENABLED
 export function applyTradeFilters({
   mlConfidence,
   mlAvailable,
+  mlSide,          // ML model predicted side ('UP'|'DOWN'|null)
   marketPrice,     // the side's market price (e.g. marketUp if buying UP)
   atrRatio,
   timeLeftMin,
@@ -323,6 +324,11 @@ export function applyTradeFilters({
       const lagTag = oracleLagBypass ? ' [oracle-lag→relaxed]' : '';
       reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(mlConfMin * 100).toFixed(0)}%${tiltTag}${edgeTag}${lagTag}`);
     }
+  }
+
+  // 1d. ML direction consensus gate — never enter in opposition to ML prediction
+  if (mlAvailable && mlSide && signalSide && mlSide !== signalSide) {
+    reasons.push(`ML direction conflict: signal ${signalSide} vs ML ${mlSide}`);
   }
 
   // 1a. Asia session ML minimum — Asia WR 77% vs US 85%. Low liquidity + manipulation risk.

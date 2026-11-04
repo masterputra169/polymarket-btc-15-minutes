@@ -45,7 +45,7 @@ const RULES: ReadonlyArray<{ gate: GateId; re: RegExp }> = [
   { gate: 'time_gate', re: /^Asia session: ML/ },                            // 1a, 16
   { gate: 'time_gate', re: /^Weekend \+ / },                                 // 7
   { gate: 'time_gate', re: /^Blackout hour: / },                             // 10
-  { gate: 'ml_conf', re: /^ML conf / },                                      // 1 (incl. [tilt], [edge→relaxed], [oracle-lag])
+  { gate: 'ml_conf', re: /^ML (?:conf |direction conflict: )/ },            // 1 (incl. [tilt], [edge→relaxed], [oracle-lag], direction)
   { gate: 'dead_zone', re: /^ML dead zone: / },                              // 1b
   { gate: 'ptb_source', re: /^PTB source / },                                // 1c
   { gate: 'near_5050', re: /^Market \S+ near 50\/50/ },                      // 2

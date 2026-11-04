@@ -85,6 +85,12 @@ describe('applyTradeFilters', () => {
     expect(r.pass).toBe(false);
   });
 
+  it('blocks when signal direction conflicts with ML side', () => {
+    const r = applyTradeFilters(baseInput({ signalSide: 'UP', mlSide: 'DOWN' }));
+    expect(r.pass).toBe(false);
+    expect(r.reasons.some(x => /ML direction conflict/i.test(x))).toBe(true);
+  });
+
   it('returns object with pass + reasons fields', () => {
     const r = applyTradeFilters(baseInput());
     expect(r).toHaveProperty('pass');
