@@ -12,9 +12,9 @@ _Last updated: 2026-11-04 09:20 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **LIVE TRADING (DRY_RUN=false)**; no open position |
+| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $60.12 · 833 trades · 536W / 297L |
+| Paper bankroll | $61.99 · 834 trades · 537W / 297L (+$1.87 win today) |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
@@ -55,6 +55,22 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-04 — Repair dry-run bankroll accounting baseline and profit-target state ($61.99)
+
+- **What:**
+  1. Repaired dry-run position tracking state in `/opt/polybtc15/bot/data/state.json`: restored true baseline `bankroll: 61.99`, `peakBankroll: 63.76`, `startOfDayBankroll: 60.12`, and updated the settled trade array record `bankrollAfter: 61.99`.
+  2. Cleaned `/opt/polybtc15/bot/data/state_audit.jsonl`: corrected settlement entry `bankrollAfter: 61.99` and removed erroneous `STATE_LOADED: 27.23` line.
+  3. Reset `/opt/polybtc15/bot/data/profit_target.json`: updated `baseline: 60.12` and `targetReached: false` so that the artificial delta from the $13.15 live baseline does not falsely trigger a profit pause.
+- **Why:**
+  On 2026-10-28, when configuring live trading with $25.36 wallet balance, $25.36 was saved into dry-run `state.json` via dashboard input. When the bot returned to dry run today, trade 834 (+$1.87 win) settled onto the $25.36 baseline -> $27.23. In `JournalTimeSeriesPanel.tsx` -> `computeEquityCurve()`, all historical SETTLE events (1..833, $44 -> $60.12) were plotted directly followed by today's trade with `bankrollAfter: 27.23`, creating a visual 38% cliff drop despite the trade being a profitable win (+1.87).
+- **Verification:**
+  - Bot stopped cleanly, files repaired, bot restarted via systemd.
+  - Startup log confirmed: `Position state: bankroll=61.99, trades=834, W/L=537/297`.
+  - Equity curve points re-computed: 834 points, Start $44.06, Peak $63.76, Now $61.99 (+40.7% net profit).
+  - Trading loop active, evaluating signals with zero false circuit breaker or profit pause.
+- **Deployed:** Yes (live on VPS).
+
 
 ### 2026-11-04 — Strengthen trade filters with ML direction consensus gate and VPS threshold hardening
 
@@ -976,22 +992,10 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 
 ## Rules
 
-1. **Newest first** under `## Entries
-
-### 2026-11-04 — Strengthen trade filters with ML direction consensus gate and VPS threshold hardening
-
-- **What:**
-  1. Added **Gate 1d (ML Direction Consensus)** in `bot/src/safety/tradeFilters.ts`: If the ML model is available and has an active side prediction (`mlSide`), the bot is strictly prevented from entering in the opposing direction (`mlSide !== signalSide`).
-  2. Plumbed `mlSide` through `bot/src/engines/tradePipeline.ts` into `applyTradeFilters()`.
-  3. Extended tape decision trail category in `backtest/ml_training/decisionTrailCore.mts` to recognize `ML direction conflict:` as `ml_conf`.
-  4. Added unit test in `bot/tests/tradeFilters.test.ts` verifying that directional conflict triggers a filter block.
-  5. Hardened VPS `.env` threshold overrides: tightened loose values that permitted coin-flip and opposing-direction entries during live trading.
-- **Why:**
-  Analysis of the 11 live trades (4W / 7L, 36.4% WR) revealed that Trade 11 entered `UP` while the ML model predicted `DOWN` (`mlProbUp = 39.2%`, `mlSide = "DOWN"`) due to a rule-engine oscillator spike (`ruleUp = 0.89`) and a loose VPS bypass (`FILTER_ML_CONF_RELAXED=0.20`, `FILTER_HIGH_EDGE_BYPASS=0.09`). The new gate ensures the bot never trades against the ML model.
-- **Verification:**
-  - `npm run typecheck` passed (frontend, bot, bot:core, scripts).
-  - `npm test`: 94 test files / 952 tests PASS, including `tradeFilters.golden.test.ts` (0 hash drift) and `tradeFilters.test.ts`.
-- **Deployed:** Yes (code committed, pushed, pulled to VPS, `.env` updated, bot restarted).
+1. **Newest first** under `## Entries`
+2. Update the **Current status** table at the top of the file in the same commit.
+3. Every bullet must have evidence: a test run, an API response, a process status, or a dashboard observation. "Implemented X" is not an entry; "Implemented X; `npm run test` 92 passed; deployed to VPS; `pm2 logs` confirms Y" is.
+4. A task that touched code or config is **not done** until its entry is in this file.
 `.
 2. **Append-only**: old entries stay; corrections are new entries titled `YYYY-MM-DD — Correction: ...`.
 3. **One entry per change set**, not one per commit.
