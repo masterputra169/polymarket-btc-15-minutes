@@ -83,7 +83,16 @@ function monitorCycle() {
 
 // ── Win rate alert ──
 
-function checkWinRate() {
+let lastWarnedTrades = 0;
+let lastWarnedAtMs = 0;
+const WARN_ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+export function resetPerfMonitorWinRateForTests() {
+  lastWarnedTrades = 0;
+  lastWarnedAtMs = 0;
+}
+
+export function checkWinRate() {
   const stats = getStats();
   const total = stats.wins + stats.losses;
 
@@ -104,9 +113,17 @@ function checkWinRate() {
 
   if (wr < BOT_CONFIG.winRateWarnThreshold) {
     log.warn(`WIN RATE LOW: ${tag} — below ${(BOT_CONFIG.winRateWarnThreshold * 100).toFixed(0)}% warning threshold`);
-    notify('warn', `Win rate LOW: ${tag}`);
+    const now = Date.now();
+    const tradeCountChanged = total !== lastWarnedTrades;
+    const cooldownExpired = now - lastWarnedAtMs >= WARN_ALERT_COOLDOWN_MS;
+    if (tradeCountChanged || cooldownExpired) {
+      lastWarnedTrades = total;
+      lastWarnedAtMs = now;
+      notify('warn', `Win rate LOW: ${tag}`, { key: 'perf:win_rate_low' });
+    }
   } else {
     log.info(`Win rate: ${tag} — OK`);
+    lastWarnedTrades = 0;
   }
 
   if (stats.consecutiveLosses >= 5) {

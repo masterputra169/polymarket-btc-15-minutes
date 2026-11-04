@@ -8,24 +8,25 @@
 
 ## Current status
 
-_Last updated: 2026-10-28 22:33 WIB_
+_Last updated: 2026-11-04 09:20 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **LIVE TRADING (DRY_RUN=false)**; no open position |
-| Live bankroll | $18.61 (pUSD) · 4 trades today (1W / 3L) |
+| Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $60.12 · 833 trades · 536W / 297L |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 91 files / 941 tests PASS |
+| Tests | 92 files / 945 tests PASS |
 | Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
 | Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.9 (updated per operator request; was 0.75) |
+| Kelly shrink | 0.9 |
 | Circuit breaker | relaxed for live: max daily loss 50%, max drawdown 50%, cooldown 30min |
+| Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | no health issues; `systemctl --failed` clean |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
@@ -54,6 +55,24 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-04 — Fix win-rate alert spam with trade-aware deduplication and cooldown
+
+**Status:** implemented & tested; deploying to VPS
+**Area:** monitoring / alerts
+**What changed:**
+- `bot/src/monitoring/perfMonitor.ts`: added `lastWarnedTrades` and 6-hour `WARN_ALERT_COOLDOWN_MS` throttle to `checkWinRate()`.
+- Alerts are now sent only when trade count changes (i.e. a newly settled trade) or when the 6-hour cooldown expires, eliminating repetitive 15-minute Telegram spam when win rate remains unchanged.
+- Added comprehensive unit tests in `bot/src/monitoring/__tests__/perfMonitor.test.ts` (4 passing tests).
+**Why:**
+- When live win rate fell to 36.4% (4W/7L) on Nov 2, `checkWinRate()` sent `Win rate LOW: 36.4% (4W/7L)` every 15 minutes continuously because the trade count was static at 11 trades and no deduplication existed.
+**Verification:**
+- Vitest 4/4 PASS in `perfMonitor.test.ts`.
+- Full typecheck PASS across all packages.
+**Files / commits:** `bot/src/monitoring/perfMonitor.ts`; `bot/src/monitoring/__tests__/perfMonitor.test.ts`; UPDATES.md.
+**Deployment:** pending VPS git pull & restart.
+
+---
 
 ### 2026-10-28 — Set Kelly shrink to 0.9
 
