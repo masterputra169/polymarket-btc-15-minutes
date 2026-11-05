@@ -1,0 +1,13 @@
+[Unit]
+Description=Daily automated maintenance and cleanup for POLY//15 VPS
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/polybtc15/scripts/daily-maintenance.sh
+User=root
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal

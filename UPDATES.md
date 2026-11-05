@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-04 09:20 WIB_
+_Last updated: 2026-11-05 15:35 WIB_
 
 | Area | State |
 |---|---|
@@ -20,8 +20,8 @@ _Last updated: 2026-11-04 09:20 WIB_
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
 | Tests | 94 files / 952 tests PASS |
-| Disk | 11 GB used / 39 GB (29%); 27 GB free; syslog 2.1 MB + 68 MB compressed; journal 940 MB |
-| Swap | 4 GB total (2 GB existing + 2 GB new), /etc/fstab persisted |
+| Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
+| Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.9 |
@@ -33,7 +33,7 @@ _Last updated: 2026-11-04 09:20 WIB_
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
 | Auto-deploy | active but **blocked in live mode**; source at `ec82dde` |
-| Scheduled jobs | secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
+| Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
 
@@ -55,6 +55,18 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-05 — VPS Disk & Memory cleanup, journal limit, and automated daily maintenance timer
+
+- **Problem:** VPS disk and memory usage was steadily swelling. Analysis revealed `bot_state_snapshots` in PostgreSQL had grown to 916 MB (214k+ rows) and `bot_signal_perf_snapshots` to 76 MB due to 120-poll (~10s) periodic snapshots without a retention policy. Systemd journal was consuming 1.0 GB on disk and holding 228 MB RSS in `systemd-journald`. A redundant `swap2.img` consumed 2 GB.
+- **Actions executed on VPS:**
+  1. Vacuumed systemd journal logs and placed a permanent size cap (`SystemMaxUse=150M`, `RuntimeMaxUse=50M`) in `/etc/systemd/journald.conf.d/00-size-limit.conf`. `systemd-journald` memory dropped from 228 MB to 19 MB.
+  2. Purged PostgreSQL snapshot records older than 7 days (214,261 state snapshots, 71,329 signal perf snapshots) and executed `VACUUM FULL`. `bot_state_snapshots` shrank from 916 MB to 276 MB.
+  3. Capped `orderflow.jsonl` to 10k lines, cleaned temporary/rotated files, and cleaned apt cache.
+  4. Deactivated and removed redundant `/swap2.img` (2 GB reclaimed), updated `/etc/fstab`.
+  5. Flushed inactive page cache (`vm.drop_caches=3`). Free RAM jumped from 207 MB to 902 MB. Disk usage dropped from 12 GB (32%) to 9.0 GB (25%), saving 3.0 GB of disk.
+  6. Created and installed automated daily maintenance service and timer (`scripts/daily-maintenance.sh`, `polybot-maintenance.service`, `polybot-maintenance.timer`) on VPS, running daily at 04:30 WIB to prevent future snapshot/log accumulation. Tested with code 0.
+- **Evidence:** `systemctl status polybot-maintenance.timer` active; `df -h` shows 9.0G used (29G available); `free -m` shows 902 MB free / 957 MB available; bot `polybtc15-bot` running continuously and unaffected.
 
 ### 2026-11-04 — Repair dry-run bankroll accounting baseline and profit-target state ($61.99)
 
