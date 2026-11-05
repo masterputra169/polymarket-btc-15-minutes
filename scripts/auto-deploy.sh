@@ -215,6 +215,34 @@ if [ ! -f "$TMP/dist/index.html" ] || [ ! -d "$TMP/node_modules" ] || [ ! -d "$T
   notify "POLY//15 auto-deploy: artifacts missing; bot untouched"; exit 1
 fi
 
+sync_systemd_units() {
+  local units_changed=0
+  chmod +x "$REPO"/scripts/*.sh "$REPO"/scripts/*.mjs 2>/dev/null || true
+
+  for f in "$REPO"/scripts/*.service "$REPO"/scripts/*.timer; do
+    [ -f "$f" ] || continue
+    local name
+    name=$(basename "$f")
+    local dest="/etc/systemd/system/$name"
+    if [ ! -f "$dest" ] || ! cmp -s "$f" "$dest"; then
+      log "syncing systemd unit: $name"
+      sudo -n install -m 0644 -o root -g root "$f" "$dest"
+      units_changed=1
+      if grep -q "\[Install\]" "$f"; then
+        sudo -n systemctl enable "$name" >/dev/null 2>&1 || true
+      fi
+      if [[ "$name" == *.timer ]]; then
+        sudo -n systemctl restart "$name" >/dev/null 2>&1 || true
+      fi
+    fi
+  done
+
+  if [ "$units_changed" = "1" ]; then
+    log "reloading systemd daemon"
+    sudo -n systemctl daemon-reload
+  fi
+}
+
 OLD_SHA=$(git rev-parse HEAD)
 AUTH_CHANGED=0
 [ "$(sha256sum "$REPO/scripts/dashboard-auth-server.mjs" | cut -d' ' -f1)" = "$(sha256sum "$TMP/scripts/dashboard-auth-server.mjs" | cut -d' ' -f1)" ] || AUTH_CHANGED=1
@@ -223,6 +251,7 @@ log "switching (auth_changed=$AUTH_CHANGED)"
 SWITCH_STARTED=1
 sudo -n systemctl stop polybtc15-bot >/dev/null
 git -C "$REPO" reset --hard "$TARGET" >/dev/null
+sync_systemd_units
 if [ -d "$REPO/node_modules" ]; then mv "$REPO/node_modules" "$BACKUP/root_node_modules"; fi
 if [ -d "$REPO/bot/node_modules" ]; then mv "$REPO/bot/node_modules" "$BACKUP/bot_node_modules"; fi
 if [ -d "$REPO/dist" ]; then mv "$REPO/dist" "$BACKUP/dist"; fi
@@ -239,5 +268,9 @@ curl -fsS --max-time 5 "http://127.0.0.1:8080/" | grep -q 'id="root"' || { log "
 SWITCH_STARTED=0
 DEPLOYED_SHA="$TARGET"; LAST_SEEN_SHA="$TARGET"; LAST_RESULT="success"; write_state
 rm -rf "$BACKUP"; BACKUP=""
+if [ -f "$REPO/scripts/auto-deploy.sh" ] && ! cmp -s "$REPO/scripts/auto-deploy.sh" /usr/local/sbin/poly15-auto-deploy; then
+  log "refreshing /usr/local/sbin/poly15-auto-deploy"
+  sudo -n install -m 0755 -o root -g root "$REPO/scripts/auto-deploy.sh" /usr/local/sbin/poly15-auto-deploy
+fi
 log "deployed $SHORT"
 notify "POLY//15 auto-deploy success: $SHORT (DRY RUN)"

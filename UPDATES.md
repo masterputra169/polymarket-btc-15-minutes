@@ -32,7 +32,7 @@ _Last updated: 2026-11-05 15:35 WIB_
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active but **blocked in live mode**; source at `ec82dde` |
+| Auto-deploy | active; **unit auto-sync enabled**; source at `main` |
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -55,6 +55,15 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-05 — Add automatic systemd unit synchronization to auto-deploy
+
+- **Problem:** When new systemd services or timers were added to `scripts/`, `poly15-auto-deploy` only pulled code and restarted the bot/auth server. It did not install or activate new `.service` or `.timer` files, requiring manual SSH intervention.
+- **Change:**
+  1. Updated `scripts/auto-deploy.sh` with `sync_systemd_units()`: automatically iterates over `scripts/*.service` and `scripts/*.timer`, ensures scripts are executable, copies new/modified units to `/etc/systemd/system/`, enables units containing `[Install]`, restarts timers, and triggers `systemctl daemon-reload`.
+  2. Added self-update logic so `/usr/local/sbin/poly15-auto-deploy` refreshes itself whenever `scripts/auto-deploy.sh` is updated in Git.
+  3. Deployed and verified on VPS (`/usr/local/sbin/poly15-auto-deploy`).
+- **Evidence:** `bash -n /usr/local/sbin/poly15-auto-deploy` PASS; permissions 0755 root:root verified.
 
 ### 2026-11-05 — VPS Disk & Memory cleanup, journal limit, and automated daily maintenance timer
 
