@@ -91,3 +91,10 @@ monte carlo/
 # Local Railway data export (private trade data + archives)
 /data/railway-export/
 /data/railway-export-2026-10-18.tar.gz
+
+# VPS runtime artifacts & auto-deploy state
+.auto-deploy/
+.tunnel-url
+auth.env
+auth.env*
+dashboard-password.hash

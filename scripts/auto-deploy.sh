@@ -172,10 +172,9 @@ SHORT=$(printf '%.7s' "$TARGET")
 if [ "$TARGET" = "$DEPLOYED_SHA" ] || [ "$TARGET" = "$LAST_SEEN_SHA" ]; then exit 0; fi
 log "target $SHORT (deployed $DEPLOYED_SHA, seen $LAST_SEEN_SHA)"
 
-if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
-  log "worktree dirty; refusing to overwrite"
-  notify "POLY//15 auto-deploy: worktree dirty; manual cleanup required"
-  exit 1
+DIRTY_FILES=$(git status --porcelain --untracked-files=no | tr '\n' ' ' | sed 's/  */ /g' || true)
+if [ -n "$DIRTY_FILES" ]; then
+  block_deploy "worktree dirty ($DIRTY_FILES); manual cleanup required"
 fi
 
 CI=$(ci_state "$TARGET")
@@ -268,6 +267,7 @@ curl -fsS --max-time 5 "http://127.0.0.1:8080/" | grep -q 'id="root"' || { log "
 SWITCH_STARTED=0
 DEPLOYED_SHA="$TARGET"; LAST_SEEN_SHA="$TARGET"; LAST_RESULT="success"; write_state
 rm -rf "$BACKUP"; BACKUP=""
+rm -f "$STATE_DIR/last-block"
 if [ -f "$REPO/scripts/auto-deploy.sh" ] && ! cmp -s "$REPO/scripts/auto-deploy.sh" /usr/local/sbin/poly15-auto-deploy; then
   log "refreshing /usr/local/sbin/poly15-auto-deploy"
   sudo -n install -m 0755 -o root -g root "$REPO/scripts/auto-deploy.sh" /usr/local/sbin/poly15-auto-deploy

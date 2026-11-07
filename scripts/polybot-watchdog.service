@@ -1,0 +1,7 @@
+[Unit]
+Description=PolyBTC15 external liveness watchdog
+After=network-online.target polybtc15-bot.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/polybtc15/scripts/watchdog.sh

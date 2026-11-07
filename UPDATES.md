@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-05 15:35 WIB_
+_Last updated: 2026-11-07 21:50 WIB_
 
 | Area | State |
 |---|---|
@@ -27,12 +27,12 @@ _Last updated: 2026-11-05 15:35 WIB_
 | Kelly shrink | 0.9 |
 | Circuit breaker | relaxed for live: max daily loss 50%, max drawdown 50%, cooldown 30min |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
-| Health state | no health issues; `systemctl --failed` clean |
+| Health state | clean; failed units cleared; `systemctl --failed` empty |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
 | Secrets backup | AES-256 encrypted local archive; key copied locally |
 | Data backup | AES-256 encrypted archive; local offsite copy |
 | Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; **unit auto-sync enabled**; source at `main` |
+| Auto-deploy | active; **worktree dirty throttled via block_deploy**; unit auto-sync enabled; source at `main` |
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
@@ -55,6 +55,30 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-07 — Fix auto-deploy worktree dirty spam and failed unit alert loop
+
+- **Problem:**
+  Telegram was receiving duplicate, alternating alert messages every 2-3 minutes:
+  1. `POLY//15 auto-deploy: worktree dirty; manual cleanup required` (from `poly15-auto-deploy.service`)
+  2. `🚨 POLY//15 health alert unit failed: poly15-auto-deploy.service` (from `poly15-health-alert.service`)
+  Root causes:
+  - `scripts/auto-deploy.sh` on VPS had uncommitted edits, causing `git status --porcelain --untracked-files=no` to report a dirty worktree.
+  - When dirty worktree was detected, `auto-deploy.sh` called `notify` on every single run without deduplication or state tracking, and exited with `exit 1`.
+  - Exiting with `exit 1` marked the oneshot unit `poly15-auto-deploy.service` as failed in systemd.
+  - `poly15-health-alert.timer` (running every 5 min) detected `poly15-auto-deploy.service` in `systemctl --failed` and generated the health alert.
+  - Each timer trigger cleared then re-failed the unit, triggering state change alerts endlessly.
+- **Change:**
+  1. Updated `scripts/auto-deploy.sh`: replaced unthrottled `exit 1` with `block_deploy "worktree dirty ($DIRTY_FILES); manual cleanup required"`. This deduplicates notifications via `$STATE_DIR/last-block` (alerts only ONCE per target commit) and exits with `0` so the systemd service does not enter a failed state.
+  2. Added `rm -f "$STATE_DIR/last-block"` upon successful deployment.
+  3. Added `.auto-deploy/`, `.tunnel-url`, `auth.env*`, and `dashboard-password.hash` to `.gitignore` to prevent runtime state cluttering git status.
+  4. Tracked VPS external watchdog unit and script (`scripts/watchdog.sh`, `scripts/polybot-watchdog.service`, `scripts/polybot-watchdog.timer`) in git.
+  5. Cleaned VPS worktree: reset tracked uncommitted modifications, reset systemd failed unit state (`systemctl reset-failed poly15-auto-deploy.service`), and verified health check is completely green.
+- **Verification:**
+  - `systemctl is-failed poly15-auto-deploy.service` returned active/clean (not failed).
+  - `/usr/local/sbin/poly15-health-alert` executed with 0 issues; `systemctl --failed` empty.
+  - Deployed cleanly to VPS and tested.
+
 
 ### 2026-11-05 — Add automatic systemd unit synchronization to auto-deploy
 

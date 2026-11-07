@@ -1,0 +1,9 @@
+[Unit]
+Description=Run the PolyBTC15 liveness watchdog every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
