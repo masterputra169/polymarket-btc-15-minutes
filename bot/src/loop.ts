@@ -2067,7 +2067,7 @@ export async function pollOnce() {
     // Monitors fill status; cancels on signal flip or 10 min timeout → FOK fallback.
     let limitOrderBlocksFOK = false;
     let smartRouteFOK = false;
-    if (BOT_CONFIG.limitOrder.enabled && !settlementPending && !profitTargetPaused) {
+    if (BOT_CONFIG.limitOrder.enabled && !BOT_CONFIG.dryRun && !settlementPending && !profitTargetPaused) {
       const limitActive = isLimitOrderActive();
       // Compute elapsed minutes since market opened (15 min markets)
       const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;

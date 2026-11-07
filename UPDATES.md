@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-08 00:10 WIB_
+_Last updated: 2026-11-08 00:25 WIB_
 
 | Area | State |
 |---|---|
@@ -17,6 +17,8 @@ _Last updated: 2026-11-08 00:10 WIB_
 | Paper bankroll | $34.58 · 890 trades · 572W / 318L (64.3% WR) |
 | Entry price cap | **65c hard cap** (`DRY_RUN_HARD_ENTRY_CAP=0.65`, `FILTER_BASE_HARD_CAP=0.65`, `FILTER_TRENDING_HARD_CAP=0.65`) |
 | Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.95) |
+| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
+| Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
@@ -61,6 +63,21 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-08 00:25 WIB — Optimization: Early Discovery Window Expansion & Live Maker Order Router Readiness
+- **Scope:** `bot/src/loop.ts`, `UPDATES.md`, VPS configuration (`/opt/polybtc15/bot/.env`).
+- **Motivation:** Operator requested applying all tactical optimizations to prevent trade starvation while maintaining the strict 65c hard cap and leak filters.
+- **Changes Applied:**
+  1. **Early Discovery Window:** Set `FILTER_DRY_RUN_MAX_TIME_LEFT=13.5` on VPS `.env`. Extends early discovery from 12.0m to 13.5m left, enabling the bot to detect and enter trades when tokens are still priced at base levels (50c-54c) before market expansion.
+  2. **Soft Entry Cap:** Adjusted `FILTER_SOFT_ENTRY_CAP=0.62` to allow standard ML entries up to 62c (below the 65c hard cap).
+  3. **Maker Limit Router Live Guard:** In `bot/src/loop.ts`, added `!BOT_CONFIG.dryRun` guard to limit order placement (`BOT_CONFIG.limitOrder.enabled && !BOT_CONFIG.dryRun`). Enabled `LIMIT_ORDER_ENABLED=true` and `ORDER_ROUTER_ENABLED=true` in VPS `.env`.
+     - In dry run: safely executes simulated FOK fills without attempting uninitialized CLOB API calls.
+     - In live mode (`DRY_RUN=false`): automatically engages GTD post-only maker limit orders to save spread and 7% taker fees.
+- **Verification:**
+  - `npm run typecheck`: clean across all 4 packages.
+  - Deployed to VPS: git pulled, `.env` updated, service restarted.
+  - Logs verified: clean startup, 0 crashes, early discovery window active.
+- **Rollback:** Revert git commit and restore `.env`.
 
 ### 2026-11-08 00:10 WIB — Brutal Upgrade: 4-Fase Empirical Leak Plug & Risk Guard Overhaul
 - **Scope:** bot codebase (`filterThresholds.ts`, `tradeFilters.ts`, `tradePipeline.ts`, `config.ts`), tests (`tradeFilters.test.ts`, `tradePipeline.dryRunFill.test.ts`), VPS deployment (`/opt/polybtc15/bot/.env`).
