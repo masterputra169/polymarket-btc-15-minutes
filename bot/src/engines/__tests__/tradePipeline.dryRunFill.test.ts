@@ -299,4 +299,16 @@ describe('the depth gate reads the book of the side being traded', () => {
     }), deps);
     expect(executed).toBe(false);
   });
+
+  test('FIXED_SHARE_SIZE locks share count in dry run', async () => {
+    process.env.FIXED_SHARE_SIZE = '3';
+    const deps = makeDeps();
+    const executed = await executeDirectionalTrade(signal(), deps);
+    expect(executed).toBe(true);
+    expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
+      size: 3,
+      actualCost: 1.82, // 3 × 0.605 = 1.815 -> 1.82
+    }));
+    delete process.env.FIXED_SHARE_SIZE;
+  });
 });

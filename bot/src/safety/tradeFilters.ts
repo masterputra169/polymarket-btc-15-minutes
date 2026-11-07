@@ -312,13 +312,15 @@ export function applyTradeFilters({
   // even if ML specifically is uncertain (rule-based indicators still contribute).
   const highEdgeBypass = bestEdge != null && bestEdge >= T.highEdgeBypass;
   const baseMLMin = (highEdgeBypass || oracleLagBypass)
-    ? Math.min(T.mlConfMin, T.mlConfRelaxed) // relax to 45% when edge or oracle-lag triggers
+    ? Math.max(T.hardMlFloor, Math.min(T.mlConfMin, T.mlConfRelaxed)) // relax to 45% when edge or oracle-lag triggers (never below hard floor)
     : T.mlConfMin;
   const mlConfMin = (tiltMlConfMin != null && tiltMlConfMin > baseMLMin)
     ? tiltMlConfMin
     : baseMLMin;
   if (mlAvailable && mlConfidence != null) {
-    if (mlConfidence < mlConfMin) {
+    if (T.hardMlFloor > 0 && mlConfidence < T.hardMlFloor) {
+      reasons.push(`ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(T.hardMlFloor * 100).toFixed(0)}% absolute floor`);
+    } else if (mlConfidence < mlConfMin) {
       const tiltTag = tiltMlConfMin != null ? ' [tilt]' : '';
       const edgeTag = highEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥${(T.highEdgeBypass * 100).toFixed(0)}%→relaxed]` : '';
       const lagTag = oracleLagBypass ? ' [oracle-lag→relaxed]' : '';
@@ -461,6 +463,19 @@ export function applyTradeFilters({
     }
   }
 
+  // 4d. Mid-phase decay protection (anti-late entry pump):
+  // Historical proof (889 trades): MID phase entries (5m-11m) had -$20.91 loss due to entering at inflated prices.
+  // If timeLeftMin < 11m, cap price at midPhaseMaxPrice (e.g. 58c) unless bestEdge >= midPhaseMinEdge (e.g. 8%).
+  if (T.midPhaseMaxPrice > 0 && Number.isFinite(timeLeftMin) && timeLeftMin < 11.0 && timeLeftMin >= T.lateTimeLeft) {
+    if (marketPrice != null && marketPrice > T.midPhaseMaxPrice) {
+      if (bestEdge == null || bestEdge < T.midPhaseMinEdge) {
+        reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(T.midPhaseMaxPrice * 100).toFixed(0)}c without high edge (${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < ${(T.midPhaseMinEdge * 100).toFixed(0)}%)`);
+      } else if (marketPrice > 0.62) {
+        reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > 62c ceiling`);
+      }
+    }
+  }
+
   // 4c. BTC distance from PTB minimum (below = coin flip, no directional edge)
   // Audit v2 H5: Time-adaptive — EARLY phase (>10min) uses 0.02% (more time for BTC to move),
   // LATE phase uses full 0.04%. Bypass when ML is very high confidence (>=80%).
@@ -579,6 +594,10 @@ export function applyTradeFilters({
     const TRENDING_MIN_TOKEN = T.trendingMinToken;
     if (marketPrice != null && marketPrice < TRENDING_MIN_TOKEN) {
       reasons.push(`Trending+low price blocked: ${(marketPrice * 100).toFixed(0)}c < ${TRENDING_MIN_TOKEN * 100}c (market says 50/50, not trending)`);
+    }
+    // Gate d: Anti-pucuk protection (chasing trending tokens >60c had negative EV in historical audit)
+    if (T.trendingMaxPrice > 0 && marketPrice != null && marketPrice > T.trendingMaxPrice) {
+      reasons.push(`Trending+high price blocked: ${(marketPrice * 100).toFixed(0)}c > ${(T.trendingMaxPrice * 100).toFixed(0)}c (anti-chasing top)`);
     }
     // Gate c: ML confidence in trending — direction-aware with edge bypass
     const TRENDING_ML_WITH = T.trendingMlWith;         // signal aligns with BTC direction (trend supports us)

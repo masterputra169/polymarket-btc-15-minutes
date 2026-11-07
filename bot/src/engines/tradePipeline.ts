@@ -481,26 +481,33 @@ export async function executeDirectionalTrade({
     return false;
   }
 
-  // FOK confidence-tier size floor (user request 2026-05-14):
-  //   LOW=3, MEDIUM=5, HIGH=6, VERY_HIGH=7.
-  // Kelly often returns 2 shares for FOK — bump up to match confidence level
-  // since v19 ML triggers FOK at higher confidence than LIMIT.
-  // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
-  const FOK_MIN_BY_CONF = {
-    LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       3, 1, 50),
-    MEDIUM:    envInt(process.env.FOK_MIN_SHARES_MEDIUM,    5, 1, 50),
-    HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
-    VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
-  };
-  const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
-  if (shares < minShares) {
-    const minCost = minShares * betMarketPrice;
-    const bankrollCap = (deps.getBankroll?.() ?? 0) * 0.15;
-    if (minCost <= bankrollCap || bankrollCap <= 0) {
-      log.info(`FOK confidence-tier bump: ${shares}→${minShares} shares (conf=${rec.confidence}, cost=$${minCost.toFixed(2)} ≤ 15%×bankroll=$${bankrollCap.toFixed(2)})`);
-      shares = minShares;
-    } else {
-      log.info(`FOK confidence-tier bump SKIPPED: ${minShares}×$${betMarketPrice.toFixed(3)}=$${minCost.toFixed(2)} > 15%×bankroll=$${bankrollCap.toFixed(2)} — keep ${shares}`);
+  // Fixed share size override (Fase 2 P1: Lock position size to prevent overexposure)
+  const fixedShareSize = envInt(process.env.FIXED_SHARE_SIZE, 0, 0, 100);
+  if (fixedShareSize > 0) {
+    shares = (!dryRun && fixedShareSize < 5) ? 5 : fixedShareSize;
+    log.info(`Fixed share sizing active: ${shares} shares (${dryRun ? 'dry-run' : 'live min 5'})`);
+  } else {
+    // FOK confidence-tier size floor (user request 2026-05-14):
+    //   LOW=3, MEDIUM=5, HIGH=6, VERY_HIGH=7.
+    // Kelly often returns 2 shares for FOK — bump up to match confidence level
+    // since v19 ML triggers FOK at higher confidence than LIMIT.
+    // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
+    const FOK_MIN_BY_CONF = {
+      LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       3, 1, 50),
+      MEDIUM:    envInt(process.env.FOK_MIN_SHARES_MEDIUM,    5, 1, 50),
+      HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
+      VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
+    };
+    const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
+    if (shares < minShares) {
+      const minCost = minShares * betMarketPrice;
+      const bankrollCap = (deps.getBankroll?.() ?? 0) * 0.15;
+      if (minCost <= bankrollCap || bankrollCap <= 0) {
+        log.info(`FOK confidence-tier bump: ${shares}→${minShares} shares (conf=${rec.confidence}, cost=$${minCost.toFixed(2)} ≤ 15%×bankroll=$${bankrollCap.toFixed(2)})`);
+        shares = minShares;
+      } else {
+        log.info(`FOK confidence-tier bump SKIPPED: ${minShares}×$${betMarketPrice.toFixed(3)}=$${minCost.toFixed(2)} > 15%×bankroll=$${bankrollCap.toFixed(2)} — keep ${shares}`);
+      }
     }
   }
 

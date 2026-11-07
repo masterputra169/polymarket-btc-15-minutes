@@ -32,7 +32,7 @@ const BOT_CONFIG = {
   dryRun: DRY_RUN,
   bankroll: envNum(process.env.BANKROLL, 100, 1, 1_000_000),
   maxDailyLossPct: envNum(process.env.MAX_DAILY_LOSS_PCT, 15, 1, 100),  // Audit fix M: 20→15% — widen gap with maxDrawdown (25%)
-  maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 7, 1, 50),  // Audit v4 C4: 5→7 — P(7 losses at 56% WR) = 0.32%, avoids false halt ~4x/year
+  maxConsecutiveLosses: envInt(process.env.MAX_CONSECUTIVE_LOSSES, 3, 1, 50),  // Brutal upgrade: 7→3 — P(3 consec loss)=7.8%, halts 2-4hr to prevent tilt cascade
   maxDrawdownPct: envNum(process.env.MAX_DRAWDOWN_PCT, 25, 5, 80),  // Audit v2 H6: 20→25% — P(4 consec full loss)=3.7% at 56% WR; 20% too tight for normal variance
   circuitBreakerCooldownMs: envInt(process.env.CB_COOLDOWN_MS, 4 * 60 * 60 * 1000, 0, 24 * 60 * 60 * 1000), // Audit v4 C3: 30min→4hr — after consecutive losses, 30min too short; prevents 54% daily risk
   logLevel: process.env.LOG_LEVEL || 'info',

@@ -3,7 +3,7 @@
  * Tier-2 unit tests — pure functions, no I/O.
  * Tests verify gates that protect bot from bad trades.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { applyTradeFilters, recordSpread, recordLoss } from '../src/safety/tradeFilters.ts';
 
 function baseInput(overrides = {}) {
@@ -96,6 +96,36 @@ describe('applyTradeFilters', () => {
     expect(r).toHaveProperty('pass');
     expect(r).toHaveProperty('reasons');
     expect(Array.isArray(r.reasons)).toBe(true);
+  });
+
+  it('respects hard ML floor and mid-phase and trending protection overrides', async () => {
+    const { applyTradeFilters: customApply } = await vi.importActual<any>('../src/safety/tradeFilters.ts');
+    
+    // Test mid-phase decay protection
+    process.env.FILTER_MID_PHASE_MAX_PRICE = '0.58';
+    process.env.FILTER_MID_PHASE_MIN_EDGE = '0.08';
+    process.env.FILTER_TRENDING_MAX_PRICE = '0.60';
+    process.env.FILTER_HARD_ML_FLOOR = '0.45';
+
+    vi.resetModules();
+    const freshFilters = await import('../src/safety/tradeFilters.ts');
+    
+    // 1. Hard ML floor test (even with high edge bypass)
+    const rMl = freshFilters.applyTradeFilters(baseInput({ mlConfidence: 0.40, bestEdge: 0.25 }));
+    expect(rMl.reasons.some(x => /absolute floor/i.test(x))).toBe(true);
+
+    // 2. Mid phase high price test
+    const rMid = freshFilters.applyTradeFilters(baseInput({ timeLeftMin: 8.0, marketPrice: 0.61, bestEdge: 0.05 }));
+    expect(rMid.reasons.some(x => /MID phase price/i.test(x))).toBe(true);
+
+    // 3. Trending anti-pucuk test
+    const rTrend = freshFilters.applyTradeFilters(baseInput({ regime: 'trending', marketPrice: 0.65 }));
+    expect(rTrend.reasons.some(x => /Trending\+high price blocked/i.test(x))).toBe(true);
+
+    delete process.env.FILTER_MID_PHASE_MAX_PRICE;
+    delete process.env.FILTER_MID_PHASE_MIN_EDGE;
+    delete process.env.FILTER_TRENDING_MAX_PRICE;
+    delete process.env.FILTER_HARD_ML_FLOOR;
   });
 });
 

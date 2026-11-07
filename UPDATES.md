@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-07 22:07 WIB_
+_Last updated: 2026-11-08 00:10 WIB_
 
 | Area | State |
 |---|---|
@@ -16,18 +16,22 @@ _Last updated: 2026-11-07 22:07 WIB_
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $34.58 · 890 trades · 572W / 318L (64.3% WR) |
 | Entry price cap | **65c hard cap** (`DRY_RUN_HARD_ENTRY_CAP=0.65`, `FILTER_BASE_HARD_CAP=0.65`, `FILTER_TRENDING_HARD_CAP=0.65`) |
-| Trade sizing | **3 shares** (`FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.95) |
+| Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.95) |
+| Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
+| Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
+| Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
+| Trending protection| **60c anti-pucuk cap** (`FILTER_TRENDING_MAX_PRICE=0.60`, eliminated historical -$27.03 leak) |
+| Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 94 files / 952 tests PASS |
+| Tests | 94 files / 954 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | 0.9 |
-| Circuit breaker | relaxed for live: max daily loss 50%, max drawdown 50%, cooldown 30min |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | clean; failed units cleared; `systemctl --failed` empty |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
@@ -57,6 +61,31 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-08 00:10 WIB — Brutal Upgrade: 4-Fase Empirical Leak Plug & Risk Guard Overhaul
+- **Scope:** bot codebase (`filterThresholds.ts`, `tradeFilters.ts`, `tradePipeline.ts`, `config.ts`), tests (`tradeFilters.test.ts`, `tradePipeline.dryRunFill.test.ts`), VPS deployment (`/opt/polybtc15/bot/.env`).
+- **Motivation:** Complete forensic audit of 889 historical trades (`trade_journal.jsonl`) revealed 4 structural leaks totaling -$117.98:
+  1. Europe session: 185 trades, 54.1% WR, **-$38.72** loss.
+  2. ML Confidence < 0.40: 155 trades, 49.7% WR, **-$41.91** loss (coin-flip bypasses).
+  3. MID Phase (5m-11m left): 416 trades, **-$20.91** loss due to inflated token prices.
+  4. Trending regime chasing: 166 trades, **-$27.03** loss (buying tops at 68c-75c).
+- **Changes Applied:**
+  1. **Fase 1 (P0 Filter Gates):**
+     - Activated `BLOCKED_SESSIONS=Europe` (blocks European session fake breakouts).
+     - Added `FILTER_HARD_ML_FLOOR=0.45` in `filterThresholds.ts` and `tradeFilters.ts` (Gate 1): absolute floor rejecting any signal with ML confidence < 0.45, with zero bypass tolerance.
+     - Added Gate 4d in `tradeFilters.ts` with `FILTER_MID_PHASE_MAX_PRICE=0.58` and `FILTER_MID_PHASE_MIN_EDGE=0.08`: in MID phase (< 11m left), tokens priced > 58c require >= 8% edge, capped at 62c ceiling.
+  2. **Fase 2 (P1 Execution & Sizing):**
+     - Added `FIXED_SHARE_SIZE=3` in `tradePipeline.ts`: strictly locks trade size to 3 shares ($1.80 - $1.95 risk per trade in dry-run; enforces CLOB min 5 if live). Eliminates oversized 5-7 share confidence bumps.
+  3. **Fase 3 (P2 Intelligence & Regime Guard):**
+     - Added Gate 11d in `tradeFilters.ts` with `FILTER_TRENDING_MAX_PRICE=0.60`: hard price cap preventing the bot from buying trending tops (> 60c).
+  4. **Fase 4 (P3 Risk Guards):**
+     - Tightened `MAX_CONSECUTIVE_LOSSES` default in `config.ts` and `.env` from 7 to 3 (stops runaway tilt).
+     - Tightened `MAX_DRAWDOWN_PCT` to 25% and `CB_COOLDOWN_MS` to 7,200,000 ms (2 hours).
+- **Verification:**
+  - `npm run typecheck`: clean across all 4 packages (frontend, bot, bot:core, scripts).
+  - `npm test`: 94 test files, 954 tests pass (100% PASS, including new filter and sizing unit tests).
+  - Verified on VPS: `.env` updated with all 9 parameters, service restarted, logs confirm `BLOCKED_SESSIONS active: [europe]`, filter overrides active, 3-share sizing locked, and bot running smoothly.
+- **Rollback:** Revert commit and remove parameters from `.env`.
 
 ### 2026-11-07 — Tighten entry price hard cap to 65c and enforce 3-share sizing ($2.10 max bet)
 

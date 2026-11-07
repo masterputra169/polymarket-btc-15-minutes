@@ -31,6 +31,7 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   // 1. ML confidence gate (confidence = |P(UP) − 0.5| × 2)
   mlConfMin: { env: 'FILTER_ML_CONF_MIN', def: TRADE_FILTERS.MIN_ML_CONFIDENCE, min: 0, max: 1, doc: 'minimum ML confidence' },
   mlConfRelaxed: { env: 'FILTER_ML_CONF_RELAXED', def: 0.45, min: 0, max: 1, doc: 'ML confidence floor when edge ≥ highEdgeBypass or oracle-lag' },
+  hardMlFloor: { env: 'FILTER_HARD_ML_FLOOR', def: 0, min: 0, max: 1, doc: 'absolute minimum ML confidence regardless of bypasses (0 disables)' },
   highEdgeBypass: { env: 'FILTER_HIGH_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that relaxes the ML gate (and waives the Asia floor)' },
   // Oracle-lag sniper (only with LATE_SNIPER_ENABLED=true)
   oracleLagMinTimeLeft: { env: 'FILTER_ORACLE_LAG_MIN_TIME_LEFT', def: 5.0, min: 0, max: 15, doc: 'minutes left required' },
@@ -57,6 +58,9 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   ultraMl: { env: 'FILTER_ULTRA_ML', def: 0.9, min: 0, max: 1, doc: 'ultra ML confidence' },
   // 4c. Late phase
   lateTimeLeft: { env: 'FILTER_LATE_TIME_LEFT', def: 5, min: 0, max: 15, doc: 'minutes left below which the late gate applies' },
+  // Mid-phase decay protection (timeLeft < 11m)
+  midPhaseMaxPrice: { env: 'FILTER_MID_PHASE_MAX_PRICE', def: 0, min: 0, max: 1, doc: 'max token price when timeLeftMin < 11m (0 disables)' },
+  midPhaseMinEdge: { env: 'FILTER_MID_PHASE_MIN_EDGE', def: 0.08, min: 0, max: 1, doc: 'min edge required when timeLeftMin < 11m and price > midPhaseMaxPrice' },
   // Dry-run-only volume probe: the early-time gate is the second-largest blocker
   // after the price cap. Defaults to the live 12 min; can be raised in DRY_RUN only.
   dryRunMaxTimeLeft: { env: 'FILTER_DRY_RUN_MAX_TIME_LEFT', def: TRADE_FILTERS.MAX_TIME_LEFT_MIN, min: 0, max: 15, doc: 'dry-run only: max minutes left for an entry (live stays 12)' },
@@ -82,6 +86,7 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   // 11. Trending regime
   trendingMaxTimeLeft: { env: 'FILTER_TRENDING_MAX_TIME_LEFT', def: 10, min: 0, max: 15, doc: 'no trending entry with more minutes left' },
   trendingMinToken: { env: 'FILTER_TRENDING_MIN_TOKEN', def: 0.6, min: 0, max: 1, doc: 'trending token price floor' },
+  trendingMaxPrice: { env: 'FILTER_TRENDING_MAX_PRICE', def: 0, min: 0, max: 1, doc: 'max token price in trending regime (anti-chasing top; 0 disables)' },
   trendingMlWith: { env: 'FILTER_TRENDING_ML_WITH', def: 0.55, min: 0, max: 1, doc: 'trending ML floor, signal with BTC' },
   trendingMlAgainst: { env: 'FILTER_TRENDING_ML_AGAINST', def: 0.65, min: 0, max: 1, doc: 'trending ML floor, signal against BTC' },
   trendingEdgeBypass: { env: 'FILTER_TRENDING_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that waives the trending ML floor' },
