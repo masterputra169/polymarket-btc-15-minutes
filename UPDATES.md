@@ -8,13 +8,15 @@
 
 ## Current status
 
-_Last updated: 2026-11-07 21:50 WIB_
+_Last updated: 2026-11-07 22:07 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $61.99 · 834 trades · 537W / 297L (+$1.87 win today) |
+| Paper bankroll | $34.58 · 890 trades · 572W / 318L (64.3% WR) |
+| Entry price cap | **65c hard cap** (`DRY_RUN_HARD_ENTRY_CAP=0.65`, `FILTER_BASE_HARD_CAP=0.65`, `FILTER_TRENDING_HARD_CAP=0.65`) |
+| Trade sizing | **3 shares** (`FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.95) |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
@@ -55,6 +57,24 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-07 — Tighten entry price hard cap to 65c and enforce 3-share sizing ($2.10 max bet)
+
+- **Problem:**
+  Between Nov 5 ($64.83 peak) and Nov 7 ($34.58), paper bankroll dropped -$30.25 (-46.7% drawdown) despite an overall 63.2% win rate. Breakdown analysis revealed that 29 trades were entered at 76¢–81¢ and 5 trades at 71¢–75¢, incurring -$30.11 net losses across those buckets. At 80¢, a win yields only +$0.94 while a loss costs -$4.06 (breakeven requires >81% WR; 69% WR lost money). Sizing of 5 shares risked $4.05+ per trade (~7-10% of bankroll). Root cause was loose override `DRY_RUN_HARD_ENTRY_CAP=0.8` and `FOK_MIN_SHARES_*=5` on VPS.
+- **Change:**
+  1. Updated VPS `/opt/polybtc15/bot/.env`:
+     - Lowered `DRY_RUN_HARD_ENTRY_CAP` from `0.8` to `0.65`.
+     - Set `FILTER_BASE_HARD_CAP=0.65`, `FILTER_TRENDING_HARD_CAP=0.65`, and `FILTER_ULTRA_ML_CAP=0.65` so all entry paths (including trending and ultra-ML bypasses) are capped at 65¢.
+     - Set `FOK_MIN_SHARES_LOW=3`, `FOK_MIN_SHARES_MEDIUM=3`, `FOK_MIN_SHARES_HIGH=3`, and `FOK_MIN_SHARES_VERY_HIGH=3` to enforce 3-share minimum sizing.
+     - Lowered `MAX_BET_AMOUNT_USD` from `3.50` to `2.10` so maximum trade cost is capped at $1.95 (3 shares × 65¢ max).
+  2. Restarted `polybtc15-bot.service` via systemd.
+- **Verification:**
+  - Live VPS journal verified blocking expensive entries:
+    `Smart filter blocked: Entry price 81c > 65c hard cap (need 81% WR) [dry-run cap]`
+    `Smart filter blocked: Entry price 80c > 65c hard cap (need 80% WR) [dry-run cap]`.
+  - Max trade cost reduced from $4.10 to $1.95.
+
 
 ### 2026-11-07 — Fix auto-deploy worktree dirty spam and failed unit alert loop
 
