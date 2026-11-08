@@ -8,13 +8,13 @@
 
 ## Current status
 
-_Last updated: 2026-11-08 12:20 WIB_
+_Last updated: 2026-11-08 21:25 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $31.42 · 895 trades · 574W / 321L (64.1% WR) |
+| Paper bankroll | $32.75 · 896 trades · 575W / 321L (64.2% WR) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
 | Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.74) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
@@ -24,6 +24,7 @@ _Last updated: 2026-11-08 12:20 WIB_
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
 | Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
 | Microstructure gates | **Gate 20a & 20b active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` 60s anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.75` directional anti-retrace) |
+| High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
@@ -64,6 +65,20 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-08 21:25 WIB — Bugfix: High-Edge Fast-Entry Confirmation Scaling (`90/180` vs Legacy `179/180`)
+- **Scope:** `bot/src/engines/tradePipeline.ts`, `UPDATES.md`.
+- **Motivation:**
+  - Live log audit during the US session open (`21:00–21:15 WIB`) showed `Fast-entry: high edge 18% ≥ 15% → confirm 179/180 polls` firing on every unstable poll.
+  - Root cause: `tradePipeline.ts` line 279 used `Math.max(1, SIGNAL_CONFIRM_POLLS - 1)` from when `SIGNAL_CONFIRM_POLLS` was `3` (`3 - 1 = 2` polls, i.e., half/two-thirds confirmation window). After `SIGNAL_CONFIRM_POLLS` was scaled to `180` polls for the 50ms loop on `2026-10-19`, `180 - 1` became `179` polls (saving only 0.05s instead of ~50% confirmation time, and causing tokens at `54¢–58¢` to drift above `60¢` before confirmation finished).
+  - Additionally, `Fast-entry` was logged before `isSignalStable(requiredPolls)` was checked, spamming the journal on every unstable poll.
+- **Changes Applied:**
+  1. Replaced `Math.max(1, SIGNAL_CONFIRM_POLLS - 1)` with `Math.max(1, Math.ceil(SIGNAL_CONFIRM_POLLS / 2))` (`90/180` polls at 50ms loop, matching `limStabPolls` in `loop.ts:2158`, while preserving `2/3` when `SIGNAL_CONFIRM_POLLS=3` in unit tests).
+  2. Moved the `Fast-entry:` info log after `if (!deps.isSignalStable(requiredPolls))` so it logs only once the signal has actually confirmed.
+- **Verification:**
+  - `npx vitest run bot/src/engines/__tests__/tradePipeline*.ts`: all tests pass.
+  - Deployed to VPS (`ubuntu@43.129.33.237`) and restarted `polybtc15-bot.service`.
+- **Rollback:** Revert git commit.
 
 ### 2026-11-08 12:20 WIB — Microstructure Upgrade (v14): 58c Universal Cap, 60s Path Efficiency Anti-Chop & Directional Peak Gap Anti-Retrace
 - **Scope:** `bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/signalComputation.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`, `bot/.env`, VPS `/opt/polybtc15/bot/.env`.

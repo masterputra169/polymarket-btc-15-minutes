@@ -276,14 +276,8 @@ export async function executeDirectionalTrade({
   const mlConf = mlResult.available ? mlResult.mlConfidence : null;
   const highEdge = edge.bestEdge != null && edge.bestEdge >= 0.15;
   const requiredPolls = (mlConf != null && mlConf >= 0.80) ? 1
-    : highEdge ? Math.max(1, SIGNAL_CONFIRM_POLLS - 1)
+    : highEdge ? Math.max(1, Math.ceil(SIGNAL_CONFIRM_POLLS / 2))
     : SIGNAL_CONFIRM_POLLS;
-  if (requiredPolls < SIGNAL_CONFIRM_POLLS) {
-    const fastReason = (mlConf != null && mlConf >= 0.80)
-      ? `ML conf ${(mlConf * 100).toFixed(0)}% ≥ 80%`
-      : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
-    log.info(`Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`);
-  }
 
   deps.updateConfirmation(rec.side);
 
@@ -292,6 +286,13 @@ export async function executeDirectionalTrade({
     log.info(`Signal unstable, holding: ${reasons.join(' | ')}`);
     noteTapeStage('unstable', reasons);
     return false;
+  }
+
+  if (requiredPolls < SIGNAL_CONFIRM_POLLS) {
+    const fastReason = (mlConf != null && mlConf >= 0.80)
+      ? `ML conf ${(mlConf * 100).toFixed(0)}% ≥ 80%`
+      : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
+    log.info(`Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`);
   }
 
   // ── Tilt protection ──
