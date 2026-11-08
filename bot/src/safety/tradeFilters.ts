@@ -276,6 +276,8 @@ export function applyTradeFilters({
   mlAccuracy,      // ML-specific accuracy from getMLAccuracy() (0-1 or null)
   buyRatio,        // volume delta buy ratio (0-1, >0.5 = buyers dominating)
   ptbSource,       // PTB source tier ('data_streams'|'polymarket_gamma'|'polymarket_page'|'polymarket_page_prev'|'scheduled_ws'|'chainlink_round'|'polymarket_page_approx'|'oracle'|'pending'|null)
+  pathEfficiency,  // 60s BTC path efficiency |net| / sum(|step|) in [0, 1] (null if <10s history)
+  peakGapRatio,    // current |BTC - PTB| / window peak gap in signal direction in [0, 1] (null if peak < $15)
 }: Record<string, any>) {
   const reasons = [];
 
@@ -468,10 +470,11 @@ export function applyTradeFilters({
   // If timeLeftMin < 11m, cap price at midPhaseMaxPrice (e.g. 58c) unless bestEdge >= midPhaseMinEdge (e.g. 8%).
   if (T.midPhaseMaxPrice > 0 && Number.isFinite(timeLeftMin) && timeLeftMin < 11.0 && timeLeftMin >= T.lateTimeLeft) {
     if (marketPrice != null && marketPrice > T.midPhaseMaxPrice) {
+      const midHardCeil = Math.min(0.62, T.baseHardCap);
       if (bestEdge == null || bestEdge < T.midPhaseMinEdge) {
         reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(T.midPhaseMaxPrice * 100).toFixed(0)}c without high edge (${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < ${(T.midPhaseMinEdge * 100).toFixed(0)}%)`);
-      } else if (marketPrice > 0.62) {
-        reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > 62c ceiling`);
+      } else if (marketPrice > midHardCeil) {
+        reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(midHardCeil * 100).toFixed(0)}c ceiling`);
       }
     }
   }
@@ -723,6 +726,25 @@ export function applyTradeFilters({
       reasons.push('JEV: ' + jevAdvisory.reason);
     }
   }
+
+  // 20a. Path efficiency anti-chop gate (gregyoung14/openmarket v14 drift.rs)
+  // Path efficiency = |net 60s displacement| / sum(|1s steps|).
+  // Below threshold (e.g. 0.08), BTC is sawing back and forth in place (chop regime).
+  if (T.minPathEfficiency > 0 && pathEfficiency != null && Number.isFinite(pathEfficiency)) {
+    if (pathEfficiency < T.minPathEfficiency) {
+      reasons.push(`Chop regime: path efficiency ${(pathEfficiency * 100).toFixed(1)}% < ${(T.minPathEfficiency * 100).toFixed(0)}% min`);
+    }
+  }
+
+  // 20b. Peak gap ratio anti-retrace gate (KaustubhPatange/polymarket-trade-engine)
+  // Compares current |BTC - PTB| in the signal direction to the window's peak gap.
+  // If ratio < threshold (e.g. 0.75), momentum has already faded >25% from its peak.
+  if (T.minPeakGapRatio > 0 && peakGapRatio != null && Number.isFinite(peakGapRatio)) {
+    if (peakGapRatio < T.minPeakGapRatio) {
+      reasons.push(`Momentum fading: peak gap ratio ${(peakGapRatio * 100).toFixed(0)}% < ${(T.minPeakGapRatio * 100).toFixed(0)}% min`);
+    }
+  }
+
   const sessionQuality = SESSION_QUALITY[session] ?? 0.70;
 
   const pass = reasons.length === 0;

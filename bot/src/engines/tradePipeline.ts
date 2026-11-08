@@ -254,6 +254,10 @@ export async function executeDirectionalTrade({
   smartFlowSignal,
   // Monte Carlo simulation
   mcResult,
+  // Microstructure anti-chop & anti-retrace metrics (GitHub openmarket v14 + trade-engine)
+  pathEfficiency = null,
+  peakUpGapRatio = null,
+  peakDownGapRatio = null,
 }, deps) {
   // ── ML availability gate ──
   // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
@@ -322,6 +326,8 @@ export async function executeDirectionalTrade({
     mlAccuracy: deps.getMLAccuracy?.() ?? null,
     buyRatio: volDelta?.buyRatio ?? null,
     ptbSource: priceToBeat?.source ?? null,
+    pathEfficiency,
+    peakGapRatio: rec.side === 'UP' ? peakUpGapRatio : rec.side === 'DOWN' ? peakDownGapRatio : null,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);

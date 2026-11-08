@@ -98,6 +98,9 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   sentimentMlBypass: { env: 'FILTER_SENTIMENT_ML_BYPASS', def: 0.9, min: 0, max: 1, doc: 'ML confidence that overrides extreme sentiment' },
   macroMlBypass: { env: 'FILTER_MACRO_ML_BYPASS', def: 0.95, min: 0, max: 1, doc: 'ML confidence that trades through a macro event' },
   llmMlBypassDefault: { env: 'FILTER_LLM_ML_BYPASS', def: 0.9, min: 0, max: 1, doc: 'ML bypass for an LLM block that names none' },
+  // 20. Microstructure anti-chop & anti-retrace gates (GitHub openmarket v14 + trade-engine)
+  minPathEfficiency: { env: 'FILTER_MIN_PATH_EFFICIENCY', def: 0, min: 0, max: 1, doc: 'minimum 60s BTC path efficiency |net| / sum(|step|) to avoid chop (0 disables)' },
+  minPeakGapRatio: { env: 'FILTER_MIN_PEAK_GAP_RATIO', def: 0, min: 0, max: 1, doc: 'minimum |BTC - PTB| / peakGap ratio in signal direction to avoid fading momentum (0 disables)' },
 };
 
 export type FilterThresholdKey = keyof typeof FILTER_THRESHOLD_SPECS;

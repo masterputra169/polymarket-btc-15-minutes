@@ -8,21 +8,22 @@
 
 ## Current status
 
-_Last updated: 2026-11-08 00:25 WIB_
+_Last updated: 2026-11-08 12:20 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $34.58 · 890 trades · 572W / 318L (64.3% WR) |
-| Entry price cap | **65c hard cap** (`DRY_RUN_HARD_ENTRY_CAP=0.65`, `FILTER_BASE_HARD_CAP=0.65`, `FILTER_TRENDING_HARD_CAP=0.65`) |
-| Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.95) |
+| Paper bankroll | $31.42 · 895 trades · 574W / 321L (64.1% WR) |
+| Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
+| Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.74) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
 | Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
-| Trending protection| **60c anti-pucuk cap** (`FILTER_TRENDING_MAX_PRICE=0.60`, eliminated historical -$27.03 leak) |
+| Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
+| Microstructure gates | **Gate 20a & 20b active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` 60s anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.75` directional anti-retrace) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
@@ -63,6 +64,30 @@ If an earlier entry turns out to be wrong, add a **Correction** entry; do not si
 ---
 
 ## Entries
+
+### 2026-11-08 12:20 WIB — Microstructure Upgrade (v14): 58c Universal Cap, 60s Path Efficiency Anti-Chop & Directional Peak Gap Anti-Retrace
+- **Scope:** `bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/signalComputation.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`, `bot/.env`, VPS `/opt/polybtc15/bot/.env`.
+- **Motivation:**
+  1. **Post-Upgrade Trade Audit (05:01–09:47 WIB):** Out of 5 trades under the new rules, entries at $\le 58\text{¢}$ ($0.55, $0.58) achieved **2W / 0L (100% WR, +$2.51)**, whereas entries at $60\text{¢}–62\text{¢}$ ($0.60, $0.62, $0.62) suffered **0W / 3L (0% WR, -$5.67)**.
+  2. **GitHub Quantitative Research Benchmark:** Cross-referenced against `gregyoung14/openmarket` (v14 signal engine), `KaustubhPatange/polymarket-trade-engine`, and `libuyi543-lang/polymarket-btc15m-research` (4,501 resolved 15m BTC markets):
+     - Market makers price BTC direction accurately by minute 2–3, leaving zero net edge above 58¢ after CLOB V2's 7% taker fee.
+     - Choppy sawing price action (`pathEfficiency < 0.08`) and fading intra-window displacement (`peakGapRatio < 0.75`) are the primary causes of late-window TWAP settlement reversals.
+- **Changes Applied:**
+  1. **58c Universal Entry Price Cap Across All Phases & Regimes:**
+     - Set `DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`, `FILTER_MID_PHASE_MAX_PRICE=0.58`, and `FILTER_TRENDING_MAX_PRICE=0.58`.
+     - Updated Gate 4d (`midPhaseMaxPrice`) high-edge ceiling in `tradeFilters.ts` to `Math.min(0.62, T.baseHardCap)` so lowering `FILTER_BASE_HARD_CAP` to `0.58` also caps MID-phase high-edge entries at 58¢.
+     - Set `FILTER_TRENDING_MIN_TOKEN=0.54` (down from `0.60`) so trending regime trades cleanly within the `[54¢, 58¢]` window.
+  2. **Gate 20a — 60s Path Efficiency Anti-Chop Filter (`FILTER_MIN_PATH_EFFICIENCY=0.08`):**
+     - Added `recordBtcMicrostructure()` in `signalComputation.ts`, sampling 1 Hz BTC settlement prices (`settlePrice ?? lastPrice`) over a rolling 60-second window and computing `pathEfficiency = |net 60s displacement| / sum(|1s step|)`.
+     - Rejects entries when `pathEfficiency < 0.08` (choppy back-and-forth price action).
+  3. **Gate 20b — Directional Peak Gap Ratio Anti-Retrace Filter (`FILTER_MIN_PEAK_GAP_RATIO=0.75`):**
+     - Tracks directional `peakUpGap` and `peakDownGap` per 15m market slug (active once directional excursion reaches $\ge \$15$ from PTB).
+     - Rejects entries when `currentGap / peakGap < 0.75` in the signal direction (momentum fading / retracing >25% toward PTB).
+- **Verification:**
+  - `npm run typecheck`: clean across all packages.
+  - `npx vitest run`: all test suites pass (including `tradeFilters.golden.test.ts` and new Gate 20a/20b unit tests in `filterThresholds.test.ts`).
+  - Deployed to VPS (`ubuntu@43.129.33.237`), `.env` updated, `polymarket-bot` restarted and verified active.
+- **Rollback:** Revert git commit and restore previous `FILTER_*` values in `.env`.
 
 ### 2026-11-08 00:25 WIB — Optimization: Early Discovery Window Expansion & Live Maker Order Router Readiness
 - **Scope:** `bot/src/loop.ts`, `UPDATES.md`, VPS configuration (`/opt/polybtc15/bot/.env`).

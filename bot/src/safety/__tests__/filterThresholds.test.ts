@@ -120,4 +120,28 @@ describe('tradeFilters honours the thresholds', () => {
     expect(mlGate((await load({})).applyTradeFilters(weak).reasons)).toEqual([`ML conf 50% < ${(TRADE_FILTERS.MIN_ML_CONFIDENCE * 100).toFixed(0)}%`]);
     expect(mlGate((await load({ FILTER_ML_CONF_MIN: '0.45' })).applyTradeFilters(weak).reasons)).toEqual([]);
   });
+
+  test('FILTER_MIN_PATH_EFFICIENCY and FILTER_MIN_PEAK_GAP_RATIO enforce microstructure gates 20a and 20b', async () => {
+    const f = await load({
+      FILTER_MIN_PATH_EFFICIENCY: '0.08',
+      FILTER_MIN_PEAK_GAP_RATIO: '0.75',
+    });
+    const chopAndFading = f.applyTradeFilters({
+      ...input,
+      pathEfficiency: 0.05,
+      peakGapRatio: 0.60,
+    });
+    expect(chopAndFading.reasons.filter(r => r.startsWith('Chop regime') || r.startsWith('Momentum fading'))).toEqual([
+      'Chop regime: path efficiency 5.0% < 8% min',
+      'Momentum fading: peak gap ratio 60% < 75% min',
+    ]);
+
+    const cleanAndStrong = f.applyTradeFilters({
+      ...input,
+      pathEfficiency: 0.14,
+      peakGapRatio: 0.90,
+    });
+    expect(cleanAndStrong.reasons.filter(r => r.startsWith('Chop regime') || r.startsWith('Momentum fading'))).toEqual([]);
+  });
 });
+

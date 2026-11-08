@@ -32,12 +32,84 @@ const marketUpTimed: { slug: string | null; points: Array<{ t: number; p: number
 const MARKET_HISTORY_KEEP_MS = MARKET_MOMENTUM_WINDOW_MS + 30_000;
 const MARKET_HISTORY_MIN_STEP_MS = 1_000;
 
+// ── Timestamped BTC price & directional peak-gap tracker (GitHub openmarket v14 + trade-engine) ──
+const btcMicroTimed: {
+  slug: string | null;
+  points: Array<{ t: number; p: number }>;
+  peakUpGap: number;
+  peakDownGap: number;
+} = { slug: null, points: [], peakUpGap: 0, peakDownGap: 0 };
+const BTC_PATH_WINDOW_MS = 60_000;
+const MIN_PATH_POINTS = 10;
+const MIN_MEANINGFUL_PEAK_GAP_USD = 15;
+
+export function recordBtcMicrostructure(
+  slug: string | null | undefined,
+  t: number,
+  btcPrice: number | null | undefined,
+  ptbValue: number | null | undefined,
+): { pathEfficiency: number | null; peakUpGapRatio: number | null; peakDownGapRatio: number | null } {
+  if ((slug ?? null) !== btcMicroTimed.slug) {
+    btcMicroTimed.slug = slug ?? null;
+    btcMicroTimed.points = [];
+    btcMicroTimed.peakUpGap = 0;
+    btcMicroTimed.peakDownGap = 0;
+  }
+
+  if (btcPrice != null && Number.isFinite(btcPrice) && btcPrice > 0 && Number.isFinite(t)) {
+    const pts = btcMicroTimed.points;
+    const last = pts[pts.length - 1];
+    if (last && t - last.t < MARKET_HISTORY_MIN_STEP_MS) {
+      pts[pts.length - 1] = { t: last.t, p: btcPrice };
+    } else {
+      pts.push({ t, p: btcPrice });
+    }
+    const cutoff = t - BTC_PATH_WINDOW_MS;
+    while (pts.length > 1 && pts[0].t < cutoff) pts.shift();
+
+    if (ptbValue != null && Number.isFinite(ptbValue) && ptbValue > 0) {
+      const gap = btcPrice - ptbValue;
+      if (gap > btcMicroTimed.peakUpGap) btcMicroTimed.peakUpGap = gap;
+      if (-gap > btcMicroTimed.peakDownGap) btcMicroTimed.peakDownGap = -gap;
+    }
+  }
+
+  let pathEfficiency: number | null = null;
+  const pts = btcMicroTimed.points;
+  if (pts.length >= MIN_PATH_POINTS) {
+    const direct = Math.abs(pts[pts.length - 1].p - pts[0].p);
+    let totalPath = 0;
+    for (let i = 1; i < pts.length; i++) {
+      totalPath += Math.abs(pts[i].p - pts[i - 1].p);
+    }
+    pathEfficiency = totalPath > 1e-6 ? direct / totalPath : 0;
+  }
+
+  let peakUpGapRatio: number | null = null;
+  let peakDownGapRatio: number | null = null;
+  if (btcPrice != null && Number.isFinite(btcPrice) && ptbValue != null && Number.isFinite(ptbValue) && ptbValue > 0) {
+    const gap = btcPrice - ptbValue;
+    if (gap > 0 && btcMicroTimed.peakUpGap >= MIN_MEANINGFUL_PEAK_GAP_USD) {
+      peakUpGapRatio = Math.min(1, gap / btcMicroTimed.peakUpGap);
+    }
+    if (gap < 0 && btcMicroTimed.peakDownGap >= MIN_MEANINGFUL_PEAK_GAP_USD) {
+      peakDownGapRatio = Math.min(1, (-gap) / btcMicroTimed.peakDownGap);
+    }
+  }
+
+  return { pathEfficiency, peakUpGapRatio, peakDownGapRatio };
+}
+
 export function resetMarketUpHistory() {
   marketUpHistory.buf.fill(0);
   marketUpHistory.idx = 0;
   marketUpHistory.count = 0;
   marketUpTimed.slug = null;
   marketUpTimed.points = [];
+  btcMicroTimed.slug = null;
+  btcMicroTimed.points = [];
+  btcMicroTimed.peakUpGap = 0;
+  btcMicroTimed.peakDownGap = 0;
 }
 
 /** Record the UP price seen at `t` for `slug` (at most one point per second). */
@@ -46,6 +118,10 @@ export function recordMarketUp(slug: string | null | undefined, t: number, p: nu
   if ((slug ?? null) !== marketUpTimed.slug) {
     marketUpTimed.slug = slug ?? null;
     marketUpTimed.points = [];
+  btcMicroTimed.slug = null;
+  btcMicroTimed.points = [];
+  btcMicroTimed.peakUpGap = 0;
+  btcMicroTimed.peakDownGap = 0;
   }
   const pts = marketUpTimed.points;
   const last = pts[pts.length - 1];
@@ -190,6 +266,9 @@ export function computeSignals({
   try { recordOrderFlowTrades(getClobRecentTrades?.() ?? [], marketSlug, now); } catch { /* record-only */ }
 
   recordMarketUp(marketSlug, now, marketUp);
+  const { pathEfficiency, peakUpGapRatio, peakDownGapRatio } = recordBtcMicrostructure(
+    marketSlug, now, settlePrice ?? lastPrice, updatedPriceToBeat.value,
+  );
 
   // ── Market price momentum (ring buffer) ──
   // M18: Ring buffer uses fixed candle count (12 polls), not time-based.
@@ -355,6 +434,7 @@ export function computeSignals({
     useClobWs, marketUp, marketDown,
     orderbookUp, orderbookDown, orderbookSignal,
     arb, obFlow, marketPriceMomentum,
+    pathEfficiency, peakUpGapRatio, peakDownGapRatio,
 
     // Price to beat (potentially updated)
     updatedPriceToBeat,

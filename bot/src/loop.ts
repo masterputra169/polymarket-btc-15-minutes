@@ -1379,6 +1379,7 @@ export async function pollOnce() {
       useClobWs, marketUp, marketDown,
       orderbookUp, orderbookDown, orderbookSignal,
       arb, obFlow, marketPriceMomentum,
+      pathEfficiency, peakUpGapRatio, peakDownGapRatio,
       scored, timeAware, ruleEdge,
       mlResult, ensembleUp, ensembleDown, mlAgreesWithRules,
       edge, session,
@@ -2661,6 +2662,7 @@ export async function pollOnce() {
           marketUp, marketDown, obFlow,
           smartFlowSignal,
           mcResult,
+          pathEfficiency, peakUpGapRatio, peakDownGapRatio,
         }, {
           updateConfirmation,
           isSignalStable,
