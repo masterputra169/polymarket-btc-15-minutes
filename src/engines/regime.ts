@@ -16,6 +16,8 @@
  *   moderate       → neutral 1.00x (default)
  */
 
+import { computeHurstExponent, computeHalfLife } from '../indicators/quantMath.ts';
+
 export type MarketRegime = 'trending' | 'choppy' | 'mean_reverting' | 'moderate';
 export type RegimeDirection = 'UP' | 'DOWN' | null;
 
@@ -29,6 +31,9 @@ export interface RegimeParams {
   atrRatio?: number | null;
   volumeRatioOverride?: number | null;
   acf?: number | null;
+  closes?: number[] | null;
+  hurst?: number | null;
+  halfLife?: number | null;
 }
 
 export interface RegimeInfo {
@@ -37,6 +42,8 @@ export interface RegimeInfo {
   label: string;
   direction: RegimeDirection;
   acf: number | null;
+  hurst?: number | null;
+  halfLife?: number | null;
 }
 
 /**
@@ -109,11 +116,22 @@ export function detectRegime({
   atrRatio = null,
   volumeRatioOverride = null,
   acf = null,
+  closes = null,
+  hurst: hurstOverride = null,
+  halfLife: halfLifeOverride = null,
 }: RegimeParams): RegimeInfo {
   let regime: MarketRegime = 'moderate';
   let confidence = 0.5;
   let label = 'Moderate';
   let direction: RegimeDirection = null; // 'UP', 'DOWN', or null (non-directional)
+
+  const hurst = hurstOverride ?? (closes ? computeHurstExponent(closes) : null);
+  const halfLife = halfLifeOverride ?? (closes ? computeHalfLife(closes) : null);
+  const hasHurst = hurst !== null && Number.isFinite(hurst);
+  const hurstTrendBoost = hasHurst ? (hurst > 0.58 ? 0.08 : (hurst < 0.45 ? -0.06 : 0)) : 0;
+  const hurstMrBoost = hasHurst ? (hurst < 0.45 ? 0.08 : (hurst > 0.58 ? -0.06 : 0)) : 0;
+  const hurstChoppyBoost = hasHurst && hurst >= 0.46 && hurst <= 0.54 ? 0.05 : 0;
+  const hasHalfLife = halfLife !== null && Number.isFinite(halfLife) && halfLife > 0 && halfLife < 30;
 
   const hasVwap = vwap !== null && vwap !== undefined && price !== null && price !== undefined;
   const hasSlope = vwapSlope !== null && vwapSlope !== undefined;
@@ -121,7 +139,7 @@ export function detectRegime({
   const hasAtr = atrRatio !== null && Number.isFinite(atrRatio);
   const hasAcf = acf !== null && Number.isFinite(acf);
 
-  if (!hasVwap || vwap === 0) return { regime, confidence, label, direction, acf };
+  if (!hasVwap || vwap === 0) return { regime, confidence, label, direction, acf, hurst, halfLife };
 
   const vwapDist = Math.abs(price - vwap) / vwap;
   const volumeRatio = volumeRatioOverride ?? (hasVolume ? volumeRecent / volumeAvg : 1);
@@ -136,9 +154,9 @@ export function detectRegime({
     const atrChoppyBoost = (hasAtr && atrRatio < 0.8) ? 0.10 : 0;
     const acfChoppyBoost = (hasAcf && Math.abs(acf) < 0.15) ? 0.08 : 0;
     regime = 'choppy';
-    confidence = Math.min(0.3 + Math.min(vwapCrossCount / 8, 0.4) + atrChoppyBoost + acfChoppyBoost, 0.90);
-    label = `Choppy (${vwapCrossCount} crosses${atrChoppyBoost > 0 ? ', low ATR' : ''}${acfChoppyBoost > 0 ? ', ACF~0' : ''})`;
-    return { regime, confidence, label, direction, acf };
+    confidence = Math.min(0.3 + Math.min(vwapCrossCount / 8, 0.4) + atrChoppyBoost + acfChoppyBoost + hurstChoppyBoost, 0.90);
+    label = `Choppy (${vwapCrossCount} crosses${atrChoppyBoost > 0 ? ', low ATR' : ''}${acfChoppyBoost > 0 ? ', ACF~0' : ''}${hurstChoppyBoost > 0 ? ', H~0.5' : ''})`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // H4: ATR-confirmed choppy — low ATR + low slope + near VWAP, even without many crosses
@@ -146,9 +164,9 @@ export function detectRegime({
   if (hasAtr && atrRatio < 0.7 && vwapDist < 0.001 && normalizedAbsSlope < 0.00005) {
     const acfChoppyBoost = (hasAcf && Math.abs(acf) < 0.15) ? 0.08 : 0;
     regime = 'choppy';
-    confidence = Math.min(0.45 + (0.7 - atrRatio) * 0.5 + acfChoppyBoost, 0.90);
-    label = `Choppy (low ATR ${atrRatio.toFixed(2)}${acfChoppyBoost > 0 ? ', ACF~0' : ''})`;
-    return { regime, confidence, label, direction, acf };
+    confidence = Math.min(0.45 + (0.7 - atrRatio) * 0.5 + acfChoppyBoost + hurstChoppyBoost, 0.90);
+    label = `Choppy (low ATR ${atrRatio.toFixed(2)}${acfChoppyBoost > 0 ? ', ACF~0' : ''}${hurstChoppyBoost > 0 ? ', H~0.5' : ''})`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // ═══ TRENDING: Price far from VWAP + directional slope ═══
@@ -164,23 +182,23 @@ export function detectRegime({
     const atrTrendBoost = (hasAtr && atrRatio > 1.2) ? Math.min((atrRatio - 1.2) * 0.3, 0.15) : 0;
     const acfTrendBoost = hasAcf ? (acf > 0.3 ? 0.08 : (acf < -0.2 ? -0.05 : 0)) : 0;
     regime = 'trending';
-    confidence = Math.min(Math.max(0.6 + vwapDist * 200 + volBoost + atrTrendBoost + acfTrendBoost, 0.30), 0.95);
+    confidence = Math.min(Math.max(0.6 + vwapDist * 200 + volBoost + atrTrendBoost + acfTrendBoost + hurstTrendBoost, 0.30), 0.95);
     // M3: Use dead zone for slope direction — near-zero slope should fall back to price vs VWAP
     // to avoid random direction flips from noise (e.g. slope +0.00005 * vwap ~ 0).
     const slopeSignificant = hasSlope && normalizedAbsSlope > 0.0001; // 0.01% of VWAP per candle
     direction = slopeSignificant ? (vwapSlope > 0 ? 'UP' : 'DOWN') : (price > vwap ? 'UP' : 'DOWN');
-    label = `Trending ${direction}${atrTrendBoost > 0 ? ' (ATR confirmed)' : ''}${acfTrendBoost > 0 ? ' (momentum)' : ''}`;
-    return { regime, confidence, label, direction, acf };
+    label = `Trending ${direction}${atrTrendBoost > 0 ? ' (ATR confirmed)' : ''}${acfTrendBoost > 0 ? ' (momentum)' : ''}${hurstTrendBoost > 0 ? ' (Hurst>0.58)' : ''}`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // Also trending if very far from VWAP regardless of slope (weaker — no slope confirmation)
   if (vwapDist > 0.002) {
     const acfTrendBoost = hasAcf ? (acf > 0.3 ? 0.06 : (acf < -0.2 ? -0.05 : 0)) : 0;
     regime = 'trending';
-    confidence = Math.min(Math.max(0.50 + vwapDist * 80 + acfTrendBoost, 0.30), 0.75);
+    confidence = Math.min(Math.max(0.50 + vwapDist * 80 + acfTrendBoost + hurstTrendBoost, 0.30), 0.75);
     direction = price > vwap ? 'UP' : 'DOWN';
-    label = `Trending ${direction} (distance)${acfTrendBoost > 0 ? ' (momentum)' : ''}`;
-    return { regime, confidence, label, direction, acf };
+    label = `Trending ${direction} (distance)${acfTrendBoost > 0 ? ' (momentum)' : ''}${hurstTrendBoost > 0 ? ' (Hurst>0.58)' : ''}`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // H4: ATR-confirmed trending — high ATR + directional slope, even if VWAP distance is small
@@ -188,11 +206,11 @@ export function detectRegime({
   if (hasAtr && atrRatio > 1.3 && normalizedAbsSlope > 0.00005 && volumeRatio > 1.0) {
     const acfTrendBoost = hasAcf ? (acf > 0.3 ? 0.08 : (acf < -0.2 ? -0.05 : 0)) : 0;
     regime = 'trending';
-    confidence = Math.min(Math.max(0.50 + (atrRatio - 1.0) * 0.2 + (volumeRatio - 1.0) * 0.1 + acfTrendBoost, 0.30), 0.80);
+    confidence = Math.min(Math.max(0.50 + (atrRatio - 1.0) * 0.2 + (volumeRatio - 1.0) * 0.1 + acfTrendBoost + hurstTrendBoost, 0.30), 0.80);
     const slopeSignificant = hasSlope && normalizedAbsSlope > 0.0001;
     direction = slopeSignificant ? (vwapSlope > 0 ? 'UP' : 'DOWN') : (price > vwap ? 'UP' : 'DOWN');
-    label = `Trending ${direction} (ATR breakout)${acfTrendBoost > 0 ? ' (momentum)' : ''}`;
-    return { regime, confidence, label, direction, acf };
+    label = `Trending ${direction} (ATR breakout)${acfTrendBoost > 0 ? ' (momentum)' : ''}${hurstTrendBoost > 0 ? ' (Hurst>0.58)' : ''}`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // ═══ MEAN REVERTING: Price near VWAP, low slope, few crosses ═══
@@ -200,12 +218,13 @@ export function detectRegime({
   // v3 ACF: ACF < -0.2 confirms mean-reversion (+0.10), ACF > 0.3 opposes (-0.05)
   if (vwapDist < 0.0008 && normalizedAbsSlope < 0.00003 && (vwapCrossCount === null || vwapCrossCount < 3)) {
     const acfMrBoost = hasAcf ? (acf < -0.2 ? 0.10 : (acf > 0.3 ? -0.05 : 0)) : 0;
+    const hlBoost = hasHalfLife ? 0.06 : 0;
     regime = 'mean_reverting';
-    confidence = Math.min(Math.max(0.5 + (hasAtr && atrRatio < 1.0 ? 0.10 : 0) + acfMrBoost, 0.30), 0.85);
-    label = `Mean Reverting${acfMrBoost > 0 ? ' (ACF confirmed)' : ''}`;
-    return { regime, confidence, label, direction, acf };
+    confidence = Math.min(Math.max(0.5 + (hasAtr && atrRatio < 1.0 ? 0.10 : 0) + acfMrBoost + hurstMrBoost + hlBoost, 0.30), 0.85);
+    label = `Mean Reverting${acfMrBoost > 0 ? ' (ACF confirmed)' : ''}${hurstMrBoost > 0 ? ' (Hurst<0.45)' : ''}${hlBoost > 0 ? ' (HL confirmed)' : ''}`;
+    return { regime, confidence, label, direction, acf, hurst, halfLife };
   }
 
   // ═══ DEFAULT: Moderate ═══
-  return { regime, confidence, label, direction, acf };
+  return { regime, confidence, label, direction, acf, hurst, halfLife };
 }

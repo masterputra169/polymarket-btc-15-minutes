@@ -73,6 +73,9 @@ describe('summarizeMargin', () => {
     expect(s.avgEntryPrice).toBeCloseTo(0.60, 6);
     expect(s.breakevenPct).toBeCloseTo(61.68, 1);
     expect(s.marginPp).toBeCloseTo(70 - 61.68, 1);
+    expect(s.bayesianWinRatePct).toBeCloseTo(63.33, 1); // (12+7)/(20+10) = 19/30 = 63.33%
+    expect(s.zScore).toBeDefined();
+    expect(typeof s.isStatisticallySignificant).toBe('boolean');
   });
 
   test('a losing book reports a negative margin, not an absolute distance', () => {

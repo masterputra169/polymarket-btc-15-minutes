@@ -46,6 +46,15 @@ describe('estimateSettlePrice', () => {
     expect(estimateSettlePrice({ nowMs: 0, endMs: END, spot: null, spotTicks: [], binance: 84_024, basis: null }).source).toBe('binance_raw');
     expect(estimateSettlePrice({ nowMs: 0, endMs: END, spot: null, spotTicks: [], binance: null, basis: null })).toEqual({ price: null, source: 'none' });
   });
+
+  test('final minute ignores anomalous outlier bad ticks (> 6 sigma)', () => {
+    const normalTicks = secs(END - TWAP_WINDOW_MS + 1000, 29, () => 84_000);
+    const glitchTick = { ts: END - TWAP_WINDOW_MS + 15000, value: 99_999 };
+    const allTicks = [...normalTicks, glitchTick];
+    const r = estimateSettlePrice({ nowMs: END - 30_000, endMs: END, spot: 84_060, spotTicks: allTicks, binance: null, basis: null });
+    expect(r.source).toBe('chainlink_final_minute');
+    expect(r.price).toBeCloseTo(84_030, 6);
+  });
 });
 
 describe('BasisTracker', () => {

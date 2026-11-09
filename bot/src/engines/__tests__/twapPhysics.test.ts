@@ -3,7 +3,7 @@
  * per-second volatility, and P(UP) = Φ(z).
  */
 import { describe, test, expect } from 'vitest';
-import { twapVarianceSeconds, spotVolPerSecond, normCdf, twapPhysics, SettleHistory } from '../twapPhysics.ts';
+import { twapVarianceSeconds, spotVolPerSecond, spotVolPerSecondEwma, normCdf, twapPhysics, SettleHistory } from '../twapPhysics.ts';
 import { DecisionTrail } from '../../tape/decisionTrail.ts';
 
 const END = 1_790_400_000_000;
@@ -24,6 +24,12 @@ describe('spotVolPerSecond and normCdf', () => {
   test('alternating ±$2 moves give σ = $2 per second; too little history gives null', () => {
     expect(spotVolPerSecond(walk(END - 120_000, 121, i => (i % 2 ? 2 : 0)))).toBeCloseTo(2, 9);
     expect(spotVolPerSecond(walk(END - 10_000, 10, () => 0))).toBeNull();
+  });
+  test('spotVolPerSecondEwma computes EWMA volatility correctly', () => {
+    const ticks = walk(END - 120_000, 121, i => (i % 2 ? 2 : 0));
+    const ewma = spotVolPerSecondEwma(ticks);
+    expect(ewma).toBeGreaterThan(0);
+    expect(ewma).toBeCloseTo(2, 1);
   });
   test('Φ at known points', () => {
     expect(normCdf(0)).toBeCloseTo(0.5, 7);

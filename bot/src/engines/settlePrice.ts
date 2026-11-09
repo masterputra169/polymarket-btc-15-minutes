@@ -20,6 +20,7 @@
  */
 
 import type { Tick } from '../streams/tickStore.ts';
+import { isBadTick } from '../../../src/indicators/quantMath.ts';
 
 export const TWAP_WINDOW_MS = 60_000;
 
@@ -58,7 +59,9 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
   const upto = Math.min(i.nowMs, i.endMs);
   // One sample per whole second of the TWAP window; a second with no tick holds
   // the previous one (the last tick before the window seeds it).
-  const ticks = [...i.spotTicks].filter(t => t.ts <= upto).sort((a, b) => a.ts - b.ts);
+  const rawTicks = [...i.spotTicks].filter(t => t.ts <= upto && Number.isFinite(t.value) && t.value > 0).sort((a, b) => a.ts - b.ts);
+  const tickVals = rawTicks.map(t => t.value);
+  const ticks = rawTicks.filter(t => !isBadTick(t.value, tickVals, 6.0));
   let held: number | null = null;
   let j = 0;
   let sum = 0;

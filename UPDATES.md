@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-08 21:25 WIB_
+_Last updated: 2026-11-09 15:45 WIB_
 
 | Area | State |
 |---|---|
@@ -30,7 +30,7 @@ _Last updated: 2026-11-08 21:25 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 94 files / 954 tests PASS |
+| Tests | 96 files / 985 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +48,34 @@ _Last updated: 2026-11-08 21:25 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-09 15:45 WIB — Quantitative Mathematics Core Engine Integration (Options B & C)
+
+**What changed:**
+1. **New Quant Math Library (`src/indicators/quantMath.ts` & `src/indicators/__tests__/quantMath.test.ts`):**
+   - Implemented pure, zero-dependency, high-precision quantitative formulas tailored for binary options and high-frequency trading:
+     - **Stage 1.3:** EWMA Volatility (`computeEwmaVolatility`, RiskMetrics $\lambda = 0.94$).
+     - **Stage 1.5:** Robust Outlier Rejection (`isBadTick`, Median Absolute Deviation / Hampel filter 5-sigma rejection) preventing crash/spike ticks from polluting settlement estimates.
+     - **Stage 3.4:** Hurst Exponent (`computeHurstExponent`, Rescaled Range R/S analysis on price series) to quantitatively distinguish trending ($H > 0.58$), random walk ($0.46 \le H \le 0.54$), and mean-reverting ($H < 0.45$) dynamics.
+     - **Stage 4.5:** Bayesian Win Rate (`bayesianWinRate`, Beta prior $\alpha=12, \beta=8$) shrinking small trade samples toward prior expectation to prevent over-optimism.
+     - **Stage 6.2:** Order Book Microprice (`computeMicroprice`, volume-weighted fair value accounting for top-of-book depth imbalance).
+     - **Stage 7.5:** Analytical Risk of Ruin & Max Bet Sizing (`maxBetForRiskOfRuin`, analytical bet cap guaranteeing ruin probability $R \le 0.005$ given bankroll and edge).
+     - **Option C Adaptations for Binary Options:**
+       - **C-1:** Expiry-Scaled Volatility (`expiryScaledVol`, $\sigma_{1s} \sqrt{T_{left}}$).
+       - **C-2:** Ornstein-Uhlenbeck AR(1) Mean-Reversion Half-Life (`computeHalfLife`, finite half-life confirmation).
+       - **C-4:** Late Binary Gamma Sizing Dampener (`gammaSizingDampener`, scales bet size by $\min(1.0, \sqrt{T_{left}/5.0})$ in the final 5 minutes to mitigate explosive binary option gamma).
+       - **C-7:** Binomial Z-Test & Significance (`binomialZTest`, normal CDF $p$-value for win rate vs breakeven).
+       - **C-11:** Multiple Hypothesis Testing Corrections (`bonferroniAlpha`, `familyWiseErrorRate`, `expectedMaxNoiseSharpe`).
+2. **Subsystem Wiring & Runtime Integrations:**
+   - **`src/engines/orderbook.ts`:** Integrated `computeMicroprice` exposing `upMicroprice` and `downMicroprice`.
+   - **`bot/src/engines/settlePrice.ts`:** Wrapped Chainlink / Binance tick streams with `isBadTick` robust outlier filtering in `estimateSettlePrice`.
+   - **`bot/src/trading/breakevenMargin.ts`:** Integrated `bayesianWinRate` and `binomialZTest` into `MarginSummary` and `summarizeMargin()`.
+   - **`src/engines/regime.ts` & `src/hooks/computeIndicators.ts`:** Wired automated Hurst exponent and half-life confirmation to boost/dampen regime confidence.
+   - **`bot/src/engines/twapPhysics.ts`:** Added `spotVolPerSecondEwma` and exposed expiry-scaled variance `sd`.
+   - **`bot/src/engines/tradePipeline.ts`:** Added late-window `gammaSizingDampener` and `maxBetForRiskOfRuin` caps, with guards ensuring FOK confidence-tier bumps do not bypass quant risk caps.
+3. **Verification:**
+   - Vitest suite: 96 test files, 985 tests passed 100% (including 23 quant math tests, 3 regime tests, 26 trade pipeline tests, 15 breakeven margin tests, 7 settle price tests, 9 twap physics tests).
+   - TypeScript typechecks: 4/4 packages cleanly passed (`typecheck:frontend`, `typecheck:bot`, `typecheck:bot:core`, `typecheck:scripts`).
 
 ## How to add the next update
 

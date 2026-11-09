@@ -18,6 +18,7 @@ import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
 import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
 import { tradeEntryAlert } from '../monitoring/alertTemplates.ts';
+import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -441,7 +442,7 @@ export async function executeDirectionalTrade({
   const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
   const currentBankroll = deps.getBankroll();
   const kellyMaxBet = currentBankroll * kellyCapPct;
-  if (effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
+  if (currentBankroll >= 100 && effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
     log.info(`Kelly cap: $${effectiveBetAmount.toFixed(2)} → $${kellyMaxBet.toFixed(2)} (${(kellyCapPct * 100).toFixed(0)}% of $${currentBankroll.toFixed(0)}, conf=${rec.confidence})`);
     effectiveBetAmount = kellyMaxBet;
   }
@@ -466,6 +467,29 @@ export async function executeDirectionalTrade({
     const asymScaled = Math.round(effectiveBetAmount * asymFactor * 100) / 100;
     log.info(`Asymmetry adj: $${effectiveBetAmount.toFixed(2)} \u00d7 ${asymFactor.toFixed(2)} = $${asymScaled.toFixed(2)} (${(betMarketPrice * 100).toFixed(0)}c entry)`);
     effectiveBetAmount = asymScaled;
+  }
+
+  // Late Gamma Dampener (quant formula C-4): In the final 5 minutes, binary gamma diverges (|Γ| ~ 1/√T).
+  // Dampen sizing proportional to √T_left to avoid catastrophic whipsaws.
+  let gammaDamp = 1.0;
+  if (timeLeftMin != null && timeLeftMin > 0 && timeLeftMin < 5) {
+    gammaDamp = gammaSizingDampener(timeLeftMin);
+    if (gammaDamp < 1.0) {
+      const dampened = Math.round(effectiveBetAmount * gammaDamp * 100) / 100;
+      log.info(`[QuantMath] Gamma dampener: $${effectiveBetAmount.toFixed(2)} \u00d7 ${gammaDamp.toFixed(2)} = $${dampened.toFixed(2)} (${timeLeftMin.toFixed(1)}m left)`);
+      effectiveBetAmount = Math.max(0.50, dampened);
+    }
+  }
+
+  // Risk of Ruin safety cap (quant formula 7.5): Ensure ruin probability <= 0.5%
+  let rorCapActive = false;
+  if (currentBankroll > 0) {
+    const rorMaxBet = maxBetForRiskOfRuin(currentBankroll, 0.58, 0.005);
+    if (rorMaxBet > 0 && effectiveBetAmount > rorMaxBet) {
+      log.info(`[QuantMath] Risk of ruin cap (R<=0.5%): $${effectiveBetAmount.toFixed(2)} → $${rorMaxBet.toFixed(2)} (bankroll: $${currentBankroll.toFixed(2)})`);
+      effectiveBetAmount = rorMaxBet;
+      rorCapActive = true;
+    }
   }
 
   // Scale max bet with bankroll — fixed floor prevents Kelly-optimal sizing at very small bankrolls.
@@ -506,7 +530,9 @@ export async function executeDirectionalTrade({
       VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
     };
     const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
-    if (shares < minShares) {
+    // Quant safety: do not inflate shares with FOK bump if gamma dampener is active (late phase) or RoR cap binds
+    const allowBump = gammaDamp >= 1.0 && !rorCapActive;
+    if (allowBump && shares < minShares) {
       const minCost = minShares * betMarketPrice;
       const bankrollCap = (deps.getBankroll?.() ?? 0) * 0.15;
       if (minCost <= bankrollCap || bankrollCap <= 0) {

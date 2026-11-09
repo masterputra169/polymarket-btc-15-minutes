@@ -20,6 +20,7 @@
  */
 
 import { computeSettlementPnl } from '../engines/settlementMath.ts';
+import { bayesianWinRate, binomialZTest } from '../../../src/indicators/quantMath.ts';
 
 /**
  * Notional used to solve for breakeven. computeSettlementPnl rounds to cents at
@@ -54,6 +55,12 @@ export interface MarginSummary {
   breakevenPct: number | null;
   /** winRatePct - breakevenPct, in percentage points. Negative = losing. */
   marginPp: number | null;
+  /** Bayesian smoothed win rate (Beta prior 60%), 0-100. */
+  bayesianWinRatePct?: number | null;
+  /** Z-score of win rate over breakeven (statistical significance test). */
+  zScore?: number | null;
+  /** Whether the margin over breakeven is statistically significant at 95% confidence (Z >= 1.645). */
+  isStatisticallySignificant?: boolean;
   /** Summed P&L over the set. */
   pnl: number;
 }
@@ -61,6 +68,7 @@ export interface MarginSummary {
 const EMPTY: MarginSummary = {
   trades: 0, wins: 0, losses: 0,
   winRatePct: null, avgEntryPrice: null, breakevenPct: null, marginPp: null,
+  bayesianWinRatePct: null, zScore: null, isStatisticallySignificant: false,
   pnl: 0,
 };
 
@@ -154,6 +162,9 @@ export function summarizeMargin(rows: readonly ScorableRow[]): MarginSummary {
   const denom = winPayoutSum + lossSum;
   const breakevenPct = denom > 0 ? (lossSum / denom) * 100 : null;
 
+  const bayesianRate = bayesianWinRate(wins, losses);
+  const zTest = breakevenPct != null ? binomialZTest(wins, trades, breakevenPct / 100) : null;
+
   return {
     trades,
     wins,
@@ -162,6 +173,9 @@ export function summarizeMargin(rows: readonly ScorableRow[]): MarginSummary {
     avgEntryPrice: priceSum / trades,
     breakevenPct,
     marginPp: breakevenPct === null ? null : winRatePct - breakevenPct,
+    bayesianWinRatePct: Math.round(bayesianRate * 10000) / 100,
+    zScore: zTest ? Math.round(zTest.z * 100) / 100 : null,
+    isStatisticallySignificant: zTest ? zTest.significant95 : false,
     pnl: Math.round(pnl * 100) / 100,
   };
 }

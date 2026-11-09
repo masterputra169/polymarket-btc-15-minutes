@@ -157,11 +157,13 @@ export function computeAllIndicators({
 
   // Regime — H4: pass ATR ratio + volume ratio to reduce "moderate" dead zone
   // v3: pass ACF for momentum/mean-reversion/random-walk confirmation
+  // v3.1: pass closes for Hurst exponent & Half-Life quant confirmation
   const regimeInfo = detectRegime({
     price: lastPrice, vwap: vwapNow, vwapSlope, vwapCrossCount,
     volumeRecent, volumeAvg,
     atrRatio: atr?.atrRatio ?? null,
     acf,
+    closes,
   });
 
   // Deltas

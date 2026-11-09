@@ -40,6 +40,26 @@ export function spotVolPerSecond(ticks: readonly Tick[]): number | null {
   return n >= 20 ? Math.sqrt(sum / n) : null;
 }
 
+/** Per-second volatility of spot using EWMA (RiskMetrics default λ = 0.94). */
+export function spotVolPerSecondEwma(ticks: readonly Tick[], lambda = 0.94): number | null {
+  const t = [...ticks].sort((a, b) => a.ts - b.ts);
+  let ewmaVar = 0;
+  let count = 0;
+  for (let i = 1; i < t.length; i++) {
+    const gap = (t[i].ts - t[i - 1].ts) / 1000;
+    if (!(gap > 0) || gap > 10) continue;
+    const d = t[i].value - t[i - 1].value;
+    const instVar = (d * d) / gap;
+    if (count === 0) {
+      ewmaVar = instVar;
+    } else {
+      ewmaVar = lambda * ewmaVar + (1 - lambda) * instVar;
+    }
+    count++;
+  }
+  return count >= 20 ? Math.sqrt(ewmaVar) : null;
+}
+
 /** Standard normal CDF (Abramowitz–Stegun 7.1.26 via erf; |error| < 1.5e-7). */
 export function normCdf(x: number): number {
   const z = Math.abs(x) / Math.SQRT2;
@@ -71,6 +91,10 @@ export interface TwapPhysics {
   p: number;
   /** (S − PTB) / (σ·√T_eff). */
   z: number;
+  /** Expiry-scaled volatility: σ · √T_eff ($) */
+  sd?: number;
+  /** EWMA-based per-second volatility if computed */
+  sigmaEwma?: number | null;
   /** Change of the settlement estimate over the last 30 s, $ (null without history). */
   drift30: number | null;
 }
@@ -92,5 +116,6 @@ export function twapPhysics(input: {
   const sd = sigma * Math.sqrt(twapVarianceSeconds(left));
   if (!(sd > 0)) return null;
   const z = (settle - ptb) / sd;
-  return { p: normCdf(z), z, drift30: input.settle30sAgo != null ? settle - input.settle30sAgo : null };
+  const sigmaEwma = spotVolPerSecondEwma(input.spotTicks);
+  return { p: normCdf(z), z, sd, sigmaEwma, drift30: input.settle30sAgo != null ? settle - input.settle30sAgo : null };
 }

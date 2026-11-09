@@ -311,4 +311,32 @@ describe('the depth gate reads the book of the side being traded', () => {
     }));
     delete process.env.FIXED_SHARE_SIZE;
   });
+
+  test('gammaSizingDampener reduces size in late phase (timeLeftMin < 5)', async () => {
+    const deps = makeDeps();
+    // timeLeftMin: 1.25 -> sqrt(1.25/5.0) = sqrt(0.25) = 0.50 dampener
+    const executed = await executeDirectionalTrade(signal({
+      timeLeftMin: 1.25,
+      betSizing: { betAmount: 4.0, kellyFraction: 0.1, riskLevel: 'MODERATE', expectedValue: 0.2, rationale: 'test' },
+      orderbookUp: { spread: 0.01, askLiquidity: 9999 },
+    }), deps);
+    expect(executed).toBe(true);
+    // Bet of 4.0 * 0.85 asym * 0.50 gamma = 1.70 -> at 0.60/share = 2 shares (avoiding 6 shares FOK bump)
+    expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
+      size: 2,
+    }));
+  });
+
+  test('maxBetForRiskOfRuin caps sizing on tight bankroll', async () => {
+    const deps = makeDeps({ getBankroll: vi.fn(() => 25) }); // $25 bankroll -> rorMaxBet ~ $1.52
+    const executed = await executeDirectionalTrade(signal({
+      betSizing: { betAmount: 5.0, kellyFraction: 0.2, riskLevel: 'HIGH', expectedValue: 0.3, rationale: 'test' },
+      orderbookUp: { spread: 0.01, askLiquidity: 9999 },
+    }), deps);
+    expect(executed).toBe(true);
+    // At $25 bankroll, rorMaxBet = $1.52 -> floor(1.52 / 0.6) = 2 shares (avoiding 6 shares FOK bump)
+    expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
+      size: 2,
+    }));
+  });
 });

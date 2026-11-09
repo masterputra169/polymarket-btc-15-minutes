@@ -13,6 +13,8 @@
  * This is weight +2 in the scoring system.
  */
 
+import { computeMicroprice } from '../indicators/quantMath.ts';
+
 // ── Orderbook snapshot ring buffer for spoofing detection ──
 const SPOOF_SNAPSHOT_COUNT = 5;   // Track last 5 snapshots (~3-5 seconds at 2s poll + WS updates)
 const SPOOF_PERSISTENCE_THRESHOLD = 0.50; // If <50% of size persists, flag as potential spoof
@@ -111,6 +113,8 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
     spreadHealth: 'unknown',
     detail: 'No orderbook data',
     spoofRisk: 0,
+    upMicroprice: null as number | null,
+    downMicroprice: null as number | null,
   };
 
   if (!orderbookUp || !orderbookDown) return result;
@@ -122,6 +126,9 @@ export function analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketD
   const upAskLiq = orderbookUp.askLiquidity ?? 0;
   const downBidLiq = orderbookDown.bidLiquidity ?? 0;
   const downAskLiq = orderbookDown.askLiquidity ?? 0;
+
+  result.upMicroprice = computeMicroprice(orderbookUp.bestBid, orderbookUp.bestAsk, upBidLiq, upAskLiq);
+  result.downMicroprice = computeMicroprice(orderbookDown.bestBid, orderbookDown.bestAsk, downBidLiq, downAskLiq);
 
   // ═══ 1. BID/ASK IMBALANCE ═══
   // If UP token has more bids than asks → people want to BUY UP → bullish
