@@ -96,14 +96,15 @@ export function sellFillFee(
 }
 
 /**
- * Net P&L of a binary position bought as a taker: a win pays $1/share, a loss
- * pays nothing, and the entry fee is paid either way. Until 2026-09-26 the fee
- * was modelled as 0.072·p·(1−p) of the winning profit only — about a quarter of
- * what Polymarket charges, so every booked P&L and breakeven was optimistic.
+ * Net P&L of a binary position: a win pays $1/share, a loss pays nothing.
+ * Takers pay the entry fee either way; makers (`isMaker`) pay 0. Until
+ * 2026-09-26 the fee was modelled as 0.072·p·(1−p) of the winning profit only
+ * — about a quarter of what Polymarket charges, so every booked P&L and
+ * breakeven was optimistic.
  */
-export function computeSettlementPnl({ won, size, cost, price }: {
-  won: boolean; size: number; cost: number; price: number | null | undefined;
+export function computeSettlementPnl({ won, size, cost, price, isMaker = false }: {
+  won: boolean; size: number; cost: number; price: number | null | undefined; isMaker?: boolean;
 }): number {
-  const fee = takerFee(size, price);
+  const fee = isMaker ? 0 : takerFee(size, price);
   return roundCents((won ? size : 0) - cost - fee);
 }

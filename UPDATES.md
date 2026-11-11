@@ -54,14 +54,15 @@ _Last updated: 2026-11-11 22:05 WIB_
 **Not deployed.**
 
 **What changed:**
-1. `makerFillGate.ts` — pure gates: unfilled timeout (default 45 s), edge erosion at the resting limit (P − limit under 3 pp), and FOK fallback only after unfilled/time-cutoff when fee-adjusted edge is at least 5 pp. Signal flip / market switch / thin edge → no FOK chase for the rest of the market.
+1. `makerFillGate.ts` — pure gates: unfilled timeout (default 45 s), edge erosion at the resting limit (P − limit under 3 pp), and FOK fallback only after unfilled/time-cutoff when fee-adjusted edge is at least 5 pp. Signal flip / market switch / thin edge → no FOK chase for the rest of the market (`fokFallbackDeniedForSlug` also blocks smart-routed FOK).
 2. `limitOrderManager.monitorLimitOrder` cancels on unfilled timeout and edge erosion; `loop.ts` applies the FOK fallback gate and stamps `maker_fok_denied` on the tape when blocked.
-3. Dry-run + `LIMIT_ORDER_ENABLED`: simulates JOIN maker fills (`fillModel=maker_join`, fee 0) at `DRY_RUN_MAKER_FILL_RATE` (default 0.60, slug-hashed). Miss → FOK only if the same fallback gate passes (`fok_after_maker_miss`); else skip.
-4. When `FIXED_SHARE_SIZE` is set, size is always `max(env, 5)` in dry-run and live so paper selection matches the CLOB minimum.
+3. Dry-run maker JOIN only when `routeOrder` would choose LIMIT (not merely `LIMIT_ORDER_ENABLED`). Fill rate default 0.60 (`maker_join`, fee 0). Miss → FOK only if the fallback gate passes (`fok_after_maker_miss`); else skip.
+4. Positions carry `isMaker`; settlement / early-exit / forceSettle / fallbackVerifier charge entry fee 0 for makers. `isRealisticFill` accepts `maker_join` and `fok_after_maker_miss`.
+5. When `FIXED_SHARE_SIZE` is set, size is always `max(env, 5)` in dry-run and live so paper selection matches the CLOB minimum.
 
 **Env (optional):** `LIMIT_MAX_UNFILLED_SEC`, `LIMIT_MIN_REMAINING_EDGE`, `LIMIT_FOK_FALLBACK_MIN_EDGE`, `DRY_RUN_MAKER_SIM`, `DRY_RUN_MAKER_FILL_RATE`. Set `FIXED_SHARE_SIZE=5` (or unset and rely on FOK mins) on deploy. Reset `EVAL_WINDOW_START`. Prefer `KELLY_PROB_SHRINK=0.20–0.30` (VPS still at 0.9).
 
-**Verification:** `npm run typecheck` PASS. `bot/src/engines/__tests__` 18 files / 130 tests PASS.
+**Verification:** `npm run typecheck` PASS. Engine + trading tests PASS after Codex review fixes.
 
 ### 2026-11-11 14:03 WIB — Correction: live sell fee uses the match price
 

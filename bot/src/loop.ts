@@ -1110,6 +1110,7 @@ export async function pollOnce() {
               price: fd.price, size: fd.size,
               marketSlug: fd.marketSlug, orderId: fd.orderId,
               actualCost: fd.price * fd.size,
+              isMaker: true,
             });
             confirmFill();
             captureEntrySnapshot({
@@ -2278,6 +2279,7 @@ export async function pollOnce() {
                   price: fd.price, size: fd.size,
                   marketSlug: fd.marketSlug, orderId: fd.orderId,
                   actualCost: fd.price * fd.size,
+                  isMaker: true,
                 });
                 confirmFill();
                 entryRegime = regimeInfo?.regime ?? 'moderate';
@@ -2334,6 +2336,7 @@ export async function pollOnce() {
               price: fd.price, size: fd.size,
               marketSlug: fd.marketSlug, orderId: fd.orderId,
               actualCost: fd.price * fd.size,
+              isMaker: true,
             });
             confirmFill(); // Fix #1: limit order fills are confirmed (order gone from book = filled)
             entryRegime = regimeInfo?.regime ?? 'moderate';
@@ -2373,6 +2376,7 @@ export async function pollOnce() {
               price: fd.price, size: fd.size,
               marketSlug: fd.marketSlug, orderId: fd.orderId,
               actualCost: fd.price * fd.size,
+              isMaker: true,
             });
             confirmFill(); // Fix #1: partial fill confirmed (tokens on-chain from matched portion)
             entryRegime = regimeInfo?.regime ?? 'moderate';
@@ -2454,6 +2458,7 @@ export async function pollOnce() {
                 price: fd.price, size: fd.size,
                 marketSlug: fd.marketSlug, orderId: fd.orderId,
                 actualCost: fd.price * fd.size,
+                isMaker: true,
               });
               confirmFill(); // Fix #1: phantom fill = tokens already on-chain (order was filled before cancel)
               entryRegime = regimeInfo?.regime ?? 'moderate';
@@ -2620,7 +2625,7 @@ export async function pollOnce() {
                 setPendingCost(0);
                 if (pmOrderId) trackOrderPlacement(pmOrderId, { tokenId: pmTokenId, price: limitPrice, size: pmLimitShares, side: 'UP', confirmed: false, gtd: true });
                 // Audit fix Tier-1 HIGH (2026-05-14): add actualCost.
-                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId, actualCost: pmLimitCost });
+                recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId, actualCost: pmLimitCost, isMaker: true });
                 entryRegime = regimeInfo?.regime ?? null;
                 captureEntrySnapshot({ ...pmSignalBlock, side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
                 onPreMarketEntry(limitPrice, marketSlug);
@@ -2652,7 +2657,7 @@ export async function pollOnce() {
         signalStale && 'signal_stale', tooCloseToExpiry && 'too_close_to_expiry',
         hasPending && 'pending_order', smartSellTriggered && 'smart_sell', alreadyHasPosition && 'has_position',
         (limitOrderBlocksFOK && !smartRouteFOK) && 'limit_order_active',
-        (fokFallbackDeniedForSlug === marketSlug && !smartRouteFOK) && 'maker_fok_denied',
+        fokFallbackDeniedForSlug === marketSlug && 'maker_fok_denied',
       ].filter(Boolean);
       if (tapePre.length > 0) noteTapeStage('pre', tapePre);
     }
@@ -2690,7 +2695,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK) && (fokFallbackDeniedForSlug !== marketSlug || smartRouteFOK)) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK) && fokFallbackDeniedForSlug !== marketSlug) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         const tapeEntered = await executeDirectionalTrade({

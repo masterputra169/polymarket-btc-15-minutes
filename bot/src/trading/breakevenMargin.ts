@@ -96,9 +96,13 @@ export function breakevenWinRate(price: number | null | undefined): number | nul
  * Whether a row's entry price reflects what would actually have been paid.
  *
  * A live row always does — the fill was real. A dry-run row only does once the
- * simulated fill was charged at the limit a live FOK would have submitted,
- * which tradePipeline marks with `fillModel: 'fok_limit'`. Earlier dry-run rows
- * booked at the quote with zero slippage: the optimistic bound, not a forecast.
+ * simulated fill matches a live execution path:
+ *   - `fok_limit` — charged at the FOK limit a live order would submit
+ *   - `fok_after_maker_miss` — same FOK pricing after a maker miss
+ *   - `maker_join` — resting JOIN at the bid (fee 0), only when the live
+ *     router would have chosen LIMIT
+ * Earlier dry-run rows booked at the quote with zero slippage: the optimistic
+ * bound, not a forecast.
  *
  * The marker travels with the row, so the window needs no deploy timestamp to
  * keep up with — unlike a hardcoded boundary, which goes stale silently.
@@ -110,9 +114,11 @@ export function breakevenWinRate(price: number | null | undefined): number | nul
  * such a change are not one sample however they were filled. Use
  * bot/scripts/reportWindow.mts for that question.
  */
+const REALISTIC_DRY_FILL_MODELS = new Set(['fok_limit', 'fok_after_maker_miss', 'maker_join']);
+
 export function isRealisticFill(row: ScorableRow | null | undefined): boolean {
   if (row?.entry?.dryRun !== true) return true;
-  return row?.entry?.fillModel === 'fok_limit';
+  return REALISTIC_DRY_FILL_MODELS.has(String(row?.entry?.fillModel ?? ''));
 }
 
 function isResolved(row: ScorableRow | null | undefined): boolean {
@@ -152,9 +158,10 @@ export function summarizeMargin(rows: readonly ScorableRow[]): MarginSummary {
 
     priceSum += price;
     const cost = SOLVE_NOTIONAL * price;
-    // A loss costs the stake AND the taker fee, so it is booked, not assumed to be -cost.
-    lossSum -= computeSettlementPnl({ won: false, size: SOLVE_NOTIONAL, cost, price });
-    winPayoutSum += computeSettlementPnl({ won: true, size: SOLVE_NOTIONAL, cost, price });
+    const isMaker = r.entry?.fillModel === 'maker_join' || !!(r.entry as { isMaker?: boolean } | undefined)?.isMaker;
+    // A loss costs the stake AND the taker fee (0 for makers).
+    lossSum -= computeSettlementPnl({ won: false, size: SOLVE_NOTIONAL, cost, price, isMaker });
+    winPayoutSum += computeSettlementPnl({ won: true, size: SOLVE_NOTIONAL, cost, price, isMaker });
   }
 
   const trades = scorable.length;

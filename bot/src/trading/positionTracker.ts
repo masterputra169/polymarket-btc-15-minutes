@@ -23,12 +23,13 @@ const roundMoney = (n) => Math.round(n * 100) / 100;
 const roundPct = (n) => Math.round(n * 100) / 100;
 
 /**
- * Entry fee of the open position: every leg was bought as a taker, and
- * Polymarket charges shares × 0.07 × p × (1 − p) at match, win or lose
- * (settlementMath.takerFee). Booked when the position closes, so bankroll, the
- * journal's P&L and breakevenMargin all see the same number.
+ * Entry fee of the open position. Taker fills pay shares × 0.07 × p × (1 − p)
+ * at match, win or lose (settlementMath.takerFee). Maker fills (resting GTD /
+ * simulated JOIN) pay 0. Booked when the position closes so bankroll, journal
+ * P&L and breakevenMargin all see the same number.
  */
 function entryFeeOf(pos, shares = pos.size) {
+  if (pos.isMaker) return 0;
   if (pos.side === 'ARB' && pos.arbUpCost != null && pos.arbDownCost != null && pos.size > 0) {
     return roundMoney(takerFee(shares, pos.arbUpCost / pos.size) + takerFee(shares, pos.arbDownCost / pos.size));
   }
@@ -78,6 +79,8 @@ type RecordTradeInput = {
   marketSlug: string;
   orderId?: any;
   actualCost?: number | null;
+  /** True when the entry was a resting maker fill (live GTD or dry-run JOIN). */
+  isMaker?: boolean;
 };
 
 type RecordArbTradeInput = {
@@ -262,7 +265,7 @@ export function saveState() {
  * Record a new trade (position entry).
  * Bankroll deducted immediately. If order later fails to fill, call unwindPosition().
  */
-export function recordTrade({ side, tokenId, conditionId, price, size, marketSlug, orderId, actualCost }: RecordTradeInput) {
+export function recordTrade({ side, tokenId, conditionId, price, size, marketSlug, orderId, actualCost, isMaker = false }: RecordTradeInput) {
   // NaN guard — reject invalid inputs before they corrupt bankroll
   if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(size) || size <= 0) {
     log.error(`recordTrade REJECTED: invalid params price=${price} size=${size} — trade NOT recorded`);
@@ -323,6 +326,7 @@ export function recordTrade({ side, tokenId, conditionId, price, size, marketSlu
     orderId: orderId ?? null,
     enteredAt: Date.now(),
     cost,
+    isMaker: !!isMaker,
     settled: false,        // C3: dedup flag — prevents double settlement
     fillConfirmed: false,  // C4: true once fill is verified on-chain
   };

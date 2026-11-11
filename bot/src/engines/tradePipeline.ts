@@ -25,6 +25,7 @@ import {
   shouldAllowFokFallback,
   feeAdjustedEdge,
 } from './makerFillGate.ts';
+import { routeOrder } from './orderRouter.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -622,12 +623,24 @@ export async function executeDirectionalTrade({
 
   if (dryRun) {
     // Simulate the fill and book it through the same hooks the live path uses.
-    // When LIMIT_ORDER_ENABLED + dryRunMakerSim: try a maker JOIN fill first
-    // (fee 0, ~60% fill rate from makerFillStudy). Unfilled → FOK only if
-    // fee-adjusted edge still clears the fallback floor; else skip (no chase).
+    // Maker JOIN only when the live router would choose LIMIT (same elapsed /
+    // ML / spread gates) — not merely because LIMIT_ORDER_ENABLED is on.
     const betBook = betSide === 'UP' ? orderbookUp : orderbookDown;
     const limCfg = BOT_CONFIG.limitOrder;
-    const makerSimOn = limCfg?.enabled && limCfg?.dryRunMakerSim !== false;
+    const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
+    const liveRoute = (limCfg?.enabled && limCfg?.dryRunMakerSim !== false && elapsedMin != null)
+      ? routeOrder({
+        bestAsk: betBook?.bestAsk ?? betMarketPrice,
+        mlConf: mlResult.available ? mlResult.mlConfidence : null,
+        elapsedMin,
+        delta1m,
+        mlSide: betSide,
+        regime: regimeInfo?.regime ?? 'moderate',
+        spread: betBook?.spread ?? null,
+        btcPrice: lastPrice ?? 0,
+      })
+      : { route: 'FOK', reason: 'maker_sim_off' };
+    const makerSimOn = liveRoute.route === 'LIMIT';
     const joinPx = makerSimOn
       ? makerJoinPrice(betBook?.bestBid ?? null, betBook?.bestAsk ?? betMarketPrice, limCfg.minEntryPrice ?? 0.50)
       : null;
@@ -635,12 +648,14 @@ export async function executeDirectionalTrade({
 
     let dryFillPrice;
     let fillModel;
+    let isMakerFill = false;
     if (makerSimOn && makerFilled && joinPx != null) {
       dryFillPrice = joinPx;
       fillModel = 'maker_join';
+      isMakerFill = true;
       log.info(
         `[DRY RUN] MAKER fill ${betSide}: ${shares} @ $${dryFillPrice.toFixed(3)} ` +
-        `(JOIN; fee 0; fillRate=${((limCfg.dryRunMakerFillRate ?? 0.60) * 100).toFixed(0)}% draw hit)`
+        `(JOIN; fee 0; route=${liveRoute.reason}; fillRate=${((limCfg.dryRunMakerFillRate ?? 0.60) * 100).toFixed(0)}% draw hit)`
       );
     } else if (makerSimOn && !makerFilled) {
       const ask = betBook?.bestAsk ?? betMarketPrice;
@@ -699,6 +714,7 @@ export async function executeDirectionalTrade({
       conditionId: currentConditionId,
       price: dryFillPrice, size: shares,
       marketSlug, orderId: null, actualCost: dryFillCost,
+      isMaker: isMakerFill,
     });
     deps.confirmFill?.();
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
@@ -709,6 +725,7 @@ export async function executeDirectionalTrade({
     entryData.actualPrice = dryFillPrice;
     entryData.slippagePct = drySlippagePct;
     entryData.fillModel = fillModel;
+    entryData.isMaker = isMakerFill;
     entryData.avgSlippage = getAvgSlippage();
     deps.captureEntrySnapshot(entryData);
     // Record prediction for accuracy tracking

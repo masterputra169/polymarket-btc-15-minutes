@@ -120,6 +120,8 @@ describe('isRealisticFill — which rows may be judged', () => {
 
   test('a dry-run row counts only once it was priced like a live order', () => {
     expect(isRealisticFill(row(0.6, 'WIN', 0.1, { dryRun: true, fillModel: 'fok_limit' }))).toBe(true);
+    expect(isRealisticFill(row(0.6, 'WIN', 0.1, { dryRun: true, fillModel: 'maker_join' }))).toBe(true);
+    expect(isRealisticFill(row(0.6, 'WIN', 0.1, { dryRun: true, fillModel: 'fok_after_maker_miss' }))).toBe(true);
   });
 
   test('a dry-run row booked at the quote does not count — that is the optimistic bound', () => {

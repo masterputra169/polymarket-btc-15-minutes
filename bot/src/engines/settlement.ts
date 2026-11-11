@@ -192,7 +192,9 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
 
   // FINTECH: Round P&L to cents, net of the taker entry fee (matches positionTracker math).
   // Shared with the fallback verifier so a later correction re-books the same numbers.
-  const pnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
+  const pnl = computeSettlementPnl({
+    won, size: pos.size, cost: pos.cost, price: pos?.price, isMaker: !!pos.isMaker,
+  });
   _lastSettlementSource = source; // RC5: track for fast reconcile trigger
   log.info(`Position ${context} — ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
   actions.settleTrade(won);
@@ -361,7 +363,9 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const { won, outcome, source } = await settleViaOracle(pos, oracleCondId, btcPrice, null, opts);
     log.info(`Stale position settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     // H7: same fee math as settleRegularPosition (shared with the fallback verifier).
-    const stalePnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
+    const stalePnl = computeSettlementPnl({
+      won, size: pos.size, cost: pos.cost, price: pos?.price, isMaker: !!pos.isMaker,
+    });
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
     // Fix: writeJournalEntry BEFORE clearEntrySnapshot (same bug as settleRegularPosition).
@@ -403,7 +407,9 @@ export async function handleStalePosition({ pos, currentMarketSlug, now }, deps,
     const btcPrice = oraclePrice || deps.getBinancePrice();
     const { won, outcome, source } = await settleViaOracle(pos, fetchedConditionId, btcPrice, null, opts);
     // H7: same fee math as settleRegularPosition (shared with the fallback verifier).
-    const gammaPnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos?.price });
+    const gammaPnl = computeSettlementPnl({
+      won, size: pos.size, cost: pos.cost, price: pos?.price, isMaker: !!pos.isMaker,
+    });
     log.info(`Stale position (Gamma lookup) settled: ${outcome ?? '?'} → ${won ? 'WIN' : 'LOSS'} (${source})`);
     actions.settleTrade(won);
     actions.invalidateUsdcSync();
