@@ -22,6 +22,7 @@ import { getTradeHistory, isClientReady, getProxyAddress } from './clobClient.ts
 import { adjustBankrollForReconciliation } from './positionTracker.ts';
 import { invalidateSync, setReconcileCooldown } from '../engines/usdcSync.ts';
 import { notify } from '../monitoring/notifier.ts';
+import { fillCashNotional } from '../engines/settlementMath.ts';
 
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 const DATA_API_PAGE_SIZE = 1000;
@@ -108,7 +109,12 @@ function buildDataApiEntry(conditionId, records, localTrades) {
     const a = byAsset.get(asset);
     const size = Number(t.size) || 0;
     const usdc = Number(t.usdcSize);
-    const notional = Number.isFinite(usdc) && usdc > 0 ? usdc : (Number(t.price) || 0) * size;
+    // Positive usdcSize is the cash already booked (fee included). price×size
+    // is gross, so the V2 taker fee is applied once only when usdcSize is missing.
+    const notional = fillCashNotional({
+      side: t.side, size, price: Number(t.price) || 0,
+      usdc: Number.isFinite(usdc) ? usdc : null,
+    });
     if (t.side === 'BUY') { a.buyCost += notional; a.buySize += size; }
     else if (t.side === 'SELL') { a.sellProceeds += notional; a.sellSize += size; }
   }
@@ -784,10 +790,13 @@ async function buildVerifiedEntry(conditionId, marketTrades, localTrades) {
   const tradeRecords = marketTrades.map(t => {
     const price = parseFloat(t.price) || 0;
     const size = parseFloat(t.size) || 0;
+    // V2 charges the fee at match; fee_rate_bps on the order is not that amount.
+    // price×size is gross. Makers pay 0; takers pay shares×0.07×p×(1−p) once.
     const feeBps = parseFloat(t.fee_rate_bps) || 0;
     const isBuy = t.side === 'BUY';
-    const cost = isBuy ? price * size : 0;
-    const proceeds = !isBuy ? price * size : 0;
+    const notional = fillCashNotional({ side: t.side, size, price, traderSide: t.trader_side });
+    const cost = isBuy ? notional : 0;
+    const proceeds = !isBuy ? notional : 0;
 
     return {
       tradeId: t.id,
@@ -795,8 +804,8 @@ async function buildVerifiedEntry(conditionId, marketTrades, localTrades) {
       tokenSide: resolveTokenSide(t.asset_id, tokens),
       price,
       size,
-      cost: Math.round(cost * 100) / 100,
-      proceeds: Math.round(proceeds * 100) / 100,
+      cost,
+      proceeds,
       feeBps,
       matchTime: t.match_time,
       txHash: t.transaction_hash ?? null,

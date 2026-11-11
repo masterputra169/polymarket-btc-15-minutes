@@ -623,9 +623,8 @@ describe('ARB settlement', () => {
     recordArbTrade({ upCost: 4.60, downCost: 5.10, shares: 10, marketSlug: 'arb-1' });
     // cost = 9.70, bankroll = 90.30
     settleTrade(true);
-    // UP leg 10 @ 0.46: 10 × 0.07 × 0.46 × 0.54 = 0.174 -> 0.17
-    // DOWN leg 10 @ 0.51: 10 × 0.07 × 0.51 × 0.49 = 0.175 -> 0.17
-    // payout = 10 - 0.34 = 9.66, bankroll = 90.30 + 9.66 = 99.96 — the fee eats a 3c arb
-    expect(getBankroll()).toBeCloseTo(99.96, 2);
+    // UP 10 @ 0.46 → 0.17388; DOWN 10 @ 0.51 → 0.17493; sum 0.34881 → 0.35
+    // payout = 10 - 0.35 = 9.65, bankroll = 90.30 + 9.65 = 99.95
+    expect(getBankroll()).toBeCloseTo(99.95, 2);
   });
 });

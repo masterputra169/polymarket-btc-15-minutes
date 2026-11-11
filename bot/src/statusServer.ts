@@ -306,8 +306,8 @@ export function startStatusServer() {
                   let settled = false;
                   if (owns && soldAll) {
                     // Net of the entry fee, like the tracker's own booking (settleTradeEarlyExit).
-                    // Sell leg pays the V2 taker fee; dry-run proceeds are gross.
-                    const exitFee = BOT_CONFIG.dryRun ? takerFee(size, price) : 0;
+                    // Sell leg pays the V2 taker fee. takingAmount is gross proceeds.
+                    const exitFee = takerFee(size, price);
                     const cutPnl = earlyExitPnl(sellPos, recovered, exitFee);
                     settled = settleTradeEarlyExit(recovered, exitFee);
                     if (settled) {

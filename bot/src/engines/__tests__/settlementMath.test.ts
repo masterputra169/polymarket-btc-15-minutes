@@ -7,16 +7,32 @@
  * charged to the taker at match on every fill — so a loss costs the fee too.
  */
 import { describe, test, expect } from 'vitest';
-import { computeSettlementPnl, takerFee } from '../settlementMath.ts';
+import { computeSettlementPnl, fillCashNotional, takerFee } from '../settlementMath.ts';
 
 describe('takerFee', () => {
-  test('shares × 0.07 × p × (1 − p): $1.68 per 100 shares at 60c, the docs table', () => {
+  test('shares × 0.07 × p × (1 − p), rounded to 0.00001', () => {
     expect(takerFee(100, 0.6)).toBe(1.68);
-    expect(takerFee(2, 0.605)).toBe(0.03);
+    // 2 × 0.07 × 0.605 × 0.395 = 0.0334565 → 0.03346
+    expect(takerFee(2, 0.605)).toBe(0.03346);
   });
   test('2c a share when the price is unusable; nothing for no shares', () => {
     expect(takerFee(10, null)).toBe(0.2);
     expect(takerFee(0, 0.5)).toBe(0);
+  });
+});
+
+describe('fillCashNotional', () => {
+  test('gross price×size gets the taker fee once; a reported usdc is not charged again', () => {
+    // 10 × 0.60 = 6; fee = 10 × 0.07 × 0.6 × 0.4 = 0.168
+    expect(fillCashNotional({ side: 'BUY', size: 10, price: 0.6 })).toBe(6.168);
+    expect(fillCashNotional({ side: 'SELL', size: 10, price: 0.6 })).toBe(5.832);
+    expect(fillCashNotional({ side: 'BUY', size: 10, price: 0.6, usdc: 6 })).toBe(6);
+    expect(fillCashNotional({ side: 'BUY', size: 10, price: 0.6, usdc: 6.168 })).toBe(6.168);
+    expect(fillCashNotional({ side: 'SELL', size: 10, price: 0.6, usdc: 5.832 })).toBe(5.832);
+  });
+  test('makers pay nothing', () => {
+    expect(fillCashNotional({ side: 'BUY', size: 10, price: 0.6, traderSide: 'MAKER' })).toBe(6);
+    expect(fillCashNotional({ side: 'SELL', size: 10, price: 0.6, traderSide: 'MAKER', usdc: 6 })).toBe(6);
   });
 });
 

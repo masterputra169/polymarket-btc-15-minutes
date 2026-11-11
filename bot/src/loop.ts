@@ -1497,8 +1497,8 @@ export async function pollOnce() {
             // closePosition returns takingAmount (USDC received), not .success flag
             const emRecovery = parseClobAmount(result?.takingAmount, emSellPrice * emergencyPos.size);
             if (emRecovery !== null) {
-              // The sell leg pays the V2 taker fee too; dry-run simulates proceeds net.
-              const emExitFee = BOT_CONFIG.dryRun ? takerFee(emergencyPos.size, emSellPrice) : 0;
+              // Sell leg pays the V2 taker fee. takingAmount is gross proceeds.
+              const emExitFee = takerFee(emergencyPos.size, emSellPrice);
               settleTradeEarlyExit(emRecovery, emExitFee);
               writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: earlyExitPnl(emergencyPos, emRecovery, emExitFee), exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
@@ -1583,8 +1583,9 @@ export async function pollOnce() {
               try {
                 const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
                 const sfActualRecovery = parseClobAmount(sfResult?.takingAmount, sfRecovery);
-                const sfPnl = earlyExitPnl(sfPos, sfActualRecovery);
-                settleTradeEarlyExit(sfActualRecovery);
+                const sfExitFee = takerFee(sfSellSize, sfSellPrice);
+                const sfPnl = earlyExitPnl(sfPos, sfActualRecovery, sfExitFee);
+                settleTradeEarlyExit(sfActualRecovery, sfExitFee);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'SMART_SELL_FIRST', pnl: sfPnl, exitData: { ...sfExitData, recovered: sfActualRecovery } });
                 clearEntrySnapshot();
@@ -1732,8 +1733,9 @@ export async function pollOnce() {
               try {
                 const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
                 const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
-                const cutPnl = earlyExitPnl(pos, actualRecovery);
-                settleTradeEarlyExit(actualRecovery);
+                const cutExitFee = takerFee(sellSize, cutResult.sellPrice);
+                const cutPnl = earlyExitPnl(pos, actualRecovery, cutExitFee);
+                settleTradeEarlyExit(actualRecovery, cutExitFee);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'CUT_LOSS', pnl: cutPnl, exitData: { ...exitData, cutLossRecovered: actualRecovery } });
                 clearEntrySnapshot();
@@ -1829,8 +1831,9 @@ export async function pollOnce() {
               try {
                 const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
                 const tpActualRecovery = parseClobAmount(tpSellResult?.takingAmount, tpResult.sellPrice * tpSellSize);
-                const tpPnl = earlyExitPnl(tpPos, tpActualRecovery);
-                settleTradeEarlyExit(tpActualRecovery);
+                const tpExitFee = takerFee(tpSellSize, tpResult.sellPrice);
+                const tpPnl = earlyExitPnl(tpPos, tpActualRecovery, tpExitFee);
+                settleTradeEarlyExit(tpActualRecovery, tpExitFee);
                 invalidateSync();
                 writeJournalEntry({ outcome: 'TAKE_PROFIT', pnl: tpPnl, exitData: { ...tpExitData, recovered: tpActualRecovery } });
                 clearEntrySnapshot();
