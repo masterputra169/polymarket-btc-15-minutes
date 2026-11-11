@@ -390,8 +390,9 @@ export function settleTrade(won) {
   const fee = entryFeeOf(pos);
   const payout = roundMoney(grossPayout - fee);
 
-  // C7: NaN guard after fee calculation — prevent bankroll corruption
-  if (!Number.isFinite(payout) || payout < -fee) {
+  // C7: NaN guard after fee calculation — prevent bankroll corruption.
+  // takerFee is 5 dp and payout is cents, so a loss can sit 0.005 below -fee.
+  if (!Number.isFinite(payout) || payout < -(roundMoney(fee) + 0.001)) {
     log.error(`Settlement ABORTED: payout=${payout} after fee calc (fee=${fee}, gross=${grossPayout}) — would corrupt bankroll`);
     auditLog({ type: 'SETTLE_ABORTED', reason: 'payout_NaN', payout, fee, grossPayout });
     return false;
@@ -493,8 +494,8 @@ export function settleTradeEarlyExit(recoveredUsdc, exitFee = 0) {
 
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
   const entryFee = entryFeeOf(pos);
-  // The sell leg is a taker fill too. Dry-run passes the simulated exit fee;
-  // live passes 0 until takingAmount is proven gross/net.
+  // The sell leg is a taker fill too. Callers pass takerFee(shares, sellPrice);
+  // recovered is gross proceeds (dry-run price×size, live takingAmount).
   const exit = Number.isFinite(exitFee) && exitFee > 0 ? roundMoney(exitFee) : 0;
 
   // FINTECH: Validate bankroll before modification

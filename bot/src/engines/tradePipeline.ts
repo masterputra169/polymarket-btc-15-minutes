@@ -367,15 +367,10 @@ export async function executeDirectionalTrade({
       return false;
     }
 
-    // Gate 3: Agent noise detection — token price diverges >15pp from MC fair value
-    // Bypass when ML is very confident (>=85%) — ML trained on 45K real samples beats GBM random walk
+    // Gate 3: token price diverges >15pp from MC fair value. No ML bypass.
     if (mcResult.priceEfficiency?.isNoisy && mcResult.priceEfficiency.absDivergence > 0.15) {
-      if (mlConf != null && mlConf >= 0.85) {
-        log.info(`MC noise gate BYPASSED (ML ${(mlConf * 100).toFixed(0)}%≥85%): token ${(mcResult.priceEfficiency.tokenPrice * 100).toFixed(0)}c vs MC fair ${(mcResult.priceEfficiency.mcFairValue * 100).toFixed(0)}c | div=${(mcResult.priceEfficiency.absDivergence * 100).toFixed(0)}pp`);
-      } else {
-        log.info(`MC noise gate: token ${(mcResult.priceEfficiency.tokenPrice * 100).toFixed(0)}c vs MC fair ${(mcResult.priceEfficiency.mcFairValue * 100).toFixed(0)}c | div=${(mcResult.priceEfficiency.absDivergence * 100).toFixed(0)}pp`);
-        return false;
-      }
+      log.info(`MC noise gate: token ${(mcResult.priceEfficiency.tokenPrice * 100).toFixed(0)}c vs MC fair ${(mcResult.priceEfficiency.mcFairValue * 100).toFixed(0)}c | div=${(mcResult.priceEfficiency.absDivergence * 100).toFixed(0)}pp`);
+      return false;
     }
   }
 
@@ -519,17 +514,17 @@ export async function executeDirectionalTrade({
     log.info(`Fixed share sizing active: ${shares} shares (${dryRun ? 'dry-run' : 'live min 5'})`);
   } else {
     // FOK confidence-tier size floor (user request 2026-05-14):
-    //   LOW=3, MEDIUM=5, HIGH=6, VERY_HIGH=7.
+    //   LOW=5 (CLOB minimum), MEDIUM=5, HIGH=6, VERY_HIGH=7.
     // Kelly often returns 2 shares for FOK — bump up to match confidence level
     // since v19 ML triggers FOK at higher confidence than LIMIT.
     // Safety: capped at 15% of bankroll (matches LIMIT's CLOB_MIN bump rule).
     const FOK_MIN_BY_CONF = {
-      LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       3, 1, 50),
+      LOW:       envInt(process.env.FOK_MIN_SHARES_LOW,       5, 1, 50),
       MEDIUM:    envInt(process.env.FOK_MIN_SHARES_MEDIUM,    5, 1, 50),
       HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
       VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
     };
-    const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 3;
+    const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 5;
     // Quant safety: do not inflate shares with FOK bump if gamma dampener is active (late phase) or RoR cap binds
     const allowBump = gammaDamp >= 1.0 && !rorCapActive;
     if (allowBump && shares < minShares) {

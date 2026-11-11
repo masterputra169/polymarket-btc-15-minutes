@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-09 15:45 WIB_
+_Last updated: 2026-11-11 14:03 WIB_
 
 | Area | State |
 |---|---|
@@ -30,7 +30,7 @@ _Last updated: 2026-11-09 15:45 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 96 files / 985 tests PASS |
+| Tests | 96 files / 989 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +48,32 @@ _Last updated: 2026-11-09 15:45 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-11 14:03 WIB — Correction: live sell fee uses the match price
+
+**Not deployed.**
+
+The 13:54 entry booked the live sell-leg taker fee from the order's minimum price. A FOK sell can match higher. `sellFillFee` now uses gross `takingAmount / makingAmount` (the size sent, when `makingAmount` is absent). The limit is only the fallback when proceeds are missing. Zero proceeds books no sell fee. The response has no per-fill prices, so the fee uses that one aggregate price.
+
+Live paths: emergency cut, smart sell, cut-loss, take-profit, dashboard sell. Dry-run still books the simulated limit, which is its fill.
+
+**Verification:** `npm run typecheck` PASS. `npm test` 96 files / 989 tests PASS.
+
+### 2026-11-11 13:54 WIB — Quant audit: taker fee on reconciler and live exits, Kelly 0.20, MC noise gate, FOK floor 5
+
+**Not deployed.** Code defaults only. A VPS env value still wins (`KELLY_PROB_SHRINK`, `FOK_MIN_SHARES_*`, `FIXED_SHARE_SIZE`). Current status above is the running env, unchanged by this edit.
+
+**What changed:**
+1. `journalReconciler` books the CLOB V2 taker fee `shares × 0.07 × p × (1−p)` on gross `price × size` (CLOB trades, and the data-api path when `usdcSize` is missing). A positive `usdcSize` is kept — it already includes the protocol fee — so the formula is not applied again. Maker fills (`trader_side=MAKER`) pay 0. `fee_rate_bps` is not the V2 match fee.
+2. Live early exits (emergency cut, smart sell, cut-loss, take-profit, dashboard sell) pass the same sell-leg `takerFee` into `earlyExitPnl` / `settleTradeEarlyExit` as dry-run. `takingAmount` is treated as gross proceeds. A phantom unwind (no fill) stays fee 0.
+3. `KELLY_PROB_SHRINK` default `0.5` → `0.20` (realised/claimed edge ~0.18).
+4. Monte Carlo noise gate (token vs MC fair value, divergence > 15pp) no longer skips when ML confidence is ≥ 85%.
+5. `FOK_MIN_SHARES_LOW` default `3` → `5`, matching the live 5-share minimum. Unknown confidence tiers use 5 as well.
+6. `settlementMath.takerFee` rounds to 5 decimal places (0.00001). Settlement P&L and the bankroll ledger stay cent-rounded after that fee.
+
+**Operator:** deploying this changes bet size (Kelly default), which trades clear the share floor, and which noisy books the Monte Carlo gate blocks. Set `EVAL_WINDOW_START` to the deploy timestamp. Fee booking changes live early-exit P&L and reconciler discrepancies; it does not by itself change who is entered.
+
+**Verification:** `npm run typecheck` PASS (frontend, bot, bot core, scripts). `npm test` 96 files / 987 tests PASS.
 
 ### 2026-11-09 15:45 WIB — Quantitative Mathematics Core Engine Integration (Options B & C)
 

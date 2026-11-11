@@ -60,11 +60,25 @@ describe('sellPosition RPC', () => {
   test('selling the tracked token in full settles the position, net of entry and exit fees', async () => {
     const r = await rpc({ type: 'sellPosition', tokenId: 'tok-mine', size: 10, price: 0.25 });
     expect(r.ok).toBe(true);
-    // Dry-run sell: 10 shares @ 0.25 → exit taker fee 10×0.07×0.25×0.75 = 0.13 (rounded).
-    expect(tracker.settleTradeEarlyExit).toHaveBeenCalledWith(2.5, 0.13);
-    expect(tracker.earlyExitPnl).toHaveBeenCalledWith(expect.anything(), 2.5, 0.13);
+    // 10 shares @ 0.25 → exit taker fee 10×0.07×0.25×0.75 = 0.13125 (5 dp).
+    expect(tracker.settleTradeEarlyExit).toHaveBeenCalledWith(2.5, 0.13125);
+    expect(tracker.earlyExitPnl).toHaveBeenCalledWith(expect.anything(), 2.5, 0.13125);
     expect(journal.writeJournalEntry).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'CUT_LOSS' }));
     expect(tracker.releaseSellLock).toHaveBeenCalled();
+  });
+
+  test('a fill above the sell minimum is charged at the match price', async () => {
+    registerPositionManager({
+      getPositions: () => [],
+      closePosition: async () => ({ takingAmount: '6', makingAmount: '10' }),
+    });
+    try {
+      await rpc({ type: 'sellPosition', tokenId: 'tok-mine', size: 10, price: 0.25 });
+      // 6 USDC / 10 shares = 0.60, not the 0.25 limit. Fee = 10×0.07×0.60×0.40 = 0.168.
+      expect(tracker.settleTradeEarlyExit).toHaveBeenCalledWith(6, 0.168);
+    } finally {
+      registerPositionManager({ getPositions: () => [], closePosition: async () => ({ takingAmount: '2.5' }) });
+    }
   });
 
   test('a size a hair under the tracked size (API rounding) is still a full exit, not a dust position', async () => {

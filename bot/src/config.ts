@@ -122,11 +122,9 @@ const BOT_CONFIG = {
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
   maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.50, 1.00, 100),
-  // Kelly sizes on price + shrink * (model - price). 2026-09-23: over 438 dry-run
-  // trades the model claimed 88% and won 68% against a 64% price (realised edge
-  // ~1/5 of claimed). 0.5 until the dry-run report's realised/claimed edge ratio
-  // says otherwise for the current model; 1 = trust the model fully.
-  kellyProbShrink: envNum(process.env.KELLY_PROB_SHRINK, 0.5, 0, 1),  // Audit fix: 2.00→2.50 — allow Kelly asymmetry for high-conf signals
+  // Kelly sizes on price + shrink * (model - price). Realised/claimed edge on
+  // the v1 dry-run book was ~0.18; 0.20 is that evidence. 1 = trust the model fully.
+  kellyProbShrink: envNum(process.env.KELLY_PROB_SHRINK, 0.20, 0, 1),
 
   // Take-profit — Quant fix C4: fixed minProbDrop absolute→relative (entry-based), still disabled by default
   // Enable when data confirms take-profit improves EV vs holding to settlement (WR 71.1%)
