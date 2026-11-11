@@ -7,7 +7,7 @@
  * charged to the taker at match on every fill — so a loss costs the fee too.
  */
 import { describe, test, expect } from 'vitest';
-import { computeSettlementPnl, fillCashNotional, takerFee } from '../settlementMath.ts';
+import { computeSettlementPnl, fillCashNotional, sellFillFee, takerFee } from '../settlementMath.ts';
 
 describe('takerFee', () => {
   test('shares × 0.07 × p × (1 − p), rounded to 0.00001', () => {
@@ -33,6 +33,17 @@ describe('fillCashNotional', () => {
   test('makers pay nothing', () => {
     expect(fillCashNotional({ side: 'BUY', size: 10, price: 0.6, traderSide: 'MAKER' })).toBe(6);
     expect(fillCashNotional({ side: 'SELL', size: 10, price: 0.6, traderSide: 'MAKER', usdc: 6 })).toBe(6);
+  });
+});
+
+describe('sellFillFee', () => {
+  test('uses proceeds / shares, and the limit only when the fill is missing', () => {
+    // 10 shares for 6 USDC is a 60c match: fee 0.168. The 25c limit would be 0.13125.
+    expect(sellFillFee(6, 10, 0.25, 10)).toBe(0.168);
+    expect(sellFillFee(4.8, 8, 0.25, 10)).toBe(0.1344);
+    expect(sellFillFee(2.5, null, 0.25, 10)).toBe(0.13125);
+    expect(sellFillFee(null, null, 0.25, 10)).toBe(0.13125);
+    expect(sellFillFee(0, 10, 0.25, 10)).toBe(0);
   });
 });
 

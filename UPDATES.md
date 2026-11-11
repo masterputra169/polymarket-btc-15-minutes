@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-11 13:54 WIB_
+_Last updated: 2026-11-11 14:03 WIB_
 
 | Area | State |
 |---|---|
@@ -30,7 +30,7 @@ _Last updated: 2026-11-11 13:54 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 96 files / 987 tests PASS |
+| Tests | 96 files / 989 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +48,16 @@ _Last updated: 2026-11-11 13:54 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-11 14:03 WIB — Correction: live sell fee uses the match price
+
+**Not deployed.**
+
+The 13:54 entry booked the live sell-leg taker fee from the order's minimum price. A FOK sell can match higher. `sellFillFee` now uses gross `takingAmount / makingAmount` (the size sent, when `makingAmount` is absent). The limit is only the fallback when proceeds are missing. Zero proceeds books no sell fee. The response has no per-fill prices, so the fee uses that one aggregate price.
+
+Live paths: emergency cut, smart sell, cut-loss, take-profit, dashboard sell. Dry-run still books the simulated limit, which is its fill.
+
+**Verification:** `npm run typecheck` PASS. `npm test` 96 files / 989 tests PASS.
 
 ### 2026-11-11 13:54 WIB — Quant audit: taker fee on reconciler and live exits, Kelly 0.20, MC noise gate, FOK floor 5
 

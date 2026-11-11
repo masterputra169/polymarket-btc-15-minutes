@@ -163,7 +163,7 @@ import {
   setTradeTimestamps,
   getPendingRedeemValue,
 } from './trading/positionTracker.ts';
-import { takerFee } from './engines/settlementMath.ts';
+import { sellFillFee, takerFee } from './engines/settlementMath.ts';
 import { closePosition } from './trading/positionManager.ts';
 import { evaluateCutLoss, resetCutLossState, recordSellAttempt, resetCutConfirm, getCutLossStatus } from './trading/cutLoss.ts';
 import { evaluateTakeProfit, resetTakeProfitState } from './trading/takeProfit.ts';
@@ -1497,8 +1497,9 @@ export async function pollOnce() {
             // closePosition returns takingAmount (USDC received), not .success flag
             const emRecovery = parseClobAmount(result?.takingAmount, emSellPrice * emergencyPos.size);
             if (emRecovery !== null) {
-              // Sell leg pays the V2 taker fee. takingAmount is gross proceeds.
-              const emExitFee = takerFee(emergencyPos.size, emSellPrice);
+              // Fee follows the match (takingAmount / makingAmount), not the minimum.
+              const emFilled = parseClobAmount(result?.makingAmount, emergencyPos.size);
+              const emExitFee = sellFillFee(emRecovery, emFilled, emSellPrice, emergencyPos.size);
               settleTradeEarlyExit(emRecovery, emExitFee);
               writeJournalEntry({ outcome: 'EMERGENCY_CUT', pnl: earlyExitPnl(emergencyPos, emRecovery, emExitFee), exitData: { reason: emergencyCheck.reason } });
               clearEntrySnapshot();
@@ -1583,7 +1584,8 @@ export async function pollOnce() {
               try {
                 const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
                 const sfActualRecovery = parseClobAmount(sfResult?.takingAmount, sfRecovery);
-                const sfExitFee = takerFee(sfSellSize, sfSellPrice);
+                const sfFilled = parseClobAmount(sfResult?.makingAmount, sfSellSize);
+                const sfExitFee = sellFillFee(sfActualRecovery, sfFilled, sfSellPrice, sfSellSize);
                 const sfPnl = earlyExitPnl(sfPos, sfActualRecovery, sfExitFee);
                 settleTradeEarlyExit(sfActualRecovery, sfExitFee);
                 invalidateSync();
@@ -1733,7 +1735,8 @@ export async function pollOnce() {
               try {
                 const sellResult = await closePosition(pos.tokenId, sellSize, cutResult.sellPrice);
                 const actualRecovery = parseClobAmount(sellResult?.takingAmount, cutResult.sellPrice * sellSize);
-                const cutExitFee = takerFee(sellSize, cutResult.sellPrice);
+                const cutFilled = parseClobAmount(sellResult?.makingAmount, sellSize);
+                const cutExitFee = sellFillFee(actualRecovery, cutFilled, cutResult.sellPrice, sellSize);
                 const cutPnl = earlyExitPnl(pos, actualRecovery, cutExitFee);
                 settleTradeEarlyExit(actualRecovery, cutExitFee);
                 invalidateSync();
@@ -1831,7 +1834,8 @@ export async function pollOnce() {
               try {
                 const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
                 const tpActualRecovery = parseClobAmount(tpSellResult?.takingAmount, tpResult.sellPrice * tpSellSize);
-                const tpExitFee = takerFee(tpSellSize, tpResult.sellPrice);
+                const tpFilled = parseClobAmount(tpSellResult?.makingAmount, tpSellSize);
+                const tpExitFee = sellFillFee(tpActualRecovery, tpFilled, tpResult.sellPrice, tpSellSize);
                 const tpPnl = earlyExitPnl(tpPos, tpActualRecovery, tpExitFee);
                 settleTradeEarlyExit(tpActualRecovery, tpExitFee);
                 invalidateSync();

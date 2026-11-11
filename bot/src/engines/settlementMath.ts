@@ -69,6 +69,33 @@ export function fillCashNotional({ side, size, price, usdc, traderSide }: {
 }
 
 /**
+ * Taker fee on a sell from the fill, not the limit.
+ * A FOK sell price is a minimum; the match can be higher. Gross USDC
+ * (`takingAmount`) divided by shares sold (`makingAmount`, else the size
+ * sent) is that match price. The limit is only the fallback when the
+ * proceeds are missing. The order response has no per-fill prices, so one
+ * aggregate price is the fee price. No proceeds means no sell fee.
+ */
+export function sellFillFee(
+  recovered: number | null | undefined,
+  filledShares: number | null | undefined,
+  limitPrice: number,
+  sentSize: number,
+): number {
+  const shares = Number.isFinite(filledShares) && (filledShares as number) > 0
+    ? (filledShares as number)
+    : sentSize;
+  if (!Number.isFinite(shares) || shares <= 0) return 0;
+  // Number(null) is 0, so a missing fill must be told apart from zero proceeds.
+  if (recovered == null || !Number.isFinite(recovered)) {
+    if (Number.isFinite(limitPrice) && limitPrice > 0 && limitPrice < 1) return takerFee(shares, limitPrice);
+    return 0;
+  }
+  if (recovered <= 0) return 0;
+  return takerFee(shares, recovered / shares);
+}
+
+/**
  * Net P&L of a binary position bought as a taker: a win pays $1/share, a loss
  * pays nothing, and the entry fee is paid either way. Until 2026-09-26 the fee
  * was modelled as 0.072·p·(1−p) of the winning profit only — about a quarter of

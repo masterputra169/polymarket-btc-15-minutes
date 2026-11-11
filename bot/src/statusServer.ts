@@ -8,7 +8,7 @@ import { BOT_CONFIG } from './config.ts';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, earlyExitPnl, partialExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
-import { computeSettlementPnl, takerFee } from './engines/settlementMath.ts';
+import { computeSettlementPnl, sellFillFee } from './engines/settlementMath.ts';
 import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.ts';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.ts';
 import { resetCutLossState } from './trading/cutLoss.ts';
@@ -296,6 +296,7 @@ export function startStatusServer() {
                 .then(result => {
                   // H1: Settle the position with recovered USDC (dashboard sell was missing this)
                   const recovered = parseClobAmount(result?.takingAmount, price * size);
+                  const filledShares = parseClobAmount(result?.makingAmount, size);
                   // Only touch the tracked position when the sold token IS that position's token.
                   // The dashboard can also sell holdings the tracker does not know about (getPositions
                   // merges on-chain positions); settling the tracked position for those would book
@@ -306,8 +307,8 @@ export function startStatusServer() {
                   let settled = false;
                   if (owns && soldAll) {
                     // Net of the entry fee, like the tracker's own booking (settleTradeEarlyExit).
-                    // Sell leg pays the V2 taker fee. takingAmount is gross proceeds.
-                    const exitFee = takerFee(size, price);
+                    // Sell fee uses the match price (gross takingAmount / shares), not the minimum.
+                    const exitFee = sellFillFee(recovered, filledShares, price, size);
                     const cutPnl = earlyExitPnl(sellPos, recovered, exitFee);
                     settled = settleTradeEarlyExit(recovered, exitFee);
                     if (settled) {
