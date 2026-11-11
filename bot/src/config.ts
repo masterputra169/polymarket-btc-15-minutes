@@ -182,6 +182,12 @@ const BOT_CONFIG = {
     disableDownSide: process.env.LIMIT_DISABLE_DOWN === 'true',                    // Hard kill-switch (default OFF — smart guard below handles DOWN)
     downMaxAbovePtbPct: envNum(process.env.LIMIT_DOWN_MAX_ABOVE_PTB_PCT, 0.0005, 0, 0.005),  // Smart DOWN guard (2026-05-15): LIMIT DOWN only if BTC ≤ PTB+0.05% (downtrend confirmed, fixes bottom-catch trap)
     cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 9.0, 5, 14),  // v4: 7→9 min — let limit orders live longer before FOK fallback
+    // Maker fill gate (2026-11-11): tape study ~60% fill in 15s; do not sit forever then chase with FOK.
+    maxUnfilledSec: envInt(process.env.LIMIT_MAX_UNFILLED_SEC, 45, 10, 300),
+    minRemainingEdge: envNum(process.env.LIMIT_MIN_REMAINING_EDGE, 0.03, 0, 0.20),
+    fokFallbackMinEdge: envNum(process.env.LIMIT_FOK_FALLBACK_MIN_EDGE, 0.05, 0, 0.20), // fee-adjusted
+    dryRunMakerSim: process.env.DRY_RUN_MAKER_SIM !== 'false', // when LIMIT_ORDER_ENABLED, dry-run uses maker fill model
+    dryRunMakerFillRate: envNum(process.env.DRY_RUN_MAKER_FILL_RATE, 0.60, 0, 1),
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
     expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
     minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough

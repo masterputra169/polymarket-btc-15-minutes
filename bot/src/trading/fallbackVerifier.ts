@@ -59,7 +59,13 @@ export function applyResolution(row: JournalRow, resolved: Resolution, nowMs: nu
   }
 
   const oldPnl = Number(row.analysis.pnl) || 0;
-  const pnl = computeSettlementPnl({ won: nowWin, size: row.entry.size, cost: row.entry.cost, price: row.entry.tokenPrice });
+  const pnl = computeSettlementPnl({
+    won: nowWin,
+    size: row.entry.size,
+    cost: row.entry.cost,
+    price: row.entry.tokenPrice,
+    isMaker: row.entry.fillModel === 'maker_join' || !!row.entry.isMaker,
+  });
   const analysis: JournalRow = {
     ...row.analysis,
     outcome: nowWin ? 'WIN' : 'LOSS',

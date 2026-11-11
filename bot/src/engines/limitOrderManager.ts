@@ -21,6 +21,10 @@
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { getSpreadTrend } from './executionTiming.ts';
+import {
+  shouldCancelUnfilled,
+  shouldCancelEdgeErosion,
+} from './makerFillGate.ts';
 
 const log = createLogger('LimitOrder');
 
@@ -483,6 +487,7 @@ export async function placeLimitOrder({
 export async function monitorLimitOrder({
   mlConfidence, mlSide, ensembleProb, btcPrice, priceToBeat,
   elapsedMin, marketSlug,
+  sideProb = null,
 }, deps): Promise<MonitorLimitOrderResult> {
   const cfg = BOT_CONFIG.limitOrder;
 
@@ -507,6 +512,28 @@ export async function monitorLimitOrder({
   if (flip.flipped) {
     log.info(`LIMIT ORDER signal flip: ${flip.reason}`);
     return { action: 'CANCEL_SIGNAL_FLIP', detail: flip.reason };
+  }
+
+  // Maker fill gate: edge at our resting price eroded (makers pay 0; edge = P − limit).
+  // Prefer explicit sideProb (ensemble for our side); fall back to placement ML conf mapped to P.
+  const pSide = Number.isFinite(sideProb)
+    ? sideProb
+    : (Number.isFinite(mlConfidence) && mlSide === state.side
+      ? 0.5 + (mlConfidence as number) / 2
+      : null);
+  if (shouldCancelEdgeErosion(pSide, state.targetPrice, cfg.minRemainingEdge ?? 0.03)) {
+    log.info(
+      `LIMIT ORDER edge erosion: P=${pSide != null ? (pSide * 100).toFixed(1) : '?'}% ` +
+      `limit=${((state.targetPrice ?? 0) * 100).toFixed(1)}c < min ${(cfg.minRemainingEdge * 100).toFixed(0)}pp`
+    );
+    return { action: 'CANCEL_EDGE_EROSION', detail: 'edge_erosion' };
+  }
+
+  // Maker fill gate: resting too long without a fill (tape: most fills arrive in ~15–45 s).
+  const heldSecNow = state.placedAt ? (Date.now() - state.placedAt) / 1000 : 0;
+  if (shouldCancelUnfilled(heldSecNow, cfg.maxUnfilledSec ?? 0)) {
+    log.info(`LIMIT ORDER unfilled timeout: ${heldSecNow.toFixed(0)}s >= ${cfg.maxUnfilledSec}s`);
+    return { action: 'CANCEL_UNFILLED_TIMEOUT', detail: 'unfilled_timeout' };
   }
 
   // Time cutoff — cancel after N minutes to allow FOK fallback

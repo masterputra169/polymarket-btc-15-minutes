@@ -67,4 +67,10 @@ describe('computeSettlementPnl', () => {
     expect(computeSettlementPnl({ won: true, size: 10, cost: 6, price: null })).toBe(3.8);
     expect(computeSettlementPnl({ won: false, size: 10, cost: 6, price: null })).toBe(-6.2);
   });
+
+  test('makers pay no entry fee', () => {
+    // 5 shares @ 0.54: win = 5 - 2.70 = 2.30 (no 0.07·p·(1-p) fee)
+    expect(computeSettlementPnl({ won: true, size: 5, cost: 2.70, price: 0.54, isMaker: true })).toBe(2.3);
+    expect(computeSettlementPnl({ won: false, size: 5, cost: 2.70, price: 0.54, isMaker: true })).toBe(-2.7);
+  });
 });

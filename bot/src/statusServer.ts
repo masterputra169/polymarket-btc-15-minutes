@@ -358,7 +358,9 @@ export function startStatusServer() {
           } else {
             const won = msg.outcome === 'WIN';
             // Net of the taker entry fee — the same number settleTrade books to the bankroll.
-            const pnl = computeSettlementPnl({ won, size: pos.size, cost: pos.cost, price: pos.price });
+            const pnl = computeSettlementPnl({
+              won, size: pos.size, cost: pos.cost, price: pos.price, isMaker: !!pos.isMaker,
+            });
             if (!settleTrade(won)) {
               releaseSellLock();
               respond('forceSettle', { ok: false, error: 'settle_failed' });

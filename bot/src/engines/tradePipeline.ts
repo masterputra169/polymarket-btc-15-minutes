@@ -19,8 +19,18 @@ import { envInt } from '../utils/env.ts';
 import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
 import { tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
+import {
+  dryRunMakerWouldFill,
+  makerJoinPrice,
+  shouldAllowFokFallback,
+  feeAdjustedEdge,
+} from './makerFillGate.ts';
+import { routeOrder } from './orderRouter.ts';
 
 const log = createLogger('TradePipeline');
+
+/** Live CLOB minimum for BTC 15m — dry-run must match when fixed sizing is on. */
+const LIVE_MIN_SHARES = 5;
 
 // ── Execution quality tracking (rolling slippage) ──
 const SLIPPAGE_BUF_SIZE = 20;
@@ -508,10 +518,11 @@ export async function executeDirectionalTrade({
   }
 
   // Fixed share size override (Fase 2 P1: Lock position size to prevent overexposure)
+  // Always enforce the live 5-share minimum so dry-run selection matches live.
   const fixedShareSize = envInt(process.env.FIXED_SHARE_SIZE, 0, 0, 100);
   if (fixedShareSize > 0) {
-    shares = (!dryRun && fixedShareSize < 5) ? 5 : fixedShareSize;
-    log.info(`Fixed share sizing active: ${shares} shares (${dryRun ? 'dry-run' : 'live min 5'})`);
+    shares = Math.max(fixedShareSize, LIVE_MIN_SHARES);
+    log.info(`Fixed share sizing active: ${shares} shares (floor ${LIVE_MIN_SHARES}; env FIXED_SHARE_SIZE=${fixedShareSize})`);
   } else {
     // FOK confidence-tier size floor (user request 2026-05-14):
     //   LOW=5 (CLOB minimum), MEDIUM=5, HIGH=6, VERY_HIGH=7.
@@ -611,53 +622,79 @@ export async function executeDirectionalTrade({
   entryData.jevConflict = jevForEntry && jevForEntry.direction !== 'NO_EDGE' ? jevForEntry.direction !== betSide : null;
 
   if (dryRun) {
-    // Simulate the fill and book it through the same hooks the live path uses,
-    // so settlement, cut-loss and the journal run unchanged and the dry run
-    // yields resolved trades to judge. Until 2026-09-07 this branch only logged
-    // "Would BUY": five days of dry run, zero trades measured. No order reaches
-    // the CLOB. The per-market / hourly counters are kept in step with live on
-    // purpose — a simulation that could re-enter a market the live bot may not
-    // would overstate what going live can do.
-    //
-    // 2026-09-20: it used to book at betMarketPrice with slippagePct hard-coded
-    // to 0 — the optimistic bound, assuming the whole size filled at top of book
-    // and the book never moved. All 378 Railway dry-run rows carry that
-    // assumption. The measured edge is +3.2pp over breakeven with ~3.2c of
-    // slippage tolerance, so a systematically free fill is a material part of
-    // the go-live number, not a rounding detail. It now charges exactly what the
-    // live path submits (same fokBuyPrice, same spread input), which is the
-    // worst price the bot would itself accept — the simulation can never be
-    // better than the real order, and never invents a penalty the bot would
-    // have refused.
-    // Price mirrors live exactly, including live's use of orderbookUp?.spread on
-    // a DOWN bet. That is a pre-existing inconsistency in the live order path;
-    // "fixing" it only here would make the simulation diverge from the order the
-    // bot actually sends, which is the one thing this branch must not do.
-    const dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+    // Simulate the fill and book it through the same hooks the live path uses.
+    // Maker JOIN only when the live router would choose LIMIT (same elapsed /
+    // ML / spread gates) — not merely because LIMIT_ORDER_ENABLED is on.
+    const betBook = betSide === 'UP' ? orderbookUp : orderbookDown;
+    const limCfg = BOT_CONFIG.limitOrder;
+    const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
+    const liveRoute = (limCfg?.enabled && limCfg?.dryRunMakerSim !== false && elapsedMin != null)
+      ? routeOrder({
+        bestAsk: betBook?.bestAsk ?? betMarketPrice,
+        mlConf: mlResult.available ? mlResult.mlConfidence : null,
+        elapsedMin,
+        delta1m,
+        mlSide: betSide,
+        regime: regimeInfo?.regime ?? 'moderate',
+        spread: betBook?.spread ?? null,
+        btcPrice: lastPrice ?? 0,
+      })
+      : { route: 'FOK', reason: 'maker_sim_off' };
+    const makerSimOn = liveRoute.route === 'LIMIT';
+    const joinPx = makerSimOn
+      ? makerJoinPrice(betBook?.bestBid ?? null, betBook?.bestAsk ?? betMarketPrice, limCfg.minEntryPrice ?? 0.50)
+      : null;
+    const makerFilled = joinPx != null && dryRunMakerWouldFill(marketSlug, limCfg.dryRunMakerFillRate ?? 0.60);
+
+    let dryFillPrice;
+    let fillModel;
+    let isMakerFill = false;
+    if (makerSimOn && makerFilled && joinPx != null) {
+      dryFillPrice = joinPx;
+      fillModel = 'maker_join';
+      isMakerFill = true;
+      log.info(
+        `[DRY RUN] MAKER fill ${betSide}: ${shares} @ $${dryFillPrice.toFixed(3)} ` +
+        `(JOIN; fee 0; route=${liveRoute.reason}; fillRate=${((limCfg.dryRunMakerFillRate ?? 0.60) * 100).toFixed(0)}% draw hit)`
+      );
+    } else if (makerSimOn && !makerFilled) {
+      const ask = betBook?.bestAsk ?? betMarketPrice;
+      const fokGate = shouldAllowFokFallback({
+        cancelReason: 'unfilled_timeout',
+        sideProb: betEnsembleProb,
+        ask,
+        minEdge: limCfg.fokFallbackMinEdge ?? 0.05,
+      });
+      if (!fokGate.allow) {
+        log.info(
+          `[DRY RUN] MAKER unfilled + FOK blocked (${fokGate.reason}) — skip ` +
+          `${betSide} @ ask $${Number(ask).toFixed(3)} | edge=${feeAdjustedEdge(betEnsembleProb, ask)}`
+        );
+        deps.setPendingCost(0);
+        return false;
+      }
+      dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+      fillModel = 'fok_after_maker_miss';
+      log.info(`[DRY RUN] MAKER miss → FOK fallback (${fokGate.reason}) @ $${dryFillPrice.toFixed(3)}`);
+    } else {
+      // Price mirrors live FOK (same fokBuyPrice / spread input as the live path).
+      dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+      fillModel = 'fok_limit';
+    }
+
     const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
 
-    // FOK is all-or-nothing: if the resting ask side cannot absorb the order the
-    // real one is rejected outright.
-    //
-    // Two things this has to get right. askLiquidity sums the book's `size` over
-    // the top 5 levels (src/data/polymarket.ts) — SHARES, not dollars — so it is
-    // compared against `shares`, not against the order's cost; a token is worth
-    // < $1, so comparing dollars to it is always the more permissive reading.
-    // And UP/DOWN are separate tokens with independent books, so the gate reads
-    // the book of the side actually being traded: letting the UP book decide
-    // whether a DOWN order fills is noise, not an approximation.
-    //
-    // null/0 depth means the fetch failed. Treating "unknown" as "empty" would
-    // silently halve the sample instead of measuring anything.
-    const betBook = betSide === 'UP' ? orderbookUp : orderbookDown;
-    const askLiqShares = betBook?.askLiquidity;
-    if (Number.isFinite(askLiqShares) && askLiqShares > 0 && shares > askLiqShares) {
-      log.info(
-        `[DRY RUN] FOK rejected: ${shares} ${betSide} shares @ $${dryFillPrice.toFixed(3)} ` +
-        `> ${Number(askLiqShares).toFixed(0)} shares resting on the ask — a live FOK would not fill`
-      );
-      deps.setPendingCost(0);
-      return false;
+    // FOK (and FOK fallback) is all-or-nothing against resting ask liquidity.
+    if (fillModel !== 'maker_join') {
+      const askLiqShares = betBook?.askLiquidity;
+      if (Number.isFinite(askLiqShares) && askLiqShares > 0 && shares > askLiqShares) {
+        log.info(
+          `[DRY RUN] FOK rejected: ${shares} ${betSide} shares @ $${dryFillPrice.toFixed(3)} ` +
+          `> ${Number(askLiqShares).toFixed(0)} shares resting on the ask — a live FOK would not fill`
+        );
+        deps.setPendingCost(0);
+        return false;
+      }
     }
 
     const drySlippagePct = betMarketPrice > 0
@@ -667,7 +704,7 @@ export async function executeDirectionalTrade({
 
     log.info(
       `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${dryFillPrice.toFixed(3)} = $${dryFillCost.toFixed(2)} ` +
-      `(simulated fill; quote $${betMarketPrice.toFixed(3)}, slip ${drySlippagePct.toFixed(2)}%) | ` +
+      `(${fillModel}; quote $${betMarketPrice.toFixed(3)}, slip ${drySlippagePct.toFixed(2)}%) | ` +
       `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
       `Conf: ${rec.confidence}${flowTag}${smartFlowTag} | ${betSizing.rationale}`
     );
@@ -677,19 +714,18 @@ export async function executeDirectionalTrade({
       conditionId: currentConditionId,
       price: dryFillPrice, size: shares,
       marketSlug, orderId: null, actualCost: dryFillCost,
+      isMaker: isMakerFill,
     });
     deps.confirmFill?.();
     deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
     deps.recordTradeForMarket(marketSlug);
     deps.recordTradeTimestamp?.();
-    // Settlement math keys on tokenPrice/cost, so those carry the fill. The
-    // quote stays in expectedPrice: both eras of dry-run rows remain scoreable
-    // from the journal alone, without a flag to flip.
     entryData.tokenPrice = dryFillPrice;
     entryData.cost = dryFillCost;
     entryData.actualPrice = dryFillPrice;
     entryData.slippagePct = drySlippagePct;
-    entryData.fillModel = 'fok_limit';
+    entryData.fillModel = fillModel;
+    entryData.isMaker = isMakerFill;
     entryData.avgSlippage = getAvgSlippage();
     deps.captureEntrySnapshot(entryData);
     // Record prediction for accuracy tracking

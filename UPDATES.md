@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-11 14:03 WIB_
+_Last updated: 2026-11-11 22:05 WIB_
 
 | Area | State |
 |---|---|
@@ -16,7 +16,7 @@ _Last updated: 2026-11-11 14:03 WIB_
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $32.75 · 896 trades · 575W / 321L (64.2% WR) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
-| Trade sizing | **3 shares locked** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`, `MAX_BET_AMOUNT_USD=2.10`, max cost $1.74) |
+| Trade sizing | **3 shares locked on VPS env** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`); **code now floors fixed sizing to 5** when deployed — update VPS env on deploy |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
 | Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
@@ -48,6 +48,21 @@ _Last updated: 2026-11-11 14:03 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-11 22:05 WIB — Maker fill gate + dry-run maker sim + fixed-share live floor
+
+**Not deployed.**
+
+**What changed:**
+1. `makerFillGate.ts` — pure gates: unfilled timeout (default 45 s), edge erosion at the resting limit (P − limit under 3 pp), and FOK fallback only after unfilled/time-cutoff when fee-adjusted edge is at least 5 pp. Signal flip / market switch / thin edge → no FOK chase for the rest of the market (`fokFallbackDeniedForSlug` also blocks smart-routed FOK).
+2. `limitOrderManager.monitorLimitOrder` cancels on unfilled timeout and edge erosion; `loop.ts` applies the FOK fallback gate and stamps `maker_fok_denied` on the tape when blocked.
+3. Dry-run maker JOIN only when `routeOrder` would choose LIMIT (not merely `LIMIT_ORDER_ENABLED`). Fill rate default 0.60 (`maker_join`, fee 0). Miss → FOK only if the fallback gate passes (`fok_after_maker_miss`); else skip.
+4. Positions carry `isMaker`; settlement / early-exit / forceSettle / fallbackVerifier charge entry fee 0 for makers. `isRealisticFill` accepts `maker_join` and `fok_after_maker_miss`.
+5. When `FIXED_SHARE_SIZE` is set, size is always `max(env, 5)` in dry-run and live so paper selection matches the CLOB minimum.
+
+**Env (optional):** `LIMIT_MAX_UNFILLED_SEC`, `LIMIT_MIN_REMAINING_EDGE`, `LIMIT_FOK_FALLBACK_MIN_EDGE`, `DRY_RUN_MAKER_SIM`, `DRY_RUN_MAKER_FILL_RATE`. Set `FIXED_SHARE_SIZE=5` (or unset and rely on FOK mins) on deploy. Reset `EVAL_WINDOW_START`. Prefer `KELLY_PROB_SHRINK=0.20–0.30` (VPS still at 0.9).
+
+**Verification:** `npm run typecheck` PASS. Engine + trading tests PASS after Codex review fixes.
 
 ### 2026-11-11 14:03 WIB — Correction: live sell fee uses the match price
 
