@@ -104,7 +104,10 @@ function makeDeps(overrides: Record<string, any> = {}) {
   };
 }
 
-beforeEach(() => { vi.clearAllMocks(); });
+beforeEach(() => {
+  vi.clearAllMocks();
+  delete process.env.FIXED_SHARE_SIZE;
+});
 
 describe('DRY_RUN fill price', () => {
   test('books at the price the live path would submit, not the quote', async () => {
@@ -300,16 +303,20 @@ describe('the depth gate reads the book of the side being traded', () => {
     expect(executed).toBe(false);
   });
 
-  test('FIXED_SHARE_SIZE locks share count in dry run', async () => {
+  test('FIXED_SHARE_SIZE floors to the live 5-share minimum in dry run', async () => {
     process.env.FIXED_SHARE_SIZE = '3';
-    const deps = makeDeps();
-    const executed = await executeDirectionalTrade(signal(), deps);
-    expect(executed).toBe(true);
-    expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
-      size: 3,
-      actualCost: 1.82, // 3 × 0.605 = 1.815 -> 1.82
-    }));
-    delete process.env.FIXED_SHARE_SIZE;
+    try {
+      const deps = makeDeps();
+      const executed = await executeDirectionalTrade(signal(), deps);
+      expect(executed).toBe(true);
+      // max(3, 5) = 5 so paper selection matches CLOB min
+      expect(deps.recordTrade).toHaveBeenCalledWith(expect.objectContaining({
+        size: 5,
+        actualCost: 3.03, // 5 × 0.605 = 3.025 -> 3.03
+      }));
+    } finally {
+      delete process.env.FIXED_SHARE_SIZE;
+    }
   });
 
   test('gammaSizingDampener reduces size in late phase (timeLeftMin < 5)', async () => {

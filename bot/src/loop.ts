@@ -176,6 +176,10 @@ import {
   recordFillEvent,
 } from './engines/limitOrderManager.ts';
 import { routeOrder } from './engines/orderRouter.ts';
+import {
+  shouldAllowFokFallback,
+  classifyCancelReason,
+} from './engines/makerFillGate.ts';
 
 // Safety
 import { shouldHalt, shouldEmergencyCut, validateTrade, validatePrice, recordTradeTimestamp, exportTradeTimestamps, importTradeTimestamps } from './safety/guards.ts';
@@ -490,6 +494,8 @@ export function resetEntryRegime() { entryRegime = null; }
 
 // ── Limit order filter log throttle ──
 let limitOrderFilterLogAt = 0;
+/** After a maker cancel that must not chase with FOK, block FOK for this slug until the next market. */
+let fokFallbackDeniedForSlug: string | null = null;
 
 let pollCounter = 0;
 let polling = false;
@@ -1090,6 +1096,7 @@ export async function pollOnce() {
       resetTakeProfitState();
       resetRecovery(); // Cancel any pending recovery on market switch
       clearPendingOrders(); // H2 audit fix: stale orders from previous market
+      fokFallbackDeniedForSlug = null; // new market → fresh FOK/maker decision
       if (isLimitOrderActive()) {
         const limStatus = getLimitOrderStatus();
         try {
@@ -2303,10 +2310,14 @@ export async function pollOnce() {
         if (!smartRouteFOK) {
         const elapsedMinForMonitor = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
         try {
+          const limSideForMon = getLimitOrderStatus().side;
+          const limSideProb = limSideForMon === 'UP' ? ensembleUp
+            : limSideForMon === 'DOWN' ? ensembleDown : null;
           const monResult = await monitorLimitOrder({
             mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
             mlSide: mlResult.available ? mlResult.mlSide : null,
-            ensembleProb: getLimitOrderStatus().side === 'UP' ? ensembleUp : ensembleDown,
+            ensembleProb: limSideProb,
+            sideProb: limSideProb,
             btcPrice: settlePrice,
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
@@ -2397,21 +2408,38 @@ export async function pollOnce() {
               { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit expired: ${e.message}`));
             limitOrderBlocksFOK = false;
           } else if (monResult.action.startsWith('CANCEL_') || monResult.action === 'PARTIAL_REJECT') {
-            // Signal flip, time cutoff, market switch, or partial reject — cancel
+            // Signal flip, time cutoff, unfilled timeout, edge erosion, market switch, or partial reject — cancel
             const cancelReason = monResult.action === 'PARTIAL_REJECT' ? 'partial_reject' : monResult.detail;
             const limStatus = getLimitOrderStatus();
             const cancelResult = await cancelLimitOrder(cancelReason, { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
 
+            // Maker fill gate: FOK fallback only when cancel was unfilled/time and fee-adjusted edge remains.
+            const askForFok = limStatus.side === 'UP'
+              ? (orderbookUp?.bestAsk ?? marketUp ?? null)
+              : (orderbookDown?.bestAsk ?? marketDown ?? null);
+            const pForFok = limStatus.side === 'UP' ? ensembleUp
+              : limStatus.side === 'DOWN' ? ensembleDown : null;
+            const fokGate = shouldAllowFokFallback({
+              cancelReason: classifyCancelReason(monResult.action + ' ' + String(cancelReason)),
+              sideProb: pForFok,
+              ask: askForFok,
+              minEdge: BOT_CONFIG.limitOrder.fokFallbackMinEdge ?? 0.05,
+            });
+
             // Notify: cancelled — with human-readable reason
             if (cancelResult && !cancelResult.filledInstead) {
-              const isTimeCutoff = monResult.action === 'CANCEL_TIME_CUTOFF';
+              const isTimeCutoff = monResult.action === 'CANCEL_TIME_CUTOFF'
+                || monResult.action === 'CANCEL_UNFILLED_TIMEOUT';
               const cancelEmoji = isTimeCutoff ? '⏰' : '❌';
               const readableReason = cancelReason.replace(/_/g, ' ').replace(/\b\w/g, c => c);
+              const fallbackLine = fokGate.allow
+                ? `→ FOK fallback allowed (${fokGate.reason})\n`
+                : `→ FOK fallback blocked (${fokGate.reason})\n`;
               notify('info',
                 `${cancelEmoji} LIMIT ORDER CANCELLED\n` +
                 `Side: ${limStatus.side ?? '?'} | Was @ ${limStatus.targetPrice ? (limStatus.targetPrice * 100).toFixed(1) + '¢' : '?'}\n` +
                 `Reason: ${readableReason}\n` +
-                (isTimeCutoff ? `→ FOK fallback now active\n` : `→ May retry limit order (cooldown 1min)\n`) +
+                fallbackLine +
                 `Bankroll: $${getBankroll().toFixed(2)}`,
                 { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit cancel: ${e.message}`));
             }
@@ -2449,8 +2477,16 @@ export async function pollOnce() {
                 `Position auto-recorded → holding to settlement\n` +
                 `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
                 { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify limit phantom: ${e.message}`));
+              limitOrderBlocksFOK = false;
+            } else if (fokGate.allow) {
+              fokFallbackDeniedForSlug = null;
+              limitOrderBlocksFOK = false;
+              log.info(`MAKER_GATE: FOK fallback allowed — ${fokGate.reason}`);
+            } else {
+              fokFallbackDeniedForSlug = marketSlug;
+              limitOrderBlocksFOK = true;
+              log.info(`MAKER_GATE: FOK fallback denied for ${marketSlug} — ${fokGate.reason}`);
             }
-            limitOrderBlocksFOK = false;
           }
           // HOLD — keep waiting
         } catch (err) {
@@ -2616,6 +2652,7 @@ export async function pollOnce() {
         signalStale && 'signal_stale', tooCloseToExpiry && 'too_close_to_expiry',
         hasPending && 'pending_order', smartSellTriggered && 'smart_sell', alreadyHasPosition && 'has_position',
         (limitOrderBlocksFOK && !smartRouteFOK) && 'limit_order_active',
+        (fokFallbackDeniedForSlug === marketSlug && !smartRouteFOK) && 'maker_fok_denied',
       ].filter(Boolean);
       if (tapePre.length > 0) noteTapeStage('pre', tapePre);
     }
@@ -2653,7 +2690,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK)) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK) && (fokFallbackDeniedForSlug !== marketSlug || smartRouteFOK)) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         const tapeEntered = await executeDirectionalTrade({
