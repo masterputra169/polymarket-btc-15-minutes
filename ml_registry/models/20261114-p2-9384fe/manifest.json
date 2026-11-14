@@ -1,0 +1,86 @@
+{
+  "id": "20261114-p2-9384fe",
+  "registeredAt": "2026-11-14T16:30:30.324Z",
+  "source": "autoRetrain 2026-11-14T15-41-56",
+  "featurePipeline": 2,
+  "sourceSha256": {
+    "xgboost_model.json": "9384feabe7c0f2996c6c5dd7b0f0e34598264738b847862eb2852be150b19032",
+    "lightgbm_model.json": "0f19bd458901adaeb80b6695edc97b1fa1bb4de5ea012207ed2f6353a9e469d4",
+    "norm_browser.json": "895727951423993720a0018539fe4685a7a0c3185acd6a5ddf37ed2fb3e1fd38"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "691f329b69dc216e2a10e82c60e65652636f86e35b96f2a235e65429372dbe6d",
+    "lightgbm_model.json.gz": "df211252021918647b64f8dbb0087c49a542912d94ebce684034bfc66fe37936",
+    "norm_browser.json.gz": "b54a654bdf0231a4240c3f182b34cae60d78a0c1380e64b31a73bb4a3dde9f70"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7586,
+      "auc": 0.8473,
+      "f1": 0.746,
+      "logloss": 0.477,
+      "brier": 0.16,
+      "calibration_ece": 0.0309,
+      "calibration_mce": 0.1256,
+      "high_conf_accuracy": 0.7824,
+      "high_conf_ratio": 91.91,
+      "high_conf_count": 1999,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8537,
+      "cv_acc": 0.7571,
+      "cv_test_acc_gap": 0.0016,
+      "cv_test_auc_gap": -0.0064,
+      "holdout_accuracy": 0.7637,
+      "holdout_auc": 0.8579,
+      "test_holdout_acc_gap": -0.0051,
+      "test_holdout_auc_gap": -0.0105,
+      "test_samples": 2175,
+      "holdout_samples": 1536,
+      "market_brier": 0.1687,
+      "brier_skill_vs_market": 0.052,
+      "logloss_skill_vs_market": 0.0452,
+      "market_skill_samples": 2175
+    },
+    "ensemble": {
+      "accuracy": 0.7618,
+      "auc": 0.8473,
+      "logloss": 0.4771,
+      "brier": 0.16,
+      "calibration_ece": 0.0331,
+      "calibration_mce": 0.1225,
+      "weight_source": "oof_cv",
+      "test_samples": 2175,
+      "holdout_samples": 1536,
+      "strict_holdout": true,
+      "market_brier": 0.1687,
+      "brier_skill_vs_market": 0.0518,
+      "logloss_skill_vs_market": 0.045,
+      "market_skill_samples": 2175
+    },
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": true,
+    "csvSha256": "c3c7a2183c2ad8ca822d1f1df3c8cf3b28ca49c52e37ef77677eee9cfc539299",
+    "csvMissingReason": null,
+    "meta": {
+      "feature_pipeline": 2,
+      "market_price_source": "lookup_1min",
+      "generated_at": "2026-11-14T15:44:44.369Z",
+      "days": 180,
+      "seed": 42,
+      "rows": 14606,
+      "first_slug_ts": 1779132600,
+      "last_slug_ts": 1794669300,
+      "feature_names": "(54 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "retrain"
+  ]
+}

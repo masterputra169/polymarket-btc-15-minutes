@@ -59,14 +59,14 @@ const SLUG_SWEEP_DELAY_MS = ARGS['slug-sweep-delay-ms'] ? parseInt(String(ARGS['
 // wall-clock to minutes.
 const PRICE_CONCURRENCY_RAW = ARGS['price-concurrency']
   ? parseInt(String(ARGS['price-concurrency']), 10)
-  : parseInt(process.env.POLYMARKET_PRICE_CONCURRENCY || '6', 10);
+  : parseInt(process.env.POLYMARKET_PRICE_CONCURRENCY || '12', 10);
 const PRICE_CONCURRENCY = Number.isFinite(PRICE_CONCURRENCY_RAW)
-  ? Math.min(16, Math.max(1, PRICE_CONCURRENCY_RAW))
-  : 6;
+  ? Math.min(24, Math.max(1, PRICE_CONCURRENCY_RAW))
+  : 12;
 const PRICE_DELAY_MS_RAW = ARGS['price-delay-ms']
   ? parseInt(String(ARGS['price-delay-ms']), 10)
-  : parseInt(process.env.POLYMARKET_PRICE_DELAY_MS || '50', 10);
-const PRICE_DELAY_MS = Number.isFinite(PRICE_DELAY_MS_RAW) && PRICE_DELAY_MS_RAW >= 0 ? PRICE_DELAY_MS_RAW : 50;
+  : parseInt(process.env.POLYMARKET_PRICE_DELAY_MS || '20', 10);
+const PRICE_DELAY_MS = Number.isFinite(PRICE_DELAY_MS_RAW) && PRICE_DELAY_MS_RAW >= 0 ? PRICE_DELAY_MS_RAW : 20;
 const HTTP_TIMEOUT_MS_RAW = ARGS['http-timeout-ms']
   ? parseInt(String(ARGS['http-timeout-ms']), 10)
   : parseInt(process.env.POLYMARKET_HTTP_TIMEOUT_MS || '20000', 10);
@@ -155,9 +155,12 @@ function httpsGetJson<T = unknown>(url: string, timeoutMs: number, useDoh: boole
       port: target.port || 443,
       path: `${target.pathname}${target.search}`,
       method: 'GET',
+      servername: target.hostname,
       headers: {
-        accept: 'application/json',
-        'user-agent': 'PolymarketBTC15mAssistant/1.0',
+        Host: target.hostname,
+        Accept: 'application/json, text/plain, */*',
+        'Accept-Encoding': 'identity',
+        'User-Agent': process.env.POLYMARKET_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
       },
       lookup: useDoh ? dohLookup : undefined,
       timeout: timeoutMs,
@@ -189,7 +192,16 @@ async function requestJson<T = unknown>(url: string, timeoutMs: number): Promise
     return httpsGetJson<T>(url, timeoutMs, true);
   }
 
-  const resp = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const target = new URL(url);
+  const resp = await fetch(url, {
+    headers: {
+      Host: target.hostname,
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Encoding': 'identity',
+      'User-Agent': process.env.POLYMARKET_USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    },
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   return { status: resp.status, data: await resp.json() as T };
 }
 
@@ -369,7 +381,7 @@ async function fetchPagedEvents(
   buildUrl: (offset: number, limit: number) => string,
   maxPages = 100,
 ): Promise<PagedEventsResult> {
-  const PAGE = 100;
+  const PAGE = 50;
   const events: any[] = [];
   let successfulPages = 0;
   let lastError: string | null = null;
@@ -387,7 +399,7 @@ async function fetchPagedEvents(
     successfulPages++;
     events.push(...pageEvents);
     if (pageEvents.length < PAGE) break;
-    await sleep(300);
+    await sleep(100);
   }
 
   return {
@@ -494,20 +506,29 @@ async function fetchFreshEvents(cutoffDate: string, lookup: Record<string, Looku
 
   console.log(`Fetching events since ${cutoffDate}...`);
 
+  const cutoffMs = new Date(`${cutoffDate}T00:00:00.000Z`).getTime();
+  const endMs = Date.now() + 86_400_000;
+  const WINDOW_MS = 14 * 86_400_000;
   for (const seriesId of SERIES_IDS) {
-    let result = await fetchKeysetEvents(
-      `series_id=${seriesId} keyset`,
-      `${GAMMA_BASE}/events/keyset?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=100`,
-    );
-    if (result.failed || result.truncated || result.events.length === 0) {
-      result = await fetchPagedEvents(
-        `series_id=${seriesId}`,
-        (offset, limit) => `${GAMMA_BASE}/events?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${cutoffDate}&limit=${limit}&offset=${offset}`,
+    let totalSeriesPages = 0;
+    let lastSeriesError: string | null = null;
+    const seriesEvents: any[] = [];
+    for (let wStart = cutoffMs; wStart < endMs; wStart += WINDOW_MS) {
+      const wEnd = Math.min(endMs, wStart + WINDOW_MS);
+      const startIso = new Date(wStart).toISOString().split('T')[0];
+      const endIso = new Date(wEnd).toISOString().split('T')[0];
+      const result = await fetchPagedEvents(
+        `series_id=${seriesId} [${startIso}..${endIso}]`,
+        (offset, limit) => `${GAMMA_BASE}/events?series_id=${encodeURIComponent(seriesId)}&closed=true&start_date_min=${startIso}&end_date_max=${endIso}&limit=${limit}&offset=${offset}`,
+        45,
       );
+      totalSeriesPages += result.successfulPages;
+      if (result.failed) lastSeriesError = result.error;
+      seriesEvents.push(...result.events);
     }
-    if (result.successfulPages > 0) successfulStrategies++;
-    if (result.failed) failures.push(`series_id=${seriesId}: ${result.error}`);
-    addMarketsFromEvents(result.events, marketMap, `series_id=${seriesId}`);
+    if (totalSeriesPages > 0) successfulStrategies++;
+    else if (lastSeriesError) failures.push(`series_id=${seriesId}: ${lastSeriesError}`);
+    addMarketsFromEvents(seriesEvents, marketMap, `series_id=${seriesId}`);
   }
 
   if (marketMap.size === 0) {
@@ -550,7 +571,7 @@ async function fetchFreshEvents(cutoffDate: string, lookup: Record<string, Looku
     const cutoffSec = Math.floor(new Date(`${cutoffDate}T00:00:00.000Z`).getTime() / 1000);
     const latestCovered = Math.max(latestDiscovered, NO_PRICES ? latestLookup : latestPricedLookup || latestLookup);
     const startSec = Math.max(cutoffSec, latestCovered ? latestCovered + 900 : cutoffSec);
-    const endSec = Math.floor((Date.now() / 1000) / 900) * 900;
+    const endSec = Math.floor((Date.now() / 1000 - 900) / 900) * 900;
     if (startSec <= endSec) {
       const sweep = await fetchSlugSweep(startSec, endSec, marketMap);
       if (sweep.successfulRequests > 0) successfulStrategies++;

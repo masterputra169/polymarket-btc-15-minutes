@@ -327,7 +327,13 @@ function restartBot() {
 function run(cmd, opts: { cwd?: string; timeout?: number } = {}) {
   const { cwd = TRAINING_DIR, timeout = 30 * 60 * 1000 } = opts;
   log.info(`> ${cmd}`);
-  const output = execSync(cmd, { cwd, timeout, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+  const output = execSync(cmd, {
+    cwd,
+    timeout,
+    maxBuffer: 64 * 1024 * 1024,
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
   return output;
 }
 
@@ -397,9 +403,26 @@ async function runPipeline() {
   // Step 2: Refresh Polymarket lookup and recent CLOB tick prices.
   log.info('Step 2/7: Refreshing Polymarket lookup + tick prices...');
   const polyLookup = resolve(TRAINING_DIR, 'polymarket_lookup.json');
+  let effectiveEnrichDays = CFG.enrichDays;
+  if (existsSync(polyLookup)) {
+    try {
+      const existingRaw = JSON.parse(readFileSync(polyLookup, 'utf-8')) as Record<string, any>;
+      let latestPriced = 0;
+      for (const [k, entry] of Object.entries(existingRaw)) {
+        const ts = Number(k);
+        if (Number.isFinite(ts) && ts > latestPriced && Array.isArray(entry?.prices) && entry.prices.length > 0) {
+          latestPriced = ts;
+        }
+      }
+      if (latestPriced > 0) {
+        const pricedAgeDays = Math.max(0, (Date.now() / 1000 - latestPriced) / 86400);
+        effectiveEnrichDays = Math.min(1500, Math.max(CFG.enrichDays, Math.ceil(pricedAgeDays) + 3));
+      }
+    } catch { /* fallback to CFG.enrichDays */ }
+  }
   try {
     const noPricesFlag = CFG.fetchPrices ? '' : ' --no-prices';
-    run(`node "${resolve(TRAINING_DIR, 'fetchFreshMarkets.mts')}" --days ${CFG.enrichDays} --lookup "${polyLookup}"${noPricesFlag}`, {
+    run(`node "${resolve(TRAINING_DIR, 'fetchFreshMarkets.mts')}" --days ${effectiveEnrichDays} --lookup "${polyLookup}"${noPricesFlag}`, {
       timeout: 45 * 60 * 1000,
     });
     log.info('  Lookup labels and tick prices refreshed');

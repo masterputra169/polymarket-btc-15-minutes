@@ -8,11 +8,12 @@
 
 ## Current status
 
-_Last updated: 2026-11-11 22:05 WIB_
+_Last updated: 2026-11-14 23:33 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
+| ML model | **`20261114-p2-9384fe` (Pipeline v2)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $32.75 · 896 trades · 575W / 321L (64.2% WR) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
@@ -30,7 +31,7 @@ _Last updated: 2026-11-11 22:05 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 96 files / 989 tests PASS |
+| Tests | 97 files / 1005 tests PASS · ML pytest 424 passed |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +49,28 @@ _Last updated: 2026-11-11 22:05 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-14 23:33 WIB — Fix auto-retrain pipeline & deploy refreshed ML model (`20261114-p2-9384fe`)
+
+**Root cause of stale ML model & failed auto-retrain:**
+1. Deployed model `20260924-p2-0d88d4` had become 52 days stale (`2026-03-28 → 2026-09-23`).
+2. `backtest/ml_training/fetchFreshMarkets.mts` failed against Gamma API with `HTTP 406` because Gamma now rejects `limit=100` (`limit=50` succeeds) and rejects `offset >= 3000` with `HTTP 422` while `/events/keyset` ignores cursor pagination; TLS requests via `dohLookup` also lacked explicit `servername` SNI and browser-standard headers.
+3. `bot/src/autoRetrain.ts` ran `execSync` with Node's default 1 MB `maxBuffer` (`ENOBUFS` crash on verbose script output) and used a static `CFG.enrichDays` that could miss older gaps.
+
+**What changed:**
+1. **`backtest/ml_training/fetchFreshMarkets.mts`:**
+   - Added TLS SNI (`servername: target.hostname`), `Host` header, `Accept-Encoding: identity`, and browser `User-Agent` to `httpsGetJson` and `fetch` fallback.
+   - Reduced page size from `100` to `50` and switched series discovery to 14-day `[start_date_min .. end_date_max]` windows (keeping `offset` well below Gamma's 3000 limit).
+   - Fixed slug-sweep upper bound (`endSec`) to exclude the currently open 15-minute window, and tuned defaults (`PRICE_CONCURRENCY` default 12 / cap 24, `PRICE_DELAY_MS` default 20).
+2. **`bot/src/autoRetrain.ts`:**
+   - Added `maxBuffer: 64 * 1024 * 1024` to `execSync` in `run()`.
+   - Dynamically expands `effectiveEnrichDays` in Step 2 from the age of the latest priced market in `polymarket_lookup.json`.
+3. **Full ML Retrain & Registration (`npm run ml:retrain`):**
+   - Refreshed `polymarket_lookup.json` with 4,685 new markets (4,685/4,685 with CLOB ticks; 34,909 total in lookup up to `2026-11-14T15:15:00Z`).
+   - Generated fresh 180-day dataset (`14,606` rows, `2026-05-18 → 2026-11-14`, Pipeline v2) and trained XGBoost + LightGBM via 100 Optuna trials with strict holdout + `--recency`.
+   - New model **`20261114-p2-9384fe`** passed all 11 `qualityGate()` checks (`abs_accuracy` 76.18%, `abs_auc` 0.8473, `market_skill` +0.0518 Brier skill vs same-instant market, `high_conf_accuracy` 78.24% @ 91.91% coverage, `calibration_ece` 0.0309 [ensemble 0.0331], `cv_test_acc_gap` 0.16pp, `test_holdout_acc_gap` -0.51pp, `rel_accuracy` -0.70pp, `rel_auc` -68bp), retired `20260924-p2-0d88d4`, deployed to `public/ml/`, and registered in `ml_registry/`.
+
+**Verification:** `npm run typecheck` PASS (frontend, bot, bot:core, scripts). `npm test` PASS (97 files / 1005 tests). `npm run test:ml` PASS (424 pytest tests).
 
 ### 2026-11-11 22:05 WIB — Maker fill gate + dry-run maker sim + fixed-share live floor
 
