@@ -8,16 +8,16 @@
 
 ## Current status
 
-_Last updated: 2026-11-14 23:55 WIB_
+_Last updated: 2026-11-15 00:22 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | ML model | **`20261114-p2-9384fe` (Pipeline v2)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $32.75 · 896 trades · 575W / 321L (64.2% WR) |
+| Paper bankroll | $25.87 (peak $29.45) · 923 trades · 589W / 334L (63.8% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
-| Trade sizing | **3 shares locked on VPS env** (`FIXED_SHARE_SIZE=3`, `FOK_MIN_SHARES_*=3`); **code now floors fixed sizing to 5** when deployed — update VPS env on deploy |
+| Trade sizing | **5 shares min aligned** (`FIXED_SHARE_SIZE=5`, `FOK_MIN_SHARES_*=5` on VPS; `FIXED_SHARE_SIZE=5` in local `.env`, aligned with CLOB V2 5-share floor) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
 | Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
@@ -36,7 +36,8 @@ _Last updated: 2026-11-14 23:55 WIB_
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | 0.9 |
+| Kelly shrink | **0.25** (updated from `0.9` in VPS & local `.env`) |
+| Eval window | **Since `2026-11-14T16:35:00Z`** (`EVAL_WINDOW_START`, model `20261114-p2-9384fe`, target 300 trades); prior 923-row journal kept intact + archived in `bot/data/archive_model_20260924/` |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | clean; failed units cleared; `systemctl --failed` empty |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
@@ -49,6 +50,23 @@ _Last updated: 2026-11-14 23:55 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-15 00:22 WIB — Preserve pre-retrain trade history, sync `.env` sizing/Kelly/eval window & verify dry-run evaluation
+
+**What changed:**
+1. **Preserved historical trades from prior ML models (`ubuntu@43.129.33.237`):**
+   - Created permanent snapshot archive `/opt/polybtc15/bot/data/archive_model_20260924/` containing copies of `trade_journal.jsonl` (923 entries: 458 `pre-registry (pipeline v1)` at 67.0% WR / +11.18 PnL, 463 `20260924-p2-0d88d4` at 60.9% WR / -27.53 PnL, 1 `20261114-p2-9384fe` + 1 unresolved) and `state.json`.
+   - Left live `/opt/polybtc15/bot/data/trade_journal.jsonl` and `/opt/polybtc15/bot/data/state.json` untouched so all lifetime history and cumulative stats remain accessible in the journal and dashboard.
+2. **Option 1 — Synced `.env` on VPS (`/opt/polybtc15/bot/.env`) and local (`bot/.env`):**
+   - `EVAL_WINDOW_START`: `2026-10-26T03:24:51Z` → `2026-11-14T16:35:00Z` (starts evaluation window reporting at live cutover of model `20261114-p2-9384fe` without deleting old journal entries).
+   - `KELLY_PROB_SHRINK`: `0.9` → `0.25`.
+   - `FIXED_SHARE_SIZE`: `3` → `5`, plus `FOK_MIN_SHARES_{LOW,MEDIUM,HIGH,VERY_HIGH}=5` on VPS to match the Polymarket CLOB V2 5-share minimum order constraint.
+   - Restarted `polybtc15-bot.service` cleanly (`active`).
+3. **Option 2 — Verified dry-run validation & margin separation (`breakevenMargin.ts` / `evaluationReport.ts` / `dryRunReport.mts`):**
+   - Bot startup confirmed `[ML] Model id: 20261114-p2-9384fe`, `[Position] State loaded: bankroll=$25.87, peak=$29.45, trades=923, W/L=589/334`, and `[EvalReport] Evaluation report: window since 2026-11-14T16:35:00.000Z, target 300 trades, daily at 00:00 UTC`.
+   - `dryRunReport.mts --all` & `marginReport()` confirmed lifetime history intact (`922` resolved: `63.88%` WR vs `63.46%` breakeven; `realistic` `542` trades: `62.18%` WR vs `62.53%` breakeven), while `--since 2026-11-14T16:35:00Z` & `buildEvaluation()` track the new model's evaluation window cleanly (`1` trade, `verdict=too_early`, PTB health `100.0%` exact).
+
+**Verification:** `polybtc15-bot.service` active after restart; startup `journalctl` verified; `dryRunReport.mts --all` and `--since 2026-11-14T16:35:00Z` verified on VPS; `marginReport()` / `buildEvaluation()` verified on VPS.
 
 ### 2026-11-14 23:55 WIB — ML tooling cleanup: systemd restart, Gamma `limit=50` on backfill scripts, early `NaN` sanitization
 
