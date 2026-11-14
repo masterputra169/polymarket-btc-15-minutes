@@ -107,17 +107,12 @@ function HourlyBar({ hour, trades, wr, pnl, maxTrades }: any) {
 
 function StatBox({ label, value, color, sub }: any) {
   return (
-    <div style={{
-      background: 'var(--bg-elevated)', border: '1px solid var(--border-dim)',
-      borderRadius: 'var(--radius-sm)', padding: '6px 8px', textAlign: 'center', flex: 1, minWidth: 70,
-    }}>
-      <div style={{ fontSize: '0.56rem', color: 'var(--text-dim)', marginBottom: 2, textTransform: 'uppercase' }}>
-        {label}
-      </div>
-      <div style={{ fontWeight: 700, fontSize: '0.88rem', color: color ?? 'var(--text-primary)' }}>
+    <div className="qt-stat-box" style={{ textAlign: 'center', flex: 1, minWidth: 74, alignItems: 'center' }}>
+      <span className="qt-stat-box__label">{label}</span>
+      <span className="qt-stat-box__val" style={{ fontSize: '0.88rem', color: color ?? 'var(--text-primary)' }}>
         {value}
-      </div>
-      {sub && <div style={{ fontSize: '0.52rem', color: 'var(--text-dim)' }}>{sub}</div>}
+      </span>
+      {sub && <span className="qt-stat-box__sub">{sub}</span>}
     </div>
   );
 }
@@ -248,6 +243,32 @@ function OverviewTab({ data }: any) {
           <StatBox label="P&L (realistic)" value={pnlStr(margin.realistic.pnl)} color={pnlColor(margin.realistic.pnl)} />
         </div>
       )}
+
+      {/* Quant Bayesian & Binomial Significance Row */}
+      {(() => {
+        const qSlice = (margin?.realistic?.trades ?? 0) > 0 ? margin.realistic : margin?.lifetime;
+        const qScope = (margin?.realistic?.trades ?? 0) > 0 ? 'realistic' : 'lifetime';
+        if (!qSlice || (qSlice.bayesianWinRatePct == null && qSlice.zScore == null)) return null;
+        const z = qSlice.zScore;
+        const bWr = qSlice.bayesianWinRatePct;
+        const zCol = z == null ? undefined : z >= 1.96 ? 'var(--green-bright)' : z >= 1.0 ? 'var(--yellow-bright)' : z < -1.0 ? 'var(--red-bright)' : 'var(--text-muted)';
+        return (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+            <StatBox
+              label="Bayesian WR"
+              value={bWr != null ? `${bWr.toFixed(1)}%` : '—'}
+              color={bWr != null ? wrColor(bWr) : undefined}
+              sub={`β-shrunk (${qScope})`}
+            />
+            <StatBox
+              label="Binomial Z-Score"
+              value={z != null ? `${z >= 0 ? '+' : ''}${z.toFixed(2)}σ` : '—'}
+              color={zCol}
+              sub={qSlice.isStatisticallySignificant ? 'p < 0.05 ✓ significant' : z != null && z >= 1.96 ? 'p < 0.05 ✓' : 'vs breakeven BE'}
+            />
+          </div>
+        );
+      })()}
 
       {/* Polymarketscan-style aggregate metrics */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -527,18 +548,15 @@ function EquityTab({ data }) {
       </div>
 
       {/* Chart */}
-      <div style={{
-        background: 'var(--bg-elevated)', border: '1px solid var(--border-dim)',
-        borderRadius: 'var(--radius-sm)', padding: '8px 4px', position: 'relative',
-      }}>
+      <div className="qt-panel-section qt-panel-section--accent" style={{ padding: '10px 6px' }}>
         {/* Y-axis labels */}
         <div style={{
-          position: 'absolute', left: 4, top: 6, fontSize: '0.5rem', color: 'var(--text-dim)',
+          position: 'absolute', left: 8, top: 6, fontFamily: 'var(--font-mono)', fontSize: '0.54rem', color: 'var(--text-dim)', zIndex: 2,
         }}>
           ${maxB.toFixed(0)}
         </div>
         <div style={{
-          position: 'absolute', left: 4, bottom: 4, fontSize: '0.5rem', color: 'var(--text-dim)',
+          position: 'absolute', left: 8, bottom: 6, fontFamily: 'var(--font-mono)', fontSize: '0.54rem', color: 'var(--text-dim)', zIndex: 2,
         }}>
           ${minB.toFixed(0)}
         </div>
@@ -547,11 +565,27 @@ function EquityTab({ data }) {
           preserveAspectRatio="none"
           style={{ width: '100%', height: chartH, display: 'block' }}
         >
+          <defs>
+            <linearGradient id="qtEquityGradUp" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#34d399" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="#34d399" stopOpacity="0.0" />
+            </linearGradient>
+            <linearGradient id="qtEquityGradDown" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#fb7185" stopOpacity="0.28" />
+              <stop offset="100%" stopColor="#fb7185" stopOpacity="0.0" />
+            </linearGradient>
+          </defs>
+          {points.length > 1 && (
+            <polygon
+              points={`${svgPoints} ${chartW},${chartH} 0,${chartH}`}
+              fill={change >= 0 ? 'url(#qtEquityGradUp)' : 'url(#qtEquityGradDown)'}
+            />
+          )}
           <polyline
             points={svgPoints}
             fill="none"
-            stroke={change >= 0 ? 'var(--green-mid)' : 'var(--red-mid)'}
-            strokeWidth="1.5"
+            stroke={change >= 0 ? 'var(--green-bright)' : 'var(--red-bright)'}
+            strokeWidth="1.75"
             vectorEffect="non-scaling-stroke"
           />
         </svg>
@@ -598,21 +632,12 @@ function JournalTimeSeriesPanel({ data }) {
       </div>
 
       {/* Tabs */}
-      <div style={{
-        display: 'flex', gap: 2, marginBottom: 10,
-        background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)', padding: 2,
-      }}>
+      <div className="qt-tabs" style={{ marginBottom: 10 }}>
         {TABS.map(t => (
           <button
             key={t}
+            className={`qt-tab ${tab === t ? 'is-active' : ''}`}
             onClick={() => setTab(t)}
-            style={{
-              flex: 1, padding: '4px 0', fontSize: '0.64rem', fontWeight: 600,
-              border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-              background: tab === t ? 'var(--bg-card, #1a1a2e)' : 'transparent',
-              color: tab === t ? 'var(--text-primary)' : 'var(--text-dim)',
-              transition: 'all 0.2s',
-            }}
           >
             {TAB_LABELS[t]}
           </button>
@@ -651,10 +676,14 @@ export default memo(JournalTimeSeriesPanel, (prev, next) => {
     // sign flips — so P&L can move while every count and rate stays identical.
     a.margin?.lifetime?.marginPp === b.margin?.lifetime?.marginPp &&
     a.margin?.lifetime?.breakevenPct === b.margin?.lifetime?.breakevenPct &&
+    a.margin?.lifetime?.bayesianWinRatePct === b.margin?.lifetime?.bayesianWinRatePct &&
+    a.margin?.lifetime?.zScore === b.margin?.lifetime?.zScore &&
     a.margin?.realistic?.trades === b.margin?.realistic?.trades &&
     a.margin?.realistic?.marginPp === b.margin?.realistic?.marginPp &&
     a.margin?.realistic?.winRatePct === b.margin?.realistic?.winRatePct &&
     a.margin?.realistic?.breakevenPct === b.margin?.realistic?.breakevenPct &&
+    a.margin?.realistic?.bayesianWinRatePct === b.margin?.realistic?.bayesianWinRatePct &&
+    a.margin?.realistic?.zScore === b.margin?.realistic?.zScore &&
     a.margin?.realistic?.pnl === b.margin?.realistic?.pnl
   );
 });

@@ -44,19 +44,20 @@ function PredictPanel({ data }) {
   const bannerText = isEnter
     ? isStrong ? 'STRONG SIGNAL' : isModerate ? 'MODERATE SIGNAL' : 'WEAK SIGNAL'
     : 'NO TRADE';
-  const bannerBg = isEnter
-    ? isStrong
-      ? 'linear-gradient(90deg, rgba(0,230,118,0.15), rgba(0,230,118,0.05))'
-      : isModerate
-        ? 'linear-gradient(90deg, rgba(255,193,7,0.15), rgba(255,193,7,0.05))'
-        : 'linear-gradient(90deg, rgba(255,152,0,0.1), rgba(255,152,0,0.03))'
-    : 'linear-gradient(90deg, rgba(150,150,150,0.08), rgba(150,150,150,0.02))';
-  const bannerBorder = isEnter
-    ? isStrong ? 'rgba(0,230,118,0.3)' : isModerate ? 'rgba(255,193,7,0.3)' : 'rgba(255,152,0,0.2)'
-    : 'rgba(150,150,150,0.15)';
-  const bannerColor = isEnter
-    ? isStrong ? 'var(--green-bright)' : isModerate ? '#ffc107' : '#ff9800'
-    : 'var(--text-dim)';
+  const bannerVariant = !isEnter
+    ? ''
+    : rec?.side === 'DOWN'
+      ? 'qt-banner--down'
+      : isStrong
+        ? 'qt-banner--up'
+        : 'qt-banner--warn';
+  const bannerColor = !isEnter
+    ? 'var(--text-dim)'
+    : rec?.side === 'DOWN'
+      ? 'var(--red-bright)'
+      : isStrong
+        ? 'var(--green-bright)'
+        : 'var(--yellow-bright)';
 
   const signalText =
     isEnter
@@ -77,19 +78,18 @@ function PredictPanel({ data }) {
     ? mlConf >= ML_CONFIDENCE.HIGH ? 'HIGH' : mlConf >= ML_CONFIDENCE.MEDIUM ? 'MED' : 'LOW'
     : null;
 
+  const hurst = regimeInfo?.hurst;
+  const halfLife = regimeInfo?.halfLife;
+  const hurstColor = hurst != null
+    ? hurst >= 0.55 ? 'var(--green-bright)' : hurst <= 0.45 ? 'var(--yellow-bright)' : 'var(--accent-cyan)'
+    : 'var(--text-dim)';
+
   return (
     <div className={`card ${cardGlow}`} style={{ animationDelay: '0.15s' }}>
       <div className="card__header">
         <span className="card__title">🎯 Prediction</span>
         {isEnter && (
-          <span
-            className="card__badge"
-            style={{
-              background: rec.side === 'UP' ? 'var(--green-bg)' : 'var(--red-bg)',
-              color: rec.side === 'UP' ? 'var(--green-bright)' : 'var(--red-bright)',
-              border: `1px solid ${rec.side === 'UP' ? 'rgba(0,230,118,0.2)' : 'rgba(255,82,82,0.2)'}`,
-            }}
-          >
+          <span className={`qt-badge ${rec.side === 'UP' ? 'qt-badge--green' : 'qt-badge--red'}`}>
             {confidence}
           </span>
         )}
@@ -97,21 +97,21 @@ function PredictPanel({ data }) {
 
       {/* Signal Quality Banner */}
       <div
+        className={`qt-banner ${bannerVariant}`}
         style={{
-          background: bannerBg,
-          border: `1px solid ${bannerBorder}`,
-          borderRadius: 'var(--radius-sm)',
-          padding: '8px 12px',
           marginBottom: 12,
+          flexDirection: 'column',
+          alignItems: 'center',
           textAlign: 'center',
+          gap: 3,
         }}
       >
-        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: bannerColor, letterSpacing: '0.08em' }}>
+        <div style={{ fontSize: '0.84rem', fontWeight: 700, color: bannerColor, letterSpacing: '0.08em' }}>
           {bannerText}
         </div>
         {isEnter && (
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginTop: 3 }}>
-            {rec.side} {mlConfLabel ? `· ML: ${mlConfLabel}` : ''}
+          <div className="qt-kicker" style={{ color: 'var(--text-muted)' }}>
+            {rec.side} {mlConfLabel ? `· ML ${mlConfLabel}` : ''}
           </div>
         )}
       </div>
@@ -131,13 +131,34 @@ function PredictPanel({ data }) {
         </div>
       </div>
 
-      <div style={{ marginTop: 14 }}>
-        <div className="data-row">
-          <span className="data-row__label">Regime</span>
-          <span className={`data-row__value ${regimeColor}`}>
+      {/* Quant Regime Telemetry */}
+      <div className="qt-stat-grid" style={{ marginTop: 12, marginBottom: 10 }}>
+        <div className="qt-stat-box">
+          <span className="qt-stat-box__label">Regime</span>
+          <span className={`qt-stat-box__val ${regimeColor}`} style={{ fontSize: '0.78rem', textTransform: 'uppercase' }}>
             {regimeInfo?.regime ?? '-'}
           </span>
+          <span className="qt-stat-box__sub">{regimeInfo?.confidence != null ? `${Math.round(regimeInfo.confidence * 100)}% conf` : '—'}</span>
         </div>
+        <div className="qt-stat-box">
+          <span className="qt-stat-box__label">Hurst H</span>
+          <span className="qt-stat-box__val" style={{ color: hurstColor, fontSize: '0.84rem' }}>
+            {hurst != null && Number.isFinite(hurst) ? hurst.toFixed(2) : '-'}
+          </span>
+          <span className="qt-stat-box__sub">
+            {hurst == null ? '—' : hurst >= 0.55 ? 'persistent' : hurst <= 0.45 ? 'mean-rev' : 'random'}
+          </span>
+        </div>
+        <div className="qt-stat-box">
+          <span className="qt-stat-box__label">Half-Life t½</span>
+          <span className="qt-stat-box__val" style={{ fontSize: '0.84rem', color: 'var(--accent-cyan)' }}>
+            {halfLife != null ? (Number.isFinite(halfLife) ? halfLife.toFixed(1) : '∞') : '-'}
+          </span>
+          <span className="qt-stat-box__sub">OU reversion</span>
+        </div>
+      </div>
+
+      <div className="qt-panel-section">
         <div className="data-row">
           <span className="data-row__label">Phase</span>
           <span className="data-row__value">{rec?.phase ?? '-'}</span>
@@ -179,6 +200,8 @@ export default memo(PredictPanel, (prev, next) => {
     a.pShort === b.pShort &&
     a.regimeInfo?.regime === b.regimeInfo?.regime &&
     a.regimeInfo?.label === b.regimeInfo?.label &&
+    a.regimeInfo?.hurst === b.regimeInfo?.hurst &&
+    a.regimeInfo?.halfLife === b.regimeInfo?.halfLife &&
     a.rec?.action === b.rec?.action &&
     a.rec?.side === b.rec?.side &&
     a.rec?.confidence === b.rec?.confidence &&

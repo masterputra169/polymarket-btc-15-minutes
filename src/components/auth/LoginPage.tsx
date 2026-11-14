@@ -64,9 +64,9 @@ export default function LoginPage({ onLogin, authError = null }: LoginPageProps)
           <span className="login-secure"><i /> SECURE</span>
         </div>
         <div className="login-heading">
-          <span className="login-kicker">BTC 15M · CONTROL PLANE</span>
+          <span className="login-kicker">BTC 15M · QUANT TERMINAL V5</span>
           <h1>Operator access</h1>
-          <p>Sign in to open the live market workspace. Control actions stay locked until this session is verified.</p>
+          <p>Sign in to open the CLOB V2 &amp; PolyBolt TWAP workspace. Trade execution and book controls stay locked until verified.</p>
         </div>
         <form className="login-form" onSubmit={submit}>
           <label className="login-label" htmlFor="operator-password">Password</label>
@@ -83,14 +83,14 @@ export default function LoginPage({ onLogin, authError = null }: LoginPageProps)
           <motion.button type="submit" className="login-submit" disabled={busy} whileHover={reduce ? undefined : { y: -1 }} whileTap={reduce ? undefined : { scale: 0.99 }}><span>{busy ? 'VERIFYING…' : 'ENTER CONSOLE'}</span><span className="login-submit__arrow">→</span></motion.button>
         </form>
         <div className="login-card__foot">
-          <span><i className="dot-green" /> PAPER TRADING ENVIRONMENT</span>
+          <span><i className="dot-green" /> POLYBTC15 EXECUTION ENGINE</span>
           <span>session · 12h</span>
         </div>
       </motion.main>
       <div className="login-bottom">
-        <span>NOT FINANCIAL ADVICE</span>
-        <span>BTC/USD · CHAINLINK TWAP · POLYMARKET</span>
-        <span>BUILD 2026.10</span>
+        <span>CLOB V2 · POLYBOLT TWAP · XGB+LGB V2</span>
+        <span>BTC/USD 15M BINARY TERMINAL</span>
+        <span>BUILD 2026.11 · QUANT TERMINAL V5</span>
       </div>
     </div>
   );

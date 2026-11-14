@@ -654,17 +654,21 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   const priceTone = tonePrice != null && status.priceToBeat != null
     ? (tonePrice >= status.priceToBeat ? 'up' : 'down')
     : 'flat';
+  const deltaPtb = tonePrice != null && status.priceToBeat != null
+    ? tonePrice - status.priceToBeat
+    : null;
+  const dailyPnlTone = status.dailyPnl == null ? '' : status.dailyPnl > 0 ? 'is-up' : status.dailyPnl < 0 ? 'is-down' : '';
   const feedChecks = [
-    { label: 'Binance', ok: status.binanceConnected },
-    { label: 'Chainlink', ok: status.chainlinkConnected },
-    { label: 'CLOB', ok: !!status.clobLabel },
-    { label: 'ML', ok: status.mlReady },
-    { label: 'Bot', ok: status.botConnected },
+    { label: 'Binance', short: 'BIN', ok: status.binanceConnected, warn: !status.binanceConnected },
+    { label: 'Chainlink', short: 'CL', ok: status.chainlinkConnected, warn: !status.chainlinkConnected },
+    { label: 'CLOB', short: 'CLOB', ok: !!status.clobLabel && status.clobLabel.dotClass !== 'dot-red', warn: !status.clobLabel || status.clobLabel.dotClass === 'dot-yellow' },
+    { label: 'ML', short: 'ML', ok: status.mlReady, warn: !status.mlReady },
+    { label: 'Bot', short: 'BOT', ok: status.botConnected, warn: !status.botConnected },
   ];
   const allFeedsOk = feedChecks.every(f => f.ok);
   const feedTitle = feedChecks.map(f => `${f.label}: ${f.ok ? 'up' : 'down'}`).join(' · ');
-  const oracleSourceLabel = status.oracleSource === 'polymarket_ws' ? 'POLYWS'
-    : status.oracleSource === 'chainlink_wss' ? 'WSS'
+  const oracleSourceLabel = status.oracleSource === 'polymarket_ws' ? 'POLYBOLT'
+    : status.oracleSource === 'chainlink_wss' ? 'CL WSS'
       : status.oracleSource === 'RPC' ? 'RPC' : 'CHAINLINK';
 
   return (
@@ -675,6 +679,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
           <img className="tb-mark" src="/brand/poly15-mark.svg?v=20261021" alt="" draggable={false} />
           <div className="tb-brand__text">
             <strong>POLY<span>//</span>15</strong>
+            <small>BTC 15M QUANT TERMINAL</small>
           </div>
           <button
             className={cx('tb-mode', status.dryRun ? 'is-dry' : 'is-live')}
@@ -685,21 +690,57 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
         </div>
 
         <div className="tb-market">
-          <div className={cx('tb-price', 'tb-price--' + priceTone)} title={`Oracle ${oracleSourceLabel} — the Chainlink feed compared with PTB`}>
-            <span className="tb-kicker">ORACLE</span>
-            <strong>{fmtNum(status.oraclePrice ?? status.binancePrice ?? status.btcPrice)}</strong>
+          <div className={cx('tb-price', 'tb-price--' + priceTone)} title={`Oracle ${oracleSourceLabel} — Chainlink BTC/USD compared with PTB`}>
+            <span className="tb-kicker">ORACLE · {oracleSourceLabel}</span>
+            <strong>${fmtNum(tonePrice)}</strong>
           </div>
-          <div className="tb-metric"><span>PTB</span><b>{fmtNum(status.priceToBeat)}</b></div>
-          <div className="tb-metric"><span>LEFT</span><b className={status.timeLeftMin != null && status.timeLeftMin < 2 ? 'is-warn' : ''}>{fmtClock(status.timeLeftMin)}</b></div>
+          <div className="tb-divider" />
+          <div className="tb-metric">
+            <span>PTB</span>
+            <b>${fmtNum(status.priceToBeat)}</b>
+          </div>
+          {deltaPtb != null && (
+            <div className={cx('tb-delta', deltaPtb >= 0 ? 'is-up' : 'is-down')} title="Oracle spread vs Window Price-To-Beat">
+              {deltaPtb >= 0 ? '+$' : '-$'}{Math.abs(deltaPtb).toFixed(2)}
+            </div>
+          )}
+          <div className="tb-divider" />
+          <div className="tb-metric">
+            <span>WINDOW</span>
+            <b className={status.timeLeftMin != null && status.timeLeftMin < 2 ? 'is-warn' : ''}>{fmtClock(status.timeLeftMin)}</b>
+          </div>
           <div className="tb-odds">
             <span className="is-up">UP {pct(status.marketUp)}</span>
             <span className="is-down">DOWN {pct(status.marketDown)}</span>
           </div>
+          <div className="tb-book" title="Book equity, daily net P&L, and session W-L record">
+            <div className="tb-metric">
+              <span>BOOK</span>
+              <b>{fmtMoney(status.equity ?? status.bankroll)}</b>
+            </div>
+            <div className="tb-metric">
+              <span>DAY P&amp;L</span>
+              <b className={dailyPnlTone}>
+                {status.dailyPnl == null ? '—' : `${status.dailyPnl >= 0 ? '+$' : '-$'}${Math.abs(status.dailyPnl).toFixed(2)}`}
+              </b>
+            </div>
+            <div className="tb-metric">
+              <span>W-L</span>
+              <b>{status.wins ?? 0}-{status.losses ?? 0}</b>
+            </div>
+          </div>
         </div>
 
         <div className="tb-actions">
+          <div className="tb-pills" title={feedTitle} aria-label={feedTitle}>
+            {feedChecks.map(f => (
+              <span key={f.short} className={cx('tb-pill', f.ok ? (f.warn ? 'is-warn' : 'is-on') : 'is-warn')}>
+                <i />{f.short}
+              </span>
+            ))}
+          </div>
           <div className={cx('tb-health', allFeedsOk ? 'is-ok' : 'is-warn')} title={feedTitle} aria-label={feedTitle}>
-            <i />{allFeedsOk ? 'OK' : 'CHECK'}
+            <i />{allFeedsOk ? 'SYNC' : 'CHECK'}
           </div>
           {onLogout && <button className="tb-logout" onClick={onLogout} title="Sign out">⏻</button>}
           <button
@@ -715,11 +756,30 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
 
       <div className="dash-subbar">
         <div className="preset-group" aria-label="Workspace presets">
+          <span className="subbar-label">VIEWS</span>
           {PRESETS.map(preset => (
             <button key={preset.id} className="preset-btn" onClick={() => applyPreset(preset)}>{preset.label}</button>
           ))}
         </div>
         <div className="subbar-actions">
+          <div className="accent-group" aria-label="Accent theme">
+            {ACCENTS.map(a => (
+              <button
+                key={a.id}
+                className={cx('accent-swatch', 'accent-swatch--' + a.id, accent === a.id ? 'is-active' : false)}
+                title={`Accent: ${a.label}`}
+                aria-label={`Accent ${a.label}`}
+                onClick={() => setAccent(a.id)}
+              />
+            ))}
+          </div>
+          <button
+            className={cx('subbar-btn', density === 'compact' ? 'is-active' : false)}
+            onClick={() => setDensity(d => d === 'compact' ? 'comfortable' : 'compact')}
+            title="Toggle dense vs comfortable card spacing"
+          >
+            {density === 'compact' ? 'Compact' : 'Comfort'}
+          </button>
           <button className={cx('subbar-btn', editMode ? 'is-active' : false)} onClick={() => setEditMode(v => !v)}>
             <span className="subbar-btn__icon">⠿</span>{editMode ? 'Editing' : 'Edit layout'}
           </button>
@@ -806,6 +866,7 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
                     {editMode && <span className="dash-widget__grip">⠿</span>}
                     <span className="dash-widget__icon">{widget.icon}</span>
                     <div className="dash-widget__titles"><h3>{widget.title}</h3></div>
+                    <span className="dash-widget__cat">{widget.category}</span>
                     {editMode && (
                       <button className="dash-widget__hide" onPointerDown={e => e.stopPropagation()} onClick={() => toggleWidget(widget.id)} title="Hide widget">×</button>
                     )}

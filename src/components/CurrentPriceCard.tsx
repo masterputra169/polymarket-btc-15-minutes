@@ -29,9 +29,9 @@ function CurrentPriceCard({
     prevRef.current = chainlinkPrice;
   }, [chainlinkPrice]);
 
-  const oracleLabel = chainlinkSource === 'polymarket_ws' ? 'PolyWS'
-    : chainlinkSource === 'chainlink_wss' ? 'Chainlink WSS'
-      : chainlinkSource === 'RPC' ? 'RPC' : 'Chainlink';
+  const oracleLabel = chainlinkSource === 'polymarket_ws' ? 'POLYBOLT'
+    : chainlinkSource === 'chainlink_wss' ? 'CL WSS'
+      : chainlinkSource === 'RPC' ? 'RPC' : 'CHAINLINK';
   const displayPrice = chainlinkPrice ?? binancePrice;
   const prevDisplay = chainlinkPrevPrice ?? binancePrevPrice;
 
@@ -47,24 +47,25 @@ function CurrentPriceCard({
     }
   }
 
-  // Diff between Binance and Chainlink
   let diffText = '';
+  let diffColor = 'var(--text-muted)';
   if (binancePrice && chainlinkPrice && chainlinkPrice !== 0) {
     const diffUsd = binancePrice - chainlinkPrice;
     const diffPct = (diffUsd / chainlinkPrice) * 100;
     const sign = diffUsd > 0 ? '+' : diffUsd < 0 ? '-' : '';
     diffText = `${sign}$${Math.abs(diffUsd).toFixed(2)} (${sign}${Math.abs(diffPct).toFixed(2)}%)`;
+    diffColor = Math.abs(diffUsd) > 60 ? 'var(--yellow-bright)' : 'var(--text-muted)';
   }
 
-  // ═══ Price to Beat vs Current Price comparison ═══
+  let ptbDiff = 0;
   let ptbDiffText = '';
   let ptbColor = '';
   if (priceToBeat !== null && displayPrice !== null) {
-    const diff = displayPrice - priceToBeat;
-    const diffPct = (diff / priceToBeat) * 100;
-    const sign = diff > 0 ? '+' : diff < 0 ? '-' : '';
-    ptbDiffText = `${sign}$${Math.abs(diff).toFixed(2)} (${sign}${Math.abs(diffPct).toFixed(3)}%)`;
-    ptbColor = diff > 0 ? 'c-green' : diff < 0 ? 'c-red' : '';
+    ptbDiff = displayPrice - priceToBeat;
+    const diffPct = priceToBeat !== 0 ? (ptbDiff / priceToBeat) * 100 : 0;
+    const sign = ptbDiff > 0 ? '+' : ptbDiff < 0 ? '-' : '';
+    ptbDiffText = `${sign}$${Math.abs(ptbDiff).toFixed(2)} (${sign}${Math.abs(diffPct).toFixed(3)}%)`;
+    ptbColor = ptbDiff > 0 ? 'c-green' : ptbDiff < 0 ? 'c-red' : '';
   }
 
   const timeColor =
@@ -76,141 +77,122 @@ function CurrentPriceCard({
           : 'timer--danger'
       : '';
 
+  const phaseTag = timeLeftMin == null ? null
+    : timeLeftMin >= 10 ? { text: 'EARLY', cls: 'qt-badge--cyan' }
+      : timeLeftMin >= 5 ? { text: 'MID', cls: 'qt-badge--amber' }
+        : { text: 'LATE', cls: 'qt-badge--red' };
+
+  const elapsedPct = timeLeftMin == null
+    ? 0
+    : Math.max(0, Math.min(100, ((15 - timeLeftMin) / 15) * 100));
+
+  const ptbBannerCls = priceToBeat != null && displayPrice != null
+    ? displayPrice > priceToBeat ? 'qt-banner--up'
+      : displayPrice < priceToBeat ? 'qt-banner--down' : ''
+    : '';
+
   return (
-    <div className="card span-2" style={{ animationDelay: '0.05s' }}>
+    <div className="card span-2" style={{ animationDelay: '0.05s', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <div
-        className="price-card-grid"
+        className="qt-panel-section qt-panel-section--accent price-card-grid"
         style={{
           display: 'grid',
           gridTemplateColumns: '1fr auto 1fr',
           alignItems: 'center',
-          gap: 20,
+          gap: 18,
+          padding: '12px 14px',
         }}
       >
-        {/* Chainlink / Current price */}
-        <div ref={priceRef}>
+        {/* Oracle Price */}
+        <div ref={priceRef} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div
             title={`Chainlink via ${oracleLabel}`}
-            style={{
-              fontSize: '0.68rem',
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              marginBottom: 4,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
+            className="qt-kicker"
+            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <span
               className={`status-dot ${chainlinkConnected ? '' : 'status-dot--warning'}`}
-              style={{ width: 5, height: 5 }}
+              style={{ width: 6, height: 6 }}
             />
-            ORACLE
+            ORACLE · {oracleLabel}
           </div>
-          <div className={`price-big ${priceColor}`}>
+          <div className={`price-big ${priceColor}`} style={{ lineHeight: 1.05 }}>
             {displayPrice !== null ? `$${formatNumber(displayPrice, 2)}` : '-'}
             {arrow && <span className="price-arrow">{arrow}</span>}
           </div>
+          {priceToBeat !== null && displayPrice !== null && (
+            <div style={{ marginTop: 2 }}>
+              <span className={`qt-badge ${ptbDiff > 0 ? 'qt-badge--green' : ptbDiff < 0 ? 'qt-badge--red' : 'qt-badge--amber'}`}>
+                {ptbDiff > 0 ? '↑ ABOVE PTB' : ptbDiff < 0 ? '↓ BELOW PTB' : '= AT PTB'}
+              </span>
+            </div>
+          )}
         </div>
 
-        {/* Timer */}
-        <div style={{ textAlign: 'center' }}>
-          <div
-            style={{
-              fontSize: '0.65rem',
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              marginBottom: 4,
-            }}
-          >
-            ⏱ Time Left
+        {/* Window Clock + Progress */}
+        <div style={{ textAlign: 'center', minWidth: 132, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span className="qt-kicker">15M WINDOW</span>
+            {phaseTag && <span className={`qt-badge ${phaseTag.cls}`}>{phaseTag.text}</span>}
           </div>
-          <div className={`timer ${timeColor}`}>
+          <div className={`timer ${timeColor}`} style={{ lineHeight: 1 }}>
             {timeLeftMin !== null ? fmtTimeLeft(timeLeftMin) : '--:--'}
           </div>
-        </div>
-
-        {/* Binance */}
-        <div style={{ textAlign: 'right' }}>
-          <div
-            style={{
-              fontSize: '0.68rem',
-              color: 'var(--text-muted)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-              marginBottom: 4,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-              gap: 6,
-            }}
-          >
-            BINANCE
-            <span
-              className={`status-dot ${binanceConnected ? '' : 'status-dot--error'}`}
-              style={{ width: 5, height: 5 }}
+          <div className="qt-progress" title={`Window elapsed: ${elapsedPct.toFixed(0)}%`}>
+            <div
+              className="qt-progress__bar"
+              style={{
+                width: `${elapsedPct}%`,
+                background: timeLeftMin != null && timeLeftMin < 5
+                  ? 'linear-gradient(90deg, var(--yellow-bright), var(--red-bright))'
+                  : 'linear-gradient(90deg, var(--accent-cyan), var(--green-bright))',
+              }}
             />
           </div>
-          <div className="price-mid" style={{ color: 'var(--text-primary)' }}>
+        </div>
+
+        {/* Binance Spot + Basis */}
+        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+          <div className="qt-kicker" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            BINANCE SPOT
+            <span
+              className={`status-dot ${binanceConnected ? '' : 'status-dot--error'}`}
+              style={{ width: 6, height: 6 }}
+            />
+          </div>
+          <div className="price-mid" style={{ color: 'var(--text-primary)', lineHeight: 1.05 }}>
             {binancePrice !== null ? `$${formatNumber(binancePrice, 2)}` : '-'}
           </div>
-          {diffText && (
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 2 }}>
+          {diffText ? (
+            <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.66rem', color: diffColor }}>
               BASIS {diffText}
             </div>
+          ) : (
+            <div style={{ fontSize: '0.64rem', color: 'var(--text-dim)' }}>BASIS —</div>
           )}
         </div>
       </div>
 
-      {/* ═══ Price to Beat Row ═══ */}
+      {/* Price to Beat TWAP Lock Strip */}
       {priceToBeat !== null && (
-        <div
-          style={{
-            marginTop: 14,
-            paddingTop: 12,
-            borderTop: '1px solid var(--border-dim)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 10,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span
-              style={{
-                fontSize: '0.68rem',
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.08em',
-              }}
-            >
-              PTB
-            </span>
+        <div className={`qt-banner ${ptbBannerCls}`} style={{ flexWrap: 'wrap', padding: '9px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="qt-kicker">PRICE TO BEAT</span>
             {ptbExact !== null && (
               <span
+                className={`qt-badge ${ptbExact ? 'qt-badge--green' : 'qt-badge--amber'}`}
                 title={ptbExact
-                  ? `Chainlink 60 s TWAP at the window open (${ptbSource}) — the value Polymarket settles on`
-                  : `Approximation (${ptbSource ?? 'none'}) — entries wait for the exact TWAP value`}
-                style={{
-                  fontSize: '0.6rem',
-                  fontWeight: 700,
-                  padding: '1px 6px',
-                  borderRadius: 3,
-                  background: ptbExact ? 'rgba(0,230,118,0.12)' : 'rgba(255,171,0,0.12)',
-                  color: ptbExact ? 'var(--green-bright)' : 'var(--yellow-bright)',
-                }}
+                  ? `Chainlink 60s TWAP at window open (${ptbSource}) — Polymarket settlement reference`
+                  : `Approximation (${ptbSource ?? 'none'}) — entries wait for exact TWAP value`}
               >
-                {ptbExact ? '✓ TWAP exact' : '≈ perkiraan'}
+                {ptbExact ? '✓ TWAP EXACT' : '≈ APPROX'}
               </span>
             )}
             <span
               style={{
-                fontFamily: 'var(--font-display)',
+                fontFamily: 'var(--font-mono)',
                 fontWeight: 700,
-                fontSize: '1.15rem',
+                fontSize: '1.08rem',
                 color: 'var(--accent-cyan)',
               }}
             >
@@ -218,70 +200,18 @@ function CurrentPriceCard({
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {/* Distance from current price */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {ptbDiffText && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span
-                  style={{
-                    fontSize: '0.65rem',
-                    color: 'var(--text-dim)',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.06em',
-                  }}
-                >
-                  Δ
-                </span>
-                <span
-                  className={ptbColor}
-                  style={{ fontWeight: 600, fontSize: '0.82rem' }}
-                >
+                <span className="qt-kicker">Δ ORACLE</span>
+                <span className={ptbColor} style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.84rem' }}>
                   {ptbDiffText}
                 </span>
               </div>
             )}
-
-            {/* Direction indicator — prominent gradient badge */}
             {displayPrice !== null && (
-              <span
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  padding: '4px 14px',
-                  borderRadius: '6px',
-                  letterSpacing: '0.04em',
-                  background:
-                    displayPrice > priceToBeat
-                      ? 'linear-gradient(135deg, rgba(0,230,118,0.15), rgba(0,230,118,0.06))'
-                      : displayPrice < priceToBeat
-                        ? 'linear-gradient(135deg, rgba(255,82,82,0.15), rgba(255,82,82,0.06))'
-                        : 'rgba(255,171,0,0.06)',
-                  color:
-                    displayPrice > priceToBeat
-                      ? 'var(--green-bright)'
-                      : displayPrice < priceToBeat
-                        ? 'var(--red-bright)'
-                        : 'var(--yellow-bright)',
-                  border: `1px solid ${
-                    displayPrice > priceToBeat
-                      ? 'rgba(0,230,118,0.3)'
-                      : displayPrice < priceToBeat
-                        ? 'rgba(255,82,82,0.3)'
-                        : 'rgba(255,171,0,0.2)'
-                  }`,
-                  boxShadow:
-                    displayPrice > priceToBeat
-                      ? '0 0 10px rgba(0,230,118,0.1)'
-                      : displayPrice < priceToBeat
-                        ? '0 0 10px rgba(255,82,82,0.1)'
-                        : 'none',
-                }}
-              >
-                {displayPrice > priceToBeat
-                  ? '\u2191 ABOVE'
-                  : displayPrice < priceToBeat
-                    ? '\u2193 BELOW'
-                    : '= EXACT'}
+              <span className={`qt-badge ${ptbDiff > 0 ? 'qt-badge--green' : ptbDiff < 0 ? 'qt-badge--red' : 'qt-badge--amber'}`}>
+                {ptbDiff > 0 ? 'UP LEADS' : ptbDiff < 0 ? 'DOWN LEADS' : 'AT STRIKE'}
               </span>
             )}
           </div>

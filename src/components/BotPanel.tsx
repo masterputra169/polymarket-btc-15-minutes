@@ -15,31 +15,16 @@ const fmtUsd = (n, d = 2) => n != null && Number.isFinite(n) ? `$${n.toFixed(d)}
 const CONF_COLORS = {
   VERY_HIGH: 'var(--green-bright)',
   HIGH: 'var(--green-bright)',
-  MEDIUM: '#ffc107',
+  MEDIUM: 'var(--yellow-bright)',
   LOW: 'var(--red-bright)',
   NONE: 'var(--text-dim)',
-};
-
-const ACTION_STYLES = {
-  ENTER: { bg: 'linear-gradient(135deg, rgba(0,230,118,0.15), rgba(0,230,118,0.06))', color: 'var(--green-bright)', border: 'rgba(0,230,118,0.3)', shadow: '0 0 12px rgba(0,230,118,0.15)' },
-  WAIT: { bg: 'var(--bg-elevated)', color: 'var(--text-dim)', border: 'var(--border-dim)', shadow: 'none' },
 };
 
 const REGIME_COLORS = {
   trending: 'var(--green-bright)',
   choppy: 'var(--red-bright)',
-  mean_reverting: '#ffc107',
+  mean_reverting: 'var(--yellow-bright)',
   moderate: 'var(--text-muted)',
-};
-
-// Column header style
-const colHeaderStyle = {
-  fontSize: '0.6rem',
-  color: 'var(--text-dim)',
-  textTransform: 'uppercase',
-  letterSpacing: '0.08em',
-  marginBottom: 8,
-  fontWeight: 600,
 };
 
 function BotPanel({ connected, data }) {
@@ -50,27 +35,20 @@ function BotPanel({ connected, data }) {
   // Offline state
   if (!connected || !data) {
     return (
-      <div className="card span-2" style={{ opacity: 0.5 }}>
+      <div className="card span-2" style={{ opacity: 0.55 }}>
         <div className="card__header">
           <span className="card__title">BOT STATUS</span>
-          <span className="card__badge" style={{
-            background: 'var(--bg-elevated)',
-            color: 'var(--text-dim)',
-            border: '1px solid var(--border-dim)',
-          }}>
-            OFFLINE
-          </span>
+          <span className="qt-badge qt-badge--muted">OFFLINE</span>
         </div>
         <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-          Bot not running. Start with: cd bot && node index.ts
+          Bot not running. Start with: cd bot &amp;&amp; node index.ts
         </div>
       </div>
     );
   }
 
-  const { rec, ml, betSizing, stats, indicators, regime, regimeConfidence } = data;
+  const { rec, ml, betSizing, stats, indicators, regime } = data;
   const action = rec?.action ?? 'WAIT';
-  const actionStyle = ACTION_STYLES[action] || ACTION_STYLES.WAIT;
   const confidence = rec?.confidence ?? 'NONE';
   const confColor = CONF_COLORS[confidence] || 'var(--text-dim)';
   const regimeColor = REGIME_COLORS[regime] || 'var(--text-muted)';
@@ -175,43 +153,27 @@ function BotPanel({ connected, data }) {
       </div>
 
       {/* 3-column grid */}
-      <div className="bot-panel-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 10 }}>
+      <div className="bot-panel-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 10 }}>
 
         {/* Column 1: Decision */}
-        <div style={{
-          padding: '8px 10px',
-          background: 'var(--bg-elevated)',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-dim)',
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          {/* Gradient top accent */}
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-            background: isEnter
-              ? 'linear-gradient(90deg, transparent, var(--green-bright), transparent)'
-              : 'linear-gradient(90deg, transparent, var(--border-accent), transparent)',
-            opacity: isEnter ? 0.8 : 0.3,
-          }} />
-          <div style={colHeaderStyle}>Decision</div>
+        <div className="qt-panel-section qt-panel-section--accent">
+          <div className="qt-kicker" style={{ marginBottom: 8 }}>Decision</div>
 
           {/* Action badge */}
-          <div style={{ marginBottom: 6 }}>
-            <span style={{
-              display: 'inline-block',
-              padding: '3px 12px',
-              borderRadius: 6,
-              fontSize: '0.74rem',
-              fontWeight: 700,
-              background: actionStyle.bg,
-              color: actionStyle.color,
-              border: `1px solid ${actionStyle.border}`,
-              boxShadow: actionStyle.shadow,
-              ...(isEnter ? { animation: 'glowPulse 2s ease-in-out infinite' } : {}),
-            }}>
+          <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span
+              className={`qt-badge ${isEnter ? (rec?.side === 'DOWN' ? 'qt-badge--red' : 'qt-badge--green') : 'qt-badge--muted'}`}
+              style={{
+                padding: '4px 10px',
+                fontSize: '0.72rem',
+                ...(isEnter ? { animation: 'glowPulse 2s ease-in-out infinite' } : {}),
+              }}
+            >
               {action === 'ENTER' ? `ENTER ${rec?.side ?? ''}` : 'WAIT'}
             </span>
+            {rec?.phase && (
+              <span className="qt-badge qt-badge--cyan">{rec.phase}</span>
+            )}
           </div>
 
           <div className="data-row">
@@ -244,23 +206,52 @@ function BotPanel({ connected, data }) {
               </span>
             </div>
           )}
+
+          {data.signalStability && (() => {
+            const stab = data.signalStability;
+            const need = Math.max(1, stab.confirmNeeded ?? 1);
+            const cnt = Math.max(0, Math.min(need, stab.confirmCount ?? 0));
+            const stabPct = (cnt / need) * 100;
+            return (
+              <div style={{ marginTop: 8, paddingTop: 7, borderTop: '1px solid var(--border-dim)' }}>
+                <div className="data-row" style={{ marginBottom: 3 }}>
+                  <span className="data-row__label">Stability</span>
+                  <span
+                    className="data-row__value"
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      color: stab.stable
+                        ? 'var(--green-bright)'
+                        : stab.recentFlips > 3
+                          ? 'var(--red-bright)'
+                          : 'var(--yellow-bright)',
+                    }}
+                  >
+                    {cnt}/{need} {stab.stable ? '✓' : ''}
+                  </span>
+                </div>
+                <div className="qt-progress">
+                  <div
+                    className="qt-progress__bar"
+                    style={{
+                      width: `${stabPct.toFixed(0)}%`,
+                      background: stab.stable
+                        ? 'var(--green-bright)'
+                        : stab.recentFlips > 3
+                          ? 'var(--red-bright)'
+                          : 'var(--yellow-bright)',
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Column 2: Analysis */}
-        <div style={{
-          padding: '8px 10px',
-          background: 'var(--bg-elevated)',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-dim)',
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-            background: 'linear-gradient(90deg, transparent, var(--accent-cyan), transparent)',
-            opacity: 0.3,
-          }} />
-          <div style={colHeaderStyle}>Analysis</div>
+        <div className="qt-panel-section">
+          <div className="qt-kicker" style={{ marginBottom: 8 }}>Analysis</div>
 
           <div className="data-row">
             <span className="data-row__label">Prob</span>
@@ -326,7 +317,7 @@ function BotPanel({ connected, data }) {
               <span className="data-row__label" style={{ color: 'var(--text-dim)' }}>Insider</span>
               <span className="data-row__value" style={{
                 color: meLast.insiderScore >= 90 ? 'var(--green-bright)'
-                  : meLast.insiderScore >= 70 ? '#ffc107'
+                  : meLast.insiderScore >= 70 ? 'var(--yellow-bright)'
                   : 'var(--text-muted)',
                 fontWeight: meLast.insiderScore >= 70 ? 600 : 400,
               }}>
@@ -338,20 +329,8 @@ function BotPanel({ connected, data }) {
         </div>
 
         {/* Column 3: Position */}
-        <div style={{
-          padding: '8px 10px',
-          background: 'var(--bg-elevated)',
-          borderRadius: 'var(--radius-sm)',
-          border: '1px solid var(--border-dim)',
-          position: 'relative',
-          overflow: 'hidden',
-        }}>
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-            background: 'linear-gradient(90deg, transparent, var(--accent-purple), transparent)',
-            opacity: 0.3,
-          }} />
-          <div style={colHeaderStyle}>Position</div>
+        <div className="qt-panel-section">
+          <div className="qt-kicker" style={{ marginBottom: 8 }}>Position &amp; Book</div>
 
           {data.usdcBalance && (
             <div className="data-row">

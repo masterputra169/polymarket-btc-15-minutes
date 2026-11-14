@@ -98,140 +98,63 @@ function MLPanel({ data }) {
 
       {mlReady && (
         <>
-          {/* ═══ ML Prediction ═══ */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 10,
-              marginBottom: 12,
-            }}
-          >
-            {/* ML Prob */}
-            <div
-              style={{
-                background: 'var(--bg-elevated)',
-                border: '1px solid var(--border-dim)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '10px 12px',
-                textAlign: 'center',
-              }}
-            >
-              <div
-                style={{
-                  fontSize: '0.62rem',
-                  color: 'var(--text-dim)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em',
-                  marginBottom: 5,
-                }}
-              >
-                ML P(UP)
-              </div>
-              <div
-                className={mlSide === 'UP' ? 'c-green' : mlSide === 'DOWN' ? 'c-red' : ''}
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontWeight: 700,
-                  fontSize: '1.25rem',
-                }}
+          {/* ML Prediction vs Ensemble Stat Boxes */}
+          <div className="qt-stat-grid" style={{ marginBottom: 12 }}>
+            <div className="qt-stat-box" style={{ textAlign: 'center', alignItems: 'center' }}>
+              <span className="qt-stat-box__label">ML P(UP)</span>
+              <span
+                className={`qt-stat-box__val ${mlSide === 'UP' ? 'c-green' : mlSide === 'DOWN' ? 'c-red' : ''}`}
+                style={{ fontSize: '1.15rem', marginTop: 2 }}
               >
                 {formatProbPct(mlProbUp, 1)}
-              </div>
-              <div
-                style={{
-                  fontSize: '0.65rem',
-                  marginTop: 3,
-                  fontWeight: 600,
-                }}
-                className={mlSide === 'UP' ? 'c-green' : mlSide === 'DOWN' ? 'c-red' : 'c-muted'}
-              >
-                {mlSide === 'UP' ? '↑ LONG' : mlSide === 'DOWN' ? '↓ SHORT' : '-'}
-              </div>
+              </span>
+              <span className={`qt-badge ${mlSide === 'UP' ? 'qt-badge--green' : mlSide === 'DOWN' ? 'qt-badge--red' : 'qt-badge--muted'}`} style={{ marginTop: 3 }}>
+                {mlSide === 'UP' ? '↑ LONG' : mlSide === 'DOWN' ? '↓ SHORT' : 'NEUTRAL'}
+              </span>
             </div>
 
-            {/* Ensemble */}
             <div
+              className="qt-stat-box"
               style={{
-                background: 'var(--bg-elevated)',
-                border: `1px solid ${
-                  ensembleSide === 'UP'
-                    ? 'rgba(0,230,118,0.2)'
-                    : ensembleSide === 'DOWN'
-                      ? 'rgba(255,82,82,0.2)'
-                      : 'var(--border-dim)'
-                }`,
-                borderRadius: 'var(--radius-sm)',
-                padding: '10px 12px',
                 textAlign: 'center',
+                alignItems: 'center',
+                borderColor: ensembleSide === 'UP'
+                  ? 'rgba(52, 211, 153, 0.28)'
+                  : ensembleSide === 'DOWN'
+                    ? 'rgba(251, 113, 133, 0.28)'
+                    : undefined,
               }}
             >
-              <div
-                style={{
-                  fontSize: '0.62rem',
-                  color: 'var(--text-dim)',
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.06em',
-                  marginBottom: 5,
-                }}
-              >
-                Ensemble
-              </div>
-              <div
-                className={ensembleSide === 'UP' ? 'c-green' : ensembleSide === 'DOWN' ? 'c-red' : ''}
-                style={{
-                  fontFamily: 'var(--font-display)',
-                  fontWeight: 700,
-                  fontSize: '1.25rem',
-                }}
+              <span className="qt-stat-box__label">Ensemble Blend</span>
+              <span
+                className={`qt-stat-box__val ${ensembleSide === 'UP' ? 'c-green' : ensembleSide === 'DOWN' ? 'c-red' : ''}`}
+                style={{ fontSize: '1.15rem', marginTop: 2 }}
               >
                 {formatProbPct(ensembleProbUp, 1)}
-              </div>
-              <div
-                style={{
-                  fontSize: '0.65rem',
-                  marginTop: 3,
-                  fontWeight: 600,
-                }}
-                className={ensembleSide === 'UP' ? 'c-green' : ensembleSide === 'DOWN' ? 'c-red' : 'c-muted'}
-              >
-                {ensembleSide === 'UP' ? '↑ LONG' : ensembleSide === 'DOWN' ? '↓ SHORT' : '-'}
-              </div>
+              </span>
+              <span className={`qt-badge ${ensembleSide === 'UP' ? 'qt-badge--green' : ensembleSide === 'DOWN' ? 'qt-badge--red' : 'qt-badge--muted'}`} style={{ marginTop: 3 }}>
+                {ensembleSide === 'UP' ? '↑ LONG' : ensembleSide === 'DOWN' ? '↓ SHORT' : 'NEUTRAL'}
+              </span>
             </div>
           </div>
 
-          {/* ═══ Rule vs ML Comparison Bar ═══ */}
-          <div style={{ marginBottom: 12 }}>
-            <div
-              style={{
-                fontSize: '0.62rem',
-                color: 'var(--text-dim)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.06em',
-                marginBottom: 6,
-              }}
-            >
-              Rule vs ML Comparison
+          {/* Rule vs ML Comparison Section */}
+          <div className="qt-panel-section qt-panel-section--accent" style={{ marginBottom: 10 }}>
+            <div className="qt-kicker" style={{ marginBottom: 7 }}>
+              Rule vs ML Distribution
             </div>
 
             {/* Rule bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span
-                style={{
-                  fontSize: '0.68rem',
-                  color: 'var(--text-muted)',
-                  width: 36,
-                  flexShrink: 0,
-                }}
-              >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+              <span style={{ fontSize: '0.66rem', color: 'var(--text-muted)', width: 34, flexShrink: 0, fontWeight: 600 }}>
                 Rule
               </span>
               <div
                 style={{
                   flex: 1,
-                  height: 16,
-                  background: 'var(--bg-elevated)',
-                  borderRadius: 3,
+                  height: 15,
+                  background: 'rgba(4, 8, 16, 0.72)',
+                  borderRadius: 4,
                   overflow: 'hidden',
                   position: 'relative',
                   border: '1px solid var(--border-dim)',
@@ -245,9 +168,9 @@ function MLPanel({ data }) {
                     bottom: 0,
                     width: `${Math.round((ruleProbUp ?? 0.5) * 100)}%`,
                     background: (ruleProbUp ?? 0.5) >= 0.5
-                      ? 'linear-gradient(90deg, var(--green-dim), var(--green-mid))'
-                      : 'linear-gradient(90deg, var(--red-mid), var(--red-dim))',
-                    transition: 'width 0.6s ease',
+                      ? 'linear-gradient(90deg, rgba(16,185,129,0.45), rgba(52,211,153,0.75))'
+                      : 'linear-gradient(90deg, rgba(244,63,94,0.45), rgba(251,113,133,0.75))',
+                    transition: 'width 0.5s ease',
                   }}
                 />
                 <span
@@ -257,8 +180,9 @@ function MLPanel({ data }) {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    fontFamily: 'var(--font-mono)',
                     fontSize: '0.62rem',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     color: '#fff',
                     zIndex: 1,
                   }}
@@ -270,23 +194,15 @@ function MLPanel({ data }) {
 
             {/* ML bar */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span
-                style={{
-                  fontSize: '0.68rem',
-                  color: 'var(--accent-cyan)',
-                  width: 36,
-                  flexShrink: 0,
-                  fontWeight: 500,
-                }}
-              >
+              <span style={{ fontSize: '0.66rem', color: 'var(--accent-cyan)', width: 34, flexShrink: 0, fontWeight: 700 }}>
                 ML
               </span>
               <div
                 style={{
                   flex: 1,
-                  height: 16,
-                  background: 'var(--bg-elevated)',
-                  borderRadius: 3,
+                  height: 15,
+                  background: 'rgba(4, 8, 16, 0.72)',
+                  borderRadius: 4,
                   overflow: 'hidden',
                   position: 'relative',
                   border: '1px solid var(--border-dim)',
@@ -300,9 +216,9 @@ function MLPanel({ data }) {
                     bottom: 0,
                     width: `${Math.round((mlProbUp ?? 0.5) * 100)}%`,
                     background: (mlProbUp ?? 0.5) >= 0.5
-                      ? 'linear-gradient(90deg, rgba(0,229,255,0.3), rgba(0,229,255,0.7))'
-                      : 'linear-gradient(90deg, rgba(179,136,255,0.7), rgba(179,136,255,0.3))',
-                    transition: 'width 0.6s ease',
+                      ? 'linear-gradient(90deg, rgba(6,182,212,0.4), rgba(34,211,238,0.8))'
+                      : 'linear-gradient(90deg, rgba(139,92,246,0.4), rgba(167,139,250,0.8))',
+                    transition: 'width 0.5s ease',
                   }}
                 />
                 <span
@@ -312,8 +228,9 @@ function MLPanel({ data }) {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
+                    fontFamily: 'var(--font-mono)',
                     fontSize: '0.62rem',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     color: '#fff',
                     zIndex: 1,
                   }}
@@ -324,54 +241,57 @@ function MLPanel({ data }) {
             </div>
           </div>
 
-          {/* ═══ Data Rows ═══ */}
-          <div className="data-row">
-            <span className="data-row__label">ML Confidence</span>
-            <span className={`data-row__value ${mlConfTier.color}`} style={{ fontWeight: 600 }}>
-              {mlConfidence != null ? `${(mlConfidence * 100).toFixed(1)}%` : '-'}
-              {' '}
-              <span style={{ fontSize: '0.68rem' }}>({mlConfTier.label})</span>
-            </span>
-          </div>
+          {/* Model Telemetry Rows */}
+          <div className="qt-panel-section">
+            <div className="data-row">
+              <span className="data-row__label">ML Confidence</span>
+              <span className={`data-row__value ${mlConfTier.color}`} style={{ fontWeight: 600 }}>
+                {mlConfidence != null ? `${(mlConfidence * 100).toFixed(1)}%` : '-'}{' '}
+                <span className={`qt-badge ${mlConfTier.label === 'HIGH' ? 'qt-badge--green' : mlConfTier.label === 'MEDIUM' ? 'qt-badge--amber' : 'qt-badge--muted'}`}>
+                  {mlConfTier.label}
+                </span>
+              </span>
+            </div>
 
-          <div className="data-row">
-            <span className="data-row__label">Agreement</span>
-            <span
-              className={`data-row__value ${
-                ruleAgreesWithMl === true
-                  ? 'c-green'
+            <div className="data-row">
+              <span className="data-row__label">Agreement</span>
+              <span
+                className={`data-row__value ${
+                  ruleAgreesWithMl === true
+                    ? 'c-green'
+                    : ruleAgreesWithMl === false
+                      ? 'c-red'
+                      : 'c-muted'
+                }`}
+                style={{ fontWeight: 600 }}
+              >
+                {ruleAgreesWithMl === true
+                  ? '✓ Rule + ML Agree'
                   : ruleAgreesWithMl === false
-                    ? 'c-red'
-                    : 'c-muted'
-              }`}
-              style={{ fontWeight: 600 }}
-            >
-              {ruleAgreesWithMl === true
-                ? '✓ Rule + ML Agree'
-                : ruleAgreesWithMl === false
-                  ? '✗ Conflict'
-                  : '-'}
-            </span>
-          </div>
-
-          <div className="data-row">
-            <span className="data-row__label">Blend (α)</span>
-            <span className="data-row__value">
-              <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>
-                ML {alphaBarPct}%
+                    ? '✗ Conflict'
+                    : '-'}
               </span>
-              <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>|</span>
-              <span style={{ color: 'var(--text-secondary)' }}>
-                Rule {100 - alphaBarPct}%
-              </span>
-            </span>
-          </div>
+            </div>
 
-          <div className="data-row">
-            <span className="data-row__label">Strategy</span>
-            <span className="data-row__value" style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              {source ?? '-'}
-            </span>
+            <div className="data-row">
+              <span className="data-row__label">Blend Weight (α)</span>
+              <span className="data-row__value">
+                <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                  ML {alphaBarPct}%
+                </span>
+                <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>|</span>
+                <span style={{ color: 'var(--text-secondary)' }}>
+                  Rule {100 - alphaBarPct}%
+                </span>
+              </span>
+            </div>
+
+            <div className="data-row">
+              <span className="data-row__label">Strategy</span>
+              <span className="data-row__value" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                {source ?? '-'}
+              </span>
+            </div>
           </div>
         </>
       )}

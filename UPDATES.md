@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 00:22 WIB_
+_Last updated: 2026-11-15 00:39 WIB_
 
 | Area | State |
 |---|---|
@@ -27,7 +27,7 @@ _Last updated: 2026-11-15 00:22 WIB_
 | Microstructure gates | **Gate 20a & 20b active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` 60s anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.75` directional anti-retrace) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
-| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets |
+| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI overhaul |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
@@ -48,6 +48,27 @@ _Last updated: 2026-11-15 00:22 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 00:39 WIB — POLY//15 Quant Terminal v5 full UI overhaul
+
+**What changed:**
+1. **Design system & authentication chrome (`index.html`, `src/styles/global.css`, `src/styles/dashboard.css`, `src/styles/login.css`, `src/components/auth/LoginPage.tsx`):**
+   - Loaded `Space Grotesk`, `Inter`, and `JetBrains Mono` typography with obsidian/deep-navy surfaces (`#040810`, `#0a1322`, `#0e1b2e`) and `#040810` theme color.
+   - Added reusable `.qt-*` component primitives (`.qt-kicker`, `.qt-panel-section`, `.qt-stat-grid`, `.qt-stat-box*`, `.qt-badge*`, `.qt-banner*`, `.qt-progress*`, `.qt-tabs`, `.qt-tab`), tabular numerals across market prices/timers, and subtle engineering grid backdrop on `.dash-canvas`.
+   - Updated the login glass card styling (`login.css`) and stack subtitle/metadata (`BTC 15M · QUANT TERMINAL V5`, `POLYBTC15 EXECUTION ENGINE`, `CLOB V2 · POLYBOLT TWAP · XGB+LGB V2`).
+2. **Command topbar & workspace subbar (`src/components/dashboard/DashboardShell.tsx`):**
+   - Upgraded `.dash-topbar` to surface live `ORACLE · {POLYBOLT/CL WSS/RPC}`, `PTB` + signed `.tb-delta` spread badge, `WINDOW` timer, `UP`/`DOWN` odds, `.tb-book` (`BOOK` equity, `DAY P&L`, `W-L` record), individual `.tb-pills` telemetry indicators (`BIN`, `CL`, `CLOB`, `ML`, `BOT`), `SYNC`/`CHECK` badge, Logout, and Pause/Resume.
+   - Upgraded `.dash-subbar` with workspace preset buttons (`VIEWS`), inline `.accent-swatch` theme toggles (`cyan`, `mint`, `ember`, `violet`), quick `Compact`/`Comfort` density toggle, widget count badge, and category chips (`.dash-widget__cat`) on widget headers.
+3. **Quant telemetry exposure & panel redesign (`src/App.tsx`, `CurrentPriceCard.tsx`, `BotPanel.tsx`, `PredictPanel.tsx`, `EdgePanel.tsx`, `MlPanel.tsx`, `PolymarketPanel.tsx`, `JournalTimeSeriesPanel.tsx`):**
+   - Extended `App.tsx` memoized panel slices and panel `React.memo` comparators for `regimeInfo.{hurst, halfLife}`, `orderbookSignal.{upMicroprice, downMicroprice, imbalance, spreadHealth}`, and `journalAnalytics.margin.{lifetime, realistic}.{bayesianWinRatePct, zScore}`.
+   - Redesigned `CurrentPriceCard` with a 3-column hero deck (`ABOVE/BELOW PTB` badge, `EARLY/MID/LATE` phase tag + 15m elapsed `.qt-progress` bar, Binance spot/basis) and bottom `PRICE TO BEAT` `.qt-banner` strip (`✓ TWAP EXACT` / `≈ APPROX`).
+   - Upgraded `BotPanel` into `.qt-panel-section` blocks with an embedded Signal Stability progress bar (`confirmCount/confirmNeeded`), `PredictPanel` with Hurst `H` and OU Half-Life `t½`, `EdgePanel` with `.qt-stat-grid` and `.qt-badge` Quality Gates, `MlPanel` with ML vs Ensemble stat boxes and Rule/ML distribution bars, `PolymarketPanel` with `P_micro` (`μ`), Book Imbalance, and Spread Health badges, and `JournalTimeSeriesPanel` with `.qt-tabs`, `Bayesian WR`, `Binomial Z-Score`, and gradient-filled SVG equity sparkline.
+4. **Verification:**
+   - `npm run typecheck` (frontend, bot, bot-core, scripts): passed (exit 0).
+   - `npm test` (`vitest run`): 97 test files / 1005 tests passed.
+   - `npm run build` (`vite build`): 492 modules built cleanly to `dist/`.
 
 ---
 

@@ -114,93 +114,93 @@ function EdgePanel({ data }) {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
-            Ensemble
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <span className="c-green" style={{ fontWeight: 600 }}>
+      <div className="qt-stat-grid" style={{ marginBottom: 10 }}>
+        <div className="qt-stat-box">
+          <span className="qt-stat-box__label">Ensemble Model</span>
+          <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+            <span className="c-green" style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.84rem' }}>
               ↑ {formatProbPct(pLong, 1)}
             </span>
-            <span className="c-red" style={{ fontWeight: 600 }}>
+            <span className="c-red" style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.84rem' }}>
               ↓ {formatProbPct(pShort, 1)}
             </span>
           </div>
+          <span className="qt-stat-box__sub">calibrated blend</span>
         </div>
-        <div>
-          <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
-            Market
-          </div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <span className="c-green" style={{ fontWeight: 600 }}>
+        <div className="qt-stat-box">
+          <span className="qt-stat-box__label">CLOB Market</span>
+          <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+            <span className="c-green" style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.84rem' }}>
               ↑ {marketUp !== null ? `${Math.round(marketUp * 100)}¢` : '-'}
             </span>
-            <span className="c-red" style={{ fontWeight: 600 }}>
+            <span className="c-red" style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: '0.84rem' }}>
               ↓ {marketDown !== null ? `${Math.round(marketDown * 100)}¢` : '-'}
             </span>
           </div>
+          <span className="qt-stat-box__sub">implied ask/mid</span>
         </div>
       </div>
 
-      <div className="data-row">
-        <span className="data-row__label">Edge UP</span>
-        <span className={`data-row__value ${edge?.edgeUp > 0 ? 'c-green' : edge?.edgeUp < 0 ? 'c-red' : ''}`}>
-          {edgeUpPct !== '-' ? `${edge.edgeUp > 0 ? '+' : ''}${edgeUpPct}%` : '-'}
-        </span>
-      </div>
-      <div className="data-row">
-        <span className="data-row__label">Edge DOWN</span>
-        <span className={`data-row__value ${edge?.edgeDown > 0 ? 'c-green' : edge?.edgeDown < 0 ? 'c-red' : ''}`}>
-          {edgeDownPct !== '-' ? `${edge.edgeDown > 0 ? '+' : ''}${edgeDownPct}%` : '-'}
-        </span>
-      </div>
-
-      {/* Spread penalties */}
-      {(edge?.spreadPenaltyUp > 0 || edge?.spreadPenaltyDown > 0) && (
+      <div className="qt-panel-section" style={{ marginBottom: 10 }}>
         <div className="data-row">
-          <span className="data-row__label">Spread Cost</span>
-          <span className="data-row__value c-yellow" style={{ fontSize: '0.7rem' }}>
-            {edge.spreadPenaltyUp > 0 ? `UP -${(edge.spreadPenaltyUp * 100).toFixed(1)}%` : ''}
-            {edge.spreadPenaltyUp > 0 && edge.spreadPenaltyDown > 0 ? ' | ' : ''}
-            {edge.spreadPenaltyDown > 0 ? `DN -${(edge.spreadPenaltyDown * 100).toFixed(1)}%` : ''}
+          <span className="data-row__label">Edge UP</span>
+          <span className={`data-row__value ${edge?.edgeUp > 0 ? 'c-green' : edge?.edgeUp < 0 ? 'c-red' : ''}`}>
+            {edgeUpPct !== '-' ? `${edge.edgeUp > 0 ? '+' : ''}${edgeUpPct}%` : '-'}
           </span>
         </div>
-      )}
-
-      {/* Arbitrage */}
-      {arbitrage && (
         <div className="data-row">
-          <span className="data-row__label">Arbitrage</span>
-          <span className={`data-row__value ${arbitrage.found ? 'c-green' : 'c-muted'}`} style={{ fontWeight: arbitrage.found ? 700 : 400 }}>
-            {arbitrage.found
-              ? `${arbitrage.profitPct?.toFixed(1) ?? '?'}% profit ($${arbitrage.netProfit?.toFixed(3) ?? '?'})${!arbitrage.spreadHealthy ? ' [wide spread]' : ''}`
-              : `No (cost $${arbitrage.totalCost?.toFixed(3) ?? '?'})`}
+          <span className="data-row__label">Edge DOWN</span>
+          <span className={`data-row__value ${edge?.edgeDown > 0 ? 'c-green' : edge?.edgeDown < 0 ? 'c-red' : ''}`}>
+            {edgeDownPct !== '-' ? `${edge.edgeDown > 0 ? '+' : ''}${edgeDownPct}%` : '-'}
           </span>
         </div>
-      )}
 
-      {/* ML Confidence */}
-      <div className="data-row">
-        <span className="data-row__label">ML Confidence</span>
-        <span className={`data-row__value ${mlConfColor}`} style={{ fontWeight: 600 }}>
-          {mlConfPct !== null ? `${mlConfPct}%` : 'N/A'}
-        </span>
+        {/* Spread penalties */}
+        {(edge?.spreadPenaltyUp > 0 || edge?.spreadPenaltyDown > 0) && (
+          <div className="data-row">
+            <span className="data-row__label">Spread Cost</span>
+            <span className="data-row__value c-yellow" style={{ fontSize: '0.7rem' }}>
+              {edge.spreadPenaltyUp > 0 ? `UP -${(edge.spreadPenaltyUp * 100).toFixed(1)}%` : ''}
+              {edge.spreadPenaltyUp > 0 && edge.spreadPenaltyDown > 0 ? ' | ' : ''}
+              {edge.spreadPenaltyDown > 0 ? `DN -${(edge.spreadPenaltyDown * 100).toFixed(1)}%` : ''}
+            </span>
+          </div>
+        )}
+
+        {/* Arbitrage */}
+        {arbitrage && (
+          <div className="data-row">
+            <span className="data-row__label">Arbitrage</span>
+            <span className={`data-row__value ${arbitrage.found ? 'c-green' : 'c-muted'}`} style={{ fontWeight: arbitrage.found ? 700 : 400 }}>
+              {arbitrage.found
+                ? `${arbitrage.profitPct?.toFixed(1) ?? '?'}% profit ($${arbitrage.netProfit?.toFixed(3) ?? '?'})${!arbitrage.spreadHealthy ? ' [wide spread]' : ''}`
+                : `No (cost $${arbitrage.totalCost?.toFixed(3) ?? '?'})`}
+            </span>
+          </div>
+        )}
+
+        {/* ML Confidence */}
+        <div className="data-row">
+          <span className="data-row__label">ML Confidence</span>
+          <span className={`data-row__value ${mlConfColor}`} style={{ fontWeight: 600 }}>
+            {mlConfPct !== null ? `${mlConfPct}%` : 'N/A'}
+          </span>
+        </div>
       </div>
 
       {/* Quality Gates */}
-      <div style={{ marginTop: 8, padding: '8px 10px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-dim)' }}>
-        <div style={{ fontSize: '0.62rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-          Quality Gates ({phase})
+      <div className="qt-panel-section qt-panel-section--accent">
+        <div className="qt-kicker" style={{ marginBottom: 7 }}>
+          Quality Gates · {phase}
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 10px', fontSize: '0.7rem' }}>
-          <span style={{ color: gateEdge ? 'var(--green-bright)' : 'var(--red-bright)' }}>
-            {gateEdge ? '✓' : '✗'} Edge≥{(edgePassThreshold * 100).toFixed(0)}%
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <span className={`qt-badge ${gateEdge ? 'qt-badge--green' : 'qt-badge--red'}`}>
+            {gateEdge ? '✓' : '✗'} Edge ≥ {(edgePassThreshold * 100).toFixed(0)}%
           </span>
-          <span style={{ color: gateProb ? 'var(--green-bright)' : 'var(--red-bright)' }}>
-            {gateProb ? '✓' : '✗'} Prob≥{(probPassThreshold * 100).toFixed(0)}%
+          <span className={`qt-badge ${gateProb ? 'qt-badge--green' : 'qt-badge--red'}`}>
+            {gateProb ? '✓' : '✗'} Prob ≥ {(probPassThreshold * 100).toFixed(0)}%
           </span>
-          <span style={{ color: gateMlConf ? 'var(--green-bright)' : 'var(--text-dim)' }}>
+          <span className={`qt-badge ${gateMlConf ? 'qt-badge--green' : 'qt-badge--muted'}`}>
             {gateMlConf ? '✓' : '○'} ML HiConf
           </span>
         </div>
