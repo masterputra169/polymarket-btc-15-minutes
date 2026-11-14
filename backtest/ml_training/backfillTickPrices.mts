@@ -25,6 +25,7 @@
  */
 
 import fs from 'fs';
+import { fetchJsonWithPolymarketDoh } from '../../bot/src/services/polymarketHttp.ts';
 
 type CliArgs = Record<string, string | boolean | undefined>;
 type LookupEntry = Record<string, any> & { prices?: unknown[] };
@@ -57,22 +58,12 @@ function parseArgs(): CliArgs {
 async function httpGet<T = unknown>(url, retries = 3): Promise<T | null> {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      const res = await fetch(url, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'backfill-tick-prices/1.0' },
-      });
-      clearTimeout(timeout);
-      if (!res.ok) {
-        if (res.status === 429 || res.status >= 500) {
-          await sleep(1000 * (attempt + 1));
-          continue;
-        }
+      return await fetchJsonWithPolymarketDoh<T>(url, { timeoutMs: 15_000 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('HTTP 400') || msg.includes('HTTP 404') || msg.includes('HTTP 406') || msg.includes('HTTP 422')) {
         return null;
       }
-      return await res.json() as T;
-    } catch (err) {
       if (attempt === retries - 1) return null;
       await sleep(1000 * (attempt + 1));
     }
@@ -83,7 +74,7 @@ async function httpGet<T = unknown>(url, retries = 3): Promise<T | null> {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 /**
- * Fetch all Gamma events for the BTC 15-min series, paginated.
+ * Fetch all Gamma events for the BTC 15-min series, paginated in 14-day windows.
  * Returns: Map<timestamp, { slug, upTokenId }>
  */
 async function buildGammaMap(targetTimestamps) {
@@ -108,48 +99,57 @@ async function buildGammaMap(targetTimestamps) {
   console.log(`\n[Gamma] Building tokenId map for ${targetTimestamps.length} targets...`);
   console.log(`[Gamma] Date range: ${startStr} to ${endStr}`);
 
-  let offset = 0;
-  const PAGE_SIZE = 500;
+  // Gamma enforces limit <= 50 (HTTP 406) and rejects high offsets (HTTP 422),
+  // so iterate across 14-day slices (<= 1,344 markets / <= 27 pages per window).
+  const PAGE_SIZE = 50;
+  const WINDOW_MS = 14 * 86_400_000;
   let totalEvents = 0;
 
-  while (true) {
-    const url = `${GAMMA_BASE}/events?series_id=${SERIES_ID}` +
-      `&end_date_min=${startStr}&end_date_max=${endStr}` +
-      `&limit=${PAGE_SIZE}&offset=${offset}&order=startDate&ascending=true`;
-    const events = await httpGet<any[]>(url);
-    if (!events || events.length === 0) break;
+  for (let wStart = startDate.getTime(); wStart < endDate.getTime(); wStart += WINDOW_MS) {
+    const wEnd = Math.min(endDate.getTime(), wStart + WINDOW_MS);
+    const wStartStr = new Date(wStart).toISOString().split('T')[0];
+    const wEndStr = new Date(wEnd).toISOString().split('T')[0];
+    let offset = 0;
 
-    for (const e of events) {
-      const slugMatch = /(\d{9,10})$/.exec(e.slug || '');
-      if (!slugMatch) continue;
-      const ts = slugMatch[1];
-      if (!targetSet.has(ts)) continue; // only care about target markets
+    while (true) {
+      const url = `${GAMMA_BASE}/events?series_id=${SERIES_ID}` +
+        `&end_date_min=${wStartStr}&end_date_max=${wEndStr}` +
+        `&limit=${PAGE_SIZE}&offset=${offset}&order=startDate&ascending=true`;
+      const events = await httpGet<any[]>(url);
+      if (!events || events.length === 0) break;
 
-      const market = e.markets?.[0];
-      if (!market) continue;
-      let tokenIds;
-      try {
-        tokenIds = typeof market.clobTokenIds === 'string'
-          ? JSON.parse(market.clobTokenIds)
-          : (Array.isArray(market.clobTokenIds) ? market.clobTokenIds : []);
-      } catch { tokenIds = []; }
-      if (tokenIds.length < 1) continue;
+      for (const e of events) {
+        const slugMatch = /(\d{9,10})$/.exec(e.slug || '');
+        if (!slugMatch) continue;
+        const ts = slugMatch[1];
+        if (!targetSet.has(ts)) continue; // only care about target markets
 
-      // Outcome ordering: outcomes[0]=Up, outcomes[1]=Down (standard)
-      // upTokenId = tokenIds[0] (per fetchFreshMarkets.mjs convention)
-      map.set(ts, {
-        slug: e.slug,
-        upTokenId: tokenIds[0],
-        startSec: parseInt(ts, 10),
-      });
+        const market = e.markets?.[0];
+        if (!market) continue;
+        let tokenIds;
+        try {
+          tokenIds = typeof market.clobTokenIds === 'string'
+            ? JSON.parse(market.clobTokenIds)
+            : (Array.isArray(market.clobTokenIds) ? market.clobTokenIds : []);
+        } catch { tokenIds = []; }
+        if (tokenIds.length < 1) continue;
+
+        // Outcome ordering: outcomes[0]=Up, outcomes[1]=Down (standard)
+        // upTokenId = tokenIds[0] (per fetchFreshMarkets.mjs convention)
+        map.set(ts, {
+          slug: e.slug,
+          upTokenId: tokenIds[0],
+          startSec: parseInt(ts, 10),
+        });
+      }
+
+      totalEvents += events.length;
+      process.stdout.write(`\r  Gamma [${wStartStr}..${wEndStr}] offset=${offset} | events scanned=${totalEvents} | matched=${map.size}`);
+
+      if (events.length < PAGE_SIZE) break;
+      offset += PAGE_SIZE;
+      await sleep(100); // gentle pagination
     }
-
-    totalEvents += events.length;
-    process.stdout.write(`\r  Gamma page offset=${offset} | events scanned=${totalEvents} | matched=${map.size}`);
-
-    if (events.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-    await sleep(100); // gentle pagination
   }
   console.log('');
   console.log(`[Gamma] Matched ${map.size}/${targetTimestamps.length} target markets`);

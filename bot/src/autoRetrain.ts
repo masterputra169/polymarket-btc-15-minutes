@@ -314,6 +314,17 @@ function rollback() {
 }
 
 function restartBot() {
+  if (process.platform === 'linux') {
+    try {
+      execSync('systemctl is-active --quiet polybtc15-bot.service', { timeout: 5_000, stdio: 'ignore' });
+      log.info('Restarting polybtc15-bot.service via systemd...');
+      execSync('sudo -n systemctl restart polybtc15-bot.service', { cwd: ROOT, timeout: 30_000, stdio: 'pipe' });
+      log.info('Bot restarted via systemd');
+      return;
+    } catch (err) {
+      log.warn(`systemd restart unavailable (${err.message.split('\n')[0]}), trying PM2...`);
+    }
+  }
   try {
     log.info('Restarting polymarket-bot via PM2...');
     execSync('npx pm2 restart polymarket-bot', { cwd: ROOT, timeout: 30_000, stdio: 'pipe' });

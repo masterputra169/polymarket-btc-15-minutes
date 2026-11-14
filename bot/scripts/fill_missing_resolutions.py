@@ -16,7 +16,10 @@ SERIES  = '10192'
 def get(url, retries=3):
     for a in range(retries):
         try:
-            req = urllib.request.Request(url, headers={'User-Agent':'BTC-ML/1.0'})
+            req = urllib.request.Request(url, headers={
+                'Accept': 'application/json, text/plain, */*',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            })
             with urllib.request.urlopen(req, timeout=20) as r:
                 return json.loads(r.read())
         except Exception as e:
@@ -49,11 +52,12 @@ import datetime
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
 cutoff_str = cutoff.strftime('%Y-%m-%d')
 
+PAGE_SIZE = 50
 new_resolutions = {}
 for closed_flag in ['true', 'false']:
     offset = 0
     while True:
-        url = f"{GAMMA}/events?series_id={SERIES}&closed={closed_flag}&start_date_min={cutoff_str}&limit=100&offset={offset}"
+        url = f"{GAMMA}/events?series_id={SERIES}&closed={closed_flag}&start_date_min={cutoff_str}&limit={PAGE_SIZE}&offset={offset}"
         events = get(url)
         if not events or not isinstance(events, list) or len(events) == 0:
             break
@@ -90,9 +94,9 @@ for closed_flag in ['true', 'false']:
                     'prices': [],
                 }
         print(f'  closed={closed_flag} offset={offset}: collected {len(new_resolutions)} resolutions')
-        if len(events) < 100: break
-        offset += 100
-        time.sleep(0.3)
+        if len(events) < PAGE_SIZE: break
+        offset += PAGE_SIZE
+        time.sleep(0.1)
         if len(new_resolutions) >= len(missing): break
     if len(new_resolutions) >= len(missing): break
 

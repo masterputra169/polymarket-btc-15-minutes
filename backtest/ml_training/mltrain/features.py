@@ -27,6 +27,7 @@ def engineer_features(
         (X, feature_cols) — float32 matrix with NaN/inf zeroed, and the base
         names followed by the engineered names in append order.
     """
+    X_orig = np.nan_to_num(X_orig, nan=0.0, posinf=0.0, neginf=0.0)
     fi = {name: i for i, name in enumerate(feature_cols_orig)}
 
     def col(name):

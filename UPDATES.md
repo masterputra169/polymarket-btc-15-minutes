@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-14 23:33 WIB_
+_Last updated: 2026-11-14 23:55 WIB_
 
 | Area | State |
 |---|---|
@@ -49,6 +49,15 @@ _Last updated: 2026-11-14 23:33 WIB_
 > This status block is the only section edited in place. Everything below is append-only.
 
 ---
+
+### 2026-11-14 23:55 WIB — ML tooling cleanup: systemd restart, Gamma `limit=50` on backfill scripts, early `NaN` sanitization
+
+**What changed:**
+1. **`bot/src/autoRetrain.ts` (`restartBot`):** On Linux, checks `systemctl is-active --quiet polybtc15-bot.service` and restarts via `sudo -n systemctl restart polybtc15-bot.service` before falling back to `npx pm2 restart polymarket-bot`, so scheduled retrains restart the VPS systemd unit directly.
+2. **`backtest/ml_training/backfillTickPrices.mts` & `bot/scripts/fill_missing_resolutions.py`:** Updated Gamma `/events` pagination to `PAGE_SIZE = 50` (avoiding `HTTP 406`), switched `backfillTickPrices.mts` to 14-day windows (avoiding `HTTP 422`) and `fetchJsonWithPolymarketDoh`, and added browser `Accept`/`User-Agent` headers to `fill_missing_resolutions.py`.
+3. **`backtest/ml_training/mltrain/features.py` (`engineer_features`):** Sanitized `X_orig` via `np.nan_to_num(X_orig, nan=0.0, posinf=0.0, neginf=0.0)` at entry, eliminating intermediate `RuntimeWarning`s in `test_features.py`.
+
+**Verification:** `npm run typecheck` PASS. `npm test` PASS (97 files / 1005 tests). `npm run test:ml` PASS (424 pytest tests; 0 `features.py` warnings).
 
 ### 2026-11-14 23:33 WIB — Fix auto-retrain pipeline & deploy refreshed ML model (`20261114-p2-9384fe`)
 
