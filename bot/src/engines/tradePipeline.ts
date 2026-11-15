@@ -340,6 +340,7 @@ export async function executeDirectionalTrade({
     ptbSource: priceToBeat?.source ?? null,
     pathEfficiency,
     peakGapRatio: rec.side === 'UP' ? peakUpGapRatio : rec.side === 'DOWN' ? peakDownGapRatio : null,
+    orderbookImbalance: orderbookSignal?.imbalance ?? null,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);

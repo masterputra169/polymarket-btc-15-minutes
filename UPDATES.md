@@ -8,30 +8,30 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 08:48 WIB_
+_Last updated: 2026-11-15 15:25 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
 | ML model | **`20261114-p2-9384fe` (Pipeline v2)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $25.87 (peak $29.45) · 923 trades · 589W / 334L (63.8% WR lifetime preserved) |
+| Paper bankroll | $22.88 · 924 trades · 589W / 335L (63.7% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
-| Trade sizing | **5 shares min aligned** (`FIXED_SHARE_SIZE=5`, `FOK_MIN_SHARES_*=5` on VPS; `FIXED_SHARE_SIZE=5` in local `.env`, aligned with CLOB V2 5-share floor) |
+| Trade sizing | **5 shares min aligned** (`FIXED_SHARE_SIZE=5`, `FOK_MIN_SHARES_*=5` synced in local & VPS `.env`, aligned with CLOB V2 5-share floor) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-58c early & trending entry discovery) |
-| Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
+| Order router | **Limit ready & ML-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `ROUTER_LIMIT_ML=0.45` routes 45–64% high-edge signals to `LIMIT/maker_join`) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
 | Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
-| Microstructure gates | **Gate 20a & 20b active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` 60s anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.75` directional anti-retrace) |
+| Microstructure gates | **Gate 20a, 20b & 20c active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.55` anti-retrace, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30` anti-opposing L2 flow) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI overhaul |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 97 files / 1005 tests PASS · ML pytest 424 passed |
+| Tests | 99 files / 1010 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +48,28 @@ _Last updated: 2026-11-15 08:48 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 15:25 WIB — OrderRouter ML-floor fix, Gate 20c opposing L2 imbalance guard, Market Tape gate calibration & `.env` sync
+
+**Context (diagnosed from live VPS audit `08:49–15:03 WIB`, `EVAL_WINDOW_START=2026-11-14T16:35:00Z`, 922 journal rows, and 4 days of R2 Market Tape `2026-11-12`..`2026-11-15`):**
+- Two resolved eval trades (`btc-updown-15m-1794674700` at `mlConfidence=0.53`, `obImb=-0.36`; `btc-updown-15m-1794712500` at `mlConfidence=0.48`, `obImb=-0.44`) entered against strong opposing orderbook flow and both executed as taker `fok_limit` despite `LIMIT_ORDER_ENABLED=true`, because `OrderRouter` hardcoded `mlConf >= 0.65` in Rules 5 & 7 while `tradeFilters` relaxed high-edge entries (`edge >= 15%`) down to `0.45`.
+- Decision-trail replay (`decisionTrailStudy.mts`, 305 resolved markets `2026-11-12`..`2026-11-15`) proved loosening the `58c` ceiling (`n=142`: `66.9% WR vs 74.1% breakeven`, `-12.8% ROI`) or unblocking `Europe` / `btc_dist` hurts EV, whereas solo Gate 20b (`Momentum fading: peak gap ratio < 75%`, `n=9` markets, `<30` caveat) blocked `7W-2L` (`77.8% WR`, `3/4 = 75.0%` in `55%–74%`).
+
+**What changed:**
+1. **`OrderRouter` ML threshold alignment (`bot/src/config.ts`, `bot/src/engines/orderRouter.ts`):**
+   - Added `BOT_CONFIG.orderRouter.limitMlThreshold` (`ROUTER_LIMIT_ML`, default `0.45`, bounds `0.35–0.85`).
+   - Updated `routeOrder()` Rules 5 & 7 to evaluate `mlConf >= limitMlThreshold` instead of hardcoded `0.65`, routing qualified `45%–64%` high-edge entries to `LIMIT` / `maker_join` rather than dropping to `WAIT` → taker `fok_limit`. Kept standalone `LIMIT_MIN_ML_CONF=0.62` for proactive passive bid placement in `limitOrderManager.ts`.
+2. **Gate 20c opposing L2 orderbook imbalance filter (`bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`):**
+   - Added `maxOpposingObImbalance` spec (`FILTER_MAX_OPPOSING_OB_IMBALANCE`, default `0` so `tradeFilters.golden.test.ts` remains invariant).
+   - Wired `orderbookSignal?.imbalance ?? null` from `executeDirectionalTrade()` into `applyTradeFilters()`, blocking `UP` when `orderbookImbalance < -T` and `DOWN` when `orderbookImbalance > T`. Audited on 922 journal trades (`thr=0.30` blocked `59.1% WR` / `-$17.24`, and `0W-5L` / `-$11.33` strictly at `> 0.30` in the latest 17 post-depth-fix trades); enabled at `0.30` in `.env`.
+3. **Tape-backed Gate 20b tuning & JEV / Tape verification:**
+   - Relaxed `FILTER_MIN_PEAK_GAP_RATIO` from `0.75` to `0.55` in `.env` while preserving all `0.58` price caps, `BLOCKED_SESSIONS=Europe`, and `FILTER_BTC_DIST_MIN_PCT=0.035`.
+   - Kept `JEV_SHADOW=true` (`jevEvaluate` 2,577 markets: `60.0%` acc; `jev_policy.jsonl` empty because `cal 2026-10-26-pava-70` calibrates live predictions to `cal 45%` under `JEV_POLICY_MIN_CONF=0.60`); verified 53 days / 1,365 hourly files in R2 Market Tape (`2026-09-24`..`2026-11-15`).
+4. **Environment sync & tests (`bot/.env` local + VPS, test files):**
+   - Synced local `bot/.env` non-secret operational values with VPS (`LIMIT_ORDER_ENABLED=true`, `BLOCKED_SESSIONS=Europe`, `MAX_BET_AMOUNT_USD=2.10`, `FILTER_BTC_DIST_MIN_PCT=0.035`, `FOK_MIN_SHARES_*=5`, `JEV_*`, `EVAL_*`) and added `ROUTER_LIMIT_ML=0.45`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MIN_PEAK_GAP_RATIO=0.55` to both local and VPS `.env`.
+   - Added tests in `bot/src/engines/__tests__/orderRouter.limitFloor.test.ts`, `bot/src/engines/__tests__/tradePipeline.routerAndOb.test.ts`, and `bot/src/safety/__tests__/filterThresholds.test.ts`. Verified `npm run typecheck` and `npm test` (`99` files / `1010` tests PASS).
 
 ---
 

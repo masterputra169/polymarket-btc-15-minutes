@@ -143,5 +143,28 @@ describe('tradeFilters honours the thresholds', () => {
     });
     expect(cleanAndStrong.reasons.filter(r => r.startsWith('Chop regime') || r.startsWith('Momentum fading'))).toEqual([]);
   });
+
+  test('FILTER_MAX_OPPOSING_OB_IMBALANCE enforces gate 20c against opposing flow only', async () => {
+    const obReason = (rs: string[]) => rs.filter(r => r.startsWith('Opposing L2 orderbook imbalance'));
+
+    // Disabled by default (def=0) so golden defaults stay untouched
+    const defFilters = await load({});
+    expect(defFilters.getFilterThresholds().maxOpposingObImbalance).toBe(0);
+    expect(obReason(defFilters.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: -0.80 }).reasons)).toEqual([]);
+
+    // Active threshold 0.30 blocks opposing flow on both UP and DOWN
+    const active = await load({ FILTER_MAX_OPPOSING_OB_IMBALANCE: '0.30' });
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: -0.36 }).reasons)).toEqual([
+      'Opposing L2 orderbook imbalance -36% against UP (> 30% limit)',
+    ]);
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: -0.15 }).reasons)).toEqual([]);
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: 0.45 }).reasons)).toEqual([]);
+
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'DOWN', orderbookImbalance: 0.36 }).reasons)).toEqual([
+      'Opposing L2 orderbook imbalance 36% against DOWN (> 30% limit)',
+    ]);
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'DOWN', orderbookImbalance: -0.44 }).reasons)).toEqual([]);
+    expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: null }).reasons)).toEqual([]);
+  });
 });
 

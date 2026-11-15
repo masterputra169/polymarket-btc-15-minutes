@@ -198,6 +198,7 @@ const BOT_CONFIG = {
   orderRouter: {
     enabled:               process.env.ORDER_ROUTER_ENABLED !== 'false',
     fokMlThreshold:        envNum(process.env.ROUTER_FOK_ML, 0.88, 0.70, 0.95),          // v3: 0.80→0.88 — LIMIT 81% WR >> FOK 71%, reserve FOK for very-high ML only
+    limitMlThreshold:      envNum(process.env.ROUTER_LIMIT_ML, 0.45, 0.35, 0.85),        // align LIMIT floor with filter highEdgeBypass (0.45) so 45-64% signals route to LIMIT/maker_join instead of FOK fallback
     fokMaxPrice:           envNum(process.env.ROUTER_FOK_MAX_PRICE, 0.58, 0.50, 0.75),   // v3: 0.62→0.58 — tighter FOK price cap, push more to LIMIT
     fokMaxPriceTrending:   envNum(process.env.ROUTER_FOK_MAX_PRICE_TREND, 0.68, 0.60, 0.85),  // v3: 0.75→0.68 — even trending should prefer LIMIT unless very cheap
     cheapPriceThreshold:   envNum(process.env.ROUTER_CHEAP_PRICE, 0.52, 0.45, 0.65),     // v3: 0.55→0.52 — only truly cheap tokens get FOK

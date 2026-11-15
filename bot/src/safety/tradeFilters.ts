@@ -278,6 +278,7 @@ export function applyTradeFilters({
   ptbSource,       // PTB source tier ('data_streams'|'polymarket_gamma'|'polymarket_page'|'polymarket_page_prev'|'scheduled_ws'|'chainlink_round'|'polymarket_page_approx'|'oracle'|'pending'|null)
   pathEfficiency,  // 60s BTC path efficiency |net| / sum(|step|) in [0, 1] (null if <10s history)
   peakGapRatio,    // current |BTC - PTB| / window peak gap in signal direction in [0, 1] (null if peak < $15)
+  orderbookImbalance = null, // UP bid pressure - DOWN bid pressure in [-1, 1]
 }: Record<string, any>) {
   const reasons = [];
 
@@ -742,6 +743,20 @@ export function applyTradeFilters({
   if (T.minPeakGapRatio > 0 && peakGapRatio != null && Number.isFinite(peakGapRatio)) {
     if (peakGapRatio < T.minPeakGapRatio) {
       reasons.push(`Momentum fading: peak gap ratio ${(peakGapRatio * 100).toFixed(0)}% < ${(T.minPeakGapRatio * 100).toFixed(0)}% min`);
+    }
+  }
+
+  // 20c. Opposing L2 orderbook imbalance gate
+  // imbalance = (UP bid pressure) - (DOWN bid pressure) in [-1, +1] (src/engines/orderbook.ts).
+  // Negative opposes UP, positive opposes DOWN. Block when opposing flow exceeds threshold.
+  if (T.maxOpposingObImbalance > 0 && orderbookImbalance != null && Number.isFinite(orderbookImbalance)) {
+    const opposingMag = signalSide === 'UP'
+      ? -orderbookImbalance
+      : signalSide === 'DOWN'
+        ? orderbookImbalance
+        : 0;
+    if (opposingMag > T.maxOpposingObImbalance) {
+      reasons.push(`Opposing L2 orderbook imbalance ${(orderbookImbalance * 100).toFixed(0)}% against ${signalSide} (> ${(T.maxOpposingObImbalance * 100).toFixed(0)}% limit)`);
     }
   }
 

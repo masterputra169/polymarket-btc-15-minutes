@@ -83,9 +83,12 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
     return { route: 'FOK', reason: `spread${(spread * 100).toFixed(1)}%<${(cfg.spreadNarrowThreshold * 100) | 0}%narrow+ml${(mlConf * 100) | 0}%${trendTag}` };
   }
 
+  const limitMlMin = cfg.limitMlThreshold ?? 0.45;
+  const maxElapsedMin = BOT_CONFIG.limitOrder?.maxElapsedMin ?? 12;
+
   // Rule 5: Wide spread + moderate ML + in window → LIMIT (real discount potential)
   // In trending regime, skip LIMIT — limit orders don't fill during pumps
-  if (!isTrending && spread != null && spread >= cfg.spreadWideThreshold && mlConf >= 0.65 && elapsedMin <= BOT_CONFIG.limitOrder.maxElapsedMin) {
+  if (!isTrending && spread != null && spread >= cfg.spreadWideThreshold && mlConf >= limitMlMin && elapsedMin <= maxElapsedMin) {
     return { route: 'LIMIT', reason: `spread${(spread * 100).toFixed(1)}%≥${(cfg.spreadWideThreshold * 100) | 0}%wide+ml${(mlConf * 100) | 0}%` };
   }
 
@@ -97,7 +100,7 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
   }
 
   // Rule 7: Moderate ML + in window → LIMIT (default case, get discount)
-  if (mlConf >= 0.65 && elapsedMin <= BOT_CONFIG.limitOrder.maxElapsedMin) {
+  if (mlConf >= limitMlMin && elapsedMin <= maxElapsedMin) {
     return { route: 'LIMIT', reason: `ml${(mlConf * 100) | 0}%+window${elapsedMin.toFixed(1)}m` };
   }
 
