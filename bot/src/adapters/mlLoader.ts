@@ -27,20 +27,44 @@ export {
   getFeaturePipeline,
 } from '../../../src/engines/Mlpredictor.ts';
 
-import { setEnsembleWeights, setCalibratedParams } from '../../../src/engines/Mlpredictor.ts';
+import { setEnsembleWeights, setCalibratedParams, unloadMLModel } from '../../../src/engines/Mlpredictor.ts';
 
 const log = createLogger('ML');
+
+/** Active registry model id currently loaded in memory (or null). */
+export function getModelId(): string | null {
+  return S.modelId;
+}
 
 /**
  * Load XGBoost + LightGBM models from disk into shared ML state.
  * Same logic as Mlpredictor.js loadMLModel() but uses fs.readFileSync().
+ * When `force` is true, validates files on disk before unloading the active model
+ * so a failed hot-swap cannot leave the bot without a predictor.
  */
-export function loadMLModelFromDisk() {
-  if (S.processedTrees) return true;
+export function loadMLModelFromDisk(force = false): boolean {
+  if (!force && S.processedTrees) return true;
 
   try {
     const rawModel = JSON.parse(readFileSync(BOT_CONFIG.modelPath, 'utf-8'));
     const rawNorm = JSON.parse(readFileSync(BOT_CONFIG.normPath, 'utf-8'));
+    if (!Array.isArray(rawModel?.trees) || rawModel.trees.length === 0) {
+      throw new Error('xgboost_model.json missing trees array');
+    }
+
+    const lgbPath = join(dirname(BOT_CONFIG.modelPath), 'lightgbm_model.json');
+    let lgbData: Record<string, any> | null = null;
+    if (existsSync(lgbPath)) {
+      try {
+        lgbData = JSON.parse(readFileSync(lgbPath, 'utf-8'));
+      } catch (lgbErr: any) {
+        log.warn(`LightGBM pre-read failed: ${lgbErr.message}`);
+      }
+    }
+
+    if (force && S.processedTrees) {
+      unloadMLModel();
+    }
 
     const version = rawModel.version || 1;
     const numFeatures = rawModel.num_features || S.BASE_FEATURES;
@@ -65,6 +89,7 @@ export function loadMLModelFromDisk() {
       plattOnLogits: rawModel.platt_on_logits ?? false,
       featurePipeline,
       modelId: typeof rawNorm.model_id === 'string' ? rawNorm.model_id : null,
+      loadError: null,
     });
     log.info(`Feature pipeline: v${featurePipeline}${featurePipeline >= 2 ? ' (shared live/training builder)' : ' (legacy)'}`);
     log.info(`Model id: ${typeof rawNorm.model_id === 'string' ? rawNorm.model_id : '(none — predates the model registry)'}`);
@@ -111,10 +136,8 @@ export function loadMLModelFromDisk() {
     }
 
     // Load LightGBM model if available
-    const lgbPath = join(dirname(BOT_CONFIG.modelPath), 'lightgbm_model.json');
-    if (existsSync(lgbPath)) {
+    if (lgbData) {
       try {
-        const lgbData = JSON.parse(readFileSync(lgbPath, 'utf-8'));
         loadLgbModelFromData(lgbData);
         log.info(`LightGBM loaded: ${lgbData.num_trees} trees`);
 
@@ -123,7 +146,7 @@ export function loadMLModelFromDisk() {
           setEnsembleWeights(rawNorm.ensemble_weights.xgb ?? 0.5, rawNorm.ensemble_weights.lgb ?? 0.5);
           log.info(`Ensemble weights: XGB=${rawNorm.ensemble_weights.xgb} LGB=${rawNorm.ensemble_weights.lgb}`);
         }
-      } catch (lgbErr) {
+      } catch (lgbErr: any) {
         log.warn(`LightGBM not loaded: ${lgbErr.message}`);
       }
     }
@@ -136,9 +159,16 @@ export function loadMLModelFromDisk() {
     }
 
     return true;
-  } catch (err) {
+  } catch (err: any) {
     log.error(`Failed to load model: ${err.message}`);
-    S.setState({ loadError: err.message, isLoading: false });
+    if (!force || !S.processedTrees) {
+      S.setState({ loadError: err.message, isLoading: false });
+    }
     return false;
   }
+}
+
+/** Force-reload ML model files from BOT_CONFIG paths (used after model switching). */
+export function reloadMLModelFromDisk(): boolean {
+  return loadMLModelFromDisk(true);
 }

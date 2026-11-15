@@ -85,8 +85,16 @@ import {
 } from './adapters/chainlinkDataStreams.ts';
 
 // ML (loaded from disk)
-import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds, getFeaturePipeline } from './adapters/mlLoader.ts';
+import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds, getFeaturePipeline, getModelId } from './adapters/mlLoader.ts';
 import { resetHysteresis } from '../../src/engines/ml/state.ts';
+import {
+  getEffectivePhaseThresholds,
+  getEffectiveKellyProbShrink,
+  getEffectiveMaxBetAmountUsd,
+  getEffectiveOrderRouterConfig,
+  getEffectiveLimitOrderConfig,
+  getModelControlState,
+} from './ml/modelProfiles.ts';
 
 // Feedback (JSON file persistence)
 import {
@@ -499,7 +507,29 @@ let fokFallbackDeniedForSlug: string | null = null;
 
 let pollCounter = 0;
 let polling = false;
+let modelSwitching = false;
 let tokenIdsNotified = false;
+
+/** Wait for any in-flight poll to finish while holding off new polls, then run `fn`. */
+export async function runWithModelSwitchLock<T>(fn: () => Promise<T> | T): Promise<T> {
+  modelSwitching = true;
+  try {
+    const deadline = Date.now() + 10_000;
+    while (polling && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    if (polling) {
+      throw new Error('poll_busy_timeout');
+    }
+    return await fn();
+  } finally {
+    modelSwitching = false;
+  }
+}
+
+export function resetAfterModelSwitch(): void {
+  resetHysteresis();
+}
 
 // Circuit breaker cooldown tracking
 let cbHaltStartMs = 0;        // when circuit breaker first triggered (0 = not halted)
@@ -600,7 +630,7 @@ function buildDecisionSignalBlock({
  * Single poll iteration — full analysis + trading pipeline.
  */
 export async function pollOnce() {
-  if (polling) return;
+  if (polling || modelSwitching) return;
   if (paused) {
     broadcast({ paused: true, ts: Date.now(), bankroll: getBankroll(), stats: getStats() });
     // Same as the halted path: a paused bot is idle by choice, not blind. Without a heartbeat
@@ -1896,7 +1926,7 @@ export async function pollOnce() {
         const rcvPrice = rcvSide === 'UP' ? marketUp : marketDown;
         // Recovery sizing: maxRecoveryPct of normal bet, capped by maxBetAmountUsd
         const rcvBankroll = getAvailableBankroll();
-        const rcvMaxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;
+        const rcvMaxBet = getEffectiveMaxBetAmountUsd() ?? 2.50;
         const rcvBet = Math.min(rcvBankroll * (recoveryResult.sizePct ?? 0.50), rcvMaxBet);
         const rcvSize = rcvPrice > 0 ? Math.floor(rcvBet / rcvPrice) : 0;
 
@@ -1966,7 +1996,7 @@ export async function pollOnce() {
       mlAgreesWithRules,
       regimeInfo,
       session: getSessionName(),
-      calibratedThresholds: getCalibratedPhaseThresholds(),
+      calibratedThresholds: getEffectivePhaseThresholds(getCalibratedPhaseThresholds()),
       smartFlowSignal,
     });
     rec.strength = rec.confidence;
@@ -2070,7 +2100,7 @@ export async function pollOnce() {
       smartFlowSignal,
       entryTimingScore,
       mcResult,
-      probShrinkToMarket: BOT_CONFIG.kellyProbShrink,
+      probShrinkToMarket: getEffectiveKellyProbShrink(),
     });
 
     // ── 9. Feedback tracking (stale cleanup) ──
@@ -2083,7 +2113,9 @@ export async function pollOnce() {
     // Monitors fill status; cancels on signal flip or 10 min timeout → FOK fallback.
     let limitOrderBlocksFOK = false;
     let smartRouteFOK = false;
-    if (BOT_CONFIG.limitOrder.enabled && !BOT_CONFIG.dryRun && !settlementPending && !profitTargetPaused) {
+    const effLimitCfg = getEffectiveLimitOrderConfig();
+    const effRouterCfg = getEffectiveOrderRouterConfig();
+    if (effLimitCfg.enabled && !BOT_CONFIG.dryRun && !settlementPending && !profitTargetPaused) {
       const limitActive = isLimitOrderActive();
       // Compute elapsed minutes since market opened (15 min markets)
       const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
@@ -2239,7 +2271,7 @@ export async function pollOnce() {
                   `Side: ${limitEval.side} | Price: ${(limitEval.targetPrice * 100).toFixed(1)}¢\n` +
                   `Size: ${limSt.size ?? '?'} shares ($${limSt.size && limSt.targetPrice ? (limSt.size * limSt.targetPrice).toFixed(2) : '?'})\n` +
                   `ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | Bankroll: $${getBankroll().toFixed(2)}\n` +
-                  `Waiting for fill (max ${BOT_CONFIG.limitOrder.cancelAfterElapsedMin}min)...\n` +
+                  `Waiting for fill (max ${effLimitCfg.cancelAfterElapsedMin}min)...\n` +
                   `<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`,
                   { key: 'trade:limit' }).catch(e => log.debug(`Notify limit placed: ${e.message}`));
               }
@@ -2262,11 +2294,11 @@ export async function pollOnce() {
 
         // ── Dynamic ML Upgrade: cancel limit → FOK when ML rises significantly ──
         const upgradeMlConf = mlResult.available ? mlResult.mlConfidence : null;
-        if (upgradeMlConf != null && upgradeMlConf >= BOT_CONFIG.orderRouter.upgradeMLThreshold) {
+        if (upgradeMlConf != null && upgradeMlConf >= effRouterCfg.upgradeMLThreshold) {
           const limStatus = getLimitOrderStatus();
           const holdingSec = limStatus.placedAt ? (Date.now() - limStatus.placedAt) / 1000 : 0;
-          if (holdingSec > (BOT_CONFIG.orderRouter.upgradeHoldSec ?? 60)) {
-            log.info(`SMART_ROUTE→UPGRADE: ML ${(upgradeMlConf * 100).toFixed(0)}% ≥ ${(BOT_CONFIG.orderRouter.upgradeMLThreshold * 100).toFixed(0)}% — cancel limit → FOK`);
+          if (holdingSec > (effRouterCfg.upgradeHoldSec ?? 60)) {
+            log.info(`SMART_ROUTE→UPGRADE: ML ${(upgradeMlConf * 100).toFixed(0)}% ≥ ${(effRouterCfg.upgradeMLThreshold * 100).toFixed(0)}% — cancel limit → FOK`);
             try {
               const upgradeResult = await cancelLimitOrder('smart_upgrade_fok', { cancelOrder, setPendingCost, getOrderById, getOrderStatus });
               if (upgradeResult?.filledInstead && upgradeResult.fillData) {
@@ -2427,7 +2459,7 @@ export async function pollOnce() {
               cancelReason: classifyCancelReason(monResult.action + ' ' + String(cancelReason)),
               sideProb: pForFok,
               ask: askForFok,
-              minEdge: BOT_CONFIG.limitOrder.fokFallbackMinEdge ?? 0.05,
+              minEdge: effLimitCfg.fokFallbackMinEdge ?? 0.05,
             });
 
             // Notify: cancelled — with human-readable reason
@@ -2960,11 +2992,13 @@ export async function pollOnce() {
         probUp: mlResult.mlProbUp, confidence: mlResult.mlConfidence,
         side: mlResult.mlSide, ensembleProbUp: mlResult.ensembleProbUp,
         alpha: mlResult.alpha, source: mlResult.source,
+        modelId: getModelId(),
         status: 'ready', available: true,
       } : {
         probUp: null, confidence: null, side: null,
         ensembleProbUp: null, alpha: 0,
         source: 'Rule-only', status: isMLReady() ? 'ready' : 'not_loaded',
+        modelId: getModelId(),
         available: false,
       },
 
@@ -2988,7 +3022,7 @@ export async function pollOnce() {
       recoveryBuy: getRecoveryStatus(),
 
       // Limit order status
-      limitOrder: BOT_CONFIG.limitOrder.enabled ? getLimitOrderStatus() : { enabled: false },
+      limitOrder: getEffectiveLimitOrderConfig().enabled ? getLimitOrderStatus() : { enabled: false },
 
       // Daily profit target (WIB timezone)
       profitTarget: getProfitTargetStatus(),
@@ -2996,6 +3030,9 @@ export async function pollOnce() {
 
       // Market tape recorder health (record-only; the file count is refreshed every 10s)
       tape: getTapeDashboardStatus(10_000),
+
+      // ML model switcher & per-model profile state
+      mlControl: getModelControlState(),
     });
 
     // Periodic save

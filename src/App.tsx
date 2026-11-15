@@ -345,17 +345,31 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.arbitrage?.found, data?.arbitrage?.profitPct,
   ]);
 
-  // MLPanel: ML-specific + rule prob
+  // MLPanel: ML-specific + rule prob + model switcher/profile state
   const mlData = useMemo(() => {
     if (!data) return null;
     return {
       ml: data.ml,
+      mlControl: data.mlControl,
       pLong: data.pLong,
       pShort: data.pShort,
       rawUp: data.rawUp,
       ruleUp: data.ruleUp,
     };
-  }, [data?.ml?.available, data?.ml?.probUp, data?.ml?.confidence, data?.ml?.side, data?.ml?.status, data?.pLong, data?.pShort, data?.rawUp, data?.ruleUp]);
+  }, [
+    data?.ml?.available,
+    data?.ml?.probUp,
+    data?.ml?.confidence,
+    data?.ml?.side,
+    data?.ml?.status,
+    data?.ml?.modelId,
+    data?.mlControl?.version,
+    data?.mlControl?.activeModelId,
+    data?.pLong,
+    data?.pShort,
+    data?.rawUp,
+    data?.ruleUp,
+  ]);
 
   // AccuracyPanel: feedback + detailed stats + signal performance
   // signalPerf/CRPS computed from browser-side stores (populated by bridge effect above)
@@ -603,7 +617,7 @@ const botData = useMemo(() => {
     {
       id: 'ml', title: 'ML Engine', icon: '◍', description: 'XGBoost + LightGBM inference',
       category: 'strategy', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 4, y: 5, w: 4, h: 3 }, content: <MLPanel data={mlData} />,
+      defaultRect: { x: 4, y: 5, w: 4, h: 3 }, content: <MLPanel data={mlData} sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'jev', title: 'JEV Layer', icon: '◇', description: 'independent judgment, shadow mode',

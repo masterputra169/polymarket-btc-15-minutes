@@ -18,7 +18,7 @@
  * Similar pattern to recoveryBuy.js — stateful module with tick-based evaluation.
  */
 
-import { BOT_CONFIG } from '../config.ts';
+import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
 import { createLogger } from '../logger.ts';
 import { getSpreadTrend } from './executionTiming.ts';
 import {
@@ -116,7 +116,7 @@ let state = {
  * @returns {number} Target limit price (rounded to 0.001 tick)
  */
 function computeTargetPrice(mlConf, bestBid) {
-  const cfg = BOT_CONFIG.limitOrder;
+  const cfg = getEffectiveLimitOrderConfig();
 
   // Discount tier by ML confidence (higher conf → smaller discount)
   let discountPct;
@@ -195,7 +195,7 @@ export function evaluateLimitEntry({
   marketSlug, elapsedMin,
   btcDelta1m, spread,
 }) {
-  const cfg = BOT_CONFIG.limitOrder;
+  const cfg = getEffectiveLimitOrderConfig();
   const no = (reason) => {
     // Log first rejection per market for debugging (every 30s to avoid spam)
     if (!state._lastRejectLogAt || Date.now() - state._lastRejectLogAt > 30_000) {
@@ -339,7 +339,7 @@ export async function placeLimitOrder({
   marketEndMs, bankroll, mlConfidence, sessionQuality,
   signalSnapshot = null,
 }, deps) {
-  const cfg = BOT_CONFIG.limitOrder;
+  const cfg = getEffectiveLimitOrderConfig();
 
   // ── Kelly Criterion sizing for limit orders ──
   // Same formula as asymmetricBet.js but adapted for limit order entry price.
@@ -370,7 +370,7 @@ export async function placeLimitOrder({
     : 0.03;
 
   // Fix #5: Scale maxBet with bankroll (same as tradePipeline.js audit v5 M4)
-  const fixedMaxBet = BOT_CONFIG.maxBetAmountUsd ?? 2.50;
+  const fixedMaxBet = getEffectiveMaxBetAmountUsd() ?? 2.50;
   const maxBet = Math.max(fixedMaxBet, bankroll * kellyCapPct);
   const kellyBet = bankroll * rawKelly * HALF_KELLY;
   const kellyCap = bankroll * kellyCapPct;
@@ -489,7 +489,7 @@ export async function monitorLimitOrder({
   elapsedMin, marketSlug,
   sideProb = null,
 }, deps): Promise<MonitorLimitOrderResult> {
-  const cfg = BOT_CONFIG.limitOrder;
+  const cfg = getEffectiveLimitOrderConfig();
 
   if (state.phase !== 'MONITORING' || !state.orderId) {
     return { action: 'NONE', detail: 'not_monitoring' };
@@ -923,7 +923,7 @@ export function recordFillEvent(fillData) {
  * Includes recent fill/cancel events (within TTL) for frontend transition animations.
  */
 export function getLimitOrderStatus() {
-  const cfg = BOT_CONFIG.limitOrder;
+  const cfg = getEffectiveLimitOrderConfig();
 
   // Include recent event if within TTL (fill/cancel transition for frontend)
   const recentEvent = (lastEvent.at && Date.now() - lastEvent.at < LAST_EVENT_TTL_MS)

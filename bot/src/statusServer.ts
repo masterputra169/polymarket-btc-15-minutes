@@ -72,6 +72,12 @@ let _addTracker = null;
 let _removeTracker = null;
 let _simulateTrader = null;
 
+// ML model switcher & per-model profile callbacks
+let _listMlModels: (() => unknown) | null = null;
+let _switchMlModel: ((modelId: string) => Promise<unknown>) | null = null;
+let _saveModelProfile: ((modelId: string, profile: unknown) => unknown) | null = null;
+let _resetModelProfile: ((modelId: string) => unknown) | null = null;
+
 function getStatusConfig() {
   const port = parseInt(process.env.STATUS_PORT || '3099', 10);
   const bindHost = (process.env.STATUS_BIND_HOST || process.env.STATUS_HOST || '127.0.0.1').trim();
@@ -167,6 +173,26 @@ export function registerTraderDiscovery({ scan, getTracked, getDiscovered, addTr
   _addTracker = addTracker;
   _removeTracker = removeTracker;
   _simulateTrader = simulate;
+}
+
+/**
+ * Register ML model switcher and per-model profile management callbacks.
+ */
+export function registerModelControl({
+  list,
+  switchModel,
+  saveProfile,
+  resetProfile,
+}: {
+  list: () => unknown;
+  switchModel: (modelId: string) => Promise<unknown>;
+  saveProfile: (modelId: string, profile: unknown) => unknown;
+  resetProfile: (modelId: string) => unknown;
+}) {
+  _listMlModels = list;
+  _switchMlModel = switchModel;
+  _saveModelProfile = saveProfile;
+  _resetModelProfile = resetProfile;
 }
 
 /**
@@ -435,6 +461,36 @@ export function startStatusServer() {
           _simulateTrader(msg.address)
             .then(result => respond('simulateTrader', result))
             .catch(err => respond('simulateTrader', { error: err.message }));
+        } else if (msg.type === 'listMlModels' && _listMlModels) {
+          respond('listMlModels', { ok: true, models: _listMlModels() });
+        } else if (msg.type === 'switchMlModel' && _switchMlModel && typeof msg.modelId === 'string' && msg.modelId.trim().length > 0 && msg.modelId.length <= 128) {
+          if (commandThrottled('switchMlModel', 1_500)) { respond('switchMlModel', { ok: false, error: 'rate_limited' }); return; }
+          _switchMlModel(msg.modelId.trim())
+            .then(result => respond('switchMlModel', result))
+            .catch(err => respond('switchMlModel', { ok: false, error: err.message }));
+        } else if (
+          msg.type === 'saveModelProfile' &&
+          _saveModelProfile &&
+          typeof msg.modelId === 'string' &&
+          msg.modelId.trim().length > 0 &&
+          msg.modelId.length <= 128 &&
+          msg.profile != null &&
+          typeof msg.profile === 'object' &&
+          !Array.isArray(msg.profile)
+        ) {
+          if (commandThrottled('saveModelProfile', 300)) { respond('saveModelProfile', { ok: false, error: 'rate_limited' }); return; }
+          try {
+            respond('saveModelProfile', _saveModelProfile(msg.modelId.trim(), msg.profile));
+          } catch (err) {
+            respond('saveModelProfile', { ok: false, error: err.message });
+          }
+        } else if (msg.type === 'resetModelProfile' && _resetModelProfile && typeof msg.modelId === 'string' && msg.modelId.trim().length > 0 && msg.modelId.length <= 128) {
+          if (commandThrottled('resetModelProfile', 300)) { respond('resetModelProfile', { ok: false, error: 'rate_limited' }); return; }
+          try {
+            respond('resetModelProfile', _resetModelProfile(msg.modelId.trim()));
+          } catch (err) {
+            respond('resetModelProfile', { ok: false, error: err.message });
+          }
         }
       } catch (err) { log.debug(`Malformed client message: ${err.message}`); }
     });

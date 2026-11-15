@@ -8,12 +8,14 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 15:25 WIB_
+_Last updated: 2026-11-15 19:20 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
-| ML model | **`20261114-p2-9384fe` (Pipeline v2)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
+| ML model | **`20261114-p2-9384fe` (Pipeline v2, Live default)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
+| ML candidate (365d) | **`20261115-p2-5de02d` (Pipeline v2, 1-year candidate)** · 32,096 mkts (`2025-11-15 → 2026-11-14`) · **76.35% Acc · 0.8579 AUC · 0.0159 ECE · +4.56% skill vs market** (available to hot-switch in dashboard) |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `ml_registry/models/` + persistent per-model profile overrides (`bot/data/model_profiles.json`) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $22.88 · 924 trades · 589W / 335L (63.7% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
@@ -31,7 +33,7 @@ _Last updated: 2026-11-15 15:25 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 99 files / 1010 tests PASS |
+| Tests | 100 files / 1013 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -48,6 +50,34 @@ _Last updated: 2026-11-15 15:25 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 19:20 WIB — Model Switcher UI Fallback Guard (`src/components/MlPanel.tsx`)
+
+**What changed:**
+- Updated `src/components/MlPanel.tsx` so the Model Switcher bar below `.card__header` stays visible with a lightweight `"Model switcher: syncing registry with bot…"` notice whenever `mlControl` has not arrived yet (`models.length === 0 && !activeModelId`), instead of hiding the bar completely if the frontend reloads before the bot WebSocket snapshot includes `mlControl`.
+- Verified `npm run typecheck`, `npm test` (`100` files / `1013` tests PASS), `npm run build` (`vite build`, `493` modules), `python -m ruff check backtest/ml_training`, and `npm run test:ml:cov` (`424` passed, `98%` `mltrain` coverage).
+
+---
+
+### 2026-11-15 18:05 WIB — 1-Year (`365d`) ML Experiment (`20261115-p2-5de02d`), Dashboard Model Switcher & Per-Model Config Profiles
+
+**What changed:**
+1. **1-Year (`365d`) Training & Shared OOS Head-to-Head (`backtest/ml_training/training_data_365d.csv`, `ml_registry/`):**
+   - Generated `training_data_365d.csv` (`32,096` real-labeled pipeline-v2 rows across `2025-11-15 → 2026-11-14`; `UP=15,945 / DOWN=16,151`) and trained `./output_365d` with Optuna (`--days 365 --tune --tune-trials 100 --holdout-frac 0.125 --recency`, half-life `90d`).
+   - Registered as `candidate` **`20261115-p2-5de02d`** (`76.35%` test acc, `0.8579` AUC, `0.0159` ECE, `+4.56%` skill vs market on its `4,799`-row test split; XGB weight `0.75`, LGB weight `0.25`; live `20261114-p2-9384fe` stays default on `public/ml/`).
+   - Evaluated both `20261114-p2-9384fe` (`180d`) and `20261115-p2-5de02d` (`365d`) head-to-head on their exact overlapping OOS tail (`2,175` rows from `2026-10-22T21:30:00Z → 2026-11-14`, unseen by both models):
+     - Overall metrics (`180d` vs `365d`): Acc `76.51%` vs `76.05%` | AUC `0.8535` vs **`0.8551`** | Brier `0.1562` vs **`0.1552`** | LogLoss `0.4687` vs **`0.4633`** | Skill vs lookup market `+5.47%` vs **`+6.12%`**.
+     - Confidence-tier accuracy (`conf >= 0.45 / 0.55 / 0.65 / 0.80`): `180d` `87.95% / 90.28% / 92.47% / 95.31%` vs **`365d`** **`89.01% / 90.98% / 93.28% / 96.43%`**.
+     - Simulated `lookup_1min` sweep with CLOB V2 taker fee (`settlementMath.ts`, `cap <= 58c`, caveat: offline `lookup_1min` prints are optimistic vs live L2 asks): at `confMin=0.45`, `365d` scored `78.43% WR` (`+$54.09`, `+53.03% ROI`, `n=51`) vs `180d` `72.22% WR` (`+$39.94`, `+36.98% ROI`, `n=54`); at `confMin=0.55`, `365d` scored `86.36% WR` (`+$30.08`, `+68.36% ROI`, `n=22`) vs `180d` `78.95% WR` (`+$16.56`, `+43.58% ROI`, `n=19`).
+2. **Hot-Swap Model Switcher & Per-Model Config Profiles (`bot/src/ml/modelProfiles.ts`, `bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/adapters/mlLoader.ts`, `bot/src/engines/*`, `bot/src/loop.ts`, `bot/src/statusServer.ts`, `bot/index.ts`):**
+   - Added persistent store `bot/data/model_profiles.json` mapping `modelId` to validated runtime overrides (`filters`, `sizing`, `orderRouter`, `limitOrder`, `phaseThresholds`, plus label/notes). Switching models atomically deploys artifacts from `ml_registry/models/`, reloads XGBoost + LightGBM + normaliser under a poll lock (`runWithModelSwitchLock`), blocks swaps during pending/limit orders, rolls back backups on failure, resets hysteresis, logs `deployed` in `ml_registry`, and layers that model's config overrides cleanly onto `.env` baselines.
+   - Wired `orderRouter.ts`, `limitOrderManager.ts`, `tradePipeline.ts`, and `loop.ts` to read effective per-model getters (`getEffectivePhaseThresholds`, `getEffectiveKellyProbShrink`, `getEffectiveMaxBetAmountUsd`, `getEffectiveOrderRouterConfig`, `getEffectiveLimitOrderConfig`).
+   - Added WebSocket RPC handlers (`listMlModels`, `switchMlModel`, `saveModelProfile`, `resetModelProfile`) and seeded profiles for `20261114-p2-9384fe` (`180d Live Baseline`) and `20261115-p2-5de02d` (`365d Calibrated (OOS Top)`, `mlConfMin=0.55`, `mlConfRelaxed=0.45`, `58c` caps).
+3. **Frontend Switcher UI & Per-Model Config Drawer (`src/App.tsx`, `src/components/MlPanel.tsx`, `src/components/ModelProfileDrawer.tsx`):**
+   - Added compact Model Switcher bar inside `ML Engine` (placed below `.card__header` to match widget header styling) with model selector dropdown, active/profile badges, OOS summary stats, **Switch** button, and **⚙ Config** portal drawer for editing, saving, switching, or resetting per-model parameters live.
+   - Added unit tests in `bot/src/ml/__tests__/modelProfiles.test.ts`; verified `npm run typecheck`, `npm test` (`100` files / `1013` tests PASS), and `npm run build`.
 
 ---
 

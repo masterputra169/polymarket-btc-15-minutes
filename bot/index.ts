@@ -41,7 +41,7 @@ if (typeof globalThis.window === 'undefined') {
 
 import { BOT_CONFIG, CONFIG } from './src/config.ts';
 import { setLogLevel, log } from './src/logger.ts';
-import { loadMLModelFromDisk } from './src/adapters/mlLoader.ts';
+import { getModelId, loadMLModelFromDisk, reloadMLModelFromDisk } from './src/adapters/mlLoader.ts';
 import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbackStore.ts';
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition, getBankroll, setBankroll, resetDailyBaseline } from './src/trading/positionTracker.ts';
@@ -55,8 +55,11 @@ import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs, getPr
 import { startTwapFeed, stopTwapFeed, getLatestTwap, getTwapFeedHealth } from './src/streams/chainlinkTwap.ts';
 import { connect as connectChainlinkWss, disconnect as disconnectChainlinkWss, getPrice as getChainlinkWssPrice } from './src/streams/chainlinkWss.ts';
 import { startMarketTape, stopMarketTape } from './src/tape/marketTape.ts';
-import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime, getPriceToBeatForTape } from './src/loop.ts';
-import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync } from './src/statusServer.ts';
+import { pollOnce, pauseBot, resumeBot, registerPositionCallback, resetEntryRegime, getPriceToBeatForTape, runWithModelSwitchLock, resetAfterModelSwitch } from './src/loop.ts';
+import { startStatusServer, stopStatusServer, registerBotControl, registerPositionManager, registerTraderDiscovery, registerUsdcSync, registerModelControl } from './src/statusServer.ts';
+import { hasPendingOrder } from './src/trading/fillTracker.ts';
+import { isLimitOrderActive } from './src/engines/limitOrderManager.ts';
+import { initModelProfiles, listStoredModels, switchActiveModel, saveModelProfile, resetModelProfile } from './src/ml/modelProfiles.ts';
 import { initRuntimeIntegrations, recordRuntimeEvent, shutdownRuntimeIntegrations } from './src/services/runtimeIntegrations.ts';
 import { flush as flushPtbHealth } from './src/monitoring/ptbHealth.ts';
 import { startLivenessWatch, stopLivenessWatch } from './src/monitoring/processLiveness.ts';
@@ -229,11 +232,12 @@ async function main() {
     log.info('Chainlink Data Streams: dormant (CHAINLINK_DS_API_KEY not set — PTB falls back to polymarket_page/chainlink_round)');
   }
 
-  // 2. Load ML model from disk
+  // 2. Load ML model from disk & apply per-model profile overrides
   const mlOk = loadMLModelFromDisk();
   if (!mlOk) {
     log.warn('ML model not loaded — running rule-based only');
   }
+  initModelProfiles(mlOk ? getModelId() : null);
 
   // 3. Load feedback history + signal performance
   loadFeedbackFromDisk();
@@ -349,6 +353,19 @@ async function main() {
     simulate: simulateTrader,
   });
   registerUsdcSync(getUsdcBalance);
+  registerModelControl({
+    list: () => listStoredModels(),
+    switchModel: (targetModelId: string) => switchActiveModel(targetModelId, {
+      reloadModel: reloadMLModelFromDisk,
+      hasPendingOrder,
+      isLimitOrderActive,
+      getOpenPosition: getCurrentPosition,
+      runExclusive: runWithModelSwitchLock,
+      resetPostSwitch: resetAfterModelSwitch,
+    }),
+    saveProfile: (modelId: string, profile: unknown) => saveModelProfile(modelId, profile),
+    resetProfile: (modelId: string) => resetModelProfile(modelId),
+  });
 
   // 5c. Start status broadcast server (dashboard integration)
   startStatusServer();
@@ -363,7 +380,7 @@ async function main() {
       jevProvider: process.env.JEV_PROVIDER || 'openrouter',
       twapMode: twapHealth?.mode ?? null,
       clobV2: !BOT_CONFIG.dryRun,
-      modelId: null,
+      modelId: getModelId(),
     }), { key: 'startup' });
   }
 

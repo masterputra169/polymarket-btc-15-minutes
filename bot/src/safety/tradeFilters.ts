@@ -35,20 +35,48 @@ import { checkExtremeSentiment } from '../engines/sentimentSignal.ts';
 import { checkMacroEvent } from '../monitoring/macroCalendar.ts';
 import { checkLLMRegimeAdvisory } from '../ai/regimeClassifier.ts';
 import { checkJevAdvisory } from '../ai/jevAdvisor.ts';
-import { readFilterThresholds, type FilterThresholds } from './filterThresholds.ts';
+import {
+  readFilterThresholds,
+  validateFilterThresholdOverrides,
+  type FilterThresholds,
+  type RuntimeFilterOverrideResult,
+} from './filterThresholds.ts';
 
 const log = createLogger('Filter');
 
 // Every number the gates below compare against (filterThresholds.ts): the
 // former literals as defaults, FILTER_* env overrides read once at load.
 const THRESHOLDS = readFilterThresholds(process.env);
-const T: FilterThresholds = THRESHOLDS.values;
+const BASE_THRESHOLDS: FilterThresholds = Object.freeze({ ...THRESHOLDS.values });
+const T: FilterThresholds = { ...BASE_THRESHOLDS };
 if (THRESHOLDS.overrides.length > 0) log.warn(`Filter thresholds overridden: ${THRESHOLDS.overrides.join(', ')}`);
 for (const r of THRESHOLDS.refused) log.warn(`REFUSED filter threshold: ${r}`);
 
-/** The thresholds in force (defaults plus accepted FILTER_* overrides). */
+/** Baseline env-resolved thresholds (defaults plus FILTER_* env vars). */
+export function getBaselineFilterThresholds(): FilterThresholds {
+  return { ...BASE_THRESHOLDS };
+}
+
+/** The thresholds in force (baseline plus any active per-model overrides). */
 export function getFilterThresholds(): FilterThresholds {
   return { ...T };
+}
+
+/**
+ * Reset thresholds to env-resolved baseline and apply per-model overrides.
+ * Returns accepted non-baseline overrides and any refused entries.
+ */
+export function applyFilterThresholdOverrides(
+  overrides?: Record<string, unknown> | null,
+): Omit<RuntimeFilterOverrideResult, 'values'> {
+  const res = validateFilterThresholdOverrides(BASE_THRESHOLDS, overrides);
+  Object.assign(T, res.values);
+  const appliedKeys = Object.keys(res.applied);
+  if (appliedKeys.length > 0) {
+    log.info(`Active model filter overrides: ${appliedKeys.map(k => `${k}=${res.applied[k]}`).join(', ')}`);
+  }
+  for (const r of res.refused) log.warn(`REFUSED model filter override: ${r}`);
+  return { applied: res.applied, refused: res.refused };
 }
 
 // Dry-run-only entry-price cap override.

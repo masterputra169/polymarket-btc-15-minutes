@@ -1,0 +1,86 @@
+{
+  "id": "20261115-p2-5de02d",
+  "registeredAt": "2026-11-15T11:01:44.336Z",
+  "source": "experiment_365d 2026-11-15",
+  "featurePipeline": 2,
+  "sourceSha256": {
+    "xgboost_model.json": "5de02d0bef57c4024ae006f648af6f459fe0738d93e1db4bcdf817a058ac878c",
+    "lightgbm_model.json": "b792b74f581dba5285776e1352294316a773f269cc9fc45f6387c568dd5e4932",
+    "norm_browser.json": "484879f62558164e1ae7ed4694397df46075d8172c5eea590a87e068e41dc3ea"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "6d94d27240d6ad403cf5060c068b0ac4fcf7ce80a6dd0eff158f29e8c8220dea",
+    "lightgbm_model.json.gz": "8691e6518f5dba0b4ddddbb82f494e1b7f38a42ebd03e7ecaab1bed8b186d7d3",
+    "norm_browser.json.gz": "cd106e8992c7eacc73ad48dfad27e8b2a9b5842dac0edf66a1cc95e9ad70d862"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7627,
+      "auc": 0.858,
+      "f1": 0.7573,
+      "logloss": 0.4594,
+      "brier": 0.1538,
+      "calibration_ece": 0.017,
+      "calibration_mce": 0.0592,
+      "high_conf_accuracy": 0.7908,
+      "high_conf_ratio": 90.25,
+      "high_conf_count": 4331,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8576,
+      "cv_acc": 0.7662,
+      "cv_test_acc_gap": -0.0035,
+      "cv_test_auc_gap": 0.0004,
+      "holdout_accuracy": 0.7561,
+      "holdout_auc": 0.8461,
+      "test_holdout_acc_gap": 0.0065,
+      "test_holdout_auc_gap": 0.0119,
+      "test_samples": 4799,
+      "holdout_samples": 3395,
+      "market_brier": 0.1611,
+      "brier_skill_vs_market": 0.0457,
+      "logloss_skill_vs_market": 0.0408,
+      "market_skill_samples": 4799
+    },
+    "ensemble": {
+      "accuracy": 0.7635,
+      "auc": 0.8579,
+      "logloss": 0.4595,
+      "brier": 0.1538,
+      "calibration_ece": 0.0159,
+      "calibration_mce": 0.0526,
+      "weight_source": "oof_cv",
+      "test_samples": 4799,
+      "holdout_samples": 3395,
+      "strict_holdout": true,
+      "market_brier": 0.1611,
+      "brier_skill_vs_market": 0.0456,
+      "logloss_skill_vs_market": 0.0406,
+      "market_skill_samples": 4799
+    },
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": true,
+    "csvSha256": "6510960a5bdf6ebb466a7315c8ffc9650e5d3d39e3f75e3b75b16a0c87f5d159",
+    "csvMissingReason": null,
+    "meta": {
+      "feature_pipeline": 2,
+      "market_price_source": "lookup_1min",
+      "generated_at": "2026-11-15T09:23:51.540Z",
+      "days": 365,
+      "seed": 42,
+      "rows": 32096,
+      "first_slug_ts": 1763212500,
+      "last_slug_ts": 1794669300,
+      "feature_names": "(54 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "365d 1-year experiment (--days 365 --tune --tune-trials 100 --holdout-frac 0.125 --recency)"
+  ]
+}

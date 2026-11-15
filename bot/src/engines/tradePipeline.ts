@@ -26,6 +26,7 @@ import {
   feeAdjustedEdge,
 } from './makerFillGate.ts';
 import { routeOrder } from './orderRouter.ts';
+import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -503,7 +504,7 @@ export async function executeDirectionalTrade({
   // At $30 bankroll (HIGH): max(7, 30×0.035) = max(7, 1.05) = $7 (floor binds)
   // At $200 bankroll (HIGH): max(7, 200×0.035) = max(7, 7.00) = $7 (both equal, compounding kicks in above)
   const bankrollForCap = deps.getBankroll?.() ?? 0;
-  const scaledMaxBet = Math.max(BOT_CONFIG.maxBetAmountUsd, bankrollForCap * kellyCapPct);
+  const scaledMaxBet = Math.max(getEffectiveMaxBetAmountUsd(), bankrollForCap * kellyCapPct);
   if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
     log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
     effectiveBetAmount = scaledMaxBet;
@@ -627,7 +628,7 @@ export async function executeDirectionalTrade({
     // Maker JOIN only when the live router would choose LIMIT (same elapsed /
     // ML / spread gates) — not merely because LIMIT_ORDER_ENABLED is on.
     const betBook = betSide === 'UP' ? orderbookUp : orderbookDown;
-    const limCfg = BOT_CONFIG.limitOrder;
+    const limCfg = getEffectiveLimitOrderConfig();
     const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
     const liveRoute = (limCfg?.enabled && limCfg?.dryRunMakerSim !== false && elapsedMin != null)
       ? routeOrder({

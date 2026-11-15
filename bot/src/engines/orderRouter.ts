@@ -1,4 +1,4 @@
-import { BOT_CONFIG } from '../config.ts';
+import { getEffectiveOrderRouterConfig, getEffectiveLimitOrderConfig } from '../ml/modelProfiles.ts';
 import { createLogger } from '../logger.ts';
 
 const log = createLogger('OrderRouter');
@@ -25,7 +25,8 @@ const log = createLogger('OrderRouter');
  *     Default                → LIMIT (Rule 7) — preferred route
  */
 export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regime, spread, btcPrice }) {
-  const cfg = BOT_CONFIG.orderRouter;
+  const cfg = getEffectiveOrderRouterConfig();
+  const limCfg = getEffectiveLimitOrderConfig();
   if (!cfg?.enabled) return { route: 'LIMIT', reason: 'router_disabled' };
   if (bestAsk == null || mlConf == null) return { route: 'LIMIT', reason: 'no_data' };
 
@@ -33,13 +34,13 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
 
   // Price floor — tokens below limit minEntryPrice are priced low because market
   // expects them to lose, not because they're a discount. Don't route these.
-  const minPrice = BOT_CONFIG.limitOrder.minEntryPrice ?? 0.50;
+  const minPrice = limCfg.minEntryPrice ?? 0.50;
   if (bestAsk < minPrice) {
     return { route: 'WAIT', reason: `price${(bestAsk * 100) | 0}¢<floor${(minPrice * 100) | 0}¢` };
   }
 
   // Past limit window → FOK only
-  if (elapsedMin > BOT_CONFIG.limitOrder.maxElapsedMin) {
+  if (elapsedMin > limCfg.maxElapsedMin) {
     return { route: 'FOK', reason: 'past_limit_window' };
   }
 
@@ -84,7 +85,7 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
   }
 
   const limitMlMin = cfg.limitMlThreshold ?? 0.45;
-  const maxElapsedMin = BOT_CONFIG.limitOrder?.maxElapsedMin ?? 12;
+  const maxElapsedMin = limCfg?.maxElapsedMin ?? 12;
 
   // Rule 5: Wide spread + moderate ML + in window → LIMIT (real discount potential)
   // In trending regime, skip LIMIT — limit orders don't fill during pumps

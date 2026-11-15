@@ -1,12 +1,113 @@
-import React, { memo } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import { formatProbPct } from '../utils.ts';
 import { ML_CONFIDENCE } from '../config.ts';
+import ModelProfileDrawer, {
+  type ModelConfigProfile,
+  type ModelControlState,
+  type StoredModelSummary,
+} from './ModelProfileDrawer.tsx';
 
-function MLPanel({ data }) {
+interface MlPanelProps {
+  data: any;
+  sendBotCommand?: (type: string, payload?: Record<string, any>) => Promise<any>;
+}
+
+function fmtModelOption(m: StoredModelSummary, activeId: string | null): string {
+  const win = m.windowDays ? `${m.windowDays}d` : `p${m.featurePipeline}`;
+  const acc = m.accuracy != null ? `${(m.accuracy * 100).toFixed(1)}%` : '-';
+  const tag = m.id === activeId ? ' [ACTIVE]' : '';
+  const prof = m.profileLabel ? ` (${m.profileLabel})` : m.hasProfile ? ' (custom)' : '';
+  return `${m.id} • ${win} • acc ${acc}${prof}${tag}`;
+}
+
+const EMPTY_MODELS: StoredModelSummary[] = [];
+
+function MLPanel({ data, sendBotCommand }: MlPanelProps) {
+  const ml = data?.ml;
+  const mlControl = data?.mlControl as ModelControlState | undefined;
+  const models = mlControl?.models ?? EMPTY_MODELS;
+  const activeModelId = mlControl?.activeModelId ?? ml?.modelId ?? null;
+  const [selectedId, setSelectedId] = useState<string>(() => activeModelId || models[0]?.id || '');
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchStatus, setSwitchStatus] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!selectedId && (activeModelId || models[0]?.id)) {
+      setSelectedId(activeModelId || models[0].id);
+      return;
+    }
+    if (selectedId && models.length > 0 && !models.some(m => m.id === selectedId)) {
+      setSelectedId(activeModelId || models[0].id);
+    }
+  }, [activeModelId, models, selectedId]);
+
   if (!data) return null;
 
-  const { ml, pLong, pShort, rawUp, ruleUp } = data;
+  const { pLong, pShort, rawUp, ruleUp } = data as {
+    pLong: number;
+    pShort: number;
+    rawUp: number;
+    ruleUp: number;
+  };
   const mlReady = ml?.status === 'ready';
+
+  const activeSummary = models.find(m => m.id === activeModelId) ?? null;
+  const selectedSummary = models.find(m => m.id === selectedId) ?? activeSummary ?? null;
+  const isSelectedActive = Boolean(selectedId && activeModelId && selectedId === activeModelId);
+
+  const handleSwitchModel = async (targetId: string) => {
+    if (!sendBotCommand || !targetId || switching) return;
+    setSwitching(true);
+    setSwitchStatus(null);
+    try {
+      const res = await sendBotCommand('switchMlModel', { modelId: targetId });
+      if (!res?.ok) {
+        setSwitchStatus({ kind: 'err', text: `Switch failed: ${res?.error || 'unknown error'}` });
+      } else {
+        setSelectedId(res.modelId || targetId);
+        setSwitchStatus({
+          kind: res.warning ? 'warn' : 'ok',
+          text: res.warning
+            ? `Switched to ${res.modelId || targetId} (${res.warning})`
+            : `Switched active model to ${res.modelId || targetId}`,
+        });
+      }
+    } catch (err: any) {
+      setSwitchStatus({ kind: 'err', text: err?.message || 'Switch command failed' });
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const handleSaveProfile = async (
+    modelId: string,
+    profile: ModelConfigProfile,
+    switchAfter: boolean,
+  ) => {
+    if (!sendBotCommand) return { ok: false, error: 'offline' };
+    const saveRes = await sendBotCommand('saveModelProfile', { modelId, profile });
+    if (!saveRes?.ok) return saveRes;
+    if (switchAfter && modelId !== activeModelId) {
+      const swRes = await sendBotCommand('switchMlModel', { modelId });
+      if (!swRes?.ok) {
+        return { ok: false, error: `Profile saved, switch failed: ${swRes?.error || 'unknown'}` };
+      }
+      setSelectedId(swRes.modelId || modelId);
+      setSwitchStatus({
+        kind: swRes.warning ? 'warn' : 'ok',
+        text: swRes.warning
+          ? `Saved & switched to ${swRes.modelId} (${swRes.warning})`
+          : `Saved profile & switched to ${swRes.modelId}`,
+      });
+    }
+    return saveRes;
+  };
+
+  const handleResetProfile = async (modelId: string) => {
+    if (!sendBotCommand) return { ok: false, error: 'offline' };
+    return sendBotCommand('resetModelProfile', { modelId });
+  };
 
   // ML values
   const mlProbUp = ml?.probUp;
@@ -64,6 +165,170 @@ function MLPanel({ data }) {
           {statusBadge.text}
         </span>
       </div>
+
+      {/* Model Switcher + Per-Model Profile Bar (placed below .card__header because dashboard.css clips extra header children) */}
+      {models.length === 0 && !activeModelId ? (
+        <div
+          style={{
+            marginTop: '6px',
+            marginBottom: '6px',
+            padding: '6px 8px',
+            borderRadius: '6px',
+            border: '1px solid rgba(148, 163, 184, 0.2)',
+            background: 'rgba(15, 23, 42, 0.45)',
+            fontSize: '0.68rem',
+            color: '#94a3b8',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '8px',
+          }}
+        >
+          <span>Model switcher: syncing registry with bot…</span>
+          <span style={{ fontSize: '0.62rem', opacity: 0.75 }}>Config &amp; switch ready</span>
+        </div>
+      ) : (
+        <div
+          style={{
+            marginBottom: 10,
+            padding: '7px 8px',
+            borderRadius: 8,
+            background: 'rgba(15, 23, 42, 0.55)',
+            border: '1px solid rgba(148, 163, 184, 0.16)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)', letterSpacing: '0.04em' }}>
+              MODEL:{' '}
+              <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                {activeModelId ?? 'none'}
+              </span>
+              {activeSummary?.hasProfile && (
+                <span
+                  style={{
+                    marginLeft: 5,
+                    padding: '1px 5px',
+                    borderRadius: 4,
+                    fontSize: '0.58rem',
+                    fontWeight: 700,
+                    background: 'rgba(34, 211, 238, 0.16)',
+                    color: 'var(--accent-cyan)',
+                  }}
+                >
+                  {activeSummary.profileLabel || 'CUSTOM'}
+                </span>
+              )}
+            </span>
+            {selectedSummary && (
+              <span style={{ fontSize: '0.62rem', color: 'var(--text-muted)' }}>
+                {selectedSummary.windowDays ? `${selectedSummary.windowDays}d` : `p${selectedSummary.featurePipeline}`}
+                {' · '}
+                AUC {selectedSummary.auc != null ? selectedSummary.auc.toFixed(3) : '-'}
+                {' · '}
+                Skill {selectedSummary.brierSkill != null ? `${(selectedSummary.brierSkill * 100).toFixed(1)}%` : '-'}
+              </span>
+            )}
+          </div>
+
+          {models.length > 0 && (
+            <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
+              <select
+                aria-label="Select ML model"
+                value={selectedId}
+                onChange={e => {
+                  setSelectedId(e.target.value);
+                  setSwitchStatus(null);
+                }}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  background: 'rgba(6, 15, 24, 0.9)',
+                  border: '1px solid rgba(148, 163, 184, 0.22)',
+                  borderRadius: 6,
+                  padding: '4px 6px',
+                  color: '#e2e8f0',
+                  fontSize: '0.67rem',
+                  fontFamily: 'inherit',
+                }}
+              >
+                {models.map(m => (
+                  <option key={m.id} value={m.id}>
+                    {fmtModelOption(m, activeModelId)}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                disabled={!sendBotCommand || !selectedId || isSelectedActive || switching}
+                onClick={() => handleSwitchModel(selectedId)}
+                style={{
+                  padding: '4px 9px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(34, 211, 238, 0.45)',
+                  background: isSelectedActive ? 'rgba(255,255,255,0.04)' : 'rgba(34, 211, 238, 0.16)',
+                  color: isSelectedActive ? 'var(--text-dim)' : 'var(--accent-cyan)',
+                  fontSize: '0.66rem',
+                  fontWeight: 700,
+                  cursor: (!sendBotCommand || isSelectedActive || switching) ? 'default' : 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                {switching ? '...' : isSelectedActive ? 'Active' : 'Switch'}
+              </button>
+
+              <button
+                type="button"
+                disabled={!sendBotCommand || !selectedId}
+                onClick={() => setDrawerOpen(true)}
+                title="Edit per-model configuration profile"
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(148, 163, 184, 0.25)',
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.66rem',
+                  fontWeight: 600,
+                  cursor: (!sendBotCommand || !selectedId) ? 'default' : 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                ⚙ Config
+              </button>
+            </div>
+          )}
+
+          {switchStatus && (
+            <div
+              style={{
+                fontSize: '0.63rem',
+                color: switchStatus.kind === 'err' ? '#fca5a5' : switchStatus.kind === 'warn' ? '#fde68a' : '#6ee7b7',
+              }}
+            >
+              {switchStatus.text}
+            </div>
+          )}
+        </div>
+      )}
+
+      {mlControl && (
+        <ModelProfileDrawer
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          models={models}
+          activeModelId={activeModelId}
+          targetModelId={selectedId || activeModelId || models[0]?.id || ''}
+          onChangeTarget={id => setSelectedId(id)}
+          profiles={mlControl.profiles ?? {}}
+          baseline={mlControl.baseline}
+          onSave={handleSaveProfile}
+          onReset={handleResetProfile}
+        />
+      )}
 
       {mlReady && isHighConfidence && (
         <div className="ml-high-conf-banner" style={{ marginBottom: 10 }}>
@@ -300,8 +565,9 @@ function MLPanel({ data }) {
 }
 
 // ═══ React.memo with custom comparator ═══
-// Only re-render when ML-specific fields change
+// Only re-render when ML-specific fields or model switcher state change
 export default memo(MLPanel, (prev, next) => {
+  if (prev.sendBotCommand !== next.sendBotCommand) return false;
   const a = prev.data;
   const b = next.data;
   if (!a || !b) return a === b;
@@ -313,6 +579,9 @@ export default memo(MLPanel, (prev, next) => {
     a.ml?.alpha === b.ml?.alpha &&
     a.ml?.source === b.ml?.source &&
     a.ml?.status === b.ml?.status &&
+    a.ml?.modelId === b.ml?.modelId &&
+    a.mlControl?.version === b.mlControl?.version &&
+    a.mlControl?.activeModelId === b.mlControl?.activeModelId &&
     a.pLong === b.pLong &&
     a.pShort === b.pShort &&
     a.ruleUp === b.ruleUp

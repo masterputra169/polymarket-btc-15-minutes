@@ -160,3 +160,58 @@ export function readFilterThresholds(env: Env): ThresholdResolution {
   }
   return { values, overrides, refused };
 }
+
+export interface RuntimeFilterOverrideResult {
+  values: FilterThresholds;
+  applied: Partial<FilterThresholds>;
+  refused: string[];
+}
+
+/**
+ * Validate per-model runtime overrides on top of the env-resolved baseline.
+ * Unknown keys, out-of-bounds numbers, or inverted ordered pairs are refused
+ * cleanly back to baseline rather than corrupting live gates.
+ */
+export function validateFilterThresholdOverrides(
+  base: FilterThresholds,
+  rawOverrides?: Record<string, unknown> | null,
+): RuntimeFilterOverrideResult {
+  const values: FilterThresholds = { ...base };
+  const refused: string[] = [];
+
+  if (!rawOverrides || typeof rawOverrides !== 'object') {
+    return { values, applied: {}, refused };
+  }
+
+  for (const [key, raw] of Object.entries(rawOverrides)) {
+    if (raw === undefined || raw === null || raw === '') continue;
+    const spec = FILTER_THRESHOLD_SPECS[key];
+    if (!spec) {
+      refused.push(`Unknown filter key "${key}" — ignored`);
+      continue;
+    }
+    const n = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    if (!Number.isFinite(n)) {
+      refused.push(`${key}="${String(raw)}" is not a number — stays ${base[key]}`);
+    } else if (n < spec.min || n > spec.max) {
+      refused.push(`${key}=${n} outside [${spec.min}, ${spec.max}] — stays ${base[key]}`);
+    } else {
+      values[key] = n;
+    }
+  }
+
+  for (const { lo, hi, strict } of ORDERED_PAIRS) {
+    const a = values[lo];
+    const b = values[hi];
+    if (strict ? a < b : a <= b) continue;
+    refused.push(`${lo}=${a} must be ${strict ? '<' : '<='} ${hi}=${b} — reverted to ${base[lo]} / ${base[hi]}`);
+    values[lo] = base[lo];
+    values[hi] = base[hi];
+  }
+
+  const applied: Partial<FilterThresholds> = {};
+  for (const key of Object.keys(FILTER_THRESHOLD_SPECS)) {
+    if (values[key] !== base[key]) applied[key] = values[key];
+  }
+  return { values, applied, refused };
+}
