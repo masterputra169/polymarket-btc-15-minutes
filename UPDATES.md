@@ -8,14 +8,14 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 19:20 WIB_
+_Last updated: 2026-11-15 19:26 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
-| ML model | **`20261114-p2-9384fe` (Pipeline v2, Live default)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · +5.18% skill vs market** |
-| ML candidate (365d) | **`20261115-p2-5de02d` (Pipeline v2, 1-year candidate)** · 32,096 mkts (`2025-11-15 → 2026-11-14`) · **76.35% Acc · 0.8579 AUC · 0.0159 ECE · +4.56% skill vs market** (available to hot-switch in dashboard) |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `ml_registry/models/` + persistent per-model profile overrides (`bot/data/model_profiles.json`) |
+| ML model | **`20261115-p2-5de02d` (Pipeline v2, 1-year `365d` LIVE)** · 32,096 mkts (`2025-11-15 → 2026-11-14`) · **76.35% Acc · 0.8579 AUC · 0.0159 ECE · +4.56% skill vs market** (`+6.12%` OOS head-to-head) |
+| ML previous (180d) | **`20261114-p2-9384fe` (Pipeline v2, retired)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · 0.0331 ECE · +5.18% skill vs market** (1-click rollback via dashboard switcher) |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across 13 registered models + persistent per-model profile overrides (`bot/data/model_profiles.json`, `365d` profile: `mlConfMin=0.55`, `fokMlThreshold=0.68`, `58c` caps) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $22.88 · 924 trades · 589W / 335L (63.7% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
@@ -50,6 +50,15 @@ _Last updated: 2026-11-15 19:20 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 19:26 WIB — VPS Deploy & Live Activation of 1-Year Model (`20261115-p2-5de02d`)
+
+**What changed:**
+- Cleared filemode-only git noise on VPS (`git config core.fileMode false`), normalized `ubuntu:ubuntu` ownership on `dist/`, `node_modules/`, and `bot/node_modules/`, and seeded `/opt/polybtc15/bot/data/model_profiles.json`.
+- Deployed commit `5c80cd7` via `poly15-auto-deploy.service` after GitHub CI passed; rebuilt frontend (`dist/assets/index-CkouUdfw.js`, verified serving `Select ML model`, `switchMlModel`, `Save Config`, and syncing fallback) and restarted `polybtc15-bot`.
+- Switched the active live dry-run model on VPS via `switchMlModel` RPC to **`20261115-p2-5de02d`** (`365d Calibrated (OOS Top)` · 926 XGBoost trees / 558 LightGBM trees, effective `mlConfMin=0.55`, `fokMlThreshold=0.68`, `kellyProbShrink=0.60`, `58c` caps), and aligned repo default `public/ml/` + `ml_registry/` to `20261115-p2-5de02d` so VPS worktree remains clean for `poly15-auto-deploy`.
 
 ---
 
