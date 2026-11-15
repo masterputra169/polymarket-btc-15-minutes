@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 00:39 WIB_
+_Last updated: 2026-11-15 08:48 WIB_
 
 | Area | State |
 |---|---|
@@ -18,7 +18,7 @@ _Last updated: 2026-11-15 00:39 WIB_
 | Paper bankroll | $25.87 (peak $29.45) · 923 trades · 589W / 334L (63.8% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
 | Trade sizing | **5 shares min aligned** (`FIXED_SHARE_SIZE=5`, `FOK_MIN_SHARES_*=5` on VPS; `FIXED_SHARE_SIZE=5` in local `.env`, aligned with CLOB V2 5-share floor) |
-| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, enables cheap 50-54c entry discovery) |
+| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-58c early & trending entry discovery) |
 | Order router | **Limit ready** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, live maker orders guarded against dry-run crashes) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
@@ -36,7 +36,7 @@ _Last updated: 2026-11-15 00:39 WIB_
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | **0.25** (updated from `0.9` in VPS & local `.env`) |
+| Kelly shrink | **0.60** (`KELLY_PROB_SHRINK=0.60`, `MIN_BET_PCT=0.005`; resolved `Adjusted Kelly < min 2.0%` deadlock) |
 | Eval window | **Since `2026-11-14T16:35:00Z`** (`EVAL_WINDOW_START`, model `20261114-p2-9384fe`, target 300 trades); prior 923-row journal kept intact + archived in `bot/data/archive_model_20260924/` |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | clean; failed units cleared; `systemctl --failed` empty |
@@ -48,6 +48,27 @@ _Last updated: 2026-11-15 00:39 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 08:48 WIB — Fix Kelly sizing deadlock (`MIN_BET_PCT`, `KELLY_PROB_SHRINK`) & align trending early window
+
+**Root cause (diagnosed from 49,184 filtered polls / 147,536 live VPS log lines):**
+- **Primary Blocker (`Adjusted Kelly < min 2.0%`):** `KELLY_PROB_SHRINK=0.25` combined with `KELLY_FRACTION=0.15`, `b` deducting taker fee + spread + slippage (~3.3pp break-even penalty), and `MIN_BET_PCT=0.020` pushed `safeFraction` into `0.63%–0.97%` even on `17%–20%` edge signals. All 97 polls across 2 valid setups that passed all 20 trade filters and Signal Stability (`90/90`) were blocked by `computeBetSizing()` returning `shouldBet=false`, even while `BET_SIZING_MODE=fixed_shares`.
+- **Secondary Blocker (`Gate 11a`):** Default `FILTER_TRENDING_MAX_TIME_LEFT=10` blocked `17,693` early trending polls (`> 10m left`) despite `FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`.
+
+**What changed:**
+1. **`src/config.ts` & `bot/src/config.ts`:**
+   - Lowered `BET_SIZING.MIN_BET_PCT` from `0.020` to `0.005` (`0.5%`, matching `asymmetricBet.test.ts` and eliminating double-shrinkage rejection).
+   - Raised `BOT_CONFIG.kellyProbShrink` default from `0.20` to `0.60`.
+   - Kept `bot/src/safety/filterThresholds.ts` defaults unchanged so `tradeFilters.golden.test.ts` remains intact.
+2. **Environment configuration (`bot/.env` local & VPS `/opt/polybtc15/bot/.env`):**
+   - Set `KELLY_PROB_SHRINK=0.60` (from `0.25`).
+   - Set `FILTER_TRENDING_MAX_TIME_LEFT=13.5` to align Gate 11a with `FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`.
+
+**Verification:**
+- `npm run typecheck` (frontend, bot, bot-core, scripts): passed (exit 0).
+- `npm test` (`vitest run`): 97 test files / 1005 tests passed.
 
 ---
 

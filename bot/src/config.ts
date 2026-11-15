@@ -124,7 +124,7 @@ const BOT_CONFIG = {
   maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.50, 1.00, 100),
   // Kelly sizes on price + shrink * (model - price). Realised/claimed edge on
   // the v1 dry-run book was ~0.18; 0.20 is that evidence. 1 = trust the model fully.
-  kellyProbShrink: envNum(process.env.KELLY_PROB_SHRINK, 0.20, 0, 1),
+  kellyProbShrink: envNum(process.env.KELLY_PROB_SHRINK, 0.60, 0, 1),
 
   // Take-profit — Quant fix C4: fixed minProbDrop absolute→relative (entry-based), still disabled by default
   // Enable when data confirms take-profit improves EV vs holding to settlement (WR 71.1%)

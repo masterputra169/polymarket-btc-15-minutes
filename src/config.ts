@@ -9,7 +9,7 @@ export const WS_CLOB = { heartbeatDeadMs: 15_000, subWatchdogMs: 5_000, dataStal
 export const BET_SIZING = {
   KELLY_FRACTION: 0.15,           // Reduced 0.20→0.15 — portfolio $100+: lower base fraction, ~25% smaller typical bets
   MAX_BET_PCT: 0.05,              // Reduced 0.07→0.05 — hard 5% cap per trade at any bankroll size
-  MIN_BET_PCT: 0.020,             // GC5a: 0.025→0.020 — allow smaller exploratory bets during uncertain conditions
+  MIN_BET_PCT: 0.005,             // Lowered 0.020→0.005 — prevent Kelly double-shrinkage deadlock when KELLY_FRACTION=0.15 + probShrinkToMarket
   MIN_EDGE_FOR_BET: 0.02,
   DEFAULT_BANKROLL: 1000,
   BANKROLL_STORAGE_KEY: 'btc15m_bankroll',
