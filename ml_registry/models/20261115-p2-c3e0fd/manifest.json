@@ -1,0 +1,87 @@
+{
+  "id": "20261115-p2-c3e0fd",
+  "registeredAt": "2026-11-15T16:00:28.037Z",
+  "source": "experiment_alltime_quant83 2026-11-15",
+  "featurePipeline": 2,
+  "sourceSha256": {
+    "xgboost_model.json": "c3e0fdbbff6b1fef5621037302a231df657561d9a1cd01e977f19bfbda746962",
+    "lightgbm_model.json": "b44f5594016d8801a8f6e18005d5e08c74e0c742485e32f5c21f095a0a628732",
+    "norm_browser.json": "3a2e146b618c5121d593a54f0c17cf95da145306a3cbd32abde4c78e65584689"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "d568988e0c0608d1bfcf9028763c91e168dea62a506b295b37f32b7c1e282565",
+    "lightgbm_model.json.gz": "8e1b5c78e377d2640f8c27d11b8b3d593d08718e22a083f5e4e3513e6db6d13b",
+    "norm_browser.json.gz": "09671564bed2d61caa3ee94dd72d1935f5f728f2159990d011d885af6e7ed459"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7575,
+      "auc": 0.8526,
+      "f1": 0.7539,
+      "logloss": 0.468,
+      "brier": 0.1572,
+      "calibration_ece": 0.0245,
+      "calibration_mce": 0.0574,
+      "high_conf_accuracy": 0.785,
+      "high_conf_ratio": 90.55,
+      "high_conf_count": 4735,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8609,
+      "cv_acc": 0.7702,
+      "cv_test_acc_gap": -0.0127,
+      "cv_test_auc_gap": -0.0083,
+      "holdout_accuracy": 0.7626,
+      "holdout_auc": 0.8546,
+      "test_holdout_acc_gap": -0.0051,
+      "test_holdout_auc_gap": -0.002,
+      "test_samples": 5229,
+      "holdout_samples": 3699,
+      "market_brier": 0.1673,
+      "brier_skill_vs_market": 0.0603,
+      "logloss_skill_vs_market": 0.0528,
+      "market_skill_samples": 5229
+    },
+    "ensemble": {
+      "accuracy": 0.7567,
+      "auc": 0.8524,
+      "logloss": 0.4684,
+      "brier": 0.1574,
+      "calibration_ece": 0.0235,
+      "calibration_mce": 0.058,
+      "weight_source": "holdout",
+      "test_samples": 5229,
+      "holdout_samples": 3699,
+      "strict_holdout": true,
+      "market_brier": 0.1673,
+      "brier_skill_vs_market": 0.0595,
+      "logloss_skill_vs_market": 0.0521,
+      "market_skill_samples": 5229
+    },
+    "ensembleWeights": {
+      "xgb": 0.75,
+      "lgb": 0.25
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "34,962-row all-time CSV omitted from git",
+    "meta": {
+      "feature_pipeline": 2,
+      "quant_features": true,
+      "market_price_source": "lookup_1min",
+      "generated_at": "2026-11-15T14:39:58.626Z",
+      "days": 400,
+      "seed": 42,
+      "rows": 34962,
+      "first_slug_ts": 1760704200,
+      "last_slug_ts": 1794752100,
+      "feature_names": "(58 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "395d All-Time Quant 83f (2025-10-17 to 2026-11-15, 34,962 markets, 58 base + 25 eng features with vol_delta_buy_ratio_300s/60s, hurst_exponent, realized_vol_15m_norm)"
+  ]
+}

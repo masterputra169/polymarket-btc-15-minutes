@@ -33,7 +33,7 @@ import {
   candidateIndices, buildTrainingSnapshot, buildTrainingFeatures, printsToUpSeries, pricePointsToUpSeries,
   type HistoricalCandle, type LookupMarket,
 } from '../../src/engines/ml/trainingRow.ts';
-import { FI } from '../../src/engines/ml/featureMap.ts';
+import { FI, QUANT_FI } from '../../src/engines/ml/featureMap.ts';
 import { FEATURE_PIPELINE_VERSION, LOOKUP_PRICE_PIPELINE_VERSION } from '../../src/engines/ml/featureInputs.ts';
 import { gunzipSync } from 'zlib';
 
@@ -136,8 +136,7 @@ function parseArgs(): CliArgs {
     if (!raw.startsWith('--')) continue;
     const key = raw.replace('--', '');
     // Flags without value
-    if (key === 'tune') { args[key] = true; continue; }
-    if (key === 'deploy') { args[key] = true; continue; }
+    if (key === 'tune' || key === 'deploy' || key === 'quant-features') { args[key] = true; continue; }
     // Key-value pairs
     if (i + 1 < process.argv.length && !process.argv[i + 1].startsWith('--')) {
       args[key] = process.argv[i + 1];
@@ -257,7 +256,9 @@ async function fetchAllKlines(days) {
 }
 
 // ═══ FEATURE NAMES (CSV header) — the live feature map, in index order ═══
-const FEATURE_NAMES: string[] = Object.entries(FI)
+const QUANT_FEATURES = Boolean(ARGS['quant-features']);
+const ACTIVE_FI = QUANT_FEATURES ? QUANT_FI : FI;
+const FEATURE_NAMES: string[] = Object.entries(ACTIVE_FI)
   .sort((a, b) => a[1] - b[1])
   .map(([name]) => name);
 
@@ -336,6 +337,7 @@ async function main() {
   const metaPath = OUTPUT_FILE.replace(/\.csv$/i, '') + '.meta.json';
   const meta = {
     feature_pipeline: PIPELINE_VERSION,
+    quant_features: QUANT_FEATURES,
     market_price_source: TRADE_HISTORY_DIR ? 'trade_prints' : 'lookup_1min',
     generated_at: new Date().toISOString(),
     days: DAYS,

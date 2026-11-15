@@ -19,7 +19,9 @@ import {
   priceAtOrBefore, aggregate5m, candidateIndices, buildTrainingSnapshot, buildTrainingFeatures, printsToUpSeries, pricePointsToUpSeries,
   windowStartSecs, CANDLES_1M, type HistoricalCandle, type LookupMarket,
 } from '../trainingRow.ts';
-import { FI } from '../featureMap.ts';
+import { FI, QUANT_FI } from '../featureMap.ts';
+import * as MLState from '../state.ts';
+import { extractLiveFeaturesInPlace, featureBuf } from '../featureExtract.ts';
 
 const MIN = 60_000;
 
@@ -272,5 +274,60 @@ describe('pricePointsToUpSeries — last-print point queries equal the full hist
 
   test('empty answers and malformed points are skipped', () => {
     expect(pricePointsToUpSeries([[0, null], [60, 58, 1, 0.4], [120, 110, 3, 0.5], [180, 170, 0, 1.2]])).toEqual([[58, 0.6]]);
+  });
+});
+
+describe('Option B quant 58-base / 83-total feature extension & hot-swap compatibility', () => {
+  const candles = makeCandles(400);
+  const { snap } = snapshotAt(candles, 305);
+
+  test('QUANT_FI appends indices 54..57 while preserving 0..53 identically', () => {
+    expect(Object.keys(FI)).toHaveLength(54);
+    expect(Object.keys(QUANT_FI)).toHaveLength(58);
+    expect(QUANT_FI.vol_delta_buy_ratio_300s).toBe(54);
+    expect(QUANT_FI.vol_delta_buy_ratio_60s).toBe(55);
+    expect(QUANT_FI.hurst_exponent).toBe(56);
+    expect(QUANT_FI.realized_vol_15m_norm).toBe(57);
+  });
+
+  test('buildTrainingFeatures(snap, 58) extracts 58 bounded features and restores BASE_FEATURES', () => {
+    const before = MLState.BASE_FEATURES;
+    const f54 = buildTrainingFeatures(snap!, 54);
+    const f58 = buildTrainingFeatures(snap!, 58);
+    expect(f54).toHaveLength(54);
+    expect(f58).toHaveLength(58);
+    expect(f58.slice(0, 54)).toEqual(f54);
+    for (let i = 54; i < 58; i++) {
+      expect(Number.isFinite(f58[i])).toBe(true);
+      expect(f58[i]).toBeGreaterThanOrEqual(0);
+      expect(f58[i]).toBeLessThanOrEqual(1);
+    }
+    expect(MLState.BASE_FEATURES).toBe(before);
+  });
+
+  test('hot-swapping BASE_FEATURES between 54 (79f) and 58 (83f) shifts engineered offset cleanly', () => {
+    const prevBase = MLState.BASE_FEATURES;
+    const prevVer = MLState.modelVersion;
+    try {
+      MLState.setState({ modelVersion: 2 });
+      const { marketState, ruleProbUp } = buildMlFeatureInputs(snap!);
+      const payload = { ...marketState, ruleProbUp, ruleConfidence: Math.abs(ruleProbUp - 0.5) * 2 };
+
+      MLState.setBaseFeatureCount(54);
+      extractLiveFeaturesInPlace(payload);
+      const v79Eng0 = featureBuf[54]; // engineered delta_1m_capped at [54]
+
+      MLState.setBaseFeatureCount(58);
+      extractLiveFeaturesInPlace(payload);
+      const v83Quant54 = featureBuf[54]; // quant vol_delta_buy_ratio_300s at [54]
+      const v83Eng0 = featureBuf[58];    // engineered delta_1m_capped shifted cleanly to [58]
+
+      expect(v83Eng0).toBeCloseTo(v79Eng0, 12);
+      expect(v83Quant54).toBeGreaterThanOrEqual(0);
+      expect(v83Quant54).toBeLessThanOrEqual(1);
+    } finally {
+      MLState.setBaseFeatureCount(prevBase);
+      MLState.setState({ modelVersion: prevVer });
+    }
   });
 });

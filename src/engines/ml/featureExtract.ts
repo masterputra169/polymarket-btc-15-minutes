@@ -116,6 +116,8 @@ export function extractLiveFeaturesInPlace({
   bbWidth, bbPercentB, bbSqueeze, bbSqueezeIntensity,
   atrPct, atrRatio,
   volDeltaBuyRatio, volDeltaAccel,
+  volDeltaBuyRatio300s = null, volDeltaBuyRatio60s = null,
+  hurstExponent = null, realizedVolPct = null,
   emaDistPct, emaCrossSignal,
   stochK, stochKD,
   marketYesPrice, marketPriceMomentum, orderbookImbalance, spreadPct,
@@ -256,6 +258,18 @@ export function extractLiveFeaturesInPlace({
   const fr = fundingRate?.ratePct ?? 0;
   featureBuf[52] = Math.max(-1, Math.min(1, fr / 0.1));  // funding_rate_norm
   featureBuf[53] = 0; // funding_rate_change (no historical comparison live)
+
+  // [54-57] Quant microstructure & regime features — only written when model has 58 base features
+  if (S.BASE_FEATURES === 58) {
+    const buy300 = volDeltaBuyRatio300s ?? volDeltaBuyRatio ?? 0.5;
+    const buy60 = volDeltaBuyRatio60s ?? buy300;
+    const hurst = hurstExponent ?? 0.5;
+    const rvol = realizedVolPct ?? 0.15;
+    featureBuf[54] = Math.max(0, Math.min(1, Number.isFinite(buy300) ? buy300 : 0.5));
+    featureBuf[55] = Math.max(0, Math.min(1, Number.isFinite(buy60) ? buy60 : 0.5));
+    featureBuf[56] = Math.max(0, Math.min(1, Number.isFinite(hurst) ? hurst : 0.5));
+    featureBuf[57] = Math.max(0, Math.min(1, (Number.isFinite(rvol) ? rvol : 0.15) / 0.5));
+  }
 
   // [54-58] Smart money features — only written when model has 59 base features (v9a+)
   if (S.BASE_FEATURES >= 59) {

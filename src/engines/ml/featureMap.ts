@@ -30,6 +30,15 @@ export const FI = {
   funding_rate_norm: 52, funding_rate_change: 53,
 } as const;
 
+/** Extended 58-feature base map (54 core + 4 quant microstructure/regime features for Option B). */
+export const QUANT_FI: Record<string, number> = {
+  ...FI,
+  vol_delta_buy_ratio_300s: 54,
+  vol_delta_buy_ratio_60s: 55,
+  hurst_exponent: 56,
+  realized_vol_15m_norm: 57,
+};
+
 export function resolveFeatureIdx(splitName: string): number {
   if (S.featureNameToIdx) {
     const idx = S.featureNameToIdx.get(splitName);

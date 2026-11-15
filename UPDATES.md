@@ -8,14 +8,14 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 21:10 WIB_
+_Last updated: 2026-11-15 23:12 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
-| ML model | **`20261115-p2-5de02d` (Pipeline v2, 1-year `365d` LIVE)** · 32,096 mkts (`2025-11-15 → 2026-11-14`) · **76.35% Acc · 0.8579 AUC · 0.0159 ECE · +4.56% skill vs market** (`+6.12%` OOS head-to-head) |
-| ML previous (180d) | **`20261114-p2-9384fe` (Pipeline v2, retired)** · 14,606 mkts (`2026-05-18 → 2026-11-14`) · **76.18% Acc · 0.8473 AUC · 0.0331 ECE · +5.18% skill vs market** (1-click rollback via dashboard switcher) |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across 13 registered models + persistent per-model profile overrides (`bot/data/model_profiles.json`, `365d` profile: `mlConfMin=0.55`, `fokMlThreshold=0.68`, `58c` caps) |
+| ML model | **`20261115-p2-c3e0fd` (All-Time `395d` Quant, 83f LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.67% Test Acc · 0.8524 AUC · 0.0235 ECE · +5.95% skill vs market** (OOS `+$90.63` / `75.53%` ROI / `4.37` PF at `55c/58c`) |
+| ML previous (365d / 180d) | **`20261115-p2-5de02d` (`365d` 79f: 75.74% OOS Acc · 0.8467 AUC · 0.0263 ECE)** & **`20261114-p2-9384fe` (`180d` 79f)** — both available for 1-click hot-swap |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `83f` All-Time Quant & `79f` `365d`/`180d` models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `fokMlThreshold=0.68`, `58c` caps) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | $22.88 · 924 trades · 589W / 335L (63.7% WR lifetime preserved) |
 | Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
@@ -27,14 +27,14 @@ _Last updated: 2026-11-15 21:10 WIB_
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
 | Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
 | Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
-| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) |
+| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI overhaul |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 102 files / 1021 tests PASS |
+| Tests | 102 files / 1024 vitest PASS · 424 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -51,6 +51,27 @@ _Last updated: 2026-11-15 21:10 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 23:12 WIB — Option B: All-Time Quant ML Model (`20261115-p2-c3e0fd`, 83 Features / 34,962 Markets)
+
+**What changed:**
+1. **83-Feature Quant ML Pipeline (`QUANT_FI` 58 Base + 25 Engineered):**
+   - Extended [featureMap.ts](src/engines/ml/featureMap.ts), [featureInputs.ts](src/engines/ml/featureInputs.ts), [featureExtract.ts](src/engines/ml/featureExtract.ts), [trainingRow.ts](src/engines/ml/trainingRow.ts), and [signalComputation.ts](bot/src/engines/signalComputation.ts) with 4 quant microstructure/regime base features: `vol_delta_buy_ratio_300s` (idx 54), `vol_delta_buy_ratio_60s` (idx 55), `hurst_exponent` (idx 56), and `realized_vol_15m_norm` (idx 57).
+   - Preserved backward compatibility with `54`-base (`79`-feature) `180d` and `365d` models via dynamic `setBaseFeatureCount(baseCount)` in the live loader/predictor so users can hot-swap across all models in the dashboard without restart.
+   - Added `--quant-features` support in [generateTrainingData.mts](backtest/ml_training/generateTrainingData.mts) and unit tests in [featurePipeline.test.ts](src/engines/ml/__tests__/featurePipeline.test.ts).
+2. **All-Time Dataset Training (`2025-10-17` to `2026-11-15`, `34,962` Resolved Markets):**
+   - Generated `training_data_alltime.csv` (`34,962` rows, `0` NaNs across all 4 quant columns; `UP=17,376` / `DOWN=17,586`).
+   - Trained XGBoost (`100` Optuna trials, winner `#78`, `1,049` trees, recency `halflife=90d`: Test Acc `75.75%`, AUC `0.8526`, LogLoss `0.4680`, Brier `0.1572`, ECE `0.0245`) + LightGBM (`105` trees: Acc `75.58%`, AUC `0.8505`) -> Holdout-weighted Ensemble (`0.75 / 0.25`): Acc `75.67%`, AUC `0.8524`, ECE `0.0235`, Brier Skill `+5.95%`.
+   - All 4 quant features were retained (0 pruned): `realized_vol_15m_norm` ranked `#14/73` in XGBoost (gain `7.34`, `297` splits) & `#6/70` in LightGBM (`84` splits), `vol_delta_buy_ratio_60s` `#39/73` XGB / `#10/70` LGB, `hurst_exponent` `#53/73` XGB, and `vol_delta_buy_ratio_300s` `#64/73` XGB / `#18/70` LGB.
+3. **Head-to-Head OOS Comparison (`2026-10-22` to `2026-11-15`, `n=2,267`, CLOB V2 Taker Fee):**
+   - **`20261114-p2-9384fe` (`180d`, 79f):** Acc `75.30%`, AUC `0.8421`, Brier `0.1630` (Skill `+4.81%`), ECE `0.0370` · `p55_58_06`: `27` trades, `70.37%` WR, `+$17.91` (`33.17%` ROI, PF `2.08`).
+   - **`20261115-p2-5de02d` (`365d`, 79f):** Acc `75.74%`, AUC `0.8467`, Brier `0.1600` (Skill `+6.57%`), ECE `0.0263` · `p55_58_06`: `35` trades, `80.00%` WR, `+$47.08` (`67.26%` ROI, PF `4.25`).
+   - **`20261115-p2-c3e0fd` (`All-Time 395d Quant`, 83f):** Acc `75.12%`, AUC `0.8452`, Brier `0.1616` (Skill `+5.61%`), ECE `0.0346` · `conf >= 0.80` Acc **`96.07%`** (`n=713`, highest) · `p55_58_06`: **`60` trades, `78.33%` WR, `+$90.63` (`75.53%` ROI, PF `4.37`, MaxDD `$4.15`)** · `p45_72_04`: **`356` trades, `73.60%` WR, `+$179.02`**.
+   - Registered as `20261115-p2-c3e0fd`, deployed to `public/ml/`, added profile to `bot/data/model_profiles.json` (`mlConfMin=0.55`, `hardMlFloor=0.45`, `softEntryCap=0.58`, `baseHardCap=0.58`, `kellyProbShrink=0.60`, `fokMlThreshold=0.68`).
+4. **Verification:**
+   - Passed `npm run typecheck` (`frontend`, `bot`, `bot:core`, `scripts`), `npm test` (`102` files / `1,024` tests PASS), `npm run build` (`493` modules), `python -m ruff check` & `black --check` (`56` files unchanged), and `npm run test:ml:cov` (`424` passed, `98%` `mltrain` coverage including 83-feature `test_model_contract.py`).
 
 ---
 

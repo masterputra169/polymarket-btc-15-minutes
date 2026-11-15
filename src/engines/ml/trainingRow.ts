@@ -20,6 +20,7 @@
 import type { MarketCandle } from '../../hooks/computeIndicators.ts';
 import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS, WINDOW_MINUTES, type FeatureSnapshot } from './featureInputs.ts';
 import { extractLiveFeaturesInPlace, featureBuf } from './featureExtract.ts';
+import * as S from './state.ts';
 
 export interface HistoricalCandle extends MarketCandle {
   /** Candle open, epoch ms. */
@@ -204,10 +205,20 @@ export function buildTrainingSnapshot({
  */
 export function buildTrainingFeatures(snapshot: FeatureSnapshot, baseFeatureCount: number): number[] {
   const { marketState, ruleProbUp } = buildMlFeatureInputs(snapshot);
-  extractLiveFeaturesInPlace({
-    ...marketState,
-    ruleProbUp,
-    ruleConfidence: Math.abs(ruleProbUp - 0.5) * 2,
-  });
-  return Array.from(featureBuf.subarray(0, baseFeatureCount));
+  const prevBase = S.BASE_FEATURES;
+  try {
+    if (baseFeatureCount >= 54 && baseFeatureCount <= 59) {
+      S.setBaseFeatureCount(baseFeatureCount);
+    }
+    extractLiveFeaturesInPlace({
+      ...marketState,
+      ruleProbUp,
+      ruleConfidence: Math.abs(ruleProbUp - 0.5) * 2,
+    });
+    return Array.from(featureBuf.subarray(0, baseFeatureCount));
+  } finally {
+    if (S.BASE_FEATURES !== prevBase) {
+      S.setBaseFeatureCount(prevBase);
+    }
+  }
 }
