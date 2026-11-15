@@ -270,6 +270,7 @@ export async function executeDirectionalTrade({
   pathEfficiency = null,
   peakUpGapRatio = null,
   peakDownGapRatio = null,
+  leadLagImpulse = null,
 }, deps) {
   // ── ML availability gate ──
   // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
@@ -284,12 +285,28 @@ export async function executeDirectionalTrade({
 
   // ── Signal Confirmation Gate ──
   // Audit v2 H3: Edge-adaptive confirmation. High edge (≥15%) or high ML (≥80%) → fast entry.
-  // In a 15-min market, 3-poll wait (9s) can miss 2-5% price movement.
+  // Lead-lag 3s Binance impulse (openmarket) and R4 300s taker surge (Bwijn) also accelerate confirmation.
   const mlConf = mlResult.available ? mlResult.mlConfidence : null;
   const highEdge = edge.bestEdge != null && edge.bestEdge >= 0.15;
-  const requiredPolls = (mlConf != null && mlConf >= 0.80) ? 1
+  const r4Surge =
+    (volDelta?.r4Bullish === true && rec.side === 'UP') ||
+    (volDelta?.r4Bearish === true && rec.side === 'DOWN');
+  const leadLagFast =
+    leadLagImpulse?.active === true &&
+    leadLagImpulse.direction === rec.side &&
+    edge.bestEdge != null &&
+    edge.bestEdge >= 0.08;
+
+  let requiredPolls = (mlConf != null && mlConf >= 0.80) ? 1
     : highEdge ? Math.max(1, Math.ceil(SIGNAL_CONFIRM_POLLS / 2))
     : SIGNAL_CONFIRM_POLLS;
+  if (r4Surge) {
+    requiredPolls = Math.min(requiredPolls, Math.max(1, Math.ceil(SIGNAL_CONFIRM_POLLS / 3)));
+  }
+  if (leadLagFast) {
+    const lagPolls = Math.min(SIGNAL_CONFIRM_POLLS, Math.max(10, Math.ceil(SIGNAL_CONFIRM_POLLS / 12)));
+    requiredPolls = Math.min(requiredPolls, lagPolls);
+  }
 
   deps.updateConfirmation(rec.side);
 
@@ -303,7 +320,11 @@ export async function executeDirectionalTrade({
   if (requiredPolls < SIGNAL_CONFIRM_POLLS) {
     const fastReason = (mlConf != null && mlConf >= 0.80)
       ? `ML conf ${(mlConf * 100).toFixed(0)}% ≥ 80%`
-      : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
+      : leadLagFast
+        ? `3s lead-lag impulse ${leadLagImpulse.direction} (${leadLagImpulse.btcDelta3sPct.toFixed(3)}%)`
+        : r4Surge
+          ? `300s R4 taker surge (${((volDelta?.buyRatio300s ?? 0) * 100).toFixed(0)}%)`
+          : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
     log.info(`Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`);
   }
 
@@ -338,10 +359,12 @@ export async function executeDirectionalTrade({
     spread: orderbookUp?.spread ?? null,
     mlAccuracy: deps.getMLAccuracy?.() ?? null,
     buyRatio: volDelta?.buyRatio ?? null,
+    buyRatio300s: volDelta?.buyRatio300s ?? null,
     ptbSource: priceToBeat?.source ?? null,
     pathEfficiency,
     peakGapRatio: rec.side === 'UP' ? peakUpGapRatio : rec.side === 'DOWN' ? peakDownGapRatio : null,
     orderbookImbalance: orderbookSignal?.imbalance ?? null,
+    leadLagDirection: leadLagImpulse?.active ? leadLagImpulse.direction : null,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);

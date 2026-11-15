@@ -97,6 +97,12 @@ export interface TwapPhysics {
   sigmaEwma?: number | null;
   /** Change of the settlement estimate over the last 30 s, $ (null without history). */
   drift30: number | null;
+  /** Annualized Deribit BTC DVOL implied volatility (%) if available. */
+  dvolPct?: number | null;
+  /** Forward-looking per-second implied volatility derived from DVOL ($/sec). */
+  sigmaIv?: number | null;
+  /** P(UP) using 50/50 blend of realized spot vol and Deribit DVOL implied vol. */
+  pIv?: number | null;
 }
 
 export function twapPhysics(input: {
@@ -106,6 +112,8 @@ export function twapPhysics(input: {
   spotTicks: readonly Tick[];
   nowMs: number;
   endMs: number | null;
+  ivSigmaPerSec?: number | null;
+  dvolPct?: number | null;
 }): TwapPhysics | null {
   const { settle, ptb, endMs } = input;
   if (settle == null || ptb == null || endMs == null || !(ptb > 0)) return null;
@@ -113,9 +121,28 @@ export function twapPhysics(input: {
   if (!(left > 0) || left > 900) return null;
   const sigma = spotVolPerSecond(input.spotTicks);
   if (sigma == null || !(sigma > 0)) return null;
-  const sd = sigma * Math.sqrt(twapVarianceSeconds(left));
+  const tEffSqrt = Math.sqrt(twapVarianceSeconds(left));
+  const sd = sigma * tEffSqrt;
   if (!(sd > 0)) return null;
   const z = (settle - ptb) / sd;
   const sigmaEwma = spotVolPerSecondEwma(input.spotTicks);
-  return { p: normCdf(z), z, sd, sigmaEwma, drift30: input.settle30sAgo != null ? settle - input.settle30sAgo : null };
+  const ivSig = input.ivSigmaPerSec != null && Number.isFinite(input.ivSigmaPerSec) && input.ivSigmaPerSec > 0
+    ? input.ivSigmaPerSec
+    : null;
+  let pIv: number | null = null;
+  if (ivSig != null) {
+    const sigmaBlend = 0.5 * sigma + 0.5 * ivSig;
+    const sdIv = sigmaBlend * tEffSqrt;
+    pIv = sdIv > 0 ? normCdf((settle - ptb) / sdIv) : (settle > ptb ? 1 : settle < ptb ? 0 : 0.5);
+  }
+  return {
+    p: normCdf(z),
+    z,
+    sd,
+    sigmaEwma,
+    drift30: input.settle30sAgo != null ? settle - input.settle30sAgo : null,
+    dvolPct: ivSig != null ? (input.dvolPct ?? null) : null,
+    sigmaIv: ivSig,
+    pIv,
+  };
 }

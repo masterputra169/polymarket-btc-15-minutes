@@ -24,6 +24,10 @@ export interface VolumeDeltaResult {
   deltaAccel: number;
   cumDelta: number;
   buyDominant: boolean;
+  buyRatio300s: number;
+  buyRatio60s: number;
+  r4Bullish: boolean;
+  r4Bearish: boolean;
 }
 
 /**
@@ -88,6 +92,21 @@ export function computeVolumeDelta(
     cumDelta += (buy - sell);
   }
 
+  // Rolling 300s (last 5 x 1m candles) & 60s (latest 1m candle) taker buy ratios
+  // Adapted from Bwijn/polymarket-btc-5m-quant R4 (bn_taker_buy_ratio_pre_300 >= 0.755)
+  let buyVol300 = 0;
+  let totalVol300 = 0;
+  const s300 = Math.max(0, len - 5);
+  for (let i = s300; i < len; i++) {
+    buyVol300 += candles[i].takerBuyVolume || 0;
+    totalVol300 += candles[i].volume || 0;
+  }
+  const buyRatio300s = totalVol300 > 0 ? buyVol300 / totalVol300 : buyRatio;
+
+  const vol60 = lastCandle.volume || 0;
+  const buy60 = lastCandle.takerBuyVolume || 0;
+  const buyRatio60s = vol60 > 0 ? buy60 / vol60 : buyRatio300s;
+
   return {
     buyRatio,        // 0-1 (>0.5 = buyers dominating)
     sellRatio,       // 0-1 (>0.5 = sellers dominating)
@@ -95,5 +114,9 @@ export function computeVolumeDelta(
     deltaAccel,      // Change in buy ratio (momentum)
     cumDelta,        // Cumulative net BTC delta
     buyDominant: buyRatio > 0.52, // Slight threshold for significance
+    buyRatio300s,
+    buyRatio60s,
+    r4Bullish: buyRatio300s >= 0.755,
+    r4Bearish: buyRatio300s <= 0.245,
   };
 }

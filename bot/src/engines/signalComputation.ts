@@ -20,6 +20,65 @@ import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
 import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS } from '../../../src/engines/ml/featureInputs.ts';
 import { aggregate5m, CANDLES_5M } from '../../../src/engines/ml/trainingRow.ts';
+import { getRecentPriceWindow, type BinancePriceWindow } from '../streams/binanceWs.ts';
+
+export interface LeadLagImpulse {
+  active: boolean;
+  direction: 'UP' | 'DOWN' | null;
+  btcDelta3sUsd: number;
+  btcDelta3sPct: number;
+  marketMomentum: number;
+  clobQuietMs: number | null;
+}
+
+/**
+ * Detect a fresh 3-second Binance BTC impulse that Polymarket CLOB tokens
+ * have not yet finished repricing (adapted from gregyoung14/openmarket).
+ */
+export function computeLeadLagImpulse({
+  binance3s,
+  marketMomentum,
+  clobQuietMs = null,
+  minBtcMovePct = 0.035,
+  maxMarketResponse = 0.015,
+}: {
+  binance3s: BinancePriceWindow | null | undefined;
+  marketMomentum: number;
+  clobQuietMs?: number | null;
+  minBtcMovePct?: number;
+  maxMarketResponse?: number;
+}): LeadLagImpulse {
+  if (!binance3s || binance3s.tickCount < 2 || !Number.isFinite(binance3s.deltaPct)) {
+    return {
+      active: false,
+      direction: null,
+      btcDelta3sUsd: 0,
+      btcDelta3sPct: 0,
+      marketMomentum: Number.isFinite(marketMomentum) ? marketMomentum : 0,
+      clobQuietMs,
+    };
+  }
+  const deltaPct = binance3s.deltaPct;
+  const deltaUsd = binance3s.deltaUsd;
+  const mom = Number.isFinite(marketMomentum) ? marketMomentum : 0;
+  let direction: 'UP' | 'DOWN' | null = null;
+  let active = false;
+  if (deltaPct >= minBtcMovePct) {
+    direction = 'UP';
+    active = mom <= maxMarketResponse;
+  } else if (deltaPct <= -minBtcMovePct) {
+    direction = 'DOWN';
+    active = mom >= -maxMarketResponse;
+  }
+  return {
+    active,
+    direction,
+    btcDelta3sUsd: deltaUsd,
+    btcDelta3sPct: deltaPct,
+    marketMomentum: mom,
+    clobQuietMs,
+  };
+}
 
 // ── Module state: market price ring buffer (for momentum calculation) ──
 const marketUpHistory = { buf: new Float64Array(24), idx: 0, count: 0 };
@@ -205,6 +264,8 @@ export function computeSignals({
   // Chainlink-based estimate of the price the window settles on (engines/settlePrice.ts);
   // used wherever BTC is compared with the price to beat. Falls back to lastPrice.
   settlePrice = null,
+  clobQuietMs = null,
+  binanceRecent3s = null,
 }: any) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
@@ -284,6 +345,13 @@ export function computeSignals({
       marketPriceMomentum = marketUp - marketUpHistory.buf[pastIdx];
     }
   }
+
+  const recent3s = binanceRecent3s ?? getRecentPriceWindow(3_000, now);
+  const leadLagImpulse = computeLeadLagImpulse({
+    binance3s: recent3s,
+    marketMomentum: marketPriceMomentum,
+    clobQuietMs,
+  });
 
   // ── Score direction (merge trained + live signal modifiers) ──
   // M19: Trained × live multiplication may double-correct if both respond to same signal.
@@ -433,7 +501,7 @@ export function computeSignals({
     // Market prices
     useClobWs, marketUp, marketDown,
     orderbookUp, orderbookDown, orderbookSignal,
-    arb, obFlow, marketPriceMomentum,
+    arb, obFlow, marketPriceMomentum, leadLagImpulse,
     pathEfficiency, peakUpGapRatio, peakDownGapRatio,
 
     // Price to beat (potentially updated)

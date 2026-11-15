@@ -56,6 +56,7 @@ import { getOrderFlowFeatures } from './engines/orderFlowFeatures.ts';
 import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
+import { refreshDeribitIv, getDeribitIvSnapshot } from './adapters/deribitIv.ts';
 import { estimateSettlePrice, BasisTracker } from './engines/settlePrice.ts';
 import { twapPhysics, SettleHistory } from './engines/twapPhysics.ts';
 import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
@@ -1390,10 +1391,14 @@ export async function pollOnce() {
     const settlePrice = settle.price ?? lastPrice;
     if (settle.price != null) settleHistory.add(now, settle.price);
 
+    refreshDeribitIv(now);
+    const deribitIv = getDeribitIvSnapshot(lastPrice, now);
+
     const sig = computeSignals({
       settlePrice,
       klines1m, klines5m, lastPrice, poly, priceToBeat, marketSlug, now,
       clobUsable: clobFeed.usable,
+      clobQuietMs: Number.isFinite(clobFeed.quietMs) ? clobFeed.quietMs : null,
       getClobUpPrice, getClobDownPrice, getClobOrderbook, getClobRecentTrades,
       feedbackStats, timeLeftMin,
       candleWindowMinutes: CONFIG.candleWindowMinutes,
@@ -1416,7 +1421,7 @@ export async function pollOnce() {
       momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
       useClobWs, marketUp, marketDown,
       orderbookUp, orderbookDown, orderbookSignal,
-      arb, obFlow, marketPriceMomentum,
+      arb, obFlow, marketPriceMomentum, leadLagImpulse,
       pathEfficiency, peakUpGapRatio, peakDownGapRatio,
       scored, timeAware, ruleEdge,
       mlResult, ensembleUp, ensembleDown, mlAgreesWithRules,
@@ -2012,6 +2017,8 @@ export async function pollOnce() {
           settle: settle.price, settle30sAgo: settleHistory.at(nowP - 30_000),
           ptb: priceToBeat.value, spotTicks: getSpotTicksBetween(nowP - 121_000, nowP),
           nowMs: nowP, endMs: currentMarketEndMs,
+          ivSigmaPerSec: deribitIv.sigmaPerSec,
+          dvolPct: deribitIv.dvolPct,
         });
       }
     } catch { phys = null; }
@@ -2744,6 +2751,7 @@ export async function pollOnce() {
           smartFlowSignal,
           mcResult,
           pathEfficiency, peakUpGapRatio, peakDownGapRatio,
+          leadLagImpulse,
         }, {
           updateConfirmation,
           isSignalStable,
@@ -2901,6 +2909,8 @@ export async function pollOnce() {
       settlePrice, settlePriceSource: settle.source,
       twapNow: getLatestTwap()?.value ?? null,
       twapFeed: getTwapFeedHealth(),
+      deribitIv,
+      leadLagImpulse,
       jev: getJevStatus(),
 
       // Indicators (full objects)

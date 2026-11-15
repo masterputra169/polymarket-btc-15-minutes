@@ -307,6 +307,8 @@ export function applyTradeFilters({
   pathEfficiency,  // 60s BTC path efficiency |net| / sum(|step|) in [0, 1] (null if <10s history)
   peakGapRatio,    // current |BTC - PTB| / window peak gap in signal direction in [0, 1] (null if peak < $15)
   orderbookImbalance = null, // UP bid pressure - DOWN bid pressure in [-1, 1]
+  buyRatio300s = null,       // 300s (5-minute) Binance taker buy ratio in [0, 1]
+  leadLagDirection = null,   // active 3s Binance lead-lag impulse direction ('UP'|'DOWN'|null)
 }: Record<string, any>) {
   const reasons = [];
 
@@ -786,6 +788,22 @@ export function applyTradeFilters({
     if (opposingMag > T.maxOpposingObImbalance) {
       reasons.push(`Opposing L2 orderbook imbalance ${(orderbookImbalance * 100).toFixed(0)}% against ${signalSide} (> ${(T.maxOpposingObImbalance * 100).toFixed(0)}% limit)`);
     }
+  }
+
+  // 20d. 300s (5-minute) Binance Taker Buy Ratio gate (Bwijn R4 microstructure filter)
+  // Blocks UP when 5m taker buy ratio is heavily seller-dominated (< 0.5 - T)
+  // and DOWN when 5m taker buy ratio is heavily buyer-dominated (> 0.5 + T).
+  if (T.maxOpposingTaker300s > 0 && buyRatio300s != null && Number.isFinite(buyRatio300s) && signalSide) {
+    const opposingTaker = signalSide === 'UP' ? (0.5 - buyRatio300s) : (buyRatio300s - 0.5);
+    if (opposingTaker > T.maxOpposingTaker300s) {
+      reasons.push(`Opposing 300s taker flow: buyRatio300s ${(buyRatio300s * 100).toFixed(0)}% vs ${signalSide} (opposing ${(opposingTaker * 100).toFixed(0)}% > max ${(T.maxOpposingTaker300s * 100).toFixed(0)}%)`);
+    }
+  }
+
+  // 20e. 3s Binance Lead-Lag Impulse opposition gate (openmarket microstructure guard)
+  // Never buy into a fresh 3-second BTC impulse moving against our signal side.
+  if (T.blockOpposingLeadLag >= 0.5 && leadLagDirection && signalSide && leadLagDirection !== signalSide) {
+    reasons.push(`Opposing 3s BTC lead-lag impulse: Binance spiking ${leadLagDirection} vs signal ${signalSide}`);
   }
 
   const sessionQuality = SESSION_QUALITY[session] ?? 0.70;

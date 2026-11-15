@@ -102,6 +102,8 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   minPathEfficiency: { env: 'FILTER_MIN_PATH_EFFICIENCY', def: 0, min: 0, max: 1, doc: 'minimum 60s BTC path efficiency |net| / sum(|step|) to avoid chop (0 disables)' },
   minPeakGapRatio: { env: 'FILTER_MIN_PEAK_GAP_RATIO', def: 0, min: 0, max: 1, doc: 'minimum |BTC - PTB| / peakGap ratio in signal direction to avoid fading momentum (0 disables)' },
   maxOpposingObImbalance: { env: 'FILTER_MAX_OPPOSING_OB_IMBALANCE', def: 0, min: 0, max: 1, doc: 'maximum opposing L2 orderbook imbalance against signalSide before blocking entry (0 disables)' },
+  maxOpposingTaker300s: { env: 'FILTER_MAX_OPPOSING_TAKER_300S', def: 0, min: 0, max: 0.5, doc: 'maximum opposing 300s Binance taker flow |buyRatio300s - 0.5| against signalSide in [0, 0.5] (0 disables)' },
+  blockOpposingLeadLag: { env: 'FILTER_BLOCK_OPPOSING_LEAD_LAG', def: 0, min: 0, max: 1, doc: 'block entry when 3s Binance lead-lag impulse opposes signalSide (>=0.5 enables, 0 disables)' },
 };
 
 export type FilterThresholdKey = keyof typeof FILTER_THRESHOLD_SPECS;

@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 19:26 WIB_
+_Last updated: 2026-11-15 21:10 WIB_
 
 | Area | State |
 |---|---|
@@ -26,14 +26,15 @@ _Last updated: 2026-11-15 19:26 WIB_
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
 | Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
 | Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
-| Microstructure gates | **Gate 20a, 20b & 20c active** (`FILTER_MIN_PATH_EFFICIENCY=0.08` anti-chop, `FILTER_MIN_PEAK_GAP_RATIO=0.55` anti-retrace, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30` anti-opposing L2 flow) |
+| Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
+| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI overhaul |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 100 files / 1013 tests PASS |
+| Tests | 102 files / 1021 tests PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -50,6 +51,24 @@ _Last updated: 2026-11-15 19:26 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-15 21:10 WIB — Top 3 GitHub Quant Upgrades: 300s Taker Flow, Deribit DVOL IV & 3s Lead-Lag Impulse
+
+**What changed:**
+1. **Upgrade 1 — 300s (5m) & 60s (1m) Binance Taker Buy Ratio (`src/indicators/volumedelta.ts`, `bot/src/safety/tradeFilters.ts` Gate `20d`):**
+   - Adapted from `Bwijn/polymarket-btc-5m-quant` (`R4: bn_taker_buy_ratio_pre_300 >= 0.755`): extended `computeVolumeDelta` with rolling 5-candle `buyRatio300s`, 1-candle `buyRatio60s`, and regime flags `r4Bullish` (`>= 0.755`) / `r4Bearish` (`<= 0.245`).
+   - Added Gate `20d` (`FILTER_MAX_OPPOSING_TAKER_300S=0.22` in `.env`, defaulting `0` to preserve `tradeFilters.golden.test.ts` invariants), blocking `UP` when 5m taker buy `< 28%` and `DOWN` when `> 72%`; aligned R4 flow accelerates confirmation to `60/180` polls.
+2. **Upgrade 2 — Forward-Looking Deribit BTC Implied Volatility (`bot/src/adapters/deribitIv.ts`, `bot/src/engines/twapPhysics.ts`):**
+   - Adapted from `djienne/POLYMARKET_UP_DOWN_DERIBIT_STRATEGY_15m`: added a zero-auth, 60s-cached background poller for Deribit's public BTC `DVOL` index, converting annualized `DVOL` (%) into spot-scaled `sigmaPerSec` (`$/sec`).
+   - Extended `twapPhysics` with `dvolPct`, `sigmaIv`, and 50/50 realized+implied blended `pIv` while keeping baseline `p`, `z`, and `sd` invariant, and exposed `deribitIv` in the live `loop.ts` WebSocket broadcast.
+3. **Upgrade 3 — 3-Second Binance $\rightarrow$ Polymarket Lead-Lag Impulse (`bot/src/streams/binanceWs.ts`, `bot/src/engines/signalComputation.ts`, `bot/src/engines/tradePipeline.ts`, Gate `20e`):**
+   - Adapted from `gregyoung14/openmarket`: added a 15-second tick ring buffer in `binanceWs.ts` (`getRecentPriceWindow(3000)`) and `computeLeadLagImpulse()` detecting sharp 3s BTC moves (`|deltaPct| >= 0.035%`) before CLOB token momentum responds (`|marketMomentum| <= 0.015`).
+   - Added Gate `20e` (`FILTER_BLOCK_OPPOSING_LEAD_LAG=1`, defaulting `0`) blocking entries against an active 3s BTC impulse, and accelerated aligned impulses (`edge >= 8%`) from `180` to `15` confirmation polls (~0.75s) to hit stale asks before repricing.
+4. **Verification:**
+   - Added [quantUpgrades.test.ts](bot/src/engines/__tests__/quantUpgrades.test.ts) & [quantUpgrades.pipeline.test.ts](bot/src/engines/__tests__/quantUpgrades.pipeline.test.ts).
+   - Passed `npm run typecheck` (`frontend`, `bot`, `bot:core`, `scripts`), `npm test` (`102` files / `1021` tests PASS including `tradeFilters.golden.test.ts`), and `npm run build` (`493` modules).
 
 ---
 
