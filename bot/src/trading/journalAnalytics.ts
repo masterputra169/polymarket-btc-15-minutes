@@ -5,12 +5,15 @@
  * Cached in-memory; recomputes only when trade count changes.
  */
 
-import { readFileSync, existsSync, statSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { marginReport } from './breakevenMargin.ts';
 
 const log = createLogger('JournalAnalytics');
+
+export const ARCHIVE_ID_RE = /^archive_[a-zA-Z0-9_-]+$/;
 
 // Cache
 let _cache = null;
@@ -19,6 +22,29 @@ let _lastComputeMs = 0;
 let _lastJournalMtimeMs = 0;   // track file modification time
 let _lastAuditMtimeMs = 0;
 const RECOMPUTE_INTERVAL_MS = 15_000; // throttle recompute to max every 15s
+
+// Archive caches (archives are immutable snapshots once written, keyed by id + mtime)
+const ARCHIVE_LIST_TTL_MS = 30_000;
+let _archiveListCache: { at: number; items: JournalArchiveSummary[] } | null = null;
+const _archiveAnalyticsCache = new Map<string, { mtimeMs: number; data: any }>();
+
+export interface JournalArchiveSummary {
+  id: string;
+  label: string;
+  note: string | null;
+  createdAt: string | null;
+  modelId: string | null;
+  trades: number;
+  wins: number;
+  losses: number;
+  wr: number;
+  pnl: number;
+  roi: number;
+  startBankroll: number | null;
+  endBankroll: number | null;
+  firstTs: number | null;
+  lastTs: number | null;
+}
 
 // Session definitions (ET hours)
 const SESSIONS = {
@@ -51,10 +77,16 @@ export function getJournalAnalytics(currentTradeCount) {
     journalMtime !== _lastJournalMtimeMs ||
     auditMtime !== _lastAuditMtimeMs;
 
-  if (!dataChanged) return _cache;
+  const archives = listJournalArchives();
+
+  if (!dataChanged) {
+    if (_cache) _cache.archives = archives;
+    return _cache;
+  }
 
   try {
     _cache = computeAnalytics();
+    _cache.archives = archives;
     _lastTradeCount = currentTradeCount;
     _lastComputeMs = now;
     _lastJournalMtimeMs = journalMtime;
@@ -62,6 +94,7 @@ export function getJournalAnalytics(currentTradeCount) {
   } catch (err) {
     log.warn(`Analytics computation failed: ${err.message}`);
     if (!_cache) _cache = emptyAnalytics();
+    _cache.archives = archives;
   }
 
   return _cache;
@@ -70,13 +103,28 @@ export function getJournalAnalytics(currentTradeCount) {
 /** Get file mtime in ms, 0 if not found. */
 function _safeFileMtime(filePath) {
   try {
-    return existsSync(filePath) ? statSync(filePath).mtimeMs : 0;
+    return filePath && existsSync(filePath) ? statSync(filePath).mtimeMs : 0;
   } catch { return 0; }
 }
 
-/** Force recompute on next call. */
+/** Force recompute on next call (also clears archive caches). */
 export function invalidateAnalyticsCache() {
   _lastTradeCount = -1;
+  _archiveListCache = null;
+  _archiveAnalyticsCache.clear();
+}
+
+function emptyPatterns() {
+  return {
+    totalTrades: 0, totalWins: 0, totalLosses: 0,
+    totalPnl: 0, overallWr: 0,
+    brier: null, brierN: 0, logLoss: null, logLossN: 0,
+    totalVolume: 0, totalCost: 0, totalEvents: 0, roi: 0,
+    avgPnlWin: 0, avgPnlLoss: 0, avgHoldWin: 0, avgHoldLoss: 0,
+    longestWinStreak: 0, longestLossStreak: 0,
+    currentStreak: { type: 'loss', count: 0 },
+    bestHour: null, worstHour: null, bestSession: null, worstSession: null, bestDow: null, worstDow: null,
+  };
 }
 
 function emptyAnalytics() {
@@ -86,19 +134,46 @@ function emptyAnalytics() {
     dayOfWeek: DOW_NAMES.map(d => ({ day: d, trades: 0, wins: 0, losses: 0, pnl: 0, wr: 0 })),
     equityCurve: [],
     events: [],
-    patterns: { totalTrades: 0, totalPnl: 0, overallWr: 0 },
+    patterns: emptyPatterns(),
     margin: marginReport([]),
+    actualPnl: null,
+    sources: { journal: 0, verified: 0, verifiedOverrides: 0, total: 0 },
+    archives: [],
     computedAt: Date.now(),
   };
 }
 
+function defaultAuditFilePath() {
+  return BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl');
+}
+
 /**
- * Parse all journal files and compute full analytics.
+ * Parse all active journal files and compute full analytics.
  */
 function computeAnalytics() {
-  const trades = loadTradeJournal();
-  const verifiedTrades = loadVerifiedJournal();
-  const auditEvents = loadStateAudit();
+  return computeAnalyticsFromFiles({
+    journalFile: BOT_CONFIG.journalFile,
+    verifiedJournalFile: BOT_CONFIG.verifiedJournalFile,
+    stateAuditFile: defaultAuditFilePath(),
+  });
+}
+
+/**
+ * Shared analytics computation across any journal + audit + optional verified file set.
+ * Used for both the live/current session and read-only archived sessions.
+ */
+export function computeAnalyticsFromFiles({
+  journalFile,
+  verifiedJournalFile = null,
+  stateAuditFile = null,
+}: {
+  journalFile: string;
+  verifiedJournalFile?: string | null;
+  stateAuditFile?: string | null;
+}) {
+  const trades = loadJsonlFile(journalFile);
+  const verifiedTrades = verifiedJournalFile ? loadVerifiedJournal(verifiedJournalFile) : [];
+  const auditEvents = stateAuditFile ? loadJsonlFile(stateAuditFile) : [];
 
   // Filter to real trades only (exclude DRY_RUN, REJECTED, UNWIND without PnL)
   const journalReal = trades.filter(t => {
@@ -195,12 +270,285 @@ function computeAnalytics() {
   };
 }
 
+// ─────────────── Archive Discovery & Loading ───────────────
+
+function readJsonSafe(filePath: string): Record<string, any> | null {
+  try {
+    if (!existsSync(filePath)) return null;
+    return JSON.parse(readFileSync(filePath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+function resolveArchivePaths(archiveDir: string) {
+  const candidates = ['trade_journal.jsonl', 'trade_journal.live.jsonl'];
+  const journalFile = candidates.map(f => join(archiveDir, f)).find(p => existsSync(p)) ?? null;
+  if (!journalFile) return null;
+  const auditCandidates = ['state_audit.jsonl', 'state_audit.live.jsonl'];
+  const stateAuditFile = auditCandidates.map(f => join(archiveDir, f)).find(p => existsSync(p)) ?? null;
+  const verifiedCandidates = ['verified_journal.jsonl', 'verified_journal.live.jsonl'];
+  const verifiedJournalFile = verifiedCandidates.map(f => join(archiveDir, f)).find(p => existsSync(p)) ?? null;
+  const stateFile = ['state.json', 'state.live.json'].map(f => join(archiveDir, f)).find(p => existsSync(p)) ?? null;
+  const metaFile = join(archiveDir, 'archive_meta.json');
+  return { journalFile, stateAuditFile, verifiedJournalFile, stateFile, metaFile };
+}
+
+function loadOrComputeArchive(archiveId: string) {
+  if (!ARCHIVE_ID_RE.test(archiveId)) return null;
+  const baseDir = dirname(BOT_CONFIG.journalFile);
+  const archiveDir = join(baseDir, archiveId);
+  if (!existsSync(archiveDir)) return null;
+
+  const paths = resolveArchivePaths(archiveDir);
+  if (!paths) return null;
+
+  const journalMtime = _safeFileMtime(paths.journalFile);
+  const cached = _archiveAnalyticsCache.get(archiveId);
+  if (cached && cached.mtimeMs === journalMtime) {
+    return cached.data;
+  }
+
+  const meta = readJsonSafe(paths.metaFile);
+  const archivedState = paths.stateFile ? readJsonSafe(paths.stateFile) : null;
+  const analytics = computeAnalyticsFromFiles({
+    journalFile: paths.journalFile,
+    verifiedJournalFile: paths.verifiedJournalFile,
+    stateAuditFile: paths.stateAuditFile,
+  });
+
+  const events = analytics.events ?? [];
+  const curve = analytics.equityCurve ?? [];
+  const tradeTs = events.map(e => e.ts).filter((t): t is number => typeof t === 'number' && Number.isFinite(t));
+  const firstTs = tradeTs.length > 0 ? Math.min(...tradeTs) : (curve[0]?.ts ?? null);
+  const lastTs = tradeTs.length > 0 ? Math.max(...tradeTs) : (curve[curve.length - 1]?.ts ?? null);
+
+  const startBankroll =
+    typeof meta?.startBankroll === 'number' ? meta.startBankroll
+      : (analytics.actualPnl?.firstBankroll ?? (curve[0]?.bankroll ?? null));
+  const endBankroll =
+    typeof meta?.endBankroll === 'number' ? meta.endBankroll
+      : (typeof archivedState?.bankroll === 'number' ? archivedState.bankroll
+        : (analytics.actualPnl?.lastBankroll ?? (curve[curve.length - 1]?.bankroll ?? null)));
+
+  const summary: JournalArchiveSummary = {
+    id: archiveId,
+    label: typeof meta?.label === 'string' && meta.label.trim() ? meta.label.trim() : archiveId.replace(/^archive_/, ''),
+    note: typeof meta?.note === 'string' ? meta.note : null,
+    createdAt: typeof meta?.createdAt === 'string' ? meta.createdAt : (lastTs ? new Date(lastTs).toISOString() : null),
+    modelId: typeof meta?.modelId === 'string' ? meta.modelId : null,
+    trades: analytics.patterns?.totalTrades ?? 0,
+    wins: analytics.patterns?.totalWins ?? 0,
+    losses: analytics.patterns?.totalLosses ?? 0,
+    wr: analytics.patterns?.overallWr ?? 0,
+    pnl: analytics.patterns?.totalPnl ?? 0,
+    roi: analytics.patterns?.roi ?? 0,
+    startBankroll,
+    endBankroll,
+    firstTs,
+    lastTs,
+  };
+
+  const full = { ...analytics, archiveMeta: summary };
+  _archiveAnalyticsCache.set(archiveId, { mtimeMs: journalMtime, data: full });
+  return full;
+}
+
+/**
+ * List read-only trade journal archives found in bot/data/archive_*.
+ * Results are cached for ARCHIVE_LIST_TTL_MS so poll loops stay allocation-light.
+ */
+export function listJournalArchives(): JournalArchiveSummary[] {
+  const now = Date.now();
+  if (_archiveListCache && (now - _archiveListCache.at) < ARCHIVE_LIST_TTL_MS) {
+    return _archiveListCache.items;
+  }
+
+  const baseDir = dirname(BOT_CONFIG.journalFile);
+  if (!existsSync(baseDir)) {
+    _archiveListCache = { at: now, items: [] };
+    return [];
+  }
+
+  const items: JournalArchiveSummary[] = [];
+  try {
+    const entries = readdirSync(baseDir, { withFileTypes: true });
+    for (const ent of entries) {
+      if (!ent.isDirectory() || !ARCHIVE_ID_RE.test(ent.name)) continue;
+      const loaded = loadOrComputeArchive(ent.name);
+      if (loaded?.archiveMeta) items.push(loaded.archiveMeta);
+    }
+  } catch (err) {
+    log.debug(`Archive scan failed: ${err.message}`);
+  }
+
+  items.sort((a, b) => (b.lastTs ?? 0) - (a.lastTs ?? 0) || b.id.localeCompare(a.id));
+  _archiveListCache = { at: now, items };
+  return items;
+}
+
+/**
+ * Compute/return full analytics payload for a specific archive id.
+ * Strictly validates archiveId against ARCHIVE_ID_RE (no path traversal).
+ */
+export function getArchivedJournalAnalytics(archiveId: string) {
+  const loaded = loadOrComputeArchive(archiveId);
+  if (!loaded) return null;
+  return {
+    ...loaded,
+    archives: listJournalArchives(),
+  };
+}
+
+export interface ArchiveSessionOptions {
+  dataDir?: string;
+  archiveId: string;
+  label: string;
+  note?: string;
+  modelId?: string | null;
+  newBankroll?: number;
+  suffix?: string;
+}
+
+/**
+ * Copy active journal/state/audit/feedback files into an immutable archive directory
+ * and reset the active session cleanly to `newBankroll` with 0 trades.
+ */
+export function archiveSessionData({
+  dataDir = dirname(BOT_CONFIG.journalFile),
+  archiveId,
+  label,
+  note = '',
+  modelId = null,
+  newBankroll = 100,
+  suffix = '',
+}: ArchiveSessionOptions) {
+  if (!ARCHIVE_ID_RE.test(archiveId)) {
+    throw new Error(`Invalid archiveId "${archiveId}" (must match ${ARCHIVE_ID_RE})`);
+  }
+  if (!Number.isFinite(newBankroll) || newBankroll <= 0) {
+    throw new Error(`Invalid newBankroll: ${newBankroll}`);
+  }
+  const archiveDir = join(dataDir, archiveId);
+  if (existsSync(archiveDir)) {
+    throw new Error(`Archive directory already exists: ${archiveDir}`);
+  }
+
+  const journalName = `trade_journal${suffix}.jsonl`;
+  const stateName = `state${suffix}.json`;
+  const auditName = `state_audit${suffix}.jsonl`;
+  const auditPath = join(dataDir, auditName);
+  const journalPath = join(dataDir, journalName);
+  const statePath = join(dataDir, stateName);
+
+  const prevState = readJsonSafe(statePath);
+  const prevAudit = existsSync(auditPath) ? loadJsonlFile(auditPath) : [];
+  const prevActual = computeActualPnlFromAudit(prevAudit);
+  const endBankroll = typeof prevState?.bankroll === 'number'
+    ? prevState.bankroll
+    : (prevActual?.lastBankroll ?? null);
+  const startBankroll = prevActual?.firstBankroll ?? (typeof prevState?.startOfDayBankroll === 'number' ? prevState.startOfDayBankroll : null);
+
+  mkdirSync(archiveDir, { recursive: true });
+  const filesToCopy = [
+    journalName,
+    stateName,
+    auditName,
+    `${auditName}.1`,
+    `${auditName}.2`,
+    `${auditName}.3`,
+    `verified_journal${suffix}.jsonl`,
+    'profit_target.json',
+    'feedback.json',
+    'signal_perf.json',
+  ];
+  const archivedFiles: string[] = [];
+  for (const name of filesToCopy) {
+    const src = join(dataDir, name);
+    if (existsSync(src)) {
+      copyFileSync(src, join(archiveDir, name));
+      archivedFiles.push(name);
+    }
+  }
+
+  const nowMs = Date.now();
+  const roundedBankroll = roundMoney(newBankroll);
+  const meta = {
+    id: archiveId,
+    label: label.trim() || archiveId.replace(/^archive_/, ''),
+    note: note || null,
+    modelId: modelId ?? null,
+    createdAt: new Date(nowMs).toISOString(),
+    startBankroll,
+    endBankroll,
+    totalTrades: prevState?.totalTrades ?? null,
+    wins: prevState?.wins ?? null,
+    losses: prevState?.losses ?? null,
+    archivedFiles,
+  };
+  writeFileSync(join(archiveDir, 'archive_meta.json'), JSON.stringify(meta, null, 2));
+
+  // Reset active session state + empty journal + initial audit event after archive succeeds
+  const freshState = {
+    bankroll: roundedBankroll,
+    peakBankroll: roundedBankroll,
+    startOfDayBankroll: roundedBankroll,
+    dayStartMs: nowMs,
+    currentPosition: null,
+    pendingCost: 0,
+    consecutiveLosses: 0,
+    totalTrades: 0,
+    wins: 0,
+    losses: 0,
+    trades: [],
+    lastSettledSlug: null,
+    lastSettledTs: 0,
+    lastSettlementMs: 0,
+    cutLossCount: 0,
+    marketTradeCounts: {},
+    lastLossTimestamp: 0,
+    tradeTimestamps: [],
+    pendingRedeems: [],
+  };
+  writeFileSync(statePath, JSON.stringify(freshState, null, 2));
+  writeFileSync(journalPath, '');
+  writeFileSync(
+    auditPath,
+    JSON.stringify({
+      type: 'SET_BANKROLL',
+      prev: endBankroll,
+      next: roundedBankroll,
+      peakBankroll: roundedBankroll,
+      source: 'session_reset',
+      archiveId,
+      _ts: nowMs,
+    }) + '\n',
+  );
+
+  if (suffix === '') {
+    const wibDate = new Date(nowMs).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+    writeFileSync(
+      join(dataDir, 'profit_target.json'),
+      JSON.stringify({ wibDate, baseline: roundedBankroll, targetReached: false, savedAt: nowMs }, null, 2),
+    );
+    if (existsSync(join(dataDir, 'feedback.json'))) {
+      writeFileSync(join(dataDir, 'feedback.json'), '[]');
+    }
+    if (existsSync(join(dataDir, 'signal_perf.json'))) {
+      writeFileSync(join(dataDir, 'signal_perf.json'), '{}');
+    }
+  }
+
+  invalidateAnalyticsCache();
+  return { ok: true, archiveId, archiveDir, meta, archivedFiles };
+}
+
 // ─────────────── Data Loading ───────────────
 
-function loadTradeJournal() {
+function loadJsonlFile(filePath: string) {
   try {
-    if (!existsSync(BOT_CONFIG.journalFile)) return [];
-    const raw = readFileSync(BOT_CONFIG.journalFile, 'utf-8');
+    if (!filePath || !existsSync(filePath)) return [];
+    const raw = readFileSync(filePath, 'utf-8');
     const lines = raw.trim().split('\n').filter(Boolean);
     const entries = [];
     for (const line of lines) {
@@ -208,7 +556,7 @@ function loadTradeJournal() {
     }
     return entries;
   } catch (err) {
-    log.debug(`Failed to load trade journal: ${err.message}`);
+    log.debug(`Failed to load jsonl (${filePath}): ${err.message}`);
     return [];
   }
 }
@@ -217,10 +565,10 @@ function loadTradeJournal() {
  * Load verified journal and convert to trade_journal format for merging.
  * Verified journal has on-chain confirmed trades that may be missing from trade_journal.
  */
-function loadVerifiedJournal() {
+function loadVerifiedJournal(verifiedPath = BOT_CONFIG.verifiedJournalFile) {
   try {
-    if (!existsSync(BOT_CONFIG.verifiedJournalFile)) return [];
-    const raw = readFileSync(BOT_CONFIG.verifiedJournalFile, 'utf-8');
+    if (!verifiedPath || !existsSync(verifiedPath)) return [];
+    const raw = readFileSync(verifiedPath, 'utf-8');
     const lines = raw.trim().split('\n').filter(Boolean);
     const entries = [];
     for (const line of lines) {
@@ -255,22 +603,6 @@ function loadVerifiedJournal() {
           _source: 'verified',
         });
       } catch { /* skip */ }
-    }
-    return entries;
-  } catch {
-    return [];
-  }
-}
-
-function loadStateAudit() {
-  const auditFile = (BOT_CONFIG.stateAuditFile ?? BOT_CONFIG.stateFile.replace('.json', '_audit.jsonl'));
-  try {
-    if (!existsSync(auditFile)) return [];
-    const raw = readFileSync(auditFile, 'utf-8');
-    const lines = raw.trim().split('\n').filter(Boolean);
-    const entries = [];
-    for (const line of lines) {
-      try { entries.push(JSON.parse(line)); } catch { /* skip */ }
     }
     return entries;
   } catch {
@@ -546,7 +878,7 @@ function computeEventTimeline(trades, auditEvents) {
 
 function computePatterns(trades, hourly, sessions, dayOfWeek) {
   if (trades.length === 0) {
-    return { totalTrades: 0, totalPnl: 0, overallWr: 0, brier: null, brierN: 0, logLoss: null, logLossN: 0 };
+    return emptyPatterns();
   }
 
   const totalTrades = trades.length;

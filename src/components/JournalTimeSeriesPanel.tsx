@@ -1,4 +1,4 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useCallback, useState } from 'react';
 import { useServerNow } from '../hooks/useServerNow.ts';
 
 const TABS =['overview', 'hourly', 'events', 'equity'];
@@ -141,7 +141,7 @@ const ppStr = (pp: number | null | undefined) =>
  */
 const MIN_REALISTIC_SAMPLE = 385;
 
-function OverviewTab({ data }: any) {
+function OverviewTab({ data, isArchive = false }: any) {
   const { patterns, sessions, dayOfWeek, sources, computedAt, actualPnl, margin } = data;
 
   // Live-ticking "Updated Xs ago" — re-renders every 5s independently.
@@ -149,7 +149,13 @@ function OverviewTab({ data }: any) {
   const now = useServerNow(5000);
 
   if (!patterns || patterns.totalTrades === 0) {
-    return <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.78rem' }}>No trade data</div>;
+    return (
+      <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.75rem' }}>
+        {isArchive
+          ? 'No settled trades in this archive'
+          : 'No settled trades in the current session yet — use the dataset selector above to open archived runs.'}
+      </div>
+    );
   }
 
   const p = patterns;
@@ -433,12 +439,12 @@ function HourlyTab({ data }: any) {
 // ─────────────── Tab: Events ───────────────
 
 function EventsTab({ data }: any) {
+  const [showCount, setShowCount] = useState(30);
   const { events } = data;
   if (!events || events.length === 0) {
     return <div style={{ padding: 12, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.78rem' }}>No events</div>;
   }
 
-  const [showCount, setShowCount] = useState(30);
   const visible = events.slice(0, showCount);
 
   return (
@@ -617,19 +623,141 @@ function EquityTab({ data }) {
 
 // ─────────────── Main Panel ───────────────
 
-function JournalTimeSeriesPanel({ data }) {
+function JournalTimeSeriesPanel({ data, sendBotCommand }: { data: any; sendBotCommand?: (type: string, payload?: any) => Promise<any> }) {
   const [tab, setTab] = useState('overview');
+  const [selectedId, setSelectedId] = useState<string>('active');
+  const [archiveCache, setArchiveCache] = useState<Record<string, any>>({});
+  const [archiveLoading, setArchiveLoading] = useState<boolean>(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  const archives: any[] = Array.isArray(data?.archives) ? data.archives : [];
+  const isArchive = selectedId !== 'active';
+  const activeArchiveSummary = isArchive ? (archives.find(a => a.id === selectedId) ?? null) : null;
+  const cachedArchive = isArchive ? archiveCache[selectedId] ?? null : null;
+  const displayData = isArchive && cachedArchive ? cachedArchive : data;
+
+  const handleSelectDataset = useCallback(async (nextId: string) => {
+    setArchiveError(null);
+    setSelectedId(nextId);
+    if (nextId === 'active' || archiveCache[nextId]) return;
+    if (!sendBotCommand) {
+      setArchiveError('Bot connection unavailable to load archive');
+      return;
+    }
+    setArchiveLoading(true);
+    try {
+      const res = await sendBotCommand('getJournalArchive', { archiveId: nextId });
+      if (res?.ok && res.analytics) {
+        setArchiveCache(prev => ({ ...prev, [nextId]: res.analytics }));
+      } else {
+        setArchiveError(res?.error || 'Failed to load archive');
+      }
+    } catch (err: any) {
+      setArchiveError(err?.message || 'Failed to load archive');
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, [archiveCache, sendBotCommand]);
 
   if (!data) return null;
+
+  const displayedCount = displayData?.patterns?.totalTrades ?? 0;
 
   return (
     <div className="card span-2" style={{ animationDelay: '0.32s' }}>
       <div className="card__header">
         <span className="card__title">Journal Analytics</span>
-        {data.patterns?.totalTrades > 0 && (
-          <span className="card__badge badge--live">{data.patterns.totalTrades} TRADES</span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {isArchive && (
+            <span className="card__badge" style={{
+              background: 'rgba(23, 162, 184, 0.14)',
+              color: 'var(--cyan-bright, #4dd0e1)',
+              border: '1px solid rgba(23, 162, 184, 0.35)',
+              fontSize: '0.56rem',
+            }}>
+              ARCHIVE · READ-ONLY
+            </span>
+          )}
+          <span className="card__badge badge--live">{displayedCount} TRADES</span>
+        </div>
       </div>
+
+      {/* Dataset Switcher: Active Session vs Archived Runs */}
+      {(archives.length > 0 || isArchive) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          gap: 8, marginBottom: 8, flexWrap: 'wrap',
+          padding: '5px 8px', borderRadius: 4,
+          background: 'var(--bg-elevated)', border: '1px solid var(--border-dim)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 200 }}>
+            <span style={{ fontSize: '0.58rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.05em', flexShrink: 0 }}>
+              Dataset
+            </span>
+            <select
+              aria-label="Journal dataset"
+              value={selectedId}
+              onChange={(e) => handleSelectDataset(e.target.value)}
+              style={{
+                flex: 1, minWidth: 160,
+                fontSize: '0.64rem', padding: '3px 6px',
+                background: 'var(--bg-surface)', color: 'var(--text-primary)',
+                border: '1px solid var(--border-dim)', borderRadius: 3,
+              }}
+            >
+              <option value="active">
+                Active Session ({data.patterns?.totalTrades ?? 0} trades{data.patterns?.totalTrades ? ` · ${(data.patterns.overallWr ?? 0).toFixed(1)}% WR · ${pnlStr(data.patterns.totalPnl)}` : ' · Fresh Start'})
+              </option>
+              {archives.map((a) => (
+                <option key={a.id} value={a.id}>
+                  Archive: {a.label} ({a.trades} trades · {(a.wr ?? 0).toFixed(1)}% WR · {pnlStr(a.pnl)})
+                </option>
+              ))}
+            </select>
+          </div>
+          {isArchive && (
+            <button
+              type="button"
+              onClick={() => handleSelectDataset('active')}
+              style={{
+                fontSize: '0.58rem', padding: '3px 8px', borderRadius: 3,
+                background: 'transparent', color: 'var(--cyan-mid, #17a2b8)',
+                border: '1px solid var(--border-dim)', cursor: 'pointer',
+              }}
+            >
+              Back to Active
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Archive Summary Banner */}
+      {isArchive && (activeArchiveSummary || cachedArchive?.archiveMeta) && (() => {
+        const meta = cachedArchive?.archiveMeta ?? activeArchiveSummary;
+        return (
+          <div style={{
+            fontSize: '0.58rem', color: 'var(--text-muted)', marginBottom: 8,
+            padding: '4px 8px', borderRadius: 3,
+            background: 'rgba(23, 162, 184, 0.08)', border: '1px solid rgba(23, 162, 184, 0.2)',
+            display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6,
+          }}>
+            <span>
+              <strong>{meta.label}</strong>
+              {meta.modelId ? ` · Model ${meta.modelId}` : ''}
+              {meta.startBankroll != null && meta.endBankroll != null
+                ? ` · Bankroll $${meta.startBankroll.toFixed(2)} → $${meta.endBankroll.toFixed(2)}`
+                : meta.endBankroll != null ? ` · End $${meta.endBankroll.toFixed(2)}` : ''}
+            </span>
+            {meta.note && <span style={{ color: 'var(--text-dim)' }}>{meta.note}</span>}
+          </div>
+        );
+      })()}
+
+      {archiveError && (
+        <div style={{ fontSize: '0.62rem', color: 'var(--red-bright)', marginBottom: 8 }}>
+          {archiveError}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="qt-tabs" style={{ marginBottom: 10 }}>
@@ -645,19 +773,29 @@ function JournalTimeSeriesPanel({ data }) {
       </div>
 
       {/* Tab Content */}
-      {tab === 'overview' && <OverviewTab data={data} />}
-      {tab === 'hourly' && <HourlyTab data={data} />}
-      {tab === 'events' && <EventsTab data={data} />}
-      {tab === 'equity' && <EquityTab data={data} />}
+      {archiveLoading && isArchive && !cachedArchive ? (
+        <div style={{ padding: 16, textAlign: 'center', color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+          Loading archived journal…
+        </div>
+      ) : (
+        <React.Fragment key={selectedId}>
+          {tab === 'overview' && <OverviewTab data={displayData} isArchive={isArchive} />}
+          {tab === 'hourly' && <HourlyTab data={displayData} />}
+          {tab === 'events' && <EventsTab data={displayData} />}
+          {tab === 'equity' && <EquityTab data={displayData} />}
+        </React.Fragment>
+      )}
     </div>
   );
 }
 
 export default memo(JournalTimeSeriesPanel, (prev, next) => {
+  if (prev.sendBotCommand !== next.sendBotCommand) return false;
   const a = prev.data;
   const b = next.data;
   if (!a || !b) return a === b;
   return (
+    (a.archives?.length ?? 0) === (b.archives?.length ?? 0) &&
     a.patterns?.totalTrades === b.patterns?.totalTrades &&
     a.patterns?.totalPnl === b.patterns?.totalPnl &&
     a.patterns?.overallWr === b.patterns?.overallWr &&

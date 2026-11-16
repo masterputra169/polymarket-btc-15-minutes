@@ -11,6 +11,7 @@ import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTrade
 import { computeSettlementPnl, sellFillFee } from './engines/settlementMath.ts';
 import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.ts';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.ts';
+import { ARCHIVE_ID_RE, getArchivedJournalAnalytics, listJournalArchives } from './trading/journalAnalytics.ts';
 import { resetCutLossState } from './trading/cutLoss.ts';
 import { resetTakeProfitState } from './trading/takeProfit.ts';
 import { recordLoss } from './safety/tradeFilters.ts';
@@ -491,6 +492,20 @@ export function startStatusServer() {
           } catch (err) {
             respond('resetModelProfile', { ok: false, error: err.message });
           }
+        } else if (msg.type === 'listJournalArchives') {
+          respond('listJournalArchives', { ok: true, archives: listJournalArchives() });
+        } else if (msg.type === 'getJournalArchive') {
+          const archiveId = typeof msg.archiveId === 'string' ? msg.archiveId.trim() : '';
+          if (!ARCHIVE_ID_RE.test(archiveId)) {
+            respond('getJournalArchive', { ok: false, error: 'invalid_archive_id' });
+            return;
+          }
+          const analytics = getArchivedJournalAnalytics(archiveId);
+          if (!analytics) {
+            respond('getJournalArchive', { ok: false, archiveId, error: 'archive_not_found' });
+            return;
+          }
+          respond('getJournalArchive', { ok: true, archiveId, analytics });
         }
       } catch (err) { log.debug(`Malformed client message: ${err.message}`); }
     });

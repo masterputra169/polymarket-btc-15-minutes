@@ -8,39 +8,39 @@
 
 ## Current status
 
-_Last updated: 2026-11-15 23:12 WIB_
+_Last updated: 2026-11-16 08:34 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating signals |
-| ML model | **`20261115-p2-c3e0fd` (All-Time `395d` Quant, 83f LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.67% Test Acc · 0.8524 AUC · 0.0235 ECE · +5.95% skill vs market** (OOS `+$90.63` / `75.53%` ROI / `4.37` PF at `55c/58c`) |
-| ML previous (365d / 180d) | **`20261115-p2-5de02d` (`365d` 79f: 75.74% OOS Acc · 0.8467 AUC · 0.0263 ECE)** & **`20261114-p2-9384fe` (`180d` 79f)** — both available for 1-click hot-swap |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `83f` All-Time Quant & `79f` `365d`/`180d` models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `fokMlThreshold=0.68`, `58c` caps) |
+| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating All-Time Quant ($100 fresh test) |
+| ML model | **`20261115-p2-c3e0fd` (All-Time `395d` Quant, 83f LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.67% Test Acc · 0.8524 AUC · 0.0235 ECE · +5.95% skill vs market** |
+| ML previous (365d / 180d) | **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — both available for 1-click hot-swap |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `83f` All-Time Quant & `79f` `365d`/`180d` models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `50c–65c` band) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | $22.88 · 924 trades · 589W / 335L (63.7% WR lifetime preserved) |
-| Entry price cap | **58c hard cap across all phases/regimes** (`DRY_RUN_HARD_ENTRY_CAP=0.58`, `FILTER_BASE_HARD_CAP=0.58`, `FILTER_TRENDING_HARD_CAP=0.58`, `FILTER_ULTRA_ML_CAP=0.58`, `FILTER_SOFT_ENTRY_CAP=0.58`) |
-| Trade sizing | **5 shares min aligned** (`FIXED_SHARE_SIZE=5`, `FOK_MIN_SHARES_*=5` synced in local & VPS `.env`, aligned with CLOB V2 5-share floor) |
-| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-58c early & trending entry discovery) |
+| Paper bankroll | **$100.00 fresh test run (0W / 0L)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
+| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261115-p2-c3e0fd` (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.62`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
+| Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
+| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
 | Order router | **Limit ready & ML-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `ROUTER_LIMIT_ML=0.45` routes 45–64% high-edge signals to `LIMIT/maker_join`) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
-| Mid-phase guard | **58c cap / 8% edge req** (`FILTER_MID_PHASE_MAX_PRICE=0.58`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
-| Trending protection| **54c-58c band** (`FILTER_TRENDING_MIN_TOKEN=0.54`, `FILTER_TRENDING_MAX_PRICE=0.58`, eliminated historical -$27.03 leak) |
+| Mid-phase guard | **62c cap / 8% edge req** (`midPhaseMaxPrice=0.62`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
+| Trending protection| **50c–65c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.65`, widened from 54c–58c 4c slit) |
 | Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
-| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI overhaul |
+| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 102 files / 1024 vitest PASS · 424 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 105 files / 1032 vitest PASS · 424 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | **0.60** (`KELLY_PROB_SHRINK=0.60`, `MIN_BET_PCT=0.005`; resolved `Adjusted Kelly < min 2.0%` deadlock) |
-| Eval window | **Since `2026-11-14T16:35:00Z`** (`EVAL_WINDOW_START`, model `20261114-p2-9384fe`, target 300 trades); prior 923-row journal kept intact + archived in `bot/data/archive_model_20260924/` |
+| Eval window | **Since `2026-11-16T01:35:00Z`** (`EVAL_WINDOW_START`, model `20261115-p2-c3e0fd`, `$100` fresh capital, target 300 trades); old 926-row & 923-row journals archived & viewable in UI |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | clean; failed units cleared; `systemctl --failed` empty |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
@@ -51,6 +51,22 @@ _Last updated: 2026-11-15 23:12 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 08:34 WIB — Fix `FIXED_SHARE_SIZE` Validation Order, Widened `50c–65c` Band, Archive Viewer & `$100` Fresh Evaluation
+
+**What changed:**
+1. **Fix `FIXED_SHARE_SIZE` Ordering Bug ([tradePipeline.ts](bot/src/engines/tradePipeline.ts)):**
+   - Diagnosed why 0 trades entered over 8.5 hours despite `20261115-p2-c3e0fd`: at `05:35 WIB` (`63x`) after bankroll fell to `$17.53`, Kelly sized a passing high-edge trade to `$0.28–$0.42`, which was rejected by `validateTrade` (`Bet too small < $0.50`) and `shares = Math.floor(betAmount / price) <= 0` **before** `FIXED_SHARE_SIZE=5` (`~$2.75`) ran.
+   - Resolved `fixedShares` and `fixedOrderCost` before `validateTrade()`, skipping small-dollar Kelly reduction & `0 shares` rejection when `FIXED_SHARE_SIZE > 0` while still honoring `shouldBet` and `availableBankroll` checks. Added [tradePipeline.fixedShareSize.test.ts](bot/src/engines/__tests__/tradePipeline.fixedShareSize.test.ts).
+2. **Widened Entry Price Band (`54c–58c` $\rightarrow$ `50c–65c`) for `20261115-p2-c3e0fd`:**
+   - Previously `54c` trending floor + `58c` hard cap created a 4-cent bottleneck (`39,538` high-ML polls blocked above `58c`). Updated `20261115-p2-c3e0fd` profile (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `trendingMinToken=0.50`, `trendingMaxPrice=0.65`, `midPhaseMaxPrice=0.62`) + VPS `DRY_RUN_HARD_ENTRY_CAP=0.65`.
+3. **Frontend Journal Archive Viewer + `$100` Capital Reset ([journalAnalytics.ts](bot/src/trading/journalAnalytics.ts), [statusServer.ts](bot/src/statusServer.ts), [JournalTimeSeriesPanel.tsx](src/components/JournalTimeSeriesPanel.tsx), [App.tsx](src/App.tsx)):**
+   - Added read-only archive discovery (`listJournalArchives`), on-demand computation (`getArchivedJournalAnalytics` validated against `ARCHIVE_ID_RE`), WS RPC commands (`listJournalArchives`, `getJournalArchive`), and atomic session archival/reset helper (`archiveSessionData`).
+   - Added a **Dataset Switcher** in `JournalTimeSeriesPanel` so the main UI tracks the fresh `$100.00` evaluation (`0W/0L`) cleanly while all archived runs (926-trade pre-`$100` history in `archive_20261116_pre_alltime_100/` + `archive_model_20260924/`) remain 1-click viewable across Overview, Hourly, Events, and Equity tabs. Added [journalArchives.test.ts](bot/src/trading/__tests__/journalArchives.test.ts) and [statusServer.journalArchive.test.ts](bot/src/__tests__/statusServer.journalArchive.test.ts).
+4. **Verification:**
+   - Passed `npm run typecheck` (`frontend`, `bot`, `bot:core`, `scripts`), `npm test` (`105` files / `1,032` tests PASS), and `npm run build` (`493` modules).
 
 ---
 

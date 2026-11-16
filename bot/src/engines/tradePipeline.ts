@@ -441,9 +441,20 @@ export async function executeDirectionalTrade({
     } catch (_e) { /* never propagate — MetEngine errors must not kill the trade loop */ }
   }
 
+  // Resolve fixed share sizing BEFORE validateTrade and Kelly share rounding:
+  // when FIXED_SHARE_SIZE > 0 (e.g. 5 shares = ~$2.75), validation must see
+  // the real fixed order cost rather than a sub-$0.50 Kelly dollar calculation
+  // that would block (`Bet too small`) or floor to `0 shares` on smaller bankrolls.
+  const fixedShareSize = envInt(process.env.FIXED_SHARE_SIZE, 0, 0, 100);
+  const fixedShares = fixedShareSize > 0 ? Math.max(fixedShareSize, LIVE_MIN_SHARES) : 0;
+  const fixedOrderCost = fixedShares > 0 ? Math.round(fixedShares * betMarketPrice * 100) / 100 : 0;
+  const tradeCheckSizing = (fixedShares > 0 && betSizing?.shouldBet)
+    ? { ...betSizing, betAmount: fixedOrderCost }
+    : betSizing;
+
   const priceCheck = deps.validatePrice(betMarketPrice);
   const tradeCheck = deps.validateTrade({
-    rec, betSizing, timeLeftMin,
+    rec, betSizing: tradeCheckSizing, timeLeftMin,
     bankroll: deps.getBankroll(),
     availableBankroll: deps.getAvailableBankroll(),
     hasPosition: deps.hasOpenPosition(marketSlug),
@@ -454,101 +465,99 @@ export async function executeDirectionalTrade({
     return false;
   }
 
-  // Hard dollar cap from BOT_CONFIG (data shows ~$1.30 avg is most consistent)
-  let effectiveBetAmount = betSizing.betAmount;
-
-  // MetEngine BOOST: +10% bet when smart money confirms our direction.
-  // Kelly Criterion rationale: when an independent high-quality signal agrees,
-  // the edge is higher → optimal Kelly fraction increases proportionally.
-  if (meBoostActive) {
-    const boosted = Math.round(effectiveBetAmount * ME_BOOST_MULTIPLIER * 100) / 100;
-    log.info(`[MetEngine] Bet boosted: $${effectiveBetAmount.toFixed(2)} → $${boosted.toFixed(2)} (smart money +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`);
-    effectiveBetAmount = boosted;
-  }
-
-  // Confidence-tiered Kelly cap — portfolio $100+: reduced for moderate risk.
-  // LOW=1.5%, MEDIUM=2.5%, HIGH=3.5%, VERY_HIGH=4% of bankroll.
-  const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.04, HIGH: 0.035, MEDIUM: 0.025, LOW: 0.015 }; // Max 4% porto per entry
-  const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
-  const currentBankroll = deps.getBankroll();
-  const kellyMaxBet = currentBankroll * kellyCapPct;
-  if (currentBankroll >= 100 && effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
-    log.info(`Kelly cap: $${effectiveBetAmount.toFixed(2)} → $${kellyMaxBet.toFixed(2)} (${(kellyCapPct * 100).toFixed(0)}% of $${currentBankroll.toFixed(0)}, conf=${rec.confidence})`);
-    effectiveBetAmount = kellyMaxBet;
-  }
-
-  // C2 Audit fix: Session quality scaling (Kelly adjustment for session reliability).
-  // Low-liquidity sessions (Asia/Off-hours) have wider spreads and less reliable signals.
-  const sessionQuality = filterResult.sessionQuality ?? 1.0;
-  if (sessionQuality < 1.0) {
-    const sqScaled = Math.round(effectiveBetAmount * sessionQuality * 100) / 100;
-    log.info(`Session quality: $${effectiveBetAmount.toFixed(2)} × ${sessionQuality} = $${sqScaled.toFixed(2)} (${getSessionName()})`);
-    effectiveBetAmount = sqScaled;
-  }
-
-  // Solution D: Asymmetry-aware scaling — at higher entry prices, loss/win ratio worsens.
-  // Binary option at price p: win payout = (1-p)/p of bet, loss = 100% of bet.
-  // At 50c: symmetric. At 65c: loss 1.86× win. At 68c: loss 2.13× win.
-  // Scale bet inversely: factor = max(0.60, 2 × (1 - price)).
-  // 55c→0.90, 60c→0.80, 65c→0.70, 68c→0.64. Floor 0.60.
-  // Equalizes dollar impact: smaller bets where losses are disproportionately large.
-  const asymFactor = Math.max(0.85, Math.min(1.0, 2 * (1 - betMarketPrice))); // Audit v5 M2: 0.70→0.85 floor — Kelly already accounts for price asymmetry via b=(1/p-1), double-penalization was causing ~20-30% under-betting at 60-65¢
-  if (asymFactor < 0.99) {
-    const asymScaled = Math.round(effectiveBetAmount * asymFactor * 100) / 100;
-    log.info(`Asymmetry adj: $${effectiveBetAmount.toFixed(2)} \u00d7 ${asymFactor.toFixed(2)} = $${asymScaled.toFixed(2)} (${(betMarketPrice * 100).toFixed(0)}c entry)`);
-    effectiveBetAmount = asymScaled;
-  }
-
-  // Late Gamma Dampener (quant formula C-4): In the final 5 minutes, binary gamma diverges (|Γ| ~ 1/√T).
-  // Dampen sizing proportional to √T_left to avoid catastrophic whipsaws.
-  let gammaDamp = 1.0;
-  if (timeLeftMin != null && timeLeftMin > 0 && timeLeftMin < 5) {
-    gammaDamp = gammaSizingDampener(timeLeftMin);
-    if (gammaDamp < 1.0) {
-      const dampened = Math.round(effectiveBetAmount * gammaDamp * 100) / 100;
-      log.info(`[QuantMath] Gamma dampener: $${effectiveBetAmount.toFixed(2)} \u00d7 ${gammaDamp.toFixed(2)} = $${dampened.toFixed(2)} (${timeLeftMin.toFixed(1)}m left)`);
-      effectiveBetAmount = Math.max(0.50, dampened);
-    }
-  }
-
-  // Risk of Ruin safety cap (quant formula 7.5): Ensure ruin probability <= 0.5%
-  let rorCapActive = false;
-  if (currentBankroll > 0) {
-    const rorMaxBet = maxBetForRiskOfRuin(currentBankroll, 0.58, 0.005);
-    if (rorMaxBet > 0 && effectiveBetAmount > rorMaxBet) {
-      log.info(`[QuantMath] Risk of ruin cap (R<=0.5%): $${effectiveBetAmount.toFixed(2)} → $${rorMaxBet.toFixed(2)} (bankroll: $${currentBankroll.toFixed(2)})`);
-      effectiveBetAmount = rorMaxBet;
-      rorCapActive = true;
-    }
-  }
-
-  // Scale max bet with bankroll — fixed floor prevents Kelly-optimal sizing at very small bankrolls.
-  // Use the LARGER of: (a) configured dollar floor, (b) bankroll × confidence tier %.
-  // At $30 bankroll (HIGH): max(7, 30×0.035) = max(7, 1.05) = $7 (floor binds)
-  // At $200 bankroll (HIGH): max(7, 200×0.035) = max(7, 7.00) = $7 (both equal, compounding kicks in above)
-  const bankrollForCap = deps.getBankroll?.() ?? 0;
-  const scaledMaxBet = Math.max(getEffectiveMaxBetAmountUsd(), bankrollForCap * kellyCapPct);
-  if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
-    log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
-    effectiveBetAmount = scaledMaxBet;
-  }
-
   const tokenId = betSide === 'UP' ? poly.tokens.upTokenId : poly.tokens.downTokenId;
-  let shares = Math.floor(effectiveBetAmount / betMarketPrice);
-
-  // H9: Guard against 0 shares (e.g. betAmount < marketPrice)
-  if (shares <= 0) {
-    log.info(`Trade skipped: 0 shares (betAmount=$${betSizing.betAmount.toFixed(2)} / price=$${betMarketPrice.toFixed(3)})`);
-    return false;
-  }
-
-  // Fixed share size override (Fase 2 P1: Lock position size to prevent overexposure)
-  // Always enforce the live 5-share minimum so dry-run selection matches live.
-  const fixedShareSize = envInt(process.env.FIXED_SHARE_SIZE, 0, 0, 100);
-  if (fixedShareSize > 0) {
-    shares = Math.max(fixedShareSize, LIVE_MIN_SHARES);
+  let shares: number;
+  if (fixedShares > 0) {
+    shares = fixedShares;
     log.info(`Fixed share sizing active: ${shares} shares (floor ${LIVE_MIN_SHARES}; env FIXED_SHARE_SIZE=${fixedShareSize})`);
   } else {
+    // Hard dollar cap from BOT_CONFIG (data shows ~$1.30 avg is most consistent)
+    let effectiveBetAmount = betSizing.betAmount;
+
+    // MetEngine BOOST: +10% bet when smart money confirms our direction.
+    // Kelly Criterion rationale: when an independent high-quality signal agrees,
+    // the edge is higher → optimal Kelly fraction increases proportionally.
+    if (meBoostActive) {
+      const boosted = Math.round(effectiveBetAmount * ME_BOOST_MULTIPLIER * 100) / 100;
+      log.info(`[MetEngine] Bet boosted: $${effectiveBetAmount.toFixed(2)} → $${boosted.toFixed(2)} (smart money +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`);
+      effectiveBetAmount = boosted;
+    }
+
+    // Confidence-tiered Kelly cap — portfolio $100+: reduced for moderate risk.
+    // LOW=1.5%, MEDIUM=2.5%, HIGH=3.5%, VERY_HIGH=4% of bankroll.
+    const KELLY_CAP_BY_CONF = { VERY_HIGH: 0.04, HIGH: 0.035, MEDIUM: 0.025, LOW: 0.015 }; // Max 4% porto per entry
+    const kellyCapPct = KELLY_CAP_BY_CONF[rec.confidence] ?? 0.03;
+    const currentBankroll = deps.getBankroll();
+    const kellyMaxBet = currentBankroll * kellyCapPct;
+    if (currentBankroll >= 100 && effectiveBetAmount > kellyMaxBet && kellyMaxBet > 0) {
+      log.info(`Kelly cap: $${effectiveBetAmount.toFixed(2)} → $${kellyMaxBet.toFixed(2)} (${(kellyCapPct * 100).toFixed(0)}% of $${currentBankroll.toFixed(0)}, conf=${rec.confidence})`);
+      effectiveBetAmount = kellyMaxBet;
+    }
+
+    // C2 Audit fix: Session quality scaling (Kelly adjustment for session reliability).
+    // Low-liquidity sessions (Asia/Off-hours) have wider spreads and less reliable signals.
+    const sessionQuality = filterResult.sessionQuality ?? 1.0;
+    if (sessionQuality < 1.0) {
+      const sqScaled = Math.round(effectiveBetAmount * sessionQuality * 100) / 100;
+      log.info(`Session quality: $${effectiveBetAmount.toFixed(2)} × ${sessionQuality} = $${sqScaled.toFixed(2)} (${getSessionName()})`);
+      effectiveBetAmount = sqScaled;
+    }
+
+    // Solution D: Asymmetry-aware scaling — at higher entry prices, loss/win ratio worsens.
+    // Binary option at price p: win payout = (1-p)/p of bet, loss = 100% of bet.
+    // At 50c: symmetric. At 65c: loss 1.86× win. At 68c: loss 2.13× win.
+    // Scale bet inversely: factor = max(0.60, 2 × (1 - price)).
+    // 55c→0.90, 60c→0.80, 65c→0.70, 68c→0.64. Floor 0.60.
+    // Equalizes dollar impact: smaller bets where losses are disproportionately large.
+    const asymFactor = Math.max(0.85, Math.min(1.0, 2 * (1 - betMarketPrice))); // Audit v5 M2: 0.70→0.85 floor — Kelly already accounts for price asymmetry via b=(1/p-1), double-penalization was causing ~20-30% under-betting at 60-65¢
+    if (asymFactor < 0.99) {
+      const asymScaled = Math.round(effectiveBetAmount * asymFactor * 100) / 100;
+      log.info(`Asymmetry adj: $${effectiveBetAmount.toFixed(2)} \u00d7 ${asymFactor.toFixed(2)} = $${asymScaled.toFixed(2)} (${(betMarketPrice * 100).toFixed(0)}c entry)`);
+      effectiveBetAmount = asymScaled;
+    }
+
+    // Late Gamma Dampener (quant formula C-4): In the final 5 minutes, binary gamma diverges (|Γ| ~ 1/√T).
+    // Dampen sizing proportional to √T_left to avoid catastrophic whipsaws.
+    let gammaDamp = 1.0;
+    if (timeLeftMin != null && timeLeftMin > 0 && timeLeftMin < 5) {
+      gammaDamp = gammaSizingDampener(timeLeftMin);
+      if (gammaDamp < 1.0) {
+        const dampened = Math.round(effectiveBetAmount * gammaDamp * 100) / 100;
+        log.info(`[QuantMath] Gamma dampener: $${effectiveBetAmount.toFixed(2)} \u00d7 ${gammaDamp.toFixed(2)} = $${dampened.toFixed(2)} (${timeLeftMin.toFixed(1)}m left)`);
+        effectiveBetAmount = Math.max(0.50, dampened);
+      }
+    }
+
+    // Risk of Ruin safety cap (quant formula 7.5): Ensure ruin probability <= 0.5%
+    let rorCapActive = false;
+    if (currentBankroll > 0) {
+      const rorMaxBet = maxBetForRiskOfRuin(currentBankroll, 0.58, 0.005);
+      if (rorMaxBet > 0 && effectiveBetAmount > rorMaxBet) {
+        log.info(`[QuantMath] Risk of ruin cap (R<=0.5%): $${effectiveBetAmount.toFixed(2)} → $${rorMaxBet.toFixed(2)} (bankroll: $${currentBankroll.toFixed(2)})`);
+        effectiveBetAmount = rorMaxBet;
+        rorCapActive = true;
+      }
+    }
+
+    // Scale max bet with bankroll — fixed floor prevents Kelly-optimal sizing at very small bankrolls.
+    // Use the LARGER of: (a) configured dollar floor, (b) bankroll × confidence tier %.
+    // At $30 bankroll (HIGH): max(7, 30×0.035) = max(7, 1.05) = $7 (floor binds)
+    // At $200 bankroll (HIGH): max(7, 200×0.035) = max(7, 7.00) = $7 (both equal, compounding kicks in above)
+    const bankrollForCap = deps.getBankroll?.() ?? 0;
+    const scaledMaxBet = Math.max(getEffectiveMaxBetAmountUsd(), bankrollForCap * kellyCapPct);
+    if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
+      log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
+      effectiveBetAmount = scaledMaxBet;
+    }
+
+    shares = Math.floor(effectiveBetAmount / betMarketPrice);
+
+    // H9: Guard against 0 shares (e.g. betAmount < marketPrice)
+    if (shares <= 0) {
+      log.info(`Trade skipped: 0 shares (betAmount=$${betSizing.betAmount.toFixed(2)} / price=$${betMarketPrice.toFixed(3)})`);
+      return false;
+    }
+
     // FOK confidence-tier size floor (user request 2026-05-14):
     //   LOW=5 (CLOB minimum), MEDIUM=5, HIGH=6, VERY_HIGH=7.
     // Kelly often returns 2 shares for FOK — bump up to match confidence level

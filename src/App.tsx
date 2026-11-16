@@ -404,6 +404,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
       sources: ja.sources,
       actualPnl: ja.actualPnl,
       margin: ja.margin,
+      archives: ja.archives ?? [],
       computedAt: ja.computedAt,
     };
   }, [
@@ -433,6 +434,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.journalAnalytics?.events?.length,
     data?.journalAnalytics?.equityCurve?.length,
     data?.journalAnalytics?.actualPnl?.lastBankroll,
+    data?.journalAnalytics?.archives?.length,
   ]);
 
   // PositionPanel: positions + bankroll + cutLoss + recentJournal from bot
@@ -647,7 +649,7 @@ const botData = useMemo(() => {
     {
       id: 'journal', title: 'Journal Analytics', icon: '⌁', description: 'equity, sessions, hourly edge',
       category: 'analytics', accent: 'violet', defaultW: 6, defaultH: 3, minW: 4, minH: 2,
-      defaultRect: { x: 6, y: 10, w: 6, h: 3 }, content: <JournalTimeSeriesPanel data={journalAnalyticsData} />,
+      defaultRect: { x: 6, y: 10, w: 6, h: 3 }, content: <JournalTimeSeriesPanel data={journalAnalyticsData} sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'tape', title: 'Market Tape', icon: '◫', description: 'recorder health and coverage',
