@@ -79,6 +79,7 @@ const DECISION_BLOCK = {
   edgeUp: 0.13, edgeDown: -0.09, bestEdge: 0.13,
   ensembleUp: 0.68, ruleUp: 0.64,
   mlProbUp: 0.71, mlConfidence: 0.71, mlSide: 'UP', mlAgreesWithRules: true,
+  baseMlProbUp: 0.69, hybridDeltaProb: 0.02, hybridActive: true, hybridId: 'v4-hybrid-20261116',
   rsiNow: 58.2, rsiSlope: 1.4, macdHist: 3.1, macdLine: 12.7,
   vwapDist: 0.0012, vwapSlope: 0.4,
   bbPercentB: 0.62, bbWidth: 0.018, bbSqueeze: false,
@@ -246,6 +247,7 @@ describe('journal entry written for a LIMIT fill', () => {
   const RESTORED_FIELDS = [
     'edgeUp', 'edgeDown', 'bestEdge', 'ensembleUp', 'ruleUp',
     'mlProbUp', 'mlConfidence', 'mlSide', 'mlAgreesWithRules',
+    'baseMlProbUp', 'hybridDeltaProb', 'hybridActive', 'hybridId',
     'rsiNow', 'rsiSlope', 'macdHist', 'macdLine', 'vwapDist', 'vwapSlope',
     'bbPercentB', 'bbWidth', 'bbSqueeze', 'atrPct', 'atrRatio',
     'stochK', 'stochD', 'emaCrossSignal', 'emaDistPct', 'volDeltaBuyRatio',

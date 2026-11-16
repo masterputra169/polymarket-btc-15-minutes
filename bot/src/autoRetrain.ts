@@ -51,6 +51,7 @@ const DEPLOY_MARKER = resolve(DATA_DIR, 'last_deploy.json');
 const REGISTRY_DIR = resolve(ROOT, 'ml_registry');
 
 const MODEL_FILES = ['xgboost_model.json', 'lightgbm_model.json', 'norm_browser.json'];
+const HYBRID_OVERLAY_FILE = 'hybrid_residual_v4.json';
 
 // ── Config from env ──
 function envNum(key, def, min = -Infinity, max = Infinity) {
@@ -233,7 +234,7 @@ function qualityGate(current, fresh) {
 function backupCurrent(tag) {
   if (!existsSync(BACKUP_DIR)) mkdirSync(BACKUP_DIR, { recursive: true });
 
-  for (const file of MODEL_FILES) {
+  for (const file of [...MODEL_FILES, HYBRID_OVERLAY_FILE]) {
     const src = resolve(ML_DIR, file);
     if (!existsSync(src)) continue;
     // Timestamped backup
@@ -242,6 +243,26 @@ function backupCurrent(tag) {
     copyFileSync(src, resolve(BACKUP_DIR, `rollback_${file}`));
   }
   log.info(`Backup saved: ${tag}`);
+}
+
+function refreshHybridOverlay() {
+  const tapeDir = resolve(TRAINING_DIR, 'tape');
+  const buildScript = resolve(TRAINING_DIR, 'buildTapeV4Dataset.mts');
+  const exportScript = resolve(TRAINING_DIR, 'exportHybridResidualV4.py');
+  if (!existsSync(tapeDir) || !existsSync(buildScript) || !existsSync(exportScript)) {
+    log.info('  Hybrid v4 overlay refresh skipped (tape/ or Stage-2 scripts not present)');
+    return false;
+  }
+  try {
+    log.info('  Refreshing Pipeline v4 Hybrid Residual overlay against new base model...');
+    run(`node "${buildScript}" --skip-network`, { timeout: 15 * 60 * 1000 });
+    run(`python "${exportScript}"`, { timeout: 10 * 60 * 1000 });
+    log.info('  Hybrid Residual v4 overlay refreshed and parity-verified');
+    return true;
+  } catch (err) {
+    log.warn(`  Hybrid v4 overlay refresh skipped after error (safe fallback active): ${err.message.slice(0, 200)}`);
+    return false;
+  }
 }
 
 function deployNew() {
@@ -265,7 +286,7 @@ function pruneBackups(keep = 5) {
 
   const toRemove = tags.slice(0, tags.length - keep);
   for (const tag of toRemove) {
-    for (const file of MODEL_FILES) {
+    for (const file of [...MODEL_FILES, HYBRID_OVERLAY_FILE]) {
       const p = resolve(BACKUP_DIR, `${tag}_${file}`);
       try { unlinkSync(p); } catch { /* ignore */ }
     }
@@ -301,6 +322,11 @@ function rollback() {
   if (restored === 0) {
     log.error('No rollback files found! Cannot rollback.');
     return false;
+  }
+  const overlayBak = resolve(BACKUP_DIR, `rollback_${HYBRID_OVERLAY_FILE}`);
+  if (existsSync(overlayBak)) {
+    copyFileSync(overlayBak, resolve(ML_DIR, HYBRID_OVERLAY_FILE));
+    log.info(`Rolled back ${HYBRID_OVERLAY_FILE}`);
   }
   log.info(`Rolled back ${restored} model file(s)`);
   try {
@@ -513,6 +539,7 @@ async function runPipeline() {
   log.info('Step 6/7: Deploying new model...');
   const previousId = ensureRegistered(REGISTRY_DIR, ML_DIR, 'autoRetrain', 'live');
   deployNew();
+  refreshHybridOverlay();
   journalDeployment(REGISTRY_DIR, { id: candidate.id, previousId, actor: 'autoRetrain', target: ML_DIR, backupTag: tag });
   renderModelsMd(REGISTRY_DIR);
 

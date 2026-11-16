@@ -22,6 +22,7 @@ import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml
 import { createLogger } from '../logger.ts';
 import { getSpreadTrend } from './executionTiming.ts';
 import {
+  makerJoinPrice,
   shouldCancelUnfilled,
   shouldCancelEdgeErosion,
 } from './makerFillGate.ts';
@@ -99,39 +100,24 @@ let state = {
 };
 
 /**
- * Compute target price as a discount from current market price.
+ * Compute target limit price by joining bestBid cleanly (no deep -12% discount trap).
  *
- * Strategy: "buy the dip" — place limit order X% below bestBid.
- * Discount scales by ML confidence: higher confidence → smaller discount (willing to pay more).
+ * 54d 1 Hz tape evidence (135 signals): placing bids 12% below bestBid caused -14% to -29%
+ * adverse selection (only filling on crashing markets), whereas joining bestBid within
+ * [minEntryPrice, maxEntryPrice] filled 60–68% in 1.2–2.0s median with positive ROI.
  *
- *   ML ≥ 85% → 5% discount  (very confident → small discount, likely fills)
- *   ML 70-85% → 8% discount  (confident → moderate discount)
- *   ML 60-70% → 12% discount (uncertain → demand bigger discount for risk)
- *
- * Examples (bestBid=65¢):  ML 90% → 61.8¢  |  ML 75% → 59.8¢  |  ML 62% → 57.2¢
- * Examples (bestBid=55¢):  ML 90% → 52.3¢  |  ML 75% → 50.6¢  |  ML 62% → 50.0¢ (floor)
- *
- * @param {number} mlConf - ML confidence (0-1)
+ * @param {number} _mlConf - ML confidence (0-1)
  * @param {number|null} bestBid - Best bid from CLOB orderbook for our side
+ * @param {number|null} [bestAsk] - Best ask from CLOB orderbook (prevents crossing spread)
  * @returns {number} Target limit price (rounded to 0.001 tick)
  */
-function computeTargetPrice(mlConf, bestBid) {
+export function computeTargetPrice(_mlConf, bestBid, bestAsk = null) {
   const cfg = getEffectiveLimitOrderConfig();
-
-  // Discount tier by ML confidence (higher conf → smaller discount)
-  let discountPct;
-  if (mlConf >= 0.85) {
-    discountPct = 0.05;   // 5% below market
-  } else if (mlConf >= 0.70) {
-    discountPct = 0.08;   // 8% below market
-  } else {
-    discountPct = 0.12;   // 12% below market
-  }
+  const minPx = cfg.minEntryPrice ?? 0.50;
 
   let target;
   if (bestBid != null && Number.isFinite(bestBid) && bestBid > 0) {
-    // Discount from current market price
-    target = bestBid * (1 - discountPct);
+    target = makerJoinPrice(bestBid, bestAsk, minPx, 0.01) ?? bestBid;
   } else {
     // No orderbook data — use conservative fixed price
     target = cfg.priceTierLow;
@@ -141,7 +127,7 @@ function computeTargetPrice(mlConf, bestBid) {
   target = Math.min(target, cfg.maxEntryPrice);
 
   // Floor: don't go below minEntryPrice (below 50¢ = random walk territory)
-  target = Math.max(target, cfg.minEntryPrice);
+  target = Math.max(target, minPx);
 
   // Round to Polymarket tick size (0.001)
   return Math.round(target * 1000) / 1000;
@@ -191,7 +177,8 @@ function detectSignalFlip({ side, mlSide, mlConfidence, ensembleProb, btcPrice, 
  */
 export function evaluateLimitEntry({
   mlConfidence, mlSide, btcPrice, priceToBeat,
-  bestBidUp, bestBidDown, hasPosition, isHalted,
+  bestBidUp, bestBidDown, bestAskUp = null, bestAskDown = null,
+  hasPosition, isHalted,
   marketSlug, elapsedMin,
   btcDelta1m, spread,
 }) {
@@ -280,17 +267,18 @@ export function evaluateLimitEntry({
     }
   }
 
-  // Compute target price
+  // Compute target price (JOIN bestBid, never crossing bestAsk)
   const bestBid = side === 'UP' ? bestBidUp : bestBidDown;
-  const targetPrice = computeTargetPrice(mlConfidence, bestBid);
+  const bestAsk = side === 'UP' ? bestAskUp : bestAskDown;
+  const targetPrice = computeTargetPrice(mlConfidence, bestBid, bestAsk);
 
-  // Fix #3: Limit-specific edge gate — mlConfidence minus entry price must be positive.
-  // Unlike FOK edge (model_prob - market_price), limit edge uses our actual entry price.
-  // Example: ML 65%, target 55c → limit_edge = 10% (good). ML 55%, target 54c → 1% (marginal).
-  const MIN_LIMIT_EDGE = 0.05; // 5% minimum edge at our entry price
-  const limitEdge = mlConfidence - targetPrice;
-  if (limitEdge < MIN_LIMIT_EDGE) {
-    return no(`limit_edge_${(limitEdge * 100).toFixed(1)}%<${(MIN_LIMIT_EDGE * 100).toFixed(0)}%`);
+  // Limit-specific edge gate — side probability (0.5 + mlConf/2) minus entry price must clear minRemainingEdge.
+  // mlConfidence is |P - 0.5| * 2, not a win probability (matches Kelly & monitor math in this module).
+  const sideProb = 0.5 + mlConfidence / 2;
+  const minLimitEdge = cfg.minRemainingEdge ?? 0.03;
+  const limitEdge = sideProb - targetPrice;
+  if (limitEdge + 1e-9 < minLimitEdge) {
+    return no(`limit_edge_${(limitEdge * 100).toFixed(1)}%<${(minLimitEdge * 100).toFixed(0)}%`);
   }
 
   // Increment eval count

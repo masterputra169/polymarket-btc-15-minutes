@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-11-17 — Fix GTD Limit Adverse-Selection JOIN & Edge Math, Hybrid Journal Telemetry & Retrain Coupling
+
+- **Fix GTD Limit order adverse selection & `limitEdge` bug (`bot/src/engines/limitOrderManager.ts`, `bot/src/loop.ts`):**
+  - Replaced the `-12%` deep-discount quote formula (`computeTargetPrice`) with `makerJoinPrice(bestBid, bestAsk, minPx, 0.01)` and passed `bestAskUp`/`bestAskDown` from `loop.ts`.
+  - Fixed `evaluateLimitEntry` `limitEdge` calculation from `mlConfidence - targetPrice < 0.05` (which compared normalized confidence against token price and blocked calibrated `0.30` Hybrid entries) to `sideProb - targetPrice` where `sideProb = 0.5 + mlConfidence / 2` against `cfg.minRemainingEdge` (default `0.03`).
+  - Backed by 1 Hz tape replay across `135/135` Hybrid v4 entry signals: `DISC_12PCT` `15s` suffered `-28.52%` adverse selection (`38.9%` filled WR, `-$9.13` SKIP), whereas `JOIN 15s` achieved `60.0%–68.1%` fill in `1.2–2.0s` median with `+6.18%..+7.46%` SKIP ROI (`+$13.08..+$15.58` w/ 5% FOK fallback); `45s JOIN` degraded SKIP to `+$5.37..+$12.07`.
+- **Expose `maxEntryPrice` & `maxUnfilledSec` in profiles & UI (`bot/src/ml/modelProfiles.ts`, `src/components/ModelProfileDrawer.tsx`, `bot/data/model_profiles.json`):** Added bounds (`maxEntryPrice`: `0.45–0.75`, `maxUnfilledSec`: `10–120`) and configured `20261116-p2-ef8dfd.limitOrder` with `{ minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`.
+- **Hybrid journal telemetry (`bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`):** Persisted `baseMlProbUp`, `hybridDeltaProb`, `hybridActive`, and `hybridId` in `entryData` and `buildDecisionSignalBlock()` for both FOK and GTD LIMIT entries.
+- **Retrain pipeline coupling (`bot/src/autoRetrain.ts`, `backtest/ml_training/runTraining.sh`):** Added `hybrid_residual_v4.json` to backup/prune/rollback and added automatic post-deploy overlay refresh (`buildTapeV4Dataset.mts --skip-network` + `exportHybridResidualV4.py` when `tape/` exists).
+- **Ensemble `alpha` verified & kept (`3,674`-market 39d WF OOS):** Raising Hybrid ML weight hurt OOS PnL (`hyb_065` `+$11.34`/`+$14.59`, `hyb_075` `+$7.82`/`+$14.31`, `hyb_085` `+$11.50`/`+$12.18`, `pure_ml` `-$4.11`/`-$3.23`) vs keeping `src/engines/ml/ensemble.ts` `current` (`+$14.81` Taker `67.41%` WR / `+$21.51` Maker `66.55%` WR), so `ensemble.ts` remains unchanged.
+- **Verification & unit tests (`limitOrderManager.hybrid.test.ts`, `modelProfiles.test.ts`, `tradePipeline.dryRunFill.test.ts`, `limitOrderJournal.test.ts`):** Covered `makerJoinPrice` JOIN pricing, `sideProb = 0.5 + mlConfidence / 2` `limitEdge` check, `maxEntryPrice`/`maxUnfilledSec` profile schema sanitization, and Hybrid journal snapshot persistence (`110` files / `1,058` vitest PASS, `npm run typecheck` PASS, `vite build` & `study:build` PASS).
+
 ## 2026-11-16 — Calibrate `20261116-p2-ef8dfd` Profile & Router Floors for Live Hybrid v4 (`30%` Conf)
 
 - **Why:** In 54d 1 Hz tape OOS checks, `v4-hybrid-20261116` calibrates ECE down to `0.97%–1.41%` (vs `4.1%–4.3%` on base `v2`), so its 99th-percentile confidence inside the `50c–65c` band is `35.9%` (`P=68%`). Keeping legacy `v2` thresholds (`mlConfMin=0.55`, `hardMlFloor=0.45`, `ROUTER_LIMIT_ML=0.45`, `lateMlMin=0.80`, `midPhaseMaxPrice=0.62`) blocked nearly every calibrated entry (`0` entries over `999` recent markets / `10.5d`).
@@ -71,7 +83,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 22:55 WIB_
+_Last updated: 2026-11-17 00:25 WIB_
 
 | Area | State |
 |---|---|
@@ -85,7 +97,7 @@ _Last updated: 2026-11-16 22:55 WIB_
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit ready & Hybrid-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, active profile `limitMlThreshold=0.30` / `limitOrder.minMlConfidence=0.30` routes calibrated 30%+ signals to `LIMIT/maker_join`) |
+| Order router | **Limit JOIN 15s & Hybrid-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, active profile `limitMlThreshold=0.30` / `limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `makerJoinPrice` JOIN + fixed `sideProb - targetPrice` `limitEdge`) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **25% Hybrid floor (profile override)** (`hardMlFloor=0.25` overrides `.env` `0.45` for `v4-hybrid-20261116`; `mlConfMin=0.30`) |
 | Mid-phase guard | **65c unified ceiling (Hybrid profile)** (`midPhaseMaxPrice=0` overrides `.env` `0.62` for calibrated Hybrid v4 entries in 5–11m MID window) |
@@ -100,7 +112,7 @@ _Last updated: 2026-11-16 22:55 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 109 files / 1,055 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 110 files / 1,058 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

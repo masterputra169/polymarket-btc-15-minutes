@@ -180,7 +180,7 @@ describe('modelProfiles', () => {
           midPhaseMaxPrice: 0,
         },
         orderRouter: { limitMlThreshold: 0.30, fokMlThreshold: 0.68 },
-        limitOrder: { minMlConfidence: 0.30 },
+        limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 },
       },
       base,
     );
@@ -192,6 +192,8 @@ describe('modelProfiles', () => {
     expect(profile.filters?.midPhaseMaxPrice).toBe(0);
     expect(profile.orderRouter?.limitMlThreshold).toBe(0.30);
     expect(profile.limitOrder?.minMlConfidence).toBe(0.30);
+    expect(profile.limitOrder?.maxEntryPrice).toBe(0.64);
+    expect(profile.limitOrder?.maxUnfilledSec).toBe(15);
   });
 
   it('saves, persists, applies per-model profiles and resets cleanly', () => {

@@ -346,4 +346,26 @@ describe('the depth gate reads the book of the side being traded', () => {
       size: 2,
     }));
   });
+
+  test('persists Hybrid Residual telemetry fields into trade journal entry snapshot', async () => {
+    const deps = makeDeps();
+    const executed = await executeDirectionalTrade(signal({
+      mlResult: {
+        available: true,
+        mlConfidence: 0.36,
+        mlProbUp: 0.68,
+        mlSide: 'UP',
+        baseMlProbUp: 0.63,
+        hybridDeltaProb: 0.05,
+        hybridActive: true,
+        hybridId: 'v4-hybrid-20261116',
+      },
+    }), deps);
+    expect(executed).toBe(true);
+    const snap = deps.captureEntrySnapshot.mock.calls[0][0];
+    expect(snap.baseMlProbUp).toBe(0.63);
+    expect(snap.hybridDeltaProb).toBe(0.05);
+    expect(snap.hybridActive).toBe(true);
+    expect(snap.hybridId).toBe('v4-hybrid-20261116');
+  });
 });

@@ -27,6 +27,8 @@ export interface ModelConfigProfile {
   limitOrder?: {
     minMlConfidence?: number;
     minRemainingEdge?: number;
+    maxEntryPrice?: number;
+    maxUnfilledSec?: number;
   };
   phaseThresholds?: Partial<Record<PhaseName, PhaseThresholdOverride>>;
 }
@@ -54,7 +56,7 @@ export interface ModelControlBaseline {
   filters: Record<string, number>;
   sizing: { kellyProbShrink: number; maxBetAmountUsd: number };
   orderRouter: { fokMlThreshold: number; limitMlThreshold: number; cheapMlThreshold: number; fokMaxPrice: number };
-  limitOrder: { minMlConfidence: number; minRemainingEdge: number };
+  limitOrder: { minMlConfidence: number; minRemainingEdge: number; maxEntryPrice?: number; maxUnfilledSec?: number };
   phaseThresholds: Record<PhaseName, { minEdge: number; minProb: number }>;
 }
 
@@ -111,6 +113,8 @@ const ROUTER_FIELDS: readonly FieldSpec[] = [
 const LIMIT_FIELDS: readonly FieldSpec[] = [
   { key: 'minMlConfidence', label: 'Limit Min ML Conf', step: '0.01', min: 0.20, max: 0.90, hint: 'Limit entry manager ML floor' },
   { key: 'minRemainingEdge', label: 'Limit Min Edge', step: '0.01', min: 0.00, max: 0.20, hint: 'Minimum remaining edge at target price' },
+  { key: 'maxEntryPrice', label: 'Limit Max Entry Px', step: '0.01', min: 0.45, max: 0.75, hint: 'Max GTD JOIN bid price (cents/100)' },
+  { key: 'maxUnfilledSec', label: 'Limit Timeout (s)', step: '1', min: 10, max: 120, hint: 'Cancel unfilled resting bid after N sec' },
 ];
 
 interface DraftForm {

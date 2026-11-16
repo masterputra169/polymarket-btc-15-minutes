@@ -163,6 +163,14 @@ if [ "$DEPLOY" = true ]; then
   echo "      - xgboost_model.json"
   echo "      - norm_browser.json"
   echo "      - lightgbm_model.json (if LGB trained)"
+
+  if [ -d "$SCRIPT_DIR/tape" ] && [ -f "$SCRIPT_DIR/buildTapeV4Dataset.mts" ] && [ -f "$SCRIPT_DIR/exportHybridResidualV4.py" ]; then
+    echo ""
+    echo "═══ STEP 3b: Refresh Pipeline v4 Hybrid Residual Overlay ═══"
+    node "$SCRIPT_DIR/buildTapeV4Dataset.mts" --skip-network
+    $PYTHON "$SCRIPT_DIR/exportHybridResidualV4.py" --out "$PUBLIC_ML/hybrid_residual_v4.json" --norm "$PUBLIC_ML/norm_browser.json"
+    echo "   ✅ Refreshed $PUBLIC_ML/hybrid_residual_v4.json"
+  fi
 else
   echo ""
   echo "═══ STEP 3/3: Manual Deploy ═══"

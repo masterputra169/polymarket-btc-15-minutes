@@ -85,6 +85,8 @@ export interface ModelOrderRouterOverride {
 export interface ModelLimitOrderOverride {
   minMlConfidence?: number;
   minRemainingEdge?: number;
+  maxEntryPrice?: number;
+  maxUnfilledSec?: number;
 }
 
 export interface ModelConfigProfile {
@@ -132,14 +134,14 @@ export interface ModelControlState {
     filters: Record<string, number>;
     sizing: { kellyProbShrink: number; maxBetAmountUsd: number };
     orderRouter: { fokMlThreshold: number; limitMlThreshold: number; cheapMlThreshold: number; fokMaxPrice: number };
-    limitOrder: { minMlConfidence: number; minRemainingEdge: number };
+    limitOrder: { minMlConfidence: number; minRemainingEdge: number; maxEntryPrice: number; maxUnfilledSec: number };
     phaseThresholds: Record<PhaseName, { minEdge: number; minProb: number }>;
   };
   effective: {
     filters: Record<string, number>;
     sizing: { kellyProbShrink: number; maxBetAmountUsd: number };
     orderRouter: { fokMlThreshold: number; limitMlThreshold: number; cheapMlThreshold: number; fokMaxPrice: number };
-    limitOrder: { minMlConfidence: number; minRemainingEdge: number };
+    limitOrder: { minMlConfidence: number; minRemainingEdge: number; maxEntryPrice: number; maxUnfilledSec: number };
     phaseThresholds: Record<PhaseName, { minEdge: number; minProb: number }>;
   };
   version: number;
@@ -159,6 +161,8 @@ const BOUNDS = {
   limitOrder: {
     minMlConfidence: { min: 0.20, max: 0.90 },
     minRemainingEdge: { min: 0, max: 0.20 },
+    maxEntryPrice: { min: 0.45, max: 0.75 },
+    maxUnfilledSec: { min: 10, max: 120 },
   },
   phase: {
     minEdge: { min: 0.01, max: 0.30 },
@@ -454,6 +458,8 @@ export function createModelProfileManager(deps: ManagerDeps) {
         limitOrder: {
           minMlConfidence: baseCfg.limitOrder.minMlConfidence,
           minRemainingEdge: baseCfg.limitOrder.minRemainingEdge,
+          maxEntryPrice: baseCfg.limitOrder.maxEntryPrice,
+          maxUnfilledSec: baseCfg.limitOrder.maxUnfilledSec,
         },
         phaseThresholds: phaseBase,
       },
@@ -472,6 +478,8 @@ export function createModelProfileManager(deps: ManagerDeps) {
         limitOrder: {
           minMlConfidence: activeProfile?.limitOrder?.minMlConfidence ?? baseCfg.limitOrder.minMlConfidence,
           minRemainingEdge: activeProfile?.limitOrder?.minRemainingEdge ?? baseCfg.limitOrder.minRemainingEdge,
+          maxEntryPrice: activeProfile?.limitOrder?.maxEntryPrice ?? baseCfg.limitOrder.maxEntryPrice,
+          maxUnfilledSec: activeProfile?.limitOrder?.maxUnfilledSec ?? baseCfg.limitOrder.maxUnfilledSec,
         },
         phaseThresholds: phaseEff,
       },
