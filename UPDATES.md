@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 13:52 WIB_
+_Last updated: 2026-11-16 14:25 WIB_
 
 | Area | State |
 |---|---|
@@ -31,7 +31,7 @@ _Last updated: 2026-11-16 13:52 WIB_
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
-| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** + content-hashed assets & `no-cache` headers + Studies + Changelog + `$100` eval |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
 | Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
@@ -53,6 +53,18 @@ _Last updated: 2026-11-16 13:52 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 14:25 WIB — Study Portal Cloudflare Insights CSP & `vps.dollarkilat.xyz` Dynamic Managed Units Discovery
+
+**What changed:**
+1. **Study Portal CSP for Cloudflare Web Analytics ([nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf)):**
+   - Updated `Content-Security-Policy` to permit `https://static.cloudflareinsights.com` in `script-src` and `https://cloudflareinsights.com` in `connect-src` (matching `polybtc15` dashboard without loosening XSS defense with `'unsafe-inline'`), removing browser console CSP blocks on Cloudflare's `beacon.min.js`.
+2. **VPS Monitor Dynamic Managed Units (`/opt/vps-monitor/server.mjs` on VPS):**
+   - Replaced the hardcoded 4-service array in `getServicesStatus()` with dynamic discovery (`systemctl list-unit-files` + `systemctl show` batch query cached 4 s) covering all `poly*`, `openbot*`, `alphabot`, `nginx`, `cloudflared*`, `postgresql*`, and `vps-monitor*` services & timers, with scrollable UI container (`max-h-80`) and live unit count badge.
+
+**Files:** [nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf); [UPDATES.md](UPDATES.md) (plus VPS runtime `/opt/vps-monitor/server.mjs`).
 
 ---
 
