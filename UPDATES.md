@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 13:35 WIB_
+_Last updated: 2026-11-16 13:52 WIB_
 
 | Area | State |
 |---|---|
@@ -31,12 +31,12 @@ _Last updated: 2026-11-16 13:35 WIB_
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
-| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** (27-model evolution, XGB vs LGB vs Ensemble, CV/Holdout & Optuna params, decile calibration, confidence bands, 4-phase response, 83-feature tree explorer, OOS presets, experiments & raw reports) + Studies + Changelog + `$100` eval |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** + content-hashed assets & `no-cache` headers + Studies + Changelog + `$100` eval |
 | Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 106 files / 1,036 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 107 files / 1,047 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
@@ -53,6 +53,20 @@ _Last updated: 2026-11-16 13:35 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 13:52 WIB — Study Portal Cache-Busting (`?v=<hash>`) & Nginx `no-cache` Header Fix
+
+**What changed:**
+1. **Root cause fixed (`Cannot read properties of null (reading 'replaceChildren')`):**
+   - On `poly15-study.dollarkilat.xyz`, Cloudflare Edge CDN cached unversioned `/app.js` and `/charts.js` with `max-age=14400` (4 hours), while `/` (`index.html`) was served `DYNAMIC`. After updating the DOM in `index.html`, browsers loading the old cached `/app.js` referenced removed element IDs.
+2. **Asset Content-Hashing ([build-study-site.mjs](scripts/build-study-site.mjs), [studySiteBuilder.test.ts](bot/src/__tests__/studySiteBuilder.test.ts)):**
+   - Updated `copyStaticFrontend()` to hash `study-site/` assets (8-hex SHA-256) and emit `./styles.css?v=<hash>`, `./app.js?v=<hash>`, `./charts.js?v=<hash>`, and `./markdown.js?v=<hash>` in `study-dist/`, preventing HTML/JS version skew across any CDN or browser cache.
+3. **Origin Cache-Control Headers ([nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf)):**
+   - Moved `add_header Cache-Control "no-cache, must-revalidate" always;` to the `server` block so `/`, `.js`, `.css`, and `/data/*.json` all preserve security headers (`CSP`, `X-Frame-Options`, `X-Content-Type-Options`) while preventing Cloudflare 4-hour edge caching of stale bundles.
+
+**Files:** [build-study-site.mjs](scripts/build-study-site.mjs); [nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf); [studySiteBuilder.test.ts](bot/src/__tests__/studySiteBuilder.test.ts); [UPDATES.md](UPDATES.md).
 
 ---
 

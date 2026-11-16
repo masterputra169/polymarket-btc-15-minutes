@@ -98,8 +98,11 @@ describe('parseUpdatesMd & buildStudySite', () => {
 
         const res = buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
         expect(res.skipped).toBe(false);
-        expect(fs.existsSync(path.join(tmpOut, 'index.html'))).toBe(true);
-        expect(fs.existsSync(path.join(tmpOut, 'app.js'))).toBe(true);
+        const outHtml = fs.readFileSync(path.join(tmpOut, 'index.html'), 'utf8');
+        const outApp = fs.readFileSync(path.join(tmpOut, 'app.js'), 'utf8');
+        expect(outHtml).toMatch(/\.\/styles\.css\?v=[a-f0-9]{8}/);
+        expect(outHtml).toMatch(/\.\/app\.js\?v=[a-f0-9]{8}/);
+        expect(outApp).toMatch(/\.\/charts\.js\?v=[a-f0-9]{8}/);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'site.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'models.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'studies.json'))).toBe(true);

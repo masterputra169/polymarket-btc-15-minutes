@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
@@ -707,10 +708,30 @@ function copyStaticFrontend(repoRoot, outDir) {
   const siteSrc = path.join(repoRoot, 'study-site');
   if (!fs.existsSync(siteSrc)) throw new Error(`Missing study-site templates at ${siteSrc}`);
   fs.mkdirSync(outDir, { recursive: true });
-  for (const file of fs.readdirSync(siteSrc)) {
+
+  const files = fs.readdirSync(siteSrc).sort().filter((f) => fs.statSync(path.join(siteSrc, f)).isFile());
+  const hash = crypto.createHash('sha256');
+  for (const file of files) {
+    hash.update(file);
+    hash.update(fs.readFileSync(path.join(siteSrc, file)));
+  }
+  const bundleVer = hash.digest('hex').slice(0, 8);
+
+  for (const file of files) {
     const src = path.join(siteSrc, file);
-    if (fs.statSync(src).isFile()) {
-      fs.copyFileSync(src, path.join(outDir, file));
+    const dest = path.join(outDir, file);
+    if (file === 'index.html') {
+      const html = fs.readFileSync(src, 'utf8')
+        .replace(/href="\.\/styles\.css(?:\?[^"]*)?"/, `href="./styles.css?v=${bundleVer}"`)
+        .replace(/src="\.\/app\.js(?:\?[^"]*)?"/, `src="./app.js?v=${bundleVer}"`);
+      fs.writeFileSync(dest, html);
+    } else if (file === 'app.js') {
+      const js = fs.readFileSync(src, 'utf8')
+        .replace(/from '\.\/markdown\.js(?:\?[^']*)?'/, `from './markdown.js?v=${bundleVer}'`)
+        .replace(/from '\.\/charts\.js(?:\?[^']*)?'/, `from './charts.js?v=${bundleVer}'`);
+      fs.writeFileSync(dest, js);
+    } else {
+      fs.copyFileSync(src, dest);
     }
   }
   const brandSrc = path.join(repoRoot, 'public', 'brand');
