@@ -47,7 +47,6 @@ from mltrain.lightgbm_train import (
     evaluate_lgb,
     fit_lgb_platt,
     lgb_walk_forward_cv,
-    platt_probs,
     train_final_lgb,
     tune_lgb_params,
 )
@@ -87,6 +86,7 @@ def _resolve_lgb_params(
     embargo: int,
     n_folds: int,
     use_optuna: bool,
+    lgb_tune_trials: int = LGB_OPTUNA_TRIALS,
     log: Callable[..., None],
 ) -> dict[str, Any]:
     """Optuna-tuned LightGBM params, or the hand-tuned defaults.
@@ -94,8 +94,8 @@ def _resolve_lgb_params(
     The study is scored by embargoed walk-forward CV AUC only (see
     mltrain/lightgbm_train.tune_lgb_params), so tuning never touches the holdout.
     """
-    if use_optuna:
-        log(f"   Optuna optimization ({LGB_OPTUNA_TRIALS} trials, {n_folds}-fold CV)...")
+    if use_optuna and lgb_tune_trials > 0:
+        log(f"   Optuna optimization ({lgb_tune_trials} trials, {n_folds}-fold CV)...")
         # seed + 1: the LGB study must not replay the XGBoost study's trial sequence.
         lgb_tuning = tune_lgb_params(
             X_train,
@@ -105,6 +105,7 @@ def _resolve_lgb_params(
             seed=seed + 1,
             embargo=embargo,
             n_folds=n_folds,
+            n_trials=lgb_tune_trials,
         )
         lgb_best_params = lgb_tuning.params
         log(f"   Best trial #{lgb_tuning.best_trial}: CV AUC = {lgb_tuning.best_value:.4f}")
@@ -138,7 +139,11 @@ def _select_ensemble_weight(
     X_test: np.ndarray,
     y_test: np.ndarray,
     xgb_test_probs: np.ndarray,
-    log: Callable[..., None],
+    xgb_platt_by_phase: dict[str, dict[str, float]] | None = None,
+    lgb_platt_by_phase: dict[str, dict[str, float]] | None = None,
+    minutes_idx: int | None = None,
+    X_train: np.ndarray | None = None,
+    log: Callable[..., None] = print,
 ) -> tuple[float, str]:
     """Pick the XGB blend weight, and report which split it was picked on.
 
@@ -162,8 +167,32 @@ def _select_ensemble_weight(
     ens_oof_lgb = None
     ens_oof_labels = None
     if len(xgb_oof_margins) > 0 and len(lgb_oof_margins) > 0:
-        xgb_oof_cal = platt_probs(xgb_oof_margins, xgb_platt_a, xgb_platt_b)
-        lgb_oof_cal = platt_probs(lgb_oof_margins, lgb_platt_a, lgb_platt_b)
+        from mltrain.calibration import apply_phase_platt
+
+        xgb_oof_mins = (
+            X_train[xgb_oof_idx, minutes_idx] * 15.0
+            if (
+                X_train is not None
+                and minutes_idx is not None
+                and len(xgb_oof_idx) == len(xgb_oof_margins)
+            )
+            else None
+        )
+        lgb_oof_mins = (
+            X_train[lgb_oof_idx, minutes_idx] * 15.0
+            if (
+                X_train is not None
+                and minutes_idx is not None
+                and len(lgb_oof_idx) == len(lgb_oof_margins)
+            )
+            else None
+        )
+        xgb_oof_cal = apply_phase_platt(
+            xgb_oof_margins, xgb_oof_mins, xgb_platt_a, xgb_platt_b, xgb_platt_by_phase
+        )
+        lgb_oof_cal = apply_phase_platt(
+            lgb_oof_margins, lgb_oof_mins, lgb_platt_a, lgb_platt_b, lgb_platt_by_phase
+        )
         ens_align = align_oof_predictions(
             xgb_oof_cal,
             lgb_oof_cal,
@@ -194,18 +223,30 @@ def _select_ensemble_weight(
 
     if X_holdout is not None and len(X_holdout) > 0:
         # Fallback (degenerate/misaligned CV only): legacy holdout selection
+        from mltrain.calibration import apply_phase_platt
+
         log("\n   Optimizing ensemble weights (on holdout — OOF unavailable)...")
+        ho_mins = X_holdout[:, minutes_idx] * 15.0 if minutes_idx is not None else None
         xgb_margin_ho = xgb_model.predict(xgb_dholdout, output_margin=True)
-        xgb_cal_ho = platt_probs(xgb_margin_ho, xgb_platt_a, xgb_platt_b)
+        xgb_cal_ho = apply_phase_platt(
+            xgb_margin_ho, ho_mins, xgb_platt_a, xgb_platt_b, xgb_platt_by_phase
+        )
         lgb_margin_ho = lgb_model.predict(X_holdout, raw_score=True)
-        lgb_cal_ho = platt_probs(lgb_margin_ho, lgb_platt_a, lgb_platt_b)
+        lgb_cal_ho = apply_phase_platt(
+            lgb_margin_ho, ho_mins, lgb_platt_a, lgb_platt_b, lgb_platt_by_phase
+        )
 
         return select_ensemble_weights(xgb_cal_ho, lgb_cal_ho, y_holdout).weight_xgb, "holdout"
 
+    from mltrain.calibration import apply_phase_platt
+
     log("\n   Optimizing ensemble weights (on test, no holdout)...")
+    te_mins = X_test[:, minutes_idx] * 15.0 if minutes_idx is not None else None
     xgb_cal_test = xgb_test_probs
     lgb_margin_test = lgb_model.predict(X_test, raw_score=True)
-    lgb_cal_test = platt_probs(lgb_margin_test, lgb_platt_a, lgb_platt_b)
+    lgb_cal_test = apply_phase_platt(
+        lgb_margin_test, te_mins, lgb_platt_a, lgb_platt_b, lgb_platt_by_phase
+    )
 
     return select_ensemble_weights(xgb_cal_test, lgb_cal_test, y_test).weight_xgb, "test"
 
@@ -240,6 +281,8 @@ def run_lightgbm_stage(
     norm: dict[str, Any],
     output_dir: str,
     strict_holdout: bool,
+    xgb_platt_by_phase: dict[str, dict[str, float]] | None = None,
+    lgb_tune_trials: int = LGB_OPTUNA_TRIALS,
     num_boost_round: int = LGB_BOOST_ROUND,
     early_stopping: int = LGB_EARLY_STOPPING,
     log: Callable[..., None] = print,
@@ -284,6 +327,7 @@ def run_lightgbm_stage(
         embargo=embargo,
         n_folds=n_folds,
         use_optuna=use_optuna,
+        lgb_tune_trials=lgb_tune_trials,
         log=log,
     )
 
@@ -352,11 +396,45 @@ def run_lightgbm_stage(
             )
 
     # Exported Brier/calibration must reflect the probabilities inference uses:
-    # apply the FINAL Platt transform (identity when calibration was skipped or
-    # disabled — sigmoid(raw margin) then equals the raw probability) to the raw
-    # test margins before scoring.
+    # apply the FINAL Platt transform (global + optional per-phase power scaling)
+    # to the raw test margins before scoring.
+    from mltrain.calibration import apply_phase_platt, fit_phase_power_calibration
+
+    minutes_idx = (
+        feature_cols.index("minutes_left_norm") if "minutes_left_norm" in feature_cols else None
+    )
+    lgb_platt_by_phase: dict[str, dict[str, float]] | None = None
+    if lgb_calibrator.kept and minutes_idx is not None and len(lgb_oof_idx) == len(lgb_oof_margins):
+        lgb_oof_mins = X_train[lgb_oof_idx, minutes_idx] * 15.0
+        has_ho = X_holdout is not None and y_holdout is not None and len(X_holdout) > 0
+        eval_m = (
+            lgb_model_final.predict(X_holdout, raw_score=True)
+            if has_ho
+            else lgb_model_final.predict(X_test, raw_score=True)
+        )
+        eval_y = y_holdout if has_ho else y_test
+        eval_mins = (
+            (X_holdout[:, minutes_idx] * 15.0) if has_ho else (X_test[:, minutes_idx] * 15.0)
+        )
+        lgb_phase = fit_phase_power_calibration(
+            lgb_oof_margins,
+            lgb_oof_labels,
+            lgb_oof_mins,
+            lgb_platt_a,
+            lgb_platt_b,
+            eval_margins=eval_m,
+            eval_labels=eval_y,
+            eval_minutes_left=eval_mins,
+            eval_label="holdout" if has_ho else "test",
+            log=log,
+        )
+        lgb_platt_by_phase = lgb_phase.platt_by_phase
+
+    test_mins = X_test[:, minutes_idx] * 15.0 if minutes_idx is not None else None
     lgb_y_margin_final = lgb_model_final.predict(X_test, raw_score=True)
-    lgb_y_prob_cal = platt_probs(lgb_y_margin_final, lgb_platt_a, lgb_platt_b)
+    lgb_y_prob_cal = apply_phase_platt(
+        lgb_y_margin_final, test_mins, lgb_platt_a, lgb_platt_b, lgb_platt_by_phase
+    )
     lgb_brier = brier_score_loss(y_test, lgb_y_prob_cal)
     lgb_calibration = calibration_summary(y_test, lgb_y_prob_cal)
     log(f"   LGB calibrated (exported): Brier={lgb_brier:.4f} | ECE={lgb_calibration['ece']:.4f}")
@@ -380,6 +458,10 @@ def run_lightgbm_stage(
         X_test=X_test,
         y_test=y_test,
         xgb_test_probs=xgb_test_probs,
+        xgb_platt_by_phase=xgb_platt_by_phase,
+        lgb_platt_by_phase=lgb_platt_by_phase,
+        minutes_idx=minutes_idx,
+        X_train=X_train,
         log=log,
     )
 
@@ -388,8 +470,7 @@ def run_lightgbm_stage(
 
     # Report on test (read-only) regardless of where weights were tuned
     xgb_cal_probs = xgb_test_probs
-    lgb_y_margin_ens = lgb_model_final.predict(X_test, raw_score=True)
-    lgb_cal_probs = platt_probs(lgb_y_margin_ens, lgb_platt_a, lgb_platt_b)
+    lgb_cal_probs = lgb_y_prob_cal
     ens_prob_final = ens_weight_xgb * xgb_cal_probs + ens_weight_lgb * lgb_cal_probs
     ens_acc = accuracy_score(y_test, (ens_prob_final >= 0.5).astype(int))
     ens_auc_final = roc_auc_score(y_test, ens_prob_final)
@@ -441,6 +522,7 @@ def run_lightgbm_stage(
         cv_auc=lgb_cv_auc,
         cv_acc=lgb_cv_acc,
         ensemble_weights={"xgb": ens_weight_xgb, "lgb": ens_weight_lgb},
+        platt_by_phase=lgb_platt_by_phase,
     )
 
     lgb_path = os.path.join(output_dir, "lightgbm_model.json")

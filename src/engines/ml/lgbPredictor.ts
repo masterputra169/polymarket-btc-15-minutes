@@ -6,6 +6,9 @@
  * applies sigmoid → Platt calibration.
  */
 
+import { FI, resolveFeatureIdx } from './featureMap.ts';
+import { calibrateLogitWith, parsePlattByPhase, type PlattByPhaseMap } from './calibration.ts';
+
 // ═══ Module state ═══
 let lgbTrees = null;       // Array of pre-indexed tree Maps
 let lgbNumTrees = 0;
@@ -13,6 +16,7 @@ let lgbInitScore = 0;
 let lgbPlattA = 1.0;
 let lgbPlattB = 0.0;
 let lgbPlattOnLogits = false; // v9: Platt on raw logits
+let lgbPlattByPhase: PlattByPhaseMap | null = null;
 let lgbLoading = false;
 let lgbError = null;
 
@@ -98,6 +102,7 @@ export function loadLgbModelFromData(raw) {
   lgbPlattA = raw.platt_a ?? 1.0;
   lgbPlattB = raw.platt_b ?? 0.0;
   lgbPlattOnLogits = raw.platt_on_logits ?? false;
+  lgbPlattByPhase = parsePlattByPhase(raw.platt_by_phase);
 
   const treeInfos = raw.tree_info || [];
   const numTrees = Math.min(raw.num_trees ?? treeInfos.length, treeInfos.length);
@@ -177,12 +182,10 @@ export function predictLgb(features) {
 
   let prob;
   if (lgbPlattOnLogits) {
-    // v9: Platt on raw logits — sigmoid(A*logit + B)
-    if (lgbPlattA !== 1.0 || lgbPlattB !== 0.0) {
-      prob = 1 / (1 + Math.exp(-(lgbPlattA * logit + lgbPlattB)));
-    } else {
-      prob = 1 / (1 + Math.exp(-logit));
-    }
+    // v9: Platt on raw logits — sigmoid(A*logit + B), with optional per-phase scaling
+    const mlIdx = resolveFeatureIdx('minutes_left_norm');
+    const mlNorm = features[mlIdx >= 0 ? mlIdx : FI.minutes_left_norm];
+    prob = calibrateLogitWith(logit, lgbPlattA, lgbPlattB, lgbPlattByPhase, mlNorm);
   } else {
     // Legacy: sigmoid first, then Platt on probability (double-sigmoid)
     prob = 1 / (1 + Math.exp(-logit));
@@ -204,4 +207,5 @@ export function unloadLgbModel() {
   lgbPlattA = 1.0;
   lgbPlattB = 0.0;
   lgbPlattOnLogits = false;
+  lgbPlattByPhase = null;
 }

@@ -52,6 +52,12 @@ parser.add_argument("--test-size", type=float, default=0.15)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--tune", action="store_true", help="Use Optuna Bayesian optimization")
 parser.add_argument("--tune-trials", type=int, default=150, help="Number of Optuna trials")
+parser.add_argument(
+    "--lgb-tune-trials",
+    type=int,
+    default=50,
+    help="Number of Optuna trials for LightGBM partner (0 = default params)",
+)
 parser.add_argument("--deploy", action="store_true")
 parser.add_argument("--days", type=int, default=540)
 parser.add_argument(
@@ -243,7 +249,11 @@ from sklearn.metrics import (
 )
 
 # Pure logic extracted into the mltrain package (importable + unit-tested).
-from mltrain.calibration import calibrate_platt
+from mltrain.calibration import (
+    apply_phase_platt,
+    calibrate_platt,
+    fit_phase_power_calibration,
+)
 from mltrain.configs import EARLY_STOPPING, N_CV_FOLDS, NUM_BOOST_ROUND, XGB_EVAL_METRIC
 from mltrain.cv import walk_forward_cv as _walk_forward_cv
 from mltrain.export import (
@@ -255,7 +265,7 @@ from mltrain.export import (
     dump_browser_trees,
 )
 from mltrain.metrics import calibration_summary, confidence_bucket_summary, market_skill
-from mltrain.pruning import evaluate_pruning
+from mltrain.pruning import DEFAULT_SHAP_PRUNE_THRESHOLD, evaluate_pruning
 from mltrain.report import build_training_report
 from mltrain.sweeps import select_phase_thresholds, select_threshold
 from mltrain.tuning import search_hyperparameters
@@ -271,6 +281,7 @@ def walk_forward_cv(
     return_preds: bool = False,
     feat_weights: np.ndarray | None = None,
     return_importances: bool = False,
+    return_shap_importances: bool = False,
 ) -> tuple:
     """Thin binding of mltrain.cv.walk_forward_cv to this run's globals."""
     return _walk_forward_cv(
@@ -282,6 +293,7 @@ def walk_forward_cv(
         return_preds,
         feat_weights,
         return_importances,
+        return_shap_importances,
         feature_cols=feature_cols,
         seed=args.seed,
         embargo=CV_EMBARGO,
@@ -364,14 +376,16 @@ else:
             "holdout metrics will be biased upward (legacy v16 behavior)."
         )
 
-dtrain = xgb.DMatrix(
-    X_final_train, label=y_final_train, weight=w_train_final, feature_names=feature_cols
-)
-if exclude_feature_names:
+if exclude_feature_names and final_params.get("colsample_bytree", 1.0) >= 1.0:
     # Ensure colsample_bytree < 1.0 for feature_weights to work
-    if final_params.get("colsample_bytree", 1.0) >= 1.0:
-        final_params["colsample_bytree"] = 0.95
-    dtrain.feature_weights = pre_exclude_fw
+    final_params["colsample_bytree"] = 0.95
+dtrain = xgb.DMatrix(
+    X_final_train,
+    label=y_final_train,
+    weight=w_train_final,
+    feature_names=feature_cols,
+    feature_weights=pre_exclude_fw if exclude_feature_names else None,
+)
 dtest = xgb.DMatrix(X_test, label=y_test, feature_names=feature_cols)
 
 # Early stopping on holdout (audit fix M-early) to avoid test data leakage
@@ -456,6 +470,7 @@ pruning = evaluate_pruning(
     dholdout=dholdout if has_holdout else None,
     y_holdout=y_holdout,
     initial_auc=initial_auc,
+    shap_prune_threshold=DEFAULT_SHAP_PRUNE_THRESHOLD,
 )
 model = pruning.model
 pruned_features = pruning.pruned_features
@@ -463,6 +478,14 @@ pruned_model_kept = pruning.pruned_model_kept
 combined_fw = pruning.combined_fw
 if pruning.test_probs is not None:
     y_prob = pruning.test_probs  # pruned retrain replaced `model`
+
+if pruning.shap_summary:
+    print("\n   Top 15 Features by Exact TreeSHAP (pred_contribs):")
+    for idx_s, sh_row in enumerate(pruning.shap_summary[:15], 1):
+        print(
+            f"     {idx_s:2d}. {sh_row['feature']!s:<32s} "
+            f"|SHAP|={float(sh_row['mean_abs_shap']):.4f} ({float(sh_row['share'])*100:5.2f}%)"
+        )
 
 # ================================================
 # 7. PLATT CALIBRATION
@@ -504,6 +527,52 @@ eval_label = calib.eval_label  # where the keep/revert decision was taken
 y_prob_final = calib.probabilities  # calibrated test probs for the final eval
 final_holdout_acc = calib.holdout_accuracy
 final_holdout_auc = calib.holdout_auc
+
+ml_phase_idx = fi.get("minutes_left_norm")
+xgb_platt_by_phase = None
+if calib.kept and ml_phase_idx is not None and len(oof_idx) == len(oof_margins):
+    oof_mins = X_train[oof_idx, ml_phase_idx] * 15.0
+    eval_m_phase = (
+        model.predict(dholdout, output_margin=True)
+        if has_holdout
+        else model.predict(dtest, output_margin=True)
+    )
+    eval_y_phase = y_holdout if has_holdout else y_test
+    eval_mins_phase = (
+        X_holdout[:, ml_phase_idx] * 15.0 if has_holdout else X_test[:, ml_phase_idx] * 15.0
+    )
+    phase_cal = fit_phase_power_calibration(
+        oof_margins,
+        oof_labels,
+        oof_mins,
+        platt_a,
+        platt_b,
+        eval_margins=eval_m_phase,
+        eval_labels=eval_y_phase,
+        eval_minutes_left=eval_mins_phase,
+        eval_label="holdout" if has_holdout else "test",
+        log=print,
+    )
+    xgb_platt_by_phase = phase_cal.platt_by_phase
+    if xgb_platt_by_phase is not None:
+        test_mins_phase = X_test[:, ml_phase_idx] * 15.0
+        y_prob_final = apply_phase_platt(
+            model.predict(dtest, output_margin=True),
+            test_mins_phase,
+            platt_a,
+            platt_b,
+            xgb_platt_by_phase,
+        )
+        if has_holdout:
+            ho_p = apply_phase_platt(
+                eval_m_phase,
+                eval_mins_phase,
+                platt_a,
+                platt_b,
+                xgb_platt_by_phase,
+            )
+            final_holdout_acc = float(accuracy_score(y_holdout, (ho_p >= 0.5).astype(int)))
+            final_holdout_auc = float(roc_auc_score(y_holdout, ho_p))
 
 # ================================================
 # 8. EVALUATE + EXPORT
@@ -594,8 +663,13 @@ for lo, hi in buckets:
 # applied to calibrated probabilities at inference, so the sweep runs on the
 # FINAL Platt transform (identity A=1/B=0 when calibration was disabled) applied
 # to the OOF margins — the same probability space inference sees.
+oof_mins_sweep = (
+    X_train[oof_idx, ml_phase_idx] * 15.0
+    if (ml_phase_idx is not None and len(oof_idx) == len(oof_margins))
+    else None
+)
 oof_cal_probs = (
-    1.0 / (1.0 + np.exp(-(platt_a * oof_margins + platt_b)))
+    apply_phase_platt(oof_margins, oof_mins_sweep, platt_a, platt_b, xgb_platt_by_phase)
     if len(oof_margins) > 0
     else np.array([])
 )
@@ -607,7 +681,8 @@ if len(oof_cal_probs) >= 100:
 elif X_holdout is not None and len(X_holdout) > 0:
     # Fallback (degenerate CV only): legacy holdout selection
     y_margin_ho = model.predict(dholdout, output_margin=True)
-    y_prob_ho = 1.0 / (1.0 + np.exp(-(platt_a * y_margin_ho + platt_b)))
+    ho_mins_sweep = X_holdout[:, ml_phase_idx] * 15.0 if ml_phase_idx is not None else None
+    y_prob_ho = apply_phase_platt(y_margin_ho, ho_mins_sweep, platt_a, platt_b, xgb_platt_by_phase)
     y_pred_ho = (y_prob_ho >= 0.5).astype(int)
     sweep_probs = y_prob_ho
     sweep_labels = y_holdout
@@ -782,6 +857,7 @@ browser_model = build_browser_model(
         holdout_samples=export_holdout_samples,
     ),
     metrics=xgb_metrics,
+    platt_by_phase=xgb_platt_by_phase,
 )
 
 model_path = os.path.join(args.output_dir, "xgboost_model.json")
@@ -909,6 +985,8 @@ if HAS_LGB:
         norm=norm,
         output_dir=args.output_dir,
         strict_holdout=bool(args.strict_holdout),
+        xgb_platt_by_phase=xgb_platt_by_phase,
+        lgb_tune_trials=args.lgb_tune_trials,
         log=print,
     )
 

@@ -15,6 +15,7 @@ import * as S from '../../../src/engines/ml/state.ts';
 import { setBaseFeatureCount } from '../../../src/engines/ml/state.ts';
 import { indexTree } from '../../../src/engines/ml/treeEval.ts';
 import { loadLgbModelFromData, isLgbReady } from '../../../src/engines/ml/lgbPredictor.ts';
+import { parsePlattByPhase, setPlattByPhase } from '../../../src/engines/ml/calibration.ts';
 
 // Re-export all inference functions — they work unchanged after state is loaded
 export {
@@ -91,6 +92,11 @@ export function loadMLModelFromDisk(force = false): boolean {
       modelId: typeof rawNorm.model_id === 'string' ? rawNorm.model_id : null,
       loadError: null,
     });
+    const phaseCal = parsePlattByPhase(rawModel.platt_by_phase);
+    setPlattByPhase(phaseCal);
+    if (phaseCal) {
+      log.info(`Per-phase Platt calibration loaded: ${Object.keys(phaseCal).join(', ')}`);
+    }
     log.info(`Feature pipeline: v${featurePipeline}${featurePipeline >= 2 ? ' (shared live/training builder)' : ' (legacy)'}`);
     log.info(`Model id: ${typeof rawNorm.model_id === 'string' ? rawNorm.model_id : '(none — predates the model registry)'}`);
 

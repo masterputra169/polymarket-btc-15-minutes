@@ -211,6 +211,48 @@ def test_norm_export_appends_ensemble_block_in_order(splits, xgb_oof, tmp_path, 
 
 
 @pytest.mark.integration
+def test_phase_calibration_runs_when_minutes_present(tmp_path) -> None:
+    rng = np.random.default_rng(17)
+    n, k = 1200, 4
+    X = rng.normal(size=(n, k)).astype(np.float32)
+    X[:, 1] = np.clip(rng.uniform(0.0, 1.0, size=n), 0.0, 1.0)
+    mins = X[:, 1] * 15.0
+    scale = np.where(mins > 10.0, 0.7, np.where(mins <= 2.0, 1.35, 1.0))
+    probs = 1.0 / (1.0 + np.exp(-2.0 * scale * X[:, 0]))
+    y = (rng.uniform(size=n) < probs).astype(np.int32)
+    cols = ["ptb_dist_pct", "minutes_left_norm", "f2", "f3"]
+    xgb_oof = walk_forward_cv(
+        X[:900],
+        y[:900],
+        {"max_depth": 3, "learning_rate": 0.2},
+        None,
+        N_FOLDS,
+        True,
+        None,
+        False,
+        feature_cols=cols,
+        seed=42,
+        embargo=EMBARGO,
+        num_boost_round=40,
+        early_stopping=10,
+    )
+    splits_ph = {
+        "X_train": X[:900],
+        "y_train": y[:900],
+        "X_holdout": X[900:1050],
+        "y_holdout": y[900:1050],
+        "X_test": X[1050:],
+        "y_test": y[1050:],
+        "feature_cols": cols,
+    }
+    _run(splits_ph, xgb_oof, tmp_path, lambda *a, **k: None)
+    lgb_json = json.loads((tmp_path / "lightgbm_model.json").read_text())
+    assert lgb_json["ensemble_weights"]["xgb"] + lgb_json["ensemble_weights"][
+        "lgb"
+    ] == pytest.approx(1.0)
+
+
+@pytest.mark.integration
 def test_result_matches_exported_lightgbm_model(splits, xgb_oof, tmp_path):
     result = _run(splits, xgb_oof, tmp_path, lambda *a: None)
 

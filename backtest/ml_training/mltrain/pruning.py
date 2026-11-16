@@ -31,6 +31,35 @@ import xgboost as xgb
 from sklearn.metrics import accuracy_score, roc_auc_score
 
 PRUNE_THRESHOLD = 0.005  # features with <0.5% of total gain
+DEFAULT_SHAP_PRUNE_THRESHOLD = 0.0005  # <0.05% mean(|TreeSHAP|) share across every fold
+
+
+def compute_shap_summary(
+    model: xgb.Booster,
+    dmatrix: xgb.DMatrix,
+    feature_cols: Sequence[str],
+) -> list[dict[str, object]]:
+    """Exact TreeSHAP importance ranking via XGBoost `pred_contribs=True`.
+
+    Returns one entry per feature sorted descending by `mean_abs_shap` share,
+    avoiding any external `shap` dependency.
+    """
+    contribs = model.predict(dmatrix, pred_contribs=True)
+    shap_vals = contribs[:, :-1]
+    mean_abs = np.mean(np.abs(shap_vals), axis=0)
+    total = float(np.sum(mean_abs))
+    rows: list[dict[str, object]] = []
+    for idx, name in enumerate(feature_cols):
+        val = float(mean_abs[idx])
+        rows.append(
+            {
+                "feature": name,
+                "mean_abs_shap": val,
+                "share": (val / total) if total > 0 else 0.0,
+            }
+        )
+    rows.sort(key=lambda r: float(r["mean_abs_shap"]), reverse=True)
+    return rows
 
 
 @dataclass(frozen=True)
@@ -57,6 +86,7 @@ class PruningResult:
     pruned_accuracy: float | None
     pruned_auc: float | None
     baseline_auc: float | None
+    shap_summary: tuple[dict[str, object], ...] = ()
 
 
 def evaluate_pruning(
@@ -82,9 +112,10 @@ def evaluate_pruning(
     dholdout: xgb.DMatrix | None,
     y_holdout: np.ndarray | None,
     initial_auc: float,
+    shap_prune_threshold: float | None = None,
     log: Callable[..., None] = print,
 ) -> PruningResult:
-    """Prune low-gain features, retrain, and keep the retrain only if it holds up.
+    """Prune low-gain (and optionally low-TreeSHAP) features, retrain, and keep only if it holds up.
 
     Args:
         model: the initial booster, scored for gain and used as the baseline.
@@ -104,6 +135,9 @@ def evaluate_pruning(
         dtest, y_test: test split; also the eval set when no holdout exists.
         dholdout, y_holdout: strict OOS holdout, or None.
         initial_auc: the initial model's TEST AUC (baseline when no holdout).
+        shap_prune_threshold: optional fold-stable mean(|TreeSHAP|) share cutoff
+            (e.g. 0.0005 = 0.05%). When set and supported by `cv_fn`, a feature
+            below this share in ALL CV folds is also marked for soft pruning.
         log: sink for the section's console lines (the trainer's `print`).
 
     Returns:
@@ -122,31 +156,67 @@ def evaluate_pruning(
     # only pruned when it is ALSO below threshold in every walk-forward fold.
     # Prevents pruning on noise and feature churn between retrains.
     log("   Computing per-fold importances for stability check...")
-    _, _, fold_importances = cv_fn(
-        X_train, y_train, best_cfg, w_train, return_importances=True, feat_weights=feat_weights
-    )
+    fold_shap_fracs: list[dict[str, float]] = []
+    if shap_prune_threshold is not None:
+        cv_out = cv_fn(
+            X_train,
+            y_train,
+            best_cfg,
+            w_train,
+            return_importances=True,
+            return_shap_importances=True,
+            feat_weights=feat_weights,
+        )
+        fold_importances = cv_out[2]
+        if len(cv_out) > 3:
+            fold_shap_fracs = cv_out[3]
+    else:
+        _, _, fold_importances = cv_fn(
+            X_train, y_train, best_cfg, w_train, return_importances=True, feat_weights=feat_weights
+        )
     fold_fracs: dict[str, list[float]] = {feat: [] for feat in feature_cols}
     for imp in fold_importances:
         fold_total = sum(imp.values())
         for feat in feature_cols:
             fold_fracs[feat].append((imp.get(feat, 0.0) / fold_total) if fold_total > 0 else 0.0)
 
+    shap_fold_map: dict[str, list[float]] = {feat: [] for feat in feature_cols}
+    for sh_map in fold_shap_fracs:
+        for feat in feature_cols:
+            shap_fold_map[feat].append(float(sh_map.get(feat, 0.0)))
+
     rescued_by_stability: list[str] = []
+    shap_pruned_extra: list[str] = []
     for i, feat in enumerate(feature_cols):
         gain = importance.get(feat, 0)
         frac = gain / total_gain if total_gain > 0 else 0
-        if frac < PRUNE_THRESHOLD:
-            fracs = fold_fracs.get(feat) or [0.0]
-            if all(f < PRUNE_THRESHOLD for f in fracs):
-                feature_weights[i] = 0.0  # effectively exclude from splits
-                pruned_features.append(feat)
-            else:
-                rescued_by_stability.append(feat)
+        gain_dead = frac < PRUNE_THRESHOLD
+        fracs = fold_fracs.get(feat) or [0.0]
+        folds_gain_dead = all(f < PRUNE_THRESHOLD for f in fracs)
+        sh_vals = shap_fold_map.get(feat)
+        folds_shap_dead = (
+            shap_prune_threshold is not None
+            and bool(sh_vals)
+            and all(s < shap_prune_threshold for s in sh_vals)
+        )
+        if gain_dead and folds_gain_dead:
+            feature_weights[i] = 0.0  # effectively exclude from splits
+            pruned_features.append(feat)
+        elif folds_shap_dead:
+            feature_weights[i] = 0.0
+            pruned_features.append(feat)
+            shap_pruned_extra.append(feat)
+        elif gain_dead:
+            rescued_by_stability.append(feat)
 
     log(f"   Total features: {len(feature_cols)}")
     log(
-        f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain in final model AND all {len(fold_importances)} folds): {len(pruned_features)}"
+        f"   Pruned (< {PRUNE_THRESHOLD*100:.1f}% gain or dead TreeSHAP across all {len(fold_importances)} folds): {len(pruned_features)}"
     )
+    if shap_pruned_extra:
+        log(
+            f"   TreeSHAP-pruned additions (< {shap_prune_threshold*100:.2f}% |SHAP| all folds): {', '.join(shap_pruned_extra[:12])}"
+        )
     if rescued_by_stability:
         log(
             f"   Rescued by fold stability (weak in final model, strong in >=1 fold): {len(rescued_by_stability)}"
@@ -176,16 +246,15 @@ def evaluate_pruning(
         combined_fw = feature_weights.copy()
         if has_pre_excluded:
             combined_fw = np.minimum(combined_fw, pre_exclude_fw)
-        # Audit fix (May 2026 P6 follow-up): use X_final_train / y_final_train (which
-        # respect strict-holdout). Previously used X_train_full unconditionally → weight
-        # dimension mismatch when strict_holdout excluded holdout from final train.
+        # Audit fix (May 2026 P6 follow-up + Nov 2026 XGBoost 3.x ctor fix):
+        # pass feature_weights at construction time so hist sampler respects zeros.
         dtrain_fw = xgb.DMatrix(
             X_final_train,
             label=y_final_train,
             weight=w_train_final,
             feature_names=list(feature_cols),
+            feature_weights=combined_fw,
         )
-        dtrain_fw.feature_weights = combined_fw
 
         # Early stop on holdout for pruned model too (audit fix M-prune)
         if dholdout is not None:
@@ -245,6 +314,13 @@ def evaluate_pruning(
         pruned_features = []
         log("   No features pruned (all above threshold or too many would be pruned)")
 
+    shap_eval_dmat = dholdout if dholdout is not None else dtest
+    shap_summary = (
+        tuple(compute_shap_summary(model, shap_eval_dmat, feature_cols))
+        if isinstance(model, xgb.Booster)
+        else ()
+    )
+
     return PruningResult(
         model=model,
         pruned_features=pruned_features,
@@ -257,4 +333,5 @@ def evaluate_pruning(
         pruned_accuracy=pruned_acc,
         pruned_auc=pruned_auc,
         baseline_auc=initial_eval_auc,
+        shap_summary=shap_summary,
     )

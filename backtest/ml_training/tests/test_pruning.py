@@ -20,7 +20,7 @@ import numpy as np
 import pytest
 import xgboost as xgb
 
-from mltrain.pruning import PRUNE_THRESHOLD, evaluate_pruning
+from mltrain.pruning import PRUNE_THRESHOLD, compute_shap_summary, evaluate_pruning
 
 RETRAIN_PARAMS: dict[str, Any] = {
     "objective": "binary:logistic",
@@ -305,3 +305,81 @@ class TestKeepOrRejectRetrain:
         assert result.combined_fw[0] == 1.0
         assert list(result.combined_fw[1:5]) == [0.0, 0.0, 0.0, 0.0]
         assert result.combined_fw[9] == 0.0, "pre-excluded column must stay excluded"
+
+    def test_excluded_feature_gets_zero_splits_and_shap_audit_works(self) -> None:
+        # Verifies DMatrix constructor passes feature_weights cleanly under XGBoost 3.x hist:
+        # excluded feature f0 (highest signal) must receive 0 splits in the pruned model.
+        X_tr, y_tr, X_te, y_te, cols = self._split()
+        gains = {"f0": 100.0, "f1": 0.05, "f2": 0.05, **{c: 20.0 for c in cols[3:]}}
+        pre_fw = np.ones(len(cols), dtype=np.float32)
+        pre_fw[0] = 0.0
+        dtest = xgb.DMatrix(X_te, label=y_te, feature_names=cols)
+        result = _call(
+            _StubBooster(gains),
+            cols,
+            _cv_returning([gains, gains]),
+            X=X_tr,
+            y=y_tr,
+            dtest=dtest,
+            y_test=y_te,
+            initial_auc=0.4,
+            pre_exclude_fw=pre_fw,
+            has_pre_excluded=True,
+        )
+        assert result.pruned_model_kept is True
+        assert result.model.get_score().get("f0", 0) == 0
+        sh = compute_shap_summary(result.model, dtest, cols)
+        assert len(sh) == len(cols)
+        assert sh[0]["mean_abs_shap"] >= sh[-1]["mean_abs_shap"]
+
+    def test_shap_prune_threshold_prunes_low_shap_even_with_gain(self) -> None:
+        X_tr, y_tr, X_te, y_te, cols = self._split()
+        gains = {c: 20.0 for c in cols}
+        fold_shaps = [
+            {**{c: 0.2 for c in cols}, "f8": 0.0001},
+            {**{c: 0.2 for c in cols}, "f8": 0.0001},
+        ]
+
+        def cv_shap(
+            X,
+            y,
+            cfg,
+            w,
+            *,
+            return_importances=False,
+            return_shap_importances=False,
+            feat_weights=None,
+        ):
+            if return_shap_importances:
+                return 0.0, 0.0, [gains, gains], fold_shaps
+            return 0.0, 0.0, [gains, gains]
+
+        dtest = xgb.DMatrix(X_te, label=y_te, feature_names=cols)
+        result = evaluate_pruning(
+            _StubBooster(gains),
+            feature_cols=cols,
+            cv_fn=cv_shap,
+            X_train=X_tr,
+            y_train=y_tr,
+            w_train=None,
+            best_cfg={"max_depth": 3},
+            feat_weights=None,
+            pre_exclude_fw=np.ones(len(cols), dtype=np.float32),
+            has_pre_excluded=False,
+            final_params=RETRAIN_PARAMS,
+            X_final_train=X_tr,
+            y_final_train=y_tr,
+            w_train_final=None,
+            num_boost_round=25,
+            early_stopping=10,
+            dtest=dtest,
+            y_test=y_te,
+            dholdout=None,
+            y_holdout=None,
+            initial_auc=0.4,
+            shap_prune_threshold=0.0005,
+            log=lambda *a, **k: None,
+        )
+        assert result.pruned_model_kept is True
+        assert "f8" in result.pruned_features
+        assert result.model.get_score().get("f8", 0) == 0

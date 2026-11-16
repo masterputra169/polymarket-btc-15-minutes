@@ -14,7 +14,8 @@ import { ML_CONFIDENCE } from '../config.ts';
 import * as S from './ml/state.ts';
 import { BASE_FEATURES, setBaseFeatureCount, resetHysteresis } from './ml/state.ts';
 import { indexTree, predictXGBoost } from './ml/treeEval.ts';
-import { calibrate, calibrateLogit } from './ml/calibration.ts';
+import { FI, resolveFeatureIdx } from './ml/featureMap.ts';
+import { calibrate, calibrateLogit, parsePlattByPhase, setPlattByPhase } from './ml/calibration.ts';
 import { featureBuf, extractLiveFeaturesInPlace, getDataQualityScore } from './ml/featureExtract.ts';
 import { ensemblePrediction } from './ml/ensemble.ts';
 import { loadLgbModel, isLgbReady, predictLgb, unloadLgbModel } from './ml/lgbPredictor.ts';
@@ -29,6 +30,7 @@ type MlModelJson = {
   platt_a?: number;
   platt_b?: number;
   platt_on_logits?: boolean;
+  platt_by_phase?: Record<string, { a: number; b: number; theta?: number }>;
   feature_names?: string[];
   trees: any[];
   best_iteration?: number;
@@ -115,6 +117,7 @@ export async function loadMLModel(
       plattB: rawModel.platt_b ?? 0.0,
       plattOnLogits: rawModel.platt_on_logits ?? false,
     });
+    setPlattByPhase(parsePlattByPhase(rawModel.platt_by_phase));
 
     // Build feature name → index lookup
     if (rawModel.feature_names && rawModel.feature_names.length > 0) {
@@ -231,6 +234,7 @@ export function unloadMLModel() {
     featurePipeline: 1,
     modelId: null,
   });
+  setPlattByPhase(null);
   ensembleWeightXgb = 0.5;
   ensembleWeightLgb = 0.5;
   trainedSignalModifiers = null;
@@ -247,10 +251,12 @@ export function predictML(features) {
   const xgbLogit = predictXGBoost(features);
   if (xgbLogit === null) return null;
 
-  // Apply calibration: Platt-on-logits (v9) or legacy double-sigmoid (v2)
+  // Apply calibration: Platt-on-logits (v9, with optional per-phase scaling) or legacy double-sigmoid (v2)
+  const mlIdx = resolveFeatureIdx('minutes_left_norm');
+  const mlNorm = features[mlIdx >= 0 ? mlIdx : FI.minutes_left_norm];
   let xgbProb;
   if (S.plattOnLogits) {
-    xgbProb = calibrateLogit(xgbLogit);
+    xgbProb = calibrateLogit(xgbLogit, mlNorm);
   } else {
     // Legacy: convert logit → prob first, then apply Platt on prob
     const rawProb = 1 / (1 + Math.exp(-xgbLogit));

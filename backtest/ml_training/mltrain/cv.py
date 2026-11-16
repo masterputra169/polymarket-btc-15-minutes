@@ -31,6 +31,7 @@ def walk_forward_cv(
     return_preds: bool = False,
     feat_weights: np.ndarray | None = None,
     return_importances: bool = False,
+    return_shap_importances: bool = False,
     *,
     feature_cols: list[str],
     seed: int,
@@ -49,12 +50,15 @@ def walk_forward_cv(
     the NaN guard stays consistently absent from preds, margins, labels AND idx.
     feat_weights: optional per-feature weight array (0=exclude from splits).
     return_importances: also return per-fold gain importance dicts (for
-    stability-filtered pruning)."""
+    stability-filtered pruning).
+    return_shap_importances: also return per-fold normalised mean(|TreeSHAP|)
+    fraction dicts on each validation slice (exact `pred_contribs=True`)."""
     fold_size = len(X_tr) // (n_folds + 2)
     aucs, accs = [], []
     oof_preds, oof_margins, oof_labels = [], [], []
     oof_idx: list[int] = []
     fold_importances = []
+    fold_shap_fracs: list[dict[str, float]] = []
 
     for fold in range(n_folds):
         tr_end = fold_size * (fold + 2)
@@ -76,7 +80,7 @@ def walk_forward_cv(
         params = {
             "objective": "binary:logistic",
             "eval_metric": list(XGB_EVAL_METRIC),
-            "scale_pos_weight": spw_f,
+            "scale_pos_weight": float(spw_f),
             "seed": seed,
             "tree_method": "hist",
             **cfg,
@@ -85,11 +89,14 @@ def walk_forward_cv(
         if feat_weights is not None and params.get("colsample_bytree", 1.0) >= 1.0:
             params["colsample_bytree"] = 0.95
 
+        # Pass feature_weights in DMatrix constructor: post-hoc assignment can be ignored by XGBoost 3.x hist.
         dtrain_f = xgb.DMatrix(
-            X_f_train, label=y_f_train, weight=w_f_train, feature_names=feature_cols
+            X_f_train,
+            label=y_f_train,
+            weight=w_f_train,
+            feature_names=feature_cols,
+            feature_weights=feat_weights,
         )
-        if feat_weights is not None:
-            dtrain_f.feature_weights = feat_weights
         dval_f = xgb.DMatrix(X_f_val, label=y_f_val, feature_names=feature_cols)
 
         model_f = xgb.train(
@@ -129,9 +136,31 @@ def walk_forward_cv(
         if return_importances:
             fold_importances.append(model_f.get_score(importance_type="gain"))
 
+        if return_shap_importances:
+            sh = model_f.predict(dval_f, pred_contribs=True)[:, :-1]
+            mean_abs = np.mean(np.abs(sh), axis=0)
+            tot = float(np.sum(mean_abs))
+            fold_shap_fracs.append(
+                {
+                    fn: (float(mean_abs[j] / tot) if tot > 0 else 0.0)
+                    for j, fn in enumerate(feature_cols)
+                }
+            )
+
     mean_auc = np.mean(aucs) if aucs else 0
     mean_acc = np.mean(accs) if accs else 0
 
+    if return_preds and return_importances and return_shap_importances:
+        return (
+            mean_auc,
+            mean_acc,
+            np.array(oof_preds),
+            np.array(oof_margins),
+            np.array(oof_labels),
+            np.array(oof_idx, dtype=np.int64),
+            fold_importances,
+            fold_shap_fracs,
+        )
     if return_preds and return_importances:
         return (
             mean_auc,
@@ -151,6 +180,10 @@ def walk_forward_cv(
             np.array(oof_labels),
             np.array(oof_idx, dtype=np.int64),
         )
+    if return_importances and return_shap_importances:
+        return mean_auc, mean_acc, fold_importances, fold_shap_fracs
+    if return_shap_importances:
+        return mean_auc, mean_acc, fold_shap_fracs
     if return_importances:
         return mean_auc, mean_acc, fold_importances
     return mean_auc, mean_acc

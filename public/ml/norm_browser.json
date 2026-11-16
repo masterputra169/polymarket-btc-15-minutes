@@ -257,16 +257,25 @@
   ],
   "num_features": 83,
   "original_features": 58,
-  "platt_a": 1.0383536423786552,
-  "platt_b": 0.019647308295037885,
+  "platt_a": 1.0381596805361315,
+  "platt_b": 0.02168468128078064,
   "platt_on_logits": true,
   "pruned_features": [
+    "regime_trending",
+    "regime_mean_reverting",
+    "session_us",
+    "session_offhours",
+    "multi_tf_agreement",
     "failed_vwap_reclaim",
+    "bb_squeeze",
+    "atr_expanding",
     "ema_cross_signal",
     "orderbook_imbalance",
     "spread_pct",
     "funding_rate_norm",
     "funding_rate_change",
+    "ha_delta_agree",
+    "trend_alignment_score",
     "imbalance_x_vol_delta"
   ],
   "engineered_feature_specs": {
@@ -382,18 +391,18 @@
   },
   "signal_modifiers": {
     "ptbDistance": 3,
-    "momentum": 1.27,
+    "momentum": 1.59,
     "rsi": 3,
     "macdHist": 0.3,
-    "macdLine": 0.34,
-    "vwapPos": 0.38,
+    "macdLine": 0.36,
+    "vwapPos": 0.46,
     "vwapSlope": 0.3,
     "heikenAshi": 0.3,
     "failedVwap": 0.3,
     "orderbook": 0.3,
-    "multiTf": 0.7,
-    "bbPos": 2.56,
-    "atrExpand": 0.47
+    "multiTf": 0.48,
+    "bbPos": 1.47,
+    "atrExpand": 0.4
   },
   "phase_thresholds": {
     "EARLY": {
@@ -406,11 +415,11 @@
     },
     "LATE": {
       "minEdge": 0.02,
-      "minProb": 0.535
+      "minProb": 0.52
     },
     "VERY_LATE": {
       "minEdge": 0.02,
-      "minProb": 0.525
+      "minProb": 0.52
     }
   },
   "train_samples": 29717,
@@ -418,27 +427,27 @@
   "holdout_start_idx": 26018,
   "feature_pipeline": 2,
   "ensemble_weights": {
-    "xgb": 0.75,
-    "lgb": 0.25
+    "xgb": 0.7,
+    "lgb": 0.3
   },
   "ensemble_metrics": {
-    "accuracy": 0.7567,
-    "auc": 0.8524,
-    "logloss": 0.4684,
-    "brier": 0.1574,
-    "calibration_ece": 0.0235,
-    "calibration_mce": 0.058,
-    "weight_source": "holdout",
+    "accuracy": 0.7579,
+    "auc": 0.8532,
+    "logloss": 0.4657,
+    "brier": 0.1567,
+    "calibration_ece": 0.0242,
+    "calibration_mce": 0.0602,
+    "weight_source": "oof_cv",
     "test_samples": 5229,
     "holdout_samples": 3699,
     "strict_holdout": true,
     "market_brier": 0.1673,
-    "brier_skill_vs_market": 0.0595,
-    "logloss_skill_vs_market": 0.0521,
+    "brier_skill_vs_market": 0.0638,
+    "logloss_skill_vs_market": 0.0575,
     "market_skill_samples": 5229
   },
-  "lgb_platt_a": 1.018717907038383,
-  "lgb_platt_b": 0.024469188948984588,
+  "lgb_platt_a": 1.040465865186067,
+  "lgb_platt_b": 0.014759117754713547,
   "lgb_platt_on_logits": true,
-  "model_id": "20261115-p2-c3e0fd"
+  "model_id": "20261116-p2-ef8dfd"
 }

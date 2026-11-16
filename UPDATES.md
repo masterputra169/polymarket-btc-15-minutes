@@ -8,14 +8,14 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 08:34 WIB_
+_Last updated: 2026-11-16 11:06 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating All-Time Quant ($100 fresh test) |
-| ML model | **`20261115-p2-c3e0fd` (All-Time `395d` Quant, 83f LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.67% Test Acc · 0.8524 AUC · 0.0235 ECE · +5.95% skill vs market** |
-| ML previous (365d / 180d) | **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — both available for 1-click hot-swap |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `83f` All-Time Quant & `79f` `365d`/`180d` models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `50c–65c` band) |
+| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating upgraded All-Time Quant ($100 fresh test) |
+| ML model | **`20261116-p2-ef8dfd` (All-Time `395d` Group-1 Quant, 83f / 67 active LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.79% Ensemble Acc (75.83% XGB) · 0.8532 AUC · 0.1567 Brier · 0.0225 XGB ECE · +6.38% skill vs market** |
+| ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `20261116-p2-ef8dfd` & prior models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `50c–65c` band) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | **$100.00 fresh test run (0W / 0L)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261115-p2-c3e0fd` (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.62`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
@@ -34,13 +34,13 @@ _Last updated: 2026-11-16 08:34 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 105 files / 1032 vitest PASS · 424 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 106 files / 1,036 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | **0.60** (`KELLY_PROB_SHRINK=0.60`, `MIN_BET_PCT=0.005`; resolved `Adjusted Kelly < min 2.0%` deadlock) |
-| Eval window | **Since `2026-11-16T01:35:00Z`** (`EVAL_WINDOW_START`, model `20261115-p2-c3e0fd`, `$100` fresh capital, target 300 trades); old 926-row & 923-row journals archived & viewable in UI |
+| Eval window | **Since `2026-11-16T01:35:00Z`** (`EVAL_WINDOW_START`, `$100` fresh capital, hot-upgraded to `20261116-p2-ef8dfd`); old 926-row & 923-row journals archived & viewable in UI |
 | Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
 | Health state | clean; failed units cleared; `systemctl --failed` empty |
 | Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
@@ -51,6 +51,24 @@ _Last updated: 2026-11-16 08:34 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 11:06 WIB — Group-1 ML Upgrades: Per-Phase Power Calibration, Constructor `feature_weights` Fix & Fold-Stable TreeSHAP Pruning (`20261116-p2-ef8dfd`)
+
+**What changed:**
+1. **Fixed Silent XGBoost 3.x `feature_weights` Bug ([cv.py](backtest/ml_training/mltrain/cv.py), [pruning.py](backtest/ml_training/mltrain/pruning.py), [trainXGBoost_v3.py](backtest/ml_training/trainXGBoost_v3.py)):**
+   - Under `xgboost 3.1.3` (`hist`), assigning `dtrain.feature_weights = ...` *after* constructing `xgb.DMatrix(...)` was silently ignored by the histogram sampler, causing `--exclude-features` and soft-pruned columns (e.g. `ema_cross_signal` in `20261115-p2-c3e0fd`) to still receive splits. Passing `feature_weights` directly inside `xgb.DMatrix(...)` constructor enforces zero splits on excluded features.
+2. **Exact TreeSHAP Audit & Fold-Stable Pruning ([pruning.py](backtest/ml_training/mltrain/pruning.py), [cv.py](backtest/ml_training/mltrain/cv.py)):**
+   - Added zero-dependency exact TreeSHAP via `booster.predict(..., pred_contribs=True)` (`compute_shap_summary`) plus fold-stable TreeSHAP thresholding (`DEFAULT_SHAP_PRUNE_THRESHOLD = 0.0005`, `< 0.05%` across all CV folds, keeping the strict holdout AUC `-0.002` keep/reject safety rail).
+   - Ablations on `34,962` rows tested and honestly **rejected** two Group-1 candidates that added variance without OOS improvement: causal Bayesian smoothed target encoding (`session x regime x phase`, `m=10/25`, Holdout/Test Skill flat/worse) and hourly historical Deribit DVOL + VRP spread (`Test LL 0.4680→0.4681`, `FullOOS Skill +6.03%→+5.72%`).
+3. **4-Phase Power-$\theta$ Calibration in Python & TypeScript ([calibration.py](backtest/ml_training/mltrain/calibration.py), [lightgbm_stage.py](backtest/ml_training/mltrain/lightgbm_stage.py), [export.py](backtest/ml_training/mltrain/export.py), [lightgbm_export.py](backtest/ml_training/mltrain/lightgbm_export.py), [calibration.ts](src/engines/ml/calibration.ts), [Mlpredictor.ts](src/engines/Mlpredictor.ts), [lgbPredictor.ts](src/engines/ml/lgbPredictor.ts), [mlLoader.ts](bot/src/adapters/mlLoader.ts)):**
+   - Fitted constrained 1-DOF per-phase temperature `theta` on OOF logits (`EARLY >10m`, `MID 5–10m`, `LATE 2–5m`, `VERY_LATE <=2m`, ridge `0.005`), exported cleanly as optional `platt_by_phase` on `xgboost_model.json` & `lightgbm_model.json` (preserving full backward compatibility with legacy global Platt models `180d`, `365d`, `20261115-p2-c3e0fd`).
+   - Added pure-NumPy golden-section solver (`_golden_section_theta`) and strict holdout accept/reject gate in Python, matched 1:1 in browser & Node.js runtime (`calibrateLogitWith`).
+4. **Trained, Registered & Promoted `20261116-p2-ef8dfd` (`Outperformed 20261115-p2-c3e0fd` on All 3 OOS Windows):**
+   - Trained on `34,962` all-time rows (`60` XGB Optuna trials + `15` LGB Optuna trials via `--lgb-tune-trials`), pruned `16` dead/low-SHAP features -> `67` active (`895` XGB trees + `204` LGB trees, `0.7/0.3` OOF blend), fitted `thetas={'EARLY': 0.8872, 'MID': 0.9606, 'LATE': 0.9949, 'VERY_LATE': 1.2342}`.
+   - Passed `11/11` `qualityGate` checks (`75.79%` Test Acc vs `75.67%`, `0.8532` AUC vs `0.8524`, `+6.38%` Skill vs `+5.95%`).
+   - Head-to-head TypeScript OOS (`2026-10-22 → 2026-11-15`, `2,267` rows, CLOB V2 taker fee): `AUC 0.8463` (+11bp), `Brier 0.1606` (-10bp), `LogLoss 0.4752` (-33bp), `Skill +6.24%` (+0.63pp), `p55_65` `76.67% WR / 52.86% ROI / PF 3.19 / MaxDD $5.15` (vs `c3e0fd` `76.32% WR / 47.76% ROI / PF 2.96 / MaxDD $6.19`).
 
 ---
 

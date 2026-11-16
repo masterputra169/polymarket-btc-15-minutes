@@ -113,3 +113,25 @@ class TestDegenerateInputs:
         auc, acc, preds, _, _, idx = _run(X, y, cols[:], 10_000)
         assert len(preds) == 0 and len(idx) == 0
         assert auc == 0 and acc == 0
+
+    def test_shap_importances_returned_when_requested_and_zero_weight_excluded(
+        self, separable_dataset
+    ) -> None:
+        X, y, cols = separable_dataset
+        fw = np.ones(len(cols), dtype=np.float32)
+        fw[0] = 0.0
+        _auc, _acc, preds, margins, labels, idx, gains, shaps = walk_forward_cv(
+            X,
+            y,
+            FAST_CFG,
+            return_preds=True,
+            return_importances=True,
+            return_shap_importances=True,
+            feat_weights=fw,
+            feature_cols=cols,
+            embargo=8,
+            **FAST_KW,
+        )
+        assert len(gains) == len(shaps) == DEFAULT_N_CV_FOLDS
+        assert all(s.get(cols[0], 0.0) == 0.0 for s in shaps)
+        assert len(preds) == len(margins) == len(labels) == len(idx)

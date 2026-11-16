@@ -306,6 +306,7 @@ def build_browser_model(
     use_optuna: bool,
     validation: ValidationInfo,
     metrics: XgbEvalMetrics,
+    platt_by_phase: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Assemble the xgboost_model.json payload.
 
@@ -319,7 +320,7 @@ def build_browser_model(
         params: the final XGBoost params; stringified on export because
             eval_metric is a list and the browser only ever displays these.
     """
-    return {
+    payload = {
         "format": "xgboost_json_v9",
         "version": 3,
         "num_features": len(feature_cols),
@@ -357,6 +358,9 @@ def build_browser_model(
         "metrics": build_metrics_block(metrics),
         "trees": trees,
     }
+    if platt_by_phase is not None:
+        payload["platt_by_phase"] = platt_by_phase
+    return payload
 
 
 def build_norm_export(

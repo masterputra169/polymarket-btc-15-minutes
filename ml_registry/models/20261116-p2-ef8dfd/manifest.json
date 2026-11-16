@@ -1,0 +1,87 @@
+{
+  "id": "20261116-p2-ef8dfd",
+  "registeredAt": "2026-11-16T04:04:41.917Z",
+  "source": "experiment_alltime_group1_shap_phase4 2026-11-16",
+  "featurePipeline": 2,
+  "sourceSha256": {
+    "xgboost_model.json": "ef8dfdb3fd6110d553d3bc1e0510e38115e16d0533b7d928dc7b3182016cdf95",
+    "lightgbm_model.json": "1cca1a55978d65a10fa567bb915d0abcd660a466d648ae58a4a6d5f6cb0fcb40",
+    "norm_browser.json": "c8fc8504e6e3f09ebf0e2c57a93fb06fbfeda45a348f39acb06c23d7234f3f67"
+  },
+  "storedSha256": {
+    "xgboost_model.json.gz": "a4c15a165774fe55b8243076f94c57b792134559f3ccf875309b5807f2960549",
+    "lightgbm_model.json.gz": "b164331654665c8b85d547b2bde8bd48763858456622c98adaabf378a233ec17",
+    "norm_browser.json.gz": "f110218fab3a188ca588f9a19150db4600d3a70a2cd31a9dbdad8a23ca2a3cf5"
+  },
+  "artifactRef": null,
+  "metrics": {
+    "xgb": {
+      "accuracy": 0.7583,
+      "auc": 0.8531,
+      "f1": 0.7545,
+      "logloss": 0.4659,
+      "brier": 0.1567,
+      "calibration_ece": 0.0225,
+      "calibration_mce": 0.0658,
+      "high_conf_accuracy": 0.7874,
+      "high_conf_ratio": 90.4,
+      "high_conf_count": 4727,
+      "high_conf_threshold": 0.55,
+      "cv_auc": 0.8605,
+      "cv_acc": 0.7703,
+      "cv_test_acc_gap": -0.012,
+      "cv_test_auc_gap": -0.0074,
+      "holdout_accuracy": 0.7626,
+      "holdout_auc": 0.8549,
+      "test_holdout_acc_gap": -0.0044,
+      "test_holdout_auc_gap": -0.0018,
+      "test_samples": 5229,
+      "holdout_samples": 3699,
+      "market_brier": 0.1673,
+      "brier_skill_vs_market": 0.0635,
+      "logloss_skill_vs_market": 0.057,
+      "market_skill_samples": 5229
+    },
+    "ensemble": {
+      "accuracy": 0.7579,
+      "auc": 0.8532,
+      "logloss": 0.4657,
+      "brier": 0.1567,
+      "calibration_ece": 0.0242,
+      "calibration_mce": 0.0602,
+      "weight_source": "oof_cv",
+      "test_samples": 5229,
+      "holdout_samples": 3699,
+      "strict_holdout": true,
+      "market_brier": 0.1673,
+      "brier_skill_vs_market": 0.0638,
+      "logloss_skill_vs_market": 0.0575,
+      "market_skill_samples": 5229
+    },
+    "ensembleWeights": {
+      "xgb": 0.7,
+      "lgb": 0.3
+    }
+  },
+  "training": {
+    "csvStored": false,
+    "csvSha256": null,
+    "csvMissingReason": "34,962-row all-time CSV omitted from git",
+    "meta": {
+      "feature_pipeline": 2,
+      "quant_features": true,
+      "market_price_source": "lookup_1min",
+      "generated_at": "2026-11-16T02:14:21.414Z",
+      "days": 400,
+      "seed": 42,
+      "rows": 34962,
+      "first_slug_ts": 1760704200,
+      "last_slug_ts": 1794752100,
+      "feature_names": "(58 names)"
+    },
+    "reportStored": true
+  },
+  "notes": [
+    "All-Time 395d Quant 83f upgraded (2025-10-17..2026-11-15, 34,962 rows) with XGBoost 3.x ctor feature_weights fix, fold-stable TreeSHAP<0.05% + gain pruning (16 pruned -> 67 active), and 4-phase power-theta calibration (XGB+LGB)."
+  ]
+}

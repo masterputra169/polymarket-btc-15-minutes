@@ -283,6 +283,11 @@ class TestBrowserModel:
     def test_model_is_json_serialisable(self) -> None:
         json.dumps(_browser_model())
 
+    def test_platt_by_phase_emitted_only_when_provided(self) -> None:
+        assert "platt_by_phase" not in _browser_model()
+        with_phase = _browser_model(platt_by_phase={"EARLY": {"a": 0.9, "b": 0.0, "theta": 0.88}})
+        assert with_phase["platt_by_phase"]["EARLY"]["a"] == 0.9
+
 
 class TestNormExport:
     def _norm(self, **overrides) -> dict:

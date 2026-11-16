@@ -19,7 +19,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mltrain.calibration import MIN_OOF_MARGINS, calibrate_platt
+from mltrain.calibration import (
+    MIN_OOF_MARGINS,
+    apply_phase_platt,
+    calibrate_platt,
+    fit_phase_power_calibration,
+    resolve_phase_bucket,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -142,3 +148,73 @@ class TestSkippedFit:
         model = built.pop("model")
         calibrate_platt(model, log=lines.append, **built)
         assert any("skipping calibration" in line for line in lines)
+
+
+class TestPerPhaseCalibration:
+    def test_resolve_phase_bucket_matches_contract(self) -> None:
+        assert resolve_phase_bucket(12.0) == "EARLY"
+        assert resolve_phase_bucket(10.0) == "MID"
+        assert resolve_phase_bucket(5.0) == "LATE"
+        assert resolve_phase_bucket(2.0) == "VERY_LATE"
+
+    def test_apply_phase_platt_falls_back_when_none(self) -> None:
+        m = np.array([-1.0, 0.0, 2.0])
+        mins = np.array([12.0, 7.0, 1.0])
+        expected = 1.0 / (1.0 + np.exp(-(1.2 * m - 0.1)))
+        assert np.allclose(apply_phase_platt(m, mins, 1.2, -0.1, None), expected)
+
+    def test_fit_phase_power_calibration_learns_overconfident_early_and_underconfident_late(
+        self,
+    ) -> None:
+        rng = np.random.default_rng(7)
+        n_oof = 2400
+        mins = np.concatenate(
+            [
+                np.full(800, 12.0),  # EARLY: true slope 0.7
+                np.full(800, 7.0),  # MID:   true slope 1.0
+                np.full(400, 3.5),  # LATE:  true slope 1.05
+                np.full(400, 1.0),  # VERY_LATE: true slope 1.35
+            ]
+        )
+        raw_m = rng.normal(0.0, 1.5, size=n_oof)
+        true_scale = np.where(mins > 10, 0.7, np.where(mins <= 2, 1.35, 1.0))
+        probs_true = 1.0 / (1.0 + np.exp(-true_scale * raw_m))
+        y_oof = (rng.uniform(size=n_oof) < probs_true).astype(np.int32)
+
+        eval_m = rng.normal(0.0, 1.5, size=800)
+        eval_mins = np.concatenate([np.full(300, 12.0), np.full(300, 7.0), np.full(200, 1.0)])
+        eval_scale = np.where(eval_mins > 10, 0.7, np.where(eval_mins <= 2, 1.35, 1.0))
+        eval_y = (rng.uniform(size=800) < (1.0 / (1.0 + np.exp(-eval_scale * eval_m)))).astype(
+            np.int32
+        )
+
+        res = fit_phase_power_calibration(
+            raw_m,
+            y_oof,
+            mins,
+            1.0,
+            0.0,
+            reg=0.002,
+            min_phase_samples=150,
+            eval_margins=eval_m,
+            eval_labels=eval_y,
+            eval_minutes_left=eval_mins,
+            eval_label="holdout",
+            log=lambda *a, **k: None,
+        )
+        assert res.kept is True and res.platt_by_phase is not None
+        assert res.thetas["EARLY"] < 0.90
+        assert res.thetas["VERY_LATE"] > 1.15
+        assert res.eval_logloss_after is not None and res.eval_logloss_before is not None
+        assert res.eval_logloss_after <= res.eval_logloss_before
+
+    def test_fit_phase_power_calibration_skips_when_oof_missing(self) -> None:
+        res = fit_phase_power_calibration(
+            np.array([0.1, 0.2]),
+            np.array([0, 1]),
+            None,
+            1.0,
+            0.0,
+            log=lambda *a, **k: None,
+        )
+        assert res.kept is False and res.platt_by_phase is None

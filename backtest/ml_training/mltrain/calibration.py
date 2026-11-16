@@ -174,3 +174,186 @@ def calibrate_platt(
         holdout_accuracy=final_holdout_acc,
         holdout_auc=final_holdout_auc,
     )
+
+
+PHASE_NAMES_4: tuple[str, ...] = ("EARLY", "MID", "LATE", "VERY_LATE")
+
+
+@dataclass(frozen=True)
+class PhaseCalibrationResult:
+    """Per-phase power-theta recalibration overlaid on top of global Platt."""
+
+    platt_by_phase: dict[str, dict[str, float]] | None
+    thetas: dict[str, float]
+    kept: bool
+    eval_label: str
+    eval_logloss_before: float | None
+    eval_logloss_after: float | None
+
+
+def resolve_phase_bucket(minutes_left: float) -> str:
+    """Bucket remaining market minutes identically to `edge.ts` and `sweeps.py`."""
+    if minutes_left > 10.0:
+        return "EARLY"
+    if minutes_left > 5.0:
+        return "MID"
+    if minutes_left > 2.0:
+        return "LATE"
+    return "VERY_LATE"
+
+
+def apply_phase_platt(
+    margins: np.ndarray,
+    minutes_left: np.ndarray | None,
+    global_a: float,
+    global_b: float,
+    platt_by_phase: dict[str, dict[str, float]] | None = None,
+) -> np.ndarray:
+    """Apply per-phase `(a, b)` when supplied and finite `minutes_left` exist, else global."""
+    m = np.asarray(margins, dtype=np.float64)
+    if not platt_by_phase or minutes_left is None:
+        return 1.0 / (1.0 + np.exp(-np.clip(global_a * m + global_b, -30.0, 30.0)))
+
+    mins = np.asarray(minutes_left, dtype=np.float64)
+    a_arr = np.full(len(m), float(global_a), dtype=np.float64)
+    b_arr = np.full(len(m), float(global_b), dtype=np.float64)
+    masks = {
+        "EARLY": mins > 10.0,
+        "MID": (mins > 5.0) & (mins <= 10.0),
+        "LATE": (mins > 2.0) & (mins <= 5.0),
+        "VERY_LATE": mins <= 2.0,
+    }
+    for ph, mk in masks.items():
+        cfg = platt_by_phase.get(ph)
+        if cfg and np.any(mk):
+            a_arr[mk] = float(cfg["a"])
+            b_arr[mk] = float(cfg["b"])
+    return 1.0 / (1.0 + np.exp(-np.clip(a_arr * m + b_arr, -30.0, 30.0)))
+
+
+def _golden_section_theta(
+    z_global: np.ndarray, y: np.ndarray, reg: float, lo: float = 0.65, hi: float = 1.50
+) -> float:
+    """Pure-NumPy 1D convex minimizer for ridge-regularized NLL over `theta`."""
+    phi = (5.0**0.5 - 1.0) / 2.0
+
+    def obj(th: float) -> float:
+        p = 1.0 / (1.0 + np.exp(-np.clip(th * z_global, -30.0, 30.0)))
+        p = np.clip(p, 1e-6, 1.0 - 1e-6)
+        nll = -float(np.mean(y * np.log(p) + (1.0 - y) * np.log(1.0 - p)))
+        return nll + reg * (th - 1.0) ** 2
+
+    a, b = lo, hi
+    c = b - phi * (b - a)
+    d = a + phi * (b - a)
+    fc, fd = obj(c), obj(d)
+    for _ in range(40):
+        if abs(b - a) < 1e-6:
+            break
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - phi * (b - a)
+            fc = obj(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + phi * (b - a)
+            fd = obj(d)
+    return float((a + b) / 2.0)
+
+
+def fit_phase_power_calibration(
+    oof_margins: np.ndarray,
+    oof_labels: np.ndarray,
+    oof_minutes_left: np.ndarray | None,
+    global_a: float,
+    global_b: float,
+    *,
+    reg: float = 0.005,
+    min_phase_samples: int = 200,
+    eval_margins: np.ndarray | None = None,
+    eval_labels: np.ndarray | None = None,
+    eval_minutes_left: np.ndarray | None = None,
+    eval_label: str = "holdout",
+    log: Callable[..., None] = print,
+) -> PhaseCalibrationResult:
+    """Fit per-phase power-theta recalibration on OOF logits, gated on strict eval.
+
+    Optimizes 1 parameter `theta_phase` per phase bracket on `theta_phase * (global_a * m + global_b)`,
+    yielding phase-specific `(a_phase, b_phase) = (theta_phase * global_a, theta_phase * global_b)`
+    that uses the exact same linear-in-logit inference equation as global Platt.
+    """
+    from sklearn.metrics import log_loss, roc_auc_score
+
+    if oof_minutes_left is None or len(oof_margins) < min_phase_samples * 2 or global_a <= 0.0:
+        return PhaseCalibrationResult(
+            platt_by_phase=None,
+            thetas={ph: 1.0 for ph in PHASE_NAMES_4},
+            kept=False,
+            eval_label="skipped",
+            eval_logloss_before=None,
+            eval_logloss_after=None,
+        )
+
+    m_oof = np.asarray(oof_margins, dtype=np.float64)
+    y_oof = np.asarray(oof_labels, dtype=np.float64)
+    mins_oof = np.asarray(oof_minutes_left, dtype=np.float64)
+
+    masks = {
+        "EARLY": mins_oof > 10.0,
+        "MID": (mins_oof > 5.0) & (mins_oof <= 10.0),
+        "LATE": (mins_oof > 2.0) & (mins_oof <= 5.0),
+        "VERY_LATE": mins_oof <= 2.0,
+    }
+    by_phase: dict[str, dict[str, float]] = {}
+    thetas: dict[str, float] = {}
+    for ph in PHASE_NAMES_4:
+        mk = masks[ph]
+        if int(np.sum(mk)) < min_phase_samples or len(np.unique(y_oof[mk])) < 2:
+            th = 1.0
+        else:
+            z_g = global_a * m_oof[mk] + global_b
+            th = _golden_section_theta(z_g, y_oof[mk], reg=reg)
+        thetas[ph] = round(th, 4)
+        by_phase[ph] = {
+            "a": round(float(th * global_a), 6),
+            "b": round(float(th * global_b), 6),
+            "theta": round(th, 4),
+        }
+
+    ll_before = None
+    ll_after = None
+    kept = True
+    if (
+        eval_margins is not None
+        and eval_labels is not None
+        and eval_minutes_left is not None
+        and len(eval_margins) > 0
+    ):
+        p_g = apply_phase_platt(eval_margins, eval_minutes_left, global_a, global_b, None)
+        p_ph = apply_phase_platt(eval_margins, eval_minutes_left, global_a, global_b, by_phase)
+        ll_before = float(log_loss(eval_labels, np.clip(p_g, 1e-6, 1.0 - 1e-6)))
+        ll_after = float(log_loss(eval_labels, np.clip(p_ph, 1e-6, 1.0 - 1e-6)))
+        auc_g = float(roc_auc_score(eval_labels, p_g))
+        auc_ph = float(roc_auc_score(eval_labels, p_ph))
+        # Reject only if phase scaling measurably hurts OOS probability log-loss or ranking
+        if ll_after > ll_before + 0.001 or auc_ph < auc_g - 0.003:
+            kept = False
+            by_phase = {}
+            log(
+                f"   [WARN] Per-phase calibration rejected on {eval_label} "
+                f"(LL {ll_before:.4f}->{ll_after:.4f}, AUC {auc_g:.4f}->{auc_ph:.4f})"
+            )
+        else:
+            log(
+                f"   Per-phase calibration ({eval_label}): LL {ll_before:.4f}->{ll_after:.4f} | "
+                f"AUC {auc_g:.4f}->{auc_ph:.4f} | thetas={thetas}"
+            )
+
+    return PhaseCalibrationResult(
+        platt_by_phase=by_phase if kept and by_phase else None,
+        thetas=thetas,
+        kept=kept and bool(by_phase),
+        eval_label=eval_label,
+        eval_logloss_before=ll_before,
+        eval_logloss_after=ll_after,
+    )

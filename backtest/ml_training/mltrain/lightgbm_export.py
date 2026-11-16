@@ -97,6 +97,7 @@ def build_lgb_browser_model(
     cv_auc: float,
     cv_acc: float,
     ensemble_weights: dict[str, float],
+    platt_by_phase: dict[str, dict[str, float]] | None = None,
 ) -> dict:
     """Assemble the lightgbm_model.json payload.
 
@@ -115,7 +116,7 @@ def build_lgb_browser_model(
         calibration: mltrain.metrics.calibration_summary output for the
             calibrated test probabilities.
     """
-    return {
+    payload = {
         "format": "lightgbm_json_v2",
         "version": 2,
         "num_features": len(feature_cols),
@@ -139,3 +140,6 @@ def build_lgb_browser_model(
         "ensemble_weights": ensemble_weights,
         "tree_info": tree_info,
     }
+    if platt_by_phase is not None:
+        payload["platt_by_phase"] = platt_by_phase
+    return payload
