@@ -29,6 +29,7 @@ function hideTip() {
 }
 
 export function drawEquityChart(container, points) {
+  if (!container) return;
   container.replaceChildren();
   if (!Array.isArray(points) || points.length === 0) {
     const empty = document.createElement('div');
@@ -103,6 +104,7 @@ export function drawEquityChart(container, points) {
 }
 
 export function drawMetricBars(container, items, spec) {
+  if (!container) return;
   container.replaceChildren();
   const valid = items.filter((d) => typeof d.value === 'number' && Number.isFinite(d.value));
   if (valid.length === 0) {
@@ -162,6 +164,7 @@ export function drawMetricBars(container, items, spec) {
 }
 
 export function drawTierCurve(container, series) {
+  if (!container) return;
   container.replaceChildren();
   if (!series || series.length === 0) {
     const empty = document.createElement('div');
@@ -233,6 +236,7 @@ export function drawTierCurve(container, series) {
 }
 
 export function drawPhaseThetaChart(container, xgbPhase, lgbPhase) {
+  if (!container) return;
   container.replaceChildren();
   const phases = ['EARLY', 'MID', 'LATE', 'VERY_LATE'];
   if (!xgbPhase && !lgbPhase) return;
@@ -270,6 +274,7 @@ export function drawPhaseThetaChart(container, xgbPhase, lgbPhase) {
 }
 
 export function drawEvolutionChart(container, timelineModels) {
+  if (!container) return;
   container.replaceChildren();
   const valid = (timelineModels || []).filter((m) => typeof m.accuracy === 'number' || typeof m.auc === 'number');
   if (valid.length === 0) {
@@ -382,6 +387,7 @@ export function drawEvolutionChart(container, timelineModels) {
 }
 
 export function drawCalibrationCurve(container, bins) {
+  if (!container) return;
   container.replaceChildren();
   if (!Array.isArray(bins) || bins.length === 0) {
     container.appendChild(Object.assign(document.createElement('div'), { className: 'empty-state', textContent: 'No decile calibration bins for this model.' }));
@@ -450,6 +456,7 @@ export function drawCalibrationCurve(container, bins) {
 }
 
 export function drawConfidenceBuckets(container, buckets) {
+  if (!container) return;
   container.replaceChildren();
   if (!Array.isArray(buckets) || buckets.length === 0) {
     container.appendChild(Object.assign(document.createElement('div'), { className: 'empty-state', textContent: 'No confidence bucket breakdown for this model.' }));
@@ -503,6 +510,7 @@ export function drawConfidenceBuckets(container, buckets) {
 }
 
 export function drawPhaseResponseCurve(container, xgbPhase, lgbPhase) {
+  if (!container) return;
   container.replaceChildren();
   const phases = [
     { key: 'EARLY', col: '#f59e0b' },
@@ -573,6 +581,7 @@ export function drawPhaseResponseCurve(container, xgbPhase, lgbPhase) {
 }
 
 export function drawFeatureImportanceBars(container, catalog, mode = 'xgbSplits') {
+  if (!container) return;
   container.replaceChildren();
   const metricOf = (f) => (mode === 'lgbGainPct' ? (f.lgbGainPct ?? 0) : mode === 'xgbRootSplits' ? (f.xgbRootSplits ?? 0) : (f.xgbSplits ?? 0));
   const sorted = [...(catalog || [])]

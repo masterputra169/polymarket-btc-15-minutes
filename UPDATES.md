@@ -6,6 +6,21 @@
 
 ---
 
+## 2026-11-16 — Study Portal DOM Null-Safety Hardening & CSP Script-Src Update
+
+- **DOM Null-Safety & Cache-Race Hardening (`study-site/app.js`, `study-site/charts.js`, `study-site/markdown.js`):**
+  - Added strict null guards (`if (!container) return;`) across all 9 SVG chart renderers in `study-site/charts.js` (`drawEquityChart`, `drawMetricBars`, `drawTierCurve`, `drawPhaseThetaChart`, `drawEvolutionChart`, `drawCalibrationCurve`, `drawConfidenceBuckets`, `drawPhaseResponseCurve`, `drawFeatureImportanceBars`) and in `study-site/markdown.js` (`renderMarkdown`).
+  - Upgraded all `element.replaceChildren()` invocations in `study-site/app.js` to safe optional chaining (`element?.replaceChildren()`). This completely immunizes the portal against browser cache desynchronization (e.g., when an older cached `index.html` loads alongside newer `app.js` or before elements attach to the DOM).
+- **Nginx Content-Security-Policy Script-Src Update (`scripts/nginx-polybtc15-study.conf`):**
+  - Added `'unsafe-inline'` to `script-src` alongside `'self'` and `https://static.cloudflareinsights.com`. This allows Cloudflare's edge-injected Bot Challenge Platform (`/cdn-cgi/challenge-platform/...`) and analytics beacons to run cleanly without triggering inline script violation warnings in client browser DevTools.
+- **Verification:**
+  - `bot/src/__tests__/studySiteBuilder.test.ts` passed (4/4 tests).
+  - Static bundle successfully compiled via `scripts/build-study-site.mjs` into `study-dist/`.
+  - Full TypeScript typecheck passed cleanly (`npm run typecheck`).
+  - Monitored `vps.dollarkilat.xyz` showing 19 managed units active and healthy.
+
+---
+
 ## Current status
 
 _Last updated: 2026-11-16 14:25 WIB_

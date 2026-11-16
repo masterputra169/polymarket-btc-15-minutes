@@ -70,6 +70,7 @@ function parseTableRow(line) {
 }
 
 export function renderMarkdown(mdText, container) {
+  if (!container) return;
   container.replaceChildren();
   const root = el('div', 'md');
   const lines = String(mdText || '').split(/\r?\n/);

@@ -113,7 +113,7 @@ function renderOverview() {
   const am = site.activeModelSummary;
 
   const kpiWrap = document.getElementById('overview-kpis');
-  kpiWrap.replaceChildren();
+  kpiWrap?.replaceChildren();
   const retUsd = (ev.bankroll ?? 100) - (ev.startBankroll ?? 100);
   const retPct = ev.startBankroll ? (retUsd / ev.startBankroll) * 100 : 0;
 
@@ -158,7 +158,7 @@ function renderOverview() {
       : 'Local static preview (no VPS bot/data attached — synced live when published on VPS)';
 
   const amp = document.getElementById('active-model-panel');
-  amp.replaceChildren();
+  amp?.replaceChildren();
   if (am) {
     const grid = h('div', 'stat-pair-grid');
     const pairs = [
@@ -183,7 +183,7 @@ function renderOverview() {
 
   // Breakdown
   const bd = document.getElementById('eval-breakdown');
-  bd.replaceChildren();
+  bd?.replaceChildren();
   const bdRows = [];
   const pushMap = (groupName, map) => {
     for (const [k, v] of Object.entries(map || {})) {
@@ -199,7 +199,7 @@ function renderOverview() {
 
   // PTB & Archive
   const ha = document.getElementById('health-archive-panel');
-  ha.replaceChildren();
+  ha?.replaceChildren();
   const haGrid = h('div', 'stat-pair-grid');
   if (ev.ptbHealth) {
     const s1 = h('div', 'stat-mini');
@@ -227,7 +227,7 @@ function renderOverview() {
 
   // Recent trades
   const rtt = document.getElementById('recent-trades-table');
-  rtt.replaceChildren();
+  rtt?.replaceChildren();
   document.getElementById('trades-count').textContent = `${ev.recentTrades.length} shown`;
   if (ev.recentTrades.length === 0) {
     rtt.appendChild(h('div', 'empty-state', 'No settled trades in the current dataset yet.'));
@@ -255,14 +255,14 @@ function renderOverview() {
   // Current status from UPDATES.md
   document.getElementById('status-updated-at').textContent = site.currentStatus?.lastUpdated ? `Snapshot: ${site.currentStatus.lastUpdated}` : '';
   const cst = document.getElementById('current-status-table');
-  cst.replaceChildren();
+  cst?.replaceChildren();
   const sRows = (site.currentStatus?.rows || []).map((r) => [r.area, r.state.replace(/`/g, '').replace(/\*\*/g, '')]);
   cst.appendChild(makeTable(['Area', 'Current State'], sRows));
 }
 
 function renderModelKpis(m) {
   const badges = document.getElementById('ml-selected-badges');
-  badges.replaceChildren();
+  badges?.replaceChildren();
   badges.appendChild(h('span', `badge ${m.isActive ? 'badge--emerald' : 'badge--cyan'}`, `${m.status}${m.isActive ? ' ★ LIVE' : ''}`));
   badges.appendChild(h('span', 'badge badge--cyan', `Pipeline v${m.featurePipeline}`));
   if (m.trainingMeta?.rows) {
@@ -281,7 +281,7 @@ function renderModelKpis(m) {
   const prunedCnt = m.reportSummary?.prunedCount ?? m.calibration?.xgb?.prunedFeatures?.length ?? 0;
 
   const kpiWrap = document.getElementById('ml-kpi-grid');
-  kpiWrap.replaceChildren();
+  kpiWrap?.replaceChildren();
   const cards = [
     {
       k: 'Ensemble Test Acc',
@@ -333,7 +333,7 @@ function renderModelKpis(m) {
 
 function renderSubmodelMatrix(m) {
   const wrap = document.getElementById('ml-submodel-table');
-  wrap.replaceChildren();
+  wrap?.replaceChildren();
   const xgb = m.metrics?.xgb;
   const lgb = m.metrics?.lgb;
   const ens = m.metrics?.ensemble;
@@ -365,7 +365,7 @@ function renderSubmodelMatrix(m) {
 
 function renderAuditPanel(m) {
   const wrap = document.getElementById('ml-audit-panel');
-  wrap.replaceChildren();
+  wrap?.replaceChildren();
   const xgb = m.metrics?.xgb || {};
   const val = m.validation || {};
   const p = m.xgbParams || {};
@@ -426,7 +426,7 @@ function renderAuditPanel(m) {
 function renderCalibrationSection(m) {
   drawCalibrationCurve(document.getElementById('chart-calib-bins'), m.calibrationBins);
   const cWrap = document.getElementById('ml-calib-table');
-  cWrap.replaceChildren();
+  cWrap?.replaceChildren();
   if (m.calibrationBins?.length) {
     cWrap.appendChild(makeTable(
       ['Decile', 'Pred Avg', 'Emp UP Rate', 'Abs Gap', 'Samples (Cov)'],
@@ -442,7 +442,7 @@ function renderCalibrationSection(m) {
 
   drawConfidenceBuckets(document.getElementById('chart-conf-buckets'), m.confidenceBuckets);
   const bWrap = document.getElementById('ml-buckets-table');
-  bWrap.replaceChildren();
+  bWrap?.replaceChildren();
   if (m.confidenceBuckets?.length) {
     bWrap.appendChild(makeTable(
       ['Conf Band', 'Test Accuracy', 'Count', 'Coverage'],
@@ -461,7 +461,7 @@ function renderCalibrationSection(m) {
   drawPhaseResponseCurve(document.getElementById('chart-phase-response'), xgbP, lgbP);
 
   const pWrap = document.getElementById('ml-phase-table');
-  pWrap.replaceChildren();
+  pWrap?.replaceChildren();
   if (xgbP || lgbP) {
     const phases = ['EARLY', 'MID', 'LATE', 'VERY_LATE'];
     pWrap.appendChild(makeTable(
@@ -493,7 +493,7 @@ function renderFeatureExplorer(m) {
   }
 
   const stChips = document.getElementById('feat-status-chips');
-  stChips.replaceChildren();
+  stChips?.replaceChildren();
   const statusLabels = [
     ['ALL', `All (${counts.ALL})`],
     ['active', `Active (${counts.active})`],
@@ -509,7 +509,7 @@ function renderFeatureExplorer(m) {
   }
 
   const grChips = document.getElementById('feat-group-chips');
-  grChips.replaceChildren();
+  grChips?.replaceChildren();
   for (const g of groups) {
     const b = h('button', `filter-chip ${state.featGroup === g ? 'is-active' : ''}`, g);
     b.addEventListener('click', () => { state.featGroup = g; renderFeatureExplorer(m); });
@@ -528,7 +528,7 @@ function renderFeatureExplorer(m) {
   filtered.sort((a, b) => (metricOf(b) - metricOf(a)) || (a.idx - b.idx));
 
   const tWrap = document.getElementById('ml-features-table');
-  tWrap.replaceChildren();
+  tWrap?.replaceChildren();
   if (filtered.length === 0) {
     tWrap.appendChild(h('div', 'empty-state', 'No features match this filter.'));
     return;
@@ -557,7 +557,7 @@ function renderFeatureExplorer(m) {
 
 function renderGatesAndReport(m) {
   const wrap = document.getElementById('ml-gates-report');
-  wrap.replaceChildren();
+  wrap?.replaceChildren();
 
   if (m.gate?.checks?.length) {
     const gTitle = h('div', 'mono-dim', `Quality Gates (${m.gate.pass ? 'ALL PASSED' : 'FAILED'}):`);
@@ -633,7 +633,7 @@ function renderOosSection() {
   drawTierCurve(document.getElementById('chart-oos-tiers'), tierSeries);
 
   const opWrap = document.getElementById('oos-presets-table');
-  opWrap.replaceChildren();
+  opWrap?.replaceChildren();
   const latestAgentEval = models?.models?.find((m) => m.latestEval?.fullOos_acc != null);
   if (latestAgentEval) {
     const e = latestAgentEval.latestEval;
@@ -660,7 +660,7 @@ function renderModelsLedger() {
   if (btn) btn.textContent = state.showLegacyModels ? `Hide v1 Archive (${models.timelineModels?.length || 0} total)` : `Show All 27 Incl. v1 Archive`;
 
   const led = document.getElementById('models-ledger-table');
-  led.replaceChildren();
+  led?.replaceChildren();
   const lRows = srcList.map((t) => {
     const d = detailedMap.get(t.id);
     const acc = d?.metrics?.ensemble?.accuracy ?? d?.metrics?.xgb?.accuracy ?? t.accuracy;
@@ -710,7 +710,7 @@ function renderModelsTab() {
   drawMetricBars(document.getElementById('chart-models-bar'), items, spec);
 
   const sel = document.getElementById('model-inspector-select');
-  sel.replaceChildren();
+  sel?.replaceChildren();
   for (const m of list) {
     const opt = h('option', null, `${m.id} (${m.status}${m.isActive ? ' ★' : ''})`);
     opt.value = m.id;
@@ -725,7 +725,7 @@ function renderModelsTab() {
   renderOosSection();
 
   const expWrap = document.getElementById('ml-experiments-table');
-  expWrap.replaceChildren();
+  expWrap?.replaceChildren();
   const exps = models.experiments || [];
   if (exps.length === 0) {
     expWrap.appendChild(h('div', 'empty-state', 'No offline experiment summaries found.'));
@@ -750,7 +750,7 @@ function renderStudiesTab() {
 
   // Quant JSON studies cards
   const qGrid = document.getElementById('quant-studies-grid');
-  qGrid.replaceChildren();
+  qGrid?.replaceChildren();
   const qs = studies.quantStudies || {};
   if (qs.calibration?.data) {
     const d = qs.calibration.data;
@@ -803,7 +803,7 @@ function renderStudiesTab() {
   const tagSet = new Set(['ALL']);
   for (const r of allReports) for (const t of r.tags || []) tagSet.add(t);
   const tagWrap = document.getElementById('study-tag-filters');
-  tagWrap.replaceChildren();
+  tagWrap?.replaceChildren();
   for (const t of tagSet) {
     const btn = h('button', `filter-chip ${state.studyTag === t ? 'is-active' : ''}`, t);
     btn.addEventListener('click', () => { state.studyTag = t; renderStudiesTab(); });
@@ -818,7 +818,7 @@ function renderStudiesTab() {
   });
 
   const listEl = document.getElementById('reports-list');
-  listEl.replaceChildren();
+  listEl?.replaceChildren();
   if (filtered.length === 0) {
     listEl.appendChild(h('div', 'empty-state', 'No matching reports.'));
   } else {
@@ -838,7 +838,7 @@ function renderStudiesTab() {
   const viewer = document.getElementById('report-viewer');
   const active = filtered.find((r) => r.id === state.selectedReportId) || filtered[0];
   if (active) renderMarkdown(active.markdown, viewer);
-  else viewer.replaceChildren(h('div', 'empty-state', 'Select a study report to view.'));
+  else viewer?.replaceChildren(h('div', 'empty-state', 'Select a study report to view.'));
 }
 
 function renderUpdatesTab() {
@@ -848,7 +848,7 @@ function renderUpdatesTab() {
   const tagSet = new Set(['ALL']);
   for (const e of updates.entries || []) for (const t of e.tags || []) tagSet.add(t);
   const tagWrap = document.getElementById('update-tag-filters');
-  tagWrap.replaceChildren();
+  tagWrap?.replaceChildren();
   for (const t of tagSet) {
     const btn = h('button', `filter-chip ${state.updateTag === t ? 'is-active' : ''}`, t);
     btn.addEventListener('click', () => { state.updateTag = t; renderUpdatesTab(); });
@@ -863,7 +863,7 @@ function renderUpdatesTab() {
   });
 
   const tl = document.getElementById('updates-timeline');
-  tl.replaceChildren();
+  tl?.replaceChildren();
   if (filtered.length === 0) {
     tl.appendChild(h('div', 'empty-state', 'No matching changelog entries.'));
     return;
