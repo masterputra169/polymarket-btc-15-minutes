@@ -159,11 +159,21 @@ export function parseUpdatesMd(rawMd) {
     cur = null;
   };
 
+  let skipStatusBlock = false;
   for (const line of lines) {
-    const h3 = /^###\s+(.+)$/.exec(line);
-    if (h3) {
+    if (/^##\s+Current status/i.test(line)) {
       flush();
-      const heading = h3[1].trim();
+      skipStatusBlock = true;
+      continue;
+    }
+    if (skipStatusBlock) {
+      if (/^---$/.test(line.trim())) skipStatusBlock = false;
+      continue;
+    }
+    const hMatch = /^###\s+(.+)$/.exec(line) || /^##\s+(\d{4}-\d{2}-\d{2}.+)$/.exec(line);
+    if (hMatch) {
+      flush();
+      const heading = hMatch[1].trim();
       const dMatch = /^(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?:\s+\w+)?)?)/.exec(heading);
       cur = {
         date: dMatch ? dMatch[1] : null,
@@ -749,11 +759,22 @@ function copyStaticFrontend(repoRoot, outDir) {
   }
 }
 
-export function buildStage2Bundle(repoRoot, dataDir) {
+export function buildStage2Bundle(repoRoot, dataDir, activeModelId = null) {
   const snapshotPath = path.join(repoRoot, 'scripts', 'study', 'stage2_snapshot.json');
   const snapshot = readJsonSafe(snapshotPath);
   const coverage = readJsonSafe(path.join(dataDir, 'tape_coverage_study.json')) || snapshot?.coverage || null;
   const study = readJsonSafe(path.join(dataDir, 'stage2_pipeline_v4_study.json')) || snapshot?.study || null;
+  const hybRaw = readJsonSafe(path.join(repoRoot, 'public', 'ml', 'hybrid_residual_v4.json'));
+  const liveHybridArtifact = hybRaw ? {
+    id: hybRaw.id ?? null,
+    requiresBaseModelId: hybRaw.requires_base_model_id ?? null,
+    activeMatch: Boolean(hybRaw.requires_base_model_id && activeModelId && hybRaw.requires_base_model_id === activeModelId),
+    numTrees: hybRaw.num_trees ?? (Array.isArray(hybRaw.trees) ? hybRaw.trees.length : null),
+    features: Array.isArray(hybRaw.feature_names) ? hybRaw.feature_names.length : 13,
+    trainingSplit: hybRaw.training_split ?? null,
+    metrics: hybRaw.metrics ?? null,
+    featureGains: Array.isArray(hybRaw.feature_gains) ? hybRaw.feature_gains : [],
+  } : null;
 
   const v4Features = [
     {
@@ -789,9 +810,10 @@ export function buildStage2Bundle(repoRoot, dataDir) {
   ];
 
   return {
-    available: Boolean(coverage || study),
+    available: Boolean(coverage || study || liveHybridArtifact),
     coverage,
     study,
+    liveHybridArtifact,
     v4Features,
     findings: {
       normalWindow: 'Confirming twapModelStudy.py: during the 2–12m normal trading window, CLOB market makers track Chainlink + TWAP so raw market mid achieves 0.1590 Brier; Pipeline v4 Hybrid cuts Baseline v2 error by 90% of the gap vs mid (Brier 0.1656 → 0.1597, AUC 0.8397 → 0.8468, ECE 0.0439 → 0.0177) by subtracting basis drift.',
@@ -815,6 +837,7 @@ export function buildStudySite(options = {}) {
     path.join(root, 'study-site'),
     path.join(root, 'scripts', 'build-study-site.mjs'),
     path.join(root, 'scripts', 'study'),
+    path.join(root, 'public', 'ml', 'hybrid_residual_v4.json'),
     path.join(dataDir, 'model_profiles.json'),
     path.join(dataDir, 'state.json'),
     path.join(dataDir, 'trade_journal.jsonl'),
@@ -844,9 +867,8 @@ export function buildStudySite(options = {}) {
   const modelsBundle = buildModelsBundle(root, dataDir, modelProfiles);
   const studiesBundle = buildStudiesBundle(root, dataDir, outDir, modelsBundle.journalNotes);
   const evalBundle = buildEvalAndHealthBundle(root, dataDir);
-  const stage2Bundle = buildStage2Bundle(root, dataDir);
-
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
+  const stage2Bundle = buildStage2Bundle(root, dataDir, activeModel?.id ?? null);
 
   const sitePayload = {
     generatedAt,
@@ -866,6 +888,13 @@ export function buildStudySite(options = {}) {
       prunedCount: activeModel.reportSummary?.prunedCount ?? activeModel.calibration?.xgb?.prunedFeatures?.length ?? null,
       hasPhaseCalibration: Boolean(activeModel.calibration?.xgb?.plattByPhase),
       profileLabel: activeModel.profile?.label ?? null,
+      hybridOverlay: stage2Bundle.liveHybridArtifact ? {
+        id: stage2Bundle.liveHybridArtifact.id,
+        activeMatch: stage2Bundle.liveHybridArtifact.activeMatch,
+        numTrees: stage2Bundle.liveHybridArtifact.numTrees,
+        valAcc: stage2Bundle.liveHybridArtifact.metrics?.hybrid_val_acc ?? null,
+        valEce: stage2Bundle.liveHybridArtifact.metrics?.hybrid_val_ece ?? null,
+      } : null,
     } : null,
     currentStatus: {
       lastUpdated: updates.lastUpdated,

@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-16 — Study Portal Changelog Parser (`##`/`###`) & Live Hybrid v4 Cards
+
+- **Changelog parser fix (`scripts/build-study-site.mjs`):** `parseUpdatesMd()` now parses both dated `## YYYY-MM-DD...` release headings and `### ...` entries while skipping the `## Current status` summary block cleanly, so all recent 2026-11-16 entries render at the top of `updates.json` / the `Changelog` tab on https://poly15-study.dollarkilat.xyz/.
+- **Live Hybrid v4 metadata (`scripts/build-study-site.mjs`, `study-site/app.js`):** `buildStage2Bundle()` reads `public/ml/hybrid_residual_v4.json` (metadata/metrics/gains only, without embedding raw trees) into `stage2.json` (`liveHybridArtifact`) and `site.json` (`activeModelSummary.hybridOverlay`), and `Overview` + `Tahap 2 · v4 Lab` display the active `v4-hybrid-20261116` (`412` depth-2 trees) validation Acc/AUC/Brier/ECE/parity metrics alongside the active `20261116-p2-ef8dfd` base model.
+- **Tests (`bot/src/__tests__/studySiteBuilder.test.ts`):** Extended `parseUpdatesMd` and `buildStudySite` unit assertions for mixed `##`/`###` release headers and `stage2.json.liveHybridArtifact`.
+
 ## 2026-11-16 — Live Pipeline v4 Hybrid Residual Overlay (`v4-hybrid-20261116` / Option 3)
 
 - **Exported Production Hybrid Residual Overlay (`backtest/ml_training/exportHybridResidualV4.py`, `public/ml/hybrid_residual_v4.json`):**
@@ -59,7 +65,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 21:05 WIB_
+_Last updated: 2026-11-16 21:52 WIB_
 
 | Area | State |
 |---|---|

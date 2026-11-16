@@ -57,13 +57,14 @@ describe('study portal redaction & sanitization', () => {
 });
 
 describe('parseUpdatesMd & buildStudySite', () => {
-  test('parses Current status table and release entries cleanly', () => {
-    const md = `# POLY//15\n\n## Current status\n\n_Last updated: 2026-11-16 12:00 WIB_\n\n| Area | State |\n|---|---|\n| Bot | active DRY_RUN |\n\n---\n\n### 2026-11-16 — Cross-feed guard & study portal\n\n- Added Gate 20f.\n`;
+  test('parses Current status table and both ## / ### release entries cleanly', () => {
+    const md = `# POLY//15\n\n---\n\n## 2026-11-16 — Live Pipeline v4 Hybrid Residual Overlay\n\n- Added 412 depth-2 residual trees.\n\n---\n\n## Current status\n\n_Last updated: 2026-11-16 12:00 WIB_\n\n| Area | State |\n|---|---|\n| Bot | active DRY_RUN |\n\n---\n\n### 2026-11-16 — Cross-feed guard & study portal\n\n- Added Gate 20f.\n`;
     const parsed = parseUpdatesMd(md);
     expect(parsed.lastUpdated).toBe('2026-11-16 12:00 WIB');
     expect(parsed.statusRows).toEqual([{ area: 'Bot', state: 'active DRY_RUN' }]);
-    expect(parsed.entries).toHaveLength(1);
-    expect(parsed.entries[0].tags).toContain('Filters & Risk');
+    expect(parsed.entries).toHaveLength(2);
+    expect(parsed.entries[0].heading).toContain('Hybrid Residual Overlay');
+    expect(parsed.entries[1].tags).toContain('Filters & Risk');
   });
 
   test('buildStudySite compiles complete static bundle into temp directory', { timeout: 20_000 }, () => {
@@ -111,6 +112,7 @@ describe('parseUpdatesMd & buildStudySite', () => {
         const stage2Json = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'stage2.json'), 'utf8'));
         expect(stage2Json.available).toBe(true);
         expect(stage2Json.coverage?.dateRange?.totalDays).toBeGreaterThanOrEqual(54);
+        expect(stage2Json.liveHybridArtifact?.id).toBe('v4-hybrid-20261116');
 
         const siteJson = fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8');
         expect(siteJson).not.toContain('0xdeadbeef');

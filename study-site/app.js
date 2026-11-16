@@ -181,6 +181,11 @@ function renderOverview() {
       grid.appendChild(m);
     }
     amp.appendChild(grid);
+    if (am.hybridOverlay?.activeMatch) {
+      const ov = am.hybridOverlay;
+      amp.appendChild(h('p', 'mono-dim',
+        `Hybrid Residual v4 LIVE: ${ov.id} (${ov.numTrees} depth-2 trees · Val Acc ${ov.valAcc != null ? (ov.valAcc * 100).toFixed(2) + '%' : '—'} · Val ECE ${fmtNum(ov.valEce)})`));
+    }
     if (am.profileLabel) amp.appendChild(h('p', 'mono-dim', `Live Profile: ${am.profileLabel}`));
   }
 
@@ -909,10 +914,13 @@ function renderStage2Tab() {
   const ds = st.dataset || {};
   const norm = st.normalWindow || {};
   const fin = st.final15_45sWindow || {};
+  const hybArt = s2.liveHybridArtifact || null;
 
   const badge = document.getElementById('stage2-dataset-badge');
   if (badge && cov.dateRange) {
-    badge.textContent = `${cov.dateRange.totalDays}d Tape · ${ds.featuresTotal || 88}f (v4)`;
+    badge.textContent = hybArt?.activeMatch
+      ? `${cov.dateRange.totalDays}d Tape · ${hybArt.id} LIVE`
+      : `${cov.dateRange.totalDays}d Tape · ${ds.featuresTotal || 88}f (v4)`;
   }
 
   const v2N = norm.v2_prob_up;
@@ -983,6 +991,21 @@ function renderStage2Tab() {
       m.appendChild(h('div', 'stat-mini__k', k));
       m.appendChild(h('div', 'stat-mini__v', v));
       grid.appendChild(m);
+    }
+    if (hybArt?.metrics) {
+      const hm = hybArt.metrics;
+      const liveCards = [
+        ['Live Overlay', `${hybArt.id} (${hybArt.numTrees} trees)`],
+        ['Val Acc (999 mkts)', `${(hm.v2_val_acc * 100).toFixed(2)}% → ${(hm.hybrid_val_acc * 100).toFixed(2)}%`],
+        ['Val Brier / AUC', `${hm.v2_val_brier}→${hm.hybrid_val_brier} · AUC ${hm.hybrid_val_auc}`],
+        ['Val ECE / Parity', `${hm.v2_val_ece} → ${hm.hybrid_val_ece} (${hm.max_inference_diff})`],
+      ];
+      for (const [k, v] of liveCards) {
+        const m = h('div', 'stat-mini');
+        m.appendChild(h('div', 'stat-mini__k', k));
+        m.appendChild(h('div', 'stat-mini__v c-cyan', v));
+        grid.appendChild(m);
+      }
     }
     bp.appendChild(grid);
     if (s2.findings) {
