@@ -56,6 +56,9 @@ export const UI_FILTER_KEYS: readonly string[] = [
   'lateEdgeBypass',
   'softEntryCap',
   'baseHardCap',
+  'midPhaseMaxPrice',
+  'trendingMlWith',
+  'trendingMlAgainst',
   'btcDistMinPct',
   'btcDistMlBypass',
   'deadZoneLo',
@@ -149,12 +152,12 @@ const BOUNDS = {
   },
   orderRouter: {
     fokMlThreshold: { min: 0.50, max: 0.95 },
-    limitMlThreshold: { min: 0.35, max: 0.85 },
+    limitMlThreshold: { min: 0.20, max: 0.85 },
     cheapMlThreshold: { min: 0.45, max: 0.90 },
     fokMaxPrice: { min: 0.45, max: 0.85 },
   },
   limitOrder: {
-    minMlConfidence: { min: 0.35, max: 0.90 },
+    minMlConfidence: { min: 0.20, max: 0.90 },
     minRemainingEdge: { min: 0, max: 0.20 },
   },
   phase: {

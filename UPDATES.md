@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-16 — Calibrate `20261116-p2-ef8dfd` Profile & Router Floors for Live Hybrid v4 (`30%` Conf)
+
+- **Why:** In 54d 1 Hz tape OOS checks, `v4-hybrid-20261116` calibrates ECE down to `0.97%–1.41%` (vs `4.1%–4.3%` on base `v2`), so its 99th-percentile confidence inside the `50c–65c` band is `35.9%` (`P=68%`). Keeping legacy `v2` thresholds (`mlConfMin=0.55`, `hardMlFloor=0.45`, `ROUTER_LIMIT_ML=0.45`, `lateMlMin=0.80`, `midPhaseMaxPrice=0.62`) blocked nearly every calibrated entry (`0` entries over `999` recent markets / `10.5d`).
+- **Threshold calibration (`bot/data/model_profiles.json` local & VPS):** Tuned `20261116-p2-ef8dfd` profile (`All-Time 395d + Hybrid v4 (30% · 65c)`) based on 39d 6-fold walk-forward OOS (`3,674` markets) + 10.5d Prod Val (`999` markets): `filters.mlConfMin=0.30`, `mlConfRelaxed=0.25`, `hardMlFloor=0.25`, `lateMlMin=0.35`, `lateMlRelaxed=0.28`, `trendingMlWith=0.32`, `trendingMlAgainst=0.42`, `midPhaseMaxPrice=0`, `orderRouter.limitMlThreshold=0.30`, `limitOrder.minMlConfidence=0.30` while preserving `65c` price discipline.
+- **Plumbing & UI bounds (`bot/src/ml/modelProfiles.ts`, `bot/src/config.ts`, `src/components/ModelProfileDrawer.tsx`):** Lowered `orderRouter.limitMlThreshold` / `limitOrder.minMlConfidence` min bounds from `0.35`/`0.40` → `0.20`, lowered drawer HTML min bounds for ML confidence fields to `0.20`, and surfaced `midPhaseMaxPrice`, `trendingMlWith`, and `trendingMlAgainst` in `UI_FILTER_KEYS` and the profile drawer.
+
 ## 2026-11-16 — Study Portal Changelog Parser (`##`/`###`) & Live Hybrid v4 Cards
 
 - **Changelog parser fix (`scripts/build-study-site.mjs`):** `parseUpdatesMd()` now parses both dated `## YYYY-MM-DD...` release headings and `### ...` entries while skipping the `## Current status` summary block cleanly, so all recent 2026-11-16 entries render at the top of `updates.json` / the `Changelog` tab on https://poly15-study.dollarkilat.xyz/.
@@ -65,7 +71,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 21:52 WIB_
+_Last updated: 2026-11-16 22:55 WIB_
 
 | Area | State |
 |---|---|
@@ -73,16 +79,16 @@ _Last updated: 2026-11-16 21:52 WIB_
 | ML model | **`20261116-p2-ef8dfd` + `v4-hybrid-20261116` Overlay LIVE** (`83f` v2 base + `412` depth-2 Chainlink/TWAP/L2 residual trees; `ML_HYBRID_RESIDUAL_ENABLED=true`) · Val Acc `73.68% → 74.93%`, AUC `0.8252 → 0.8355`, Brier `0.1723 → 0.1653`, ECE `0.0411 → 0.0141` (parity `3.16e-07`) |
 | Pipeline v4 / Stage 2 | **Hybrid Residual v4 LIVE + 54d Tape Lab** (`4,587,177` 1 Hz snapshots / `5,076` resolved mkts `2026-09-24 → 2026-11-16`) · Normal window OOS `75.97%` Acc / `0.1597` Brier; Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `20261116-p2-ef8dfd` & prior models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `50c–65c` band) |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 (`mlConfMin=0.30`, `hardMlFloor=0.25`, `lateMlMin=0.35`, `limitMlThreshold=0.30`, `midPhaseMaxPrice=0`, `50c–65c` band) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | **$100.00 fresh test run (0W / 0L)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
-| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261115-p2-c3e0fd` (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.62`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
+| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit ready & ML-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `ROUTER_LIMIT_ML=0.45` routes 45–64% high-edge signals to `LIMIT/maker_join`) |
+| Order router | **Limit ready & Hybrid-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, active profile `limitMlThreshold=0.30` / `limitOrder.minMlConfidence=0.30` routes calibrated 30%+ signals to `LIMIT/maker_join`) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
-| Hard ML floor | **45% absolute floor** (`FILTER_HARD_ML_FLOOR=0.45`, eliminated historical -$41.91 leak) |
-| Mid-phase guard | **62c cap / 8% edge req** (`midPhaseMaxPrice=0.62`, `FILTER_MID_PHASE_MIN_EDGE=0.08`) |
+| Hard ML floor | **25% Hybrid floor (profile override)** (`hardMlFloor=0.25` overrides `.env` `0.45` for `v4-hybrid-20261116`; `mlConfMin=0.30`) |
+| Mid-phase guard | **65c unified ceiling (Hybrid profile)** (`midPhaseMaxPrice=0` overrides `.env` `0.62` for calibrated Hybrid v4 entries in 5–11m MID window) |
 | Trending protection| **50c–65c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.65`, widened from 54c–58c 4c slit) |
 | Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
@@ -94,7 +100,7 @@ _Last updated: 2026-11-16 21:52 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 109 files / 1,054 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 109 files / 1,055 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

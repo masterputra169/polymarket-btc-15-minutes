@@ -182,7 +182,7 @@ const BOT_CONFIG = {
     priceTierHigh: envNum(process.env.LIMIT_PRICE_TIER_HIGH, 0.58, 0.50, 0.70),   // v4: 60→58¢ — even ML≥85% should not overpay; 58c needs 58% WR (easy)
     priceTierMid: envNum(process.env.LIMIT_PRICE_TIER_MID, 0.55, 0.45, 0.65),     // v4: 56→55¢ — ML 70-85%: tighter, need 55% WR
     priceTierLow: envNum(process.env.LIMIT_PRICE_TIER_LOW, 0.52, 0.40, 0.60),     // 52¢ — ML 60-70%: need 52% WR (unchanged)
-    minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.40, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin
+    minMlConfidence: envNum(process.env.LIMIT_MIN_ML_CONF, 0.62, 0.20, 0.90),     // Audit v5 H2: 0.58→0.62 — at 58% entry, break-even WR ≈ 60.5% (after costs); 62% ML provides ~2% edge margin (floor 0.20 allows calibrated Hybrid profiles)
     disableDownSide: process.env.LIMIT_DISABLE_DOWN === 'true',                    // Hard kill-switch (default OFF — smart guard below handles DOWN)
     downMaxAbovePtbPct: envNum(process.env.LIMIT_DOWN_MAX_ABOVE_PTB_PCT, 0.0005, 0, 0.005),  // Smart DOWN guard (2026-05-15): LIMIT DOWN only if BTC ≤ PTB+0.05% (downtrend confirmed, fixes bottom-catch trap)
     cancelAfterElapsedMin: envNum(process.env.LIMIT_CANCEL_AFTER_MIN, 9.0, 5, 14),  // v4: 7→9 min — let limit orders live longer before FOK fallback
@@ -202,7 +202,7 @@ const BOT_CONFIG = {
   orderRouter: {
     enabled:               process.env.ORDER_ROUTER_ENABLED !== 'false',
     fokMlThreshold:        envNum(process.env.ROUTER_FOK_ML, 0.88, 0.70, 0.95),          // v3: 0.80→0.88 — LIMIT 81% WR >> FOK 71%, reserve FOK for very-high ML only
-    limitMlThreshold:      envNum(process.env.ROUTER_LIMIT_ML, 0.45, 0.35, 0.85),        // align LIMIT floor with filter highEdgeBypass (0.45) so 45-64% signals route to LIMIT/maker_join instead of FOK fallback
+    limitMlThreshold:      envNum(process.env.ROUTER_LIMIT_ML, 0.45, 0.20, 0.85),        // align LIMIT floor with filter / Hybrid calibrated confidence so signals route to LIMIT/maker_join instead of WAIT
     fokMaxPrice:           envNum(process.env.ROUTER_FOK_MAX_PRICE, 0.58, 0.50, 0.75),   // v3: 0.62→0.58 — tighter FOK price cap, push more to LIMIT
     fokMaxPriceTrending:   envNum(process.env.ROUTER_FOK_MAX_PRICE_TREND, 0.68, 0.60, 0.85),  // v3: 0.75→0.68 — even trending should prefer LIMIT unless very cheap
     cheapPriceThreshold:   envNum(process.env.ROUTER_CHEAP_PRICE, 0.52, 0.45, 0.65),     // v3: 0.55→0.52 — only truly cheap tokens get FOK

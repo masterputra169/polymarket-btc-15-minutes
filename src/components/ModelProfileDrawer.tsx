@@ -78,19 +78,22 @@ interface FieldSpec {
 }
 
 const FILTER_FIELDS: readonly FieldSpec[] = [
-  { key: 'mlConfMin', label: 'ML Conf Min', step: '0.01', min: 0.40, max: 0.90, hint: 'Gate 1 standard ML confidence floor' },
-  { key: 'mlConfRelaxed', label: 'ML Conf Relaxed', step: '0.01', min: 0.40, max: 0.90, hint: 'Bypass floor when edge is high' },
+  { key: 'mlConfMin', label: 'ML Conf Min', step: '0.01', min: 0.20, max: 0.90, hint: 'Gate 1 standard ML confidence floor' },
+  { key: 'mlConfRelaxed', label: 'ML Conf Relaxed', step: '0.01', min: 0.20, max: 0.90, hint: 'Bypass floor when edge is high' },
   { key: 'highEdgeBypass', label: 'High Edge Bypass', step: '0.01', min: 0.01, max: 0.40, hint: 'Edge >= X relaxes mlConfMin -> mlConfRelaxed' },
-  { key: 'hardMlFloor', label: 'Hard ML Floor', step: '0.01', min: 0.40, max: 0.85, hint: 'Absolute minimum ML conf across gates' },
-  { key: 'lateMlMin', label: 'Late ML Min', step: '0.01', min: 0.40, max: 0.95, hint: 'Gate 2 floor when <2 min left' },
-  { key: 'lateMlRelaxed', label: 'Late ML Relaxed', step: '0.01', min: 0.40, max: 0.90, hint: 'Late floor with high edge' },
+  { key: 'hardMlFloor', label: 'Hard ML Floor', step: '0.01', min: 0.20, max: 0.85, hint: 'Absolute minimum ML conf across gates' },
+  { key: 'lateMlMin', label: 'Late ML Min', step: '0.01', min: 0.20, max: 0.95, hint: 'Gate 2 floor when <5 min left' },
+  { key: 'lateMlRelaxed', label: 'Late ML Relaxed', step: '0.01', min: 0.20, max: 0.90, hint: 'Late floor with high edge' },
   { key: 'lateEdgeBypass', label: 'Late Edge Bypass', step: '0.01', min: 0.01, max: 0.40, hint: 'Late high-edge bypass trigger' },
   { key: 'softEntryCap', label: 'Soft Price Cap', step: '0.01', min: 0.50, max: 0.90, hint: 'Soft ask ceiling (cents/100)' },
   { key: 'baseHardCap', label: 'Hard Price Cap', step: '0.01', min: 0.50, max: 0.92, hint: 'Hard ask ceiling (cents/100)' },
+  { key: 'midPhaseMaxPrice', label: 'Mid-Phase Max Px', step: '0.01', min: 0.00, max: 0.80, hint: '5-11m left ask ceiling (0 disables)' },
+  { key: 'trendingMlWith', label: 'Trending ML With', step: '0.01', min: 0.20, max: 0.90, hint: 'Trending ML floor aligned w/ BTC' },
+  { key: 'trendingMlAgainst', label: 'Trending ML Against', step: '0.01', min: 0.20, max: 0.95, hint: 'Trending ML floor vs BTC' },
   { key: 'btcDistMinPct', label: 'BTC Dist Min %', step: '0.01', min: 0.00, max: 1.00, hint: 'Min % distance from PTB' },
   { key: 'btcDistMlBypass', label: 'BTC Dist Bypass', step: '0.01', min: 0.50, max: 0.99, hint: 'ML conf that waives distance gate' },
-  { key: 'deadZoneLo', label: 'Dead Zone Lo', step: '0.01', min: 0.30, max: 0.60, hint: 'Lower token price skip bound' },
-  { key: 'deadZoneHi', label: 'Dead Zone Hi', step: '0.01', min: 0.30, max: 0.65, hint: 'Upper token price skip bound' },
+  { key: 'deadZoneLo', label: 'Dead Zone Lo', step: '0.01', min: 0.30, max: 0.85, hint: 'ML confidence dead-zone lower bound' },
+  { key: 'deadZoneHi', label: 'Dead Zone Hi', step: '0.01', min: 0.30, max: 0.90, hint: 'ML confidence dead-zone upper bound' },
 ];
 
 const SIZING_FIELDS: readonly FieldSpec[] = [
@@ -100,13 +103,13 @@ const SIZING_FIELDS: readonly FieldSpec[] = [
 
 const ROUTER_FIELDS: readonly FieldSpec[] = [
   { key: 'fokMlThreshold', label: 'FOK ML Threshold', step: '0.01', min: 0.50, max: 0.95, hint: 'Rule 1/3 direct FOK confidence' },
-  { key: 'limitMlThreshold', label: 'Limit ML Threshold', step: '0.01', min: 0.35, max: 0.85, hint: 'Min ML conf for smart LIMIT route' },
+  { key: 'limitMlThreshold', label: 'Limit ML Threshold', step: '0.01', min: 0.20, max: 0.85, hint: 'Min ML conf for smart LIMIT route' },
   { key: 'cheapMlThreshold', label: 'Cheap FOK Threshold', step: '0.01', min: 0.45, max: 0.90, hint: 'Cheap-token aggressive FOK conf' },
   { key: 'fokMaxPrice', label: 'FOK Max Price', step: '0.01', min: 0.45, max: 0.85, hint: 'Max ask for immediate FOK' },
 ];
 
 const LIMIT_FIELDS: readonly FieldSpec[] = [
-  { key: 'minMlConfidence', label: 'Limit Min ML Conf', step: '0.01', min: 0.35, max: 0.90, hint: 'Limit entry manager ML floor' },
+  { key: 'minMlConfidence', label: 'Limit Min ML Conf', step: '0.01', min: 0.20, max: 0.90, hint: 'Limit entry manager ML floor' },
   { key: 'minRemainingEdge', label: 'Limit Min Edge', step: '0.01', min: 0.00, max: 0.20, hint: 'Minimum remaining edge at target price' },
 ];
 

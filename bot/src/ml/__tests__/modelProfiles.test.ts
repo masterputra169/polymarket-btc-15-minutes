@@ -164,6 +164,36 @@ describe('modelProfiles', () => {
     expect(refused.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('accepts calibrated Hybrid v4 thresholds down to 0.20 without refusals', () => {
+    const base = readFilterThresholds({ FILTER_MID_PHASE_MAX_PRICE: '0.62' }).values;
+    const { profile, refused } = sanitizeModelProfile(
+      {
+        label: 'All-Time 395d + Hybrid v4 (30% · 65c)',
+        filters: {
+          mlConfMin: 0.30,
+          mlConfRelaxed: 0.25,
+          hardMlFloor: 0.25,
+          lateMlMin: 0.35,
+          lateMlRelaxed: 0.28,
+          trendingMlWith: 0.32,
+          trendingMlAgainst: 0.42,
+          midPhaseMaxPrice: 0,
+        },
+        orderRouter: { limitMlThreshold: 0.30, fokMlThreshold: 0.68 },
+        limitOrder: { minMlConfidence: 0.30 },
+      },
+      base,
+    );
+    expect(refused).toEqual([]);
+    expect(profile.filters?.mlConfMin).toBe(0.30);
+    expect(profile.filters?.hardMlFloor).toBe(0.25);
+    expect(profile.filters?.lateMlMin).toBe(0.35);
+    expect(profile.filters?.lateMlRelaxed).toBe(0.28);
+    expect(profile.filters?.midPhaseMaxPrice).toBe(0);
+    expect(profile.orderRouter?.limitMlThreshold).toBe(0.30);
+    expect(profile.limitOrder?.minMlConfidence).toBe(0.30);
+  });
+
   it('saves, persists, applies per-model profiles and resets cleanly', () => {
     const mgr = makeMgr();
     mgr.init(idA);
