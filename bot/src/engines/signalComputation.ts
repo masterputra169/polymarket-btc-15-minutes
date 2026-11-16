@@ -524,7 +524,7 @@ export function computeSignals({
       oracleDelta3s,
     });
     return getMLPrediction(inputs.marketState, timeAware.adjustedUp, regimeInfo.regime,
-      { featureRuleProbUp: inputs.ruleProbUp });
+      { featureRuleProbUp: inputs.ruleProbUp, ...(clobUsable && orderbookUp && marketUp != null && marketUp > 0.01 && marketUp < 0.99 ? { hybridInputs: buildHybridOverlayInputs(v4Signals, orderbookSignal, orderbookUp, timeLeftMin, candleWindowMinutes, marketUp, inputs.ruleProbUp) } : {}) });
   }
 
   // ── Monte Carlo simulation (independent probability from GBM price paths) ──
@@ -587,5 +587,48 @@ export function computeSignals({
 
     // Signal freshness timestamp — used to detect stale signals before execution
     computedAt: Date.now(),
+  };
+}
+
+
+function ratioFromPair(bidVal: number, askVal: number): number {
+  const total = bidVal + askVal;
+  return total > 0 ? bidVal / total : 0.5;
+}
+
+function buildHybridOverlayInputs(
+  v4Signals: {
+    oraclePtbDistPct: number;
+    twapPhysicsZ: number;
+    basisPct: number;
+    basisDriftPct: number;
+    crossFeedLead: number;
+  },
+  orderbookSignal: { imbalance?: number | null } | null | undefined,
+  orderbookUp: {
+    spread?: number | null;
+    bidSize?: number | null;
+    askSize?: number | null;
+    bidLiquidity?: number | null;
+    askLiquidity?: number | null;
+  },
+  timeLeftMin: number | null | undefined,
+  candleWindowMinutes: number,
+  marketUp: number,
+  ruleProbUp: number,
+) {
+  return {
+    oraclePtbDistPct: v4Signals.oraclePtbDistPct,
+    twapPhysicsZ: v4Signals.twapPhysicsZ,
+    basisPct: v4Signals.basisPct,
+    basisDriftPct: v4Signals.basisDriftPct,
+    crossFeedLead: v4Signals.crossFeedLead,
+    orderbookImbalance: orderbookSignal?.imbalance ?? 0,
+    spreadPct: orderbookUp.spread ?? 0.02,
+    imb1: ratioFromPair(orderbookUp.bidSize ?? 0, orderbookUp.askSize ?? 0),
+    imb5: ratioFromPair(orderbookUp.bidLiquidity ?? 0, orderbookUp.askLiquidity ?? 0),
+    minutesLeftNorm: Math.max(0, Math.min(1, (timeLeftMin ?? 7.5) / candleWindowMinutes)),
+    marketYesPrice: marketUp,
+    crowdModelDivergence: Math.abs(ruleProbUp - marketUp),
   };
 }

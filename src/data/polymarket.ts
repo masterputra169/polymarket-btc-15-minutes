@@ -47,6 +47,8 @@ export interface OrderBookSummary {
   spread: number | null;
   bidLiquidity: number | null;
   askLiquidity: number | null;
+  bidSize?: number | null;
+  askSize?: number | null;
   error?: boolean;
 }
 
@@ -131,30 +133,34 @@ export function summarizeOrderBook(book: any, depthLevels = 5): OrderBookSummary
   const bids: OrderBookLevel[] = Array.isArray(book?.bids) ? book.bids : [];
   const asks: OrderBookLevel[] = Array.isArray(book?.asks) ? book.asks : [];
 
-  const bestBid = bids.length
-    ? bids.reduce<number | null>((best, lvl) => {
-        const p = toNumber(lvl.price);
-        if (p === null) return best;
-        if (best === null) return p;
-        return Math.max(best, p);
-      }, null)
-    : null;
+  let bestBid: number | null = null;
+  let bidSize: number | null = null;
+  for (const lvl of bids) {
+    const p = toNumber(lvl.price);
+    if (p === null) continue;
+    if (bestBid === null || p > bestBid) {
+      bestBid = p;
+      bidSize = toNumber(lvl.size) ?? 0;
+    }
+  }
 
-  const bestAsk = asks.length
-    ? asks.reduce<number | null>((best, lvl) => {
-        const p = toNumber(lvl.price);
-        if (p === null) return best;
-        if (best === null) return p;
-        return Math.min(best, p);
-      }, null)
-    : null;
+  let bestAsk: number | null = null;
+  let askSize: number | null = null;
+  for (const lvl of asks) {
+    const p = toNumber(lvl.price);
+    if (p === null) continue;
+    if (bestAsk === null || p < bestAsk) {
+      bestAsk = p;
+      askSize = toNumber(lvl.size) ?? 0;
+    }
+  }
 
   const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
   // Best levels first: the CLOB lists both sides worst-first (see depthNearTop).
   const bidLiquidity = depthNearTop(bids, 'bid', depthLevels);
   const askLiquidity = depthNearTop(asks, 'ask', depthLevels);
 
-  return { bestBid, bestAsk, spread, bidLiquidity, askLiquidity, error: false };
+  return { bestBid, bestAsk, spread, bidLiquidity, askLiquidity, bidSize, askSize, error: false };
 }
 
 /**

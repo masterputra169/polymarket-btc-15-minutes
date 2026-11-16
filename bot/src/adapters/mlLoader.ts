@@ -16,6 +16,12 @@ import { setBaseFeatureCount } from '../../../src/engines/ml/state.ts';
 import { indexTree } from '../../../src/engines/ml/treeEval.ts';
 import { loadLgbModelFromData, isLgbReady } from '../../../src/engines/ml/lgbPredictor.ts';
 import { parsePlattByPhase, setPlattByPhase } from '../../../src/engines/ml/calibration.ts';
+import {
+  getHybridResidualInfo,
+  isHybridResidualReady,
+  loadHybridResidualFromData,
+  setHybridResidualEnabled,
+} from '../../../src/engines/ml/hybridResidual.ts';
 
 // Re-export all inference functions — they work unchanged after state is loaded
 export {
@@ -36,6 +42,12 @@ const log = createLogger('ML');
 export function getModelId(): string | null {
   return S.modelId;
 }
+
+export function getHybridResidualStatus() {
+  return getHybridResidualInfo(S.modelId);
+}
+
+export { isHybridResidualReady };
 
 /**
  * Load XGBoost + LightGBM models from disk into shared ML state.
@@ -162,6 +174,24 @@ export function loadMLModelFromDisk(force = false): boolean {
       setCalibratedParams(rawNorm.signal_modifiers, rawNorm.phase_thresholds);
       if (rawNorm.signal_modifiers) log.info(`Signal modifiers loaded: ${Object.keys(rawNorm.signal_modifiers).length} signals`);
       if (rawNorm.phase_thresholds) log.info(`Phase thresholds loaded: ${Object.keys(rawNorm.phase_thresholds).join(', ')}`);
+    }
+
+    // Load Pipeline v4 Hybrid Residual overlay (Chainlink-native/TWAP/L2 correction anchored on v2 base_margin)
+    setHybridResidualEnabled(BOT_CONFIG.hybridResidual.enabled);
+    if (BOT_CONFIG.hybridResidual.enabled && existsSync(BOT_CONFIG.hybridResidual.path)) {
+      try {
+        const hybRaw = JSON.parse(readFileSync(BOT_CONFIG.hybridResidual.path, 'utf-8'));
+        if (loadHybridResidualFromData(hybRaw)) {
+          const info = getHybridResidualInfo(S.modelId);
+          if (info.active) {
+            log.info(`Hybrid Residual v4 ACTIVE (${info.id}): ${info.trees} depth-2 trees anchored on ${info.requiresBaseModelId}`);
+          } else {
+            log.info(`Hybrid Residual v4 loaded on standby (requires ${info.requiresBaseModelId}, active base=${S.modelId ?? 'none'})`);
+          }
+        }
+      } catch (hybErr: any) {
+        log.warn(`Hybrid Residual v4 not loaded: ${hybErr.message}`);
+      }
     }
 
     return true;

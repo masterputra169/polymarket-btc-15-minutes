@@ -558,6 +558,28 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
                 {source ?? '-'}
               </span>
             </div>
+
+            {ml?.hybridActive && ml?.baseProbUp != null && (
+              <div className="data-row">
+                <span className="data-row__label">Hybrid Residual</span>
+                <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>{formatProbPct(ml.baseProbUp, 1)}</span>
+                  <span style={{ color: 'var(--text-dim)', margin: '0 4px' }}>→</span>
+                  <span style={{ color: 'var(--accent-cyan)', fontWeight: 700 }}>
+                    {formatProbPct(mlProbUp, 1)}
+                  </span>
+                  <span
+                    style={{
+                      marginLeft: '5px',
+                      color: (ml.hybridDeltaProb ?? 0) >= 0 ? '#34d399' : '#fb7185',
+                    }}
+                  >
+                    ({(ml.hybridDeltaProb ?? 0) >= 0 ? '+' : ''}
+                    {((ml.hybridDeltaProb ?? 0) * 100).toFixed(1)}pp)
+                  </span>
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Tahap 2: Live Pipeline v4 Chainlink-Native Telemetry */}
@@ -583,8 +605,14 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
               >
                 <span>
                   Tahap 2 · Chainlink-Native (v4){' '}
-                  <span style={{ color: (ml?.featurePipeline ?? 2) >= 4 ? '#34d399' : '#94a3b8' }}>
-                    [{(ml?.featurePipeline ?? 2) >= 4 ? 'v4 LIVE' : `p${ml?.featurePipeline ?? 2} DIAG`}]
+                  <span style={{ color: ml?.hybridActive || (ml?.featurePipeline ?? 2) >= 4 ? '#34d399' : '#94a3b8' }}>
+                    [
+                    {(ml?.featurePipeline ?? 2) >= 4
+                      ? 'v4 LIVE'
+                      : ml?.hybridActive
+                        ? 'v4 HYBRID LIVE'
+                        : `p${ml?.featurePipeline ?? 2} DIAG`}
+                    ]
                   </span>
                 </span>
                 <span style={{ color: 'var(--accent-cyan)' }}>{showV4 ? '▾' : '▸'}</span>
@@ -667,6 +695,9 @@ export default memo(MLPanel, (prev, next) => {
     a.ml?.status === b.ml?.status &&
     a.ml?.modelId === b.ml?.modelId &&
     a.ml?.featurePipeline === b.ml?.featurePipeline &&
+    a.ml?.hybridActive === b.ml?.hybridActive &&
+    a.ml?.baseProbUp === b.ml?.baseProbUp &&
+    a.ml?.hybridDeltaProb === b.ml?.hybridDeltaProb &&
     a.mlControl?.version === b.mlControl?.version &&
     a.mlControl?.activeModelId === b.mlControl?.activeModelId &&
     a.pLong === b.pLong &&

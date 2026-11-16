@@ -56,6 +56,10 @@ const BOT_CONFIG = {
   // ML model paths (read from frontend public/)
   modelPath: resolve(__dirname, '..', '..', 'public', 'ml', 'xgboost_model.json'),
   normPath: resolve(__dirname, '..', '..', 'public', 'ml', 'norm_browser.json'),
+  hybridResidual: {
+    enabled: process.env.ML_HYBRID_RESIDUAL_ENABLED !== 'false',
+    path: resolve(__dirname, '..', '..', 'public', 'ml', 'hybrid_residual_v4.json'),
+  },
 
   // Position management
   positionsFile: resolve(__dirname, '..', 'data', 'positions.json'),

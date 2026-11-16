@@ -22,7 +22,10 @@ export type IndexedTreeNode =
 
 export type IndexedTree = Map<number, IndexedTreeNode>;
 
-export function indexTree(rawTree: RawTreeNode): IndexedTree {
+export function indexTree(
+  rawTree: RawTreeNode,
+  resolveSplit: (splitName: string) => number = resolveFeatureIdx,
+): IndexedTree {
   const nodeMap: IndexedTree = new Map();
 
   function walk(node: RawTreeNode): void {
@@ -30,7 +33,7 @@ export function indexTree(rawTree: RawTreeNode): IndexedTree {
       nodeMap.set(node.nodeid, { leaf: node.leaf });
       return;
     }
-    const featureIdx = resolveFeatureIdx(node.split ?? '');
+    const featureIdx = resolveSplit(node.split ?? '');
     nodeMap.set(node.nodeid, {
       featureIdx,
       threshold: node.split_condition ?? 0,

@@ -19,6 +19,12 @@ import { calibrate, calibrateLogit, parsePlattByPhase, setPlattByPhase } from '.
 import { featureBuf, extractLiveFeaturesInPlace, getDataQualityScore } from './ml/featureExtract.ts';
 import { ensemblePrediction } from './ml/ensemble.ts';
 import { loadLgbModel, isLgbReady, predictLgb, unloadLgbModel } from './ml/lgbPredictor.ts';
+import {
+  applyHybridResidual,
+  loadHybridResidualFromData,
+  unloadHybridResidual,
+  type HybridResidualInputs,
+} from './ml/hybridResidual.ts';
 
 const IS_DEV = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
 
@@ -183,10 +189,18 @@ export async function loadMLModel(
       }
     } catch { /* use defaults */ }
 
-    // Load LightGBM model (non-blocking, graceful degradation)
+    // Load LightGBM + optional Hybrid Residual v4 overlay (non-blocking, graceful degradation)
     loadLgbModel().then(ok => {
       if (ok) console.log(`[ML] LightGBM ready, ensemble: XGB=${ensembleWeightXgb} LGB=${ensembleWeightLgb}`);
     });
+    fetch('/ml/hybrid_residual_v4.json')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (data && loadHybridResidualFromData(data)) {
+          console.log('[ML] Pipeline v4 Hybrid Residual overlay loaded');
+        }
+      })
+      .catch(() => { /* optional overlay */ });
 
     return true;
   } catch (err) {
@@ -241,10 +255,11 @@ export function unloadMLModel() {
   calibratedPhaseThresholds = null;
   resetHysteresis();
   unloadLgbModel();
+  unloadHybridResidual();
   if (IS_DEV) console.log('[ML] Models unloaded');
 }
 
-export function predictML(features) {
+export function predictML(features, hybridInputs: HybridResidualInputs | null = null) {
   if (!S.processedTrees) return null;
 
   // XGBoost prediction — predictXGBoost returns raw logit (v9+)
@@ -264,18 +279,22 @@ export function predictML(features) {
   }
 
   // LightGBM prediction (if available)
-  let probUp;
+  let baseProbUp;
   if (isLgbReady()) {
     const lgbProb = predictLgb(features);
     if (lgbProb !== null) {
       // Weighted ensemble
-      probUp = ensembleWeightXgb * xgbProb + ensembleWeightLgb * lgbProb;
+      baseProbUp = ensembleWeightXgb * xgbProb + ensembleWeightLgb * lgbProb;
     } else {
-      probUp = xgbProb;
+      baseProbUp = xgbProb;
     }
   } else {
-    probUp = xgbProb;
+    baseProbUp = xgbProb;
   }
+
+  // Pipeline v4 Hybrid Residual overlay (adjusts 395d v2 logits using Chainlink-native/TWAP/L2 signals)
+  const hyb = applyHybridResidual(baseProbUp, hybridInputs, S.modelId);
+  const probUp = hyb.probUp;
 
   const confidence = Math.abs(probUp - 0.5) * 2;
 
@@ -293,7 +312,17 @@ export function predictML(features) {
 
   const isHighConfidence = probUp > S.optimalThreshold || probUp < (1 - S.optimalThreshold);
 
-  return { probUp, confidence, side, isHighConfidence, threshold: S.optimalThreshold };
+  return {
+    probUp,
+    confidence,
+    side,
+    isHighConfidence,
+    threshold: S.optimalThreshold,
+    baseProbUp,
+    hybridDeltaProb: hyb.deltaProb,
+    hybridActive: hyb.active,
+    hybridId: hyb.id,
+  };
 }
 
 // Backward compat export
@@ -323,7 +352,12 @@ export function getModelId(): string | null {
  *   feature vector, when it must be built differently from the blend input
  *   (feature pipeline v2 builds it with neutral live-only inputs, as training does).
  */
-export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, opts: { featureRuleProbUp?: number } = {}) {
+export function getMLPrediction(
+  marketState: any,
+  ruleProbUp: any,
+  regime: any,
+  opts: { featureRuleProbUp?: number; hybridInputs?: HybridResidualInputs | null } = {},
+) {
   // Audit v4 M10: Update regime for adaptive hysteresis before prediction
   if (regime) currentRegime = regime;
 
@@ -338,6 +372,10 @@ export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, 
       alpha: 0,
       source: 'Rule-only (ML not loaded)',
       modelVersion: 0,
+      baseMlProbUp: null,
+      hybridDeltaProb: 0,
+      hybridActive: false,
+      hybridId: null,
     };
   }
 
@@ -351,7 +389,7 @@ export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, 
   // H5: Get data quality score from feature extraction
   const dataQuality = getDataQualityScore();
 
-  const mlResult = predictML(featureBuf);
+  const mlResult = predictML(featureBuf, opts.hybridInputs ?? null);
   if (!mlResult) {
     return {
       available: false,
@@ -364,6 +402,10 @@ export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, 
       source: 'Rule-only (ML failed)',
       modelVersion: S.modelVersion,
       dataQuality,
+      baseMlProbUp: null,
+      hybridDeltaProb: 0,
+      hybridActive: false,
+      hybridId: null,
     };
   }
 
@@ -379,8 +421,12 @@ export function getMLPrediction(marketState: any, ruleProbUp: any, regime: any, 
     mlSide: mlResult.side,
     isHighConfidence: mlResult.isHighConfidence,
     alpha: ensemble.alpha,
-    source: ensemble.source,
+    source: mlResult.hybridActive ? `${ensemble.source}+v4Hyb` : ensemble.source,
     modelVersion: S.modelVersion,
     dataQuality,
+    baseMlProbUp: mlResult.baseProbUp,
+    hybridDeltaProb: mlResult.hybridDeltaProb,
+    hybridActive: mlResult.hybridActive,
+    hybridId: mlResult.hybridId,
   };
 }

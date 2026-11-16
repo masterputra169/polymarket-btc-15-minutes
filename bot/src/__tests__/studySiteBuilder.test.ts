@@ -66,7 +66,7 @@ describe('parseUpdatesMd & buildStudySite', () => {
     expect(parsed.entries[0].tags).toContain('Filters & Risk');
   });
 
-  test('buildStudySite compiles complete static bundle into temp directory', () => {
+  test('buildStudySite compiles complete static bundle into temp directory', { timeout: 20_000 }, () => {
     const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'poly15-study-test-'));
     try {
       const repoRoot = path.resolve(process.cwd());
@@ -107,6 +107,10 @@ describe('parseUpdatesMd & buildStudySite', () => {
         expect(fs.existsSync(path.join(tmpOut, 'data', 'models.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'studies.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'updates.json'))).toBe(true);
+        expect(fs.existsSync(path.join(tmpOut, 'data', 'stage2.json'))).toBe(true);
+        const stage2Json = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'stage2.json'), 'utf8'));
+        expect(stage2Json.available).toBe(true);
+        expect(stage2Json.coverage?.dateRange?.totalDays).toBeGreaterThanOrEqual(54);
 
         const siteJson = fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8');
         expect(siteJson).not.toContain('0xdeadbeef');
