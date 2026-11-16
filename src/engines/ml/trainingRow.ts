@@ -207,7 +207,7 @@ export function buildTrainingFeatures(snapshot: FeatureSnapshot, baseFeatureCoun
   const { marketState, ruleProbUp } = buildMlFeatureInputs(snapshot);
   const prevBase = S.BASE_FEATURES;
   try {
-    if (baseFeatureCount >= 54 && baseFeatureCount <= 59) {
+    if (baseFeatureCount >= 54 && baseFeatureCount <= 68) {
       S.setBaseFeatureCount(baseFeatureCount);
     }
     extractLiveFeaturesInPlace({

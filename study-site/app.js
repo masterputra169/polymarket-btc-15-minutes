@@ -9,6 +9,8 @@ import {
   drawConfidenceBuckets,
   drawPhaseResponseCurve,
   drawFeatureImportanceBars,
+  drawTapeCoverageChart,
+  drawStage2WindowBars,
 } from './charts.js';
 
 const state = {
@@ -16,6 +18,7 @@ const state = {
   models: null,
   studies: null,
   updates: null,
+  stage2: null,
   activeTab: 'overview',
   metricKey: 'accuracy',
   selectedModelId: null,
@@ -81,7 +84,7 @@ function makeTable(headers, rows) {
 }
 
 function setTab(tabName) {
-  const valid = ['overview', 'models', 'studies', 'updates'];
+  const valid = ['overview', 'models', 'stage2', 'studies', 'updates'];
   state.activeTab = valid.includes(tabName) ? tabName : 'overview';
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.tab === state.activeTab);
@@ -890,23 +893,228 @@ async function fetchJson(url) {
   return res.json();
 }
 
+function renderStage2Tab() {
+  const s2 = state.stage2;
+  const kpiWrap = document.getElementById('stage2-kpis');
+  kpiWrap?.replaceChildren();
+  if (!s2 || (!s2.coverage && !s2.study)) {
+    kpiWrap?.appendChild(h('div', 'empty-state', 'Stage 2 / Pipeline v4 bundle not available in this build.'));
+    return;
+  }
+
+  const cov = s2.coverage || {};
+  const tot = cov.totals || {};
+  const bDiag = cov.basisDiagnostics || {};
+  const st = s2.study || {};
+  const ds = st.dataset || {};
+  const norm = st.normalWindow || {};
+  const fin = st.final15_45sWindow || {};
+
+  const badge = document.getElementById('stage2-dataset-badge');
+  if (badge && cov.dateRange) {
+    badge.textContent = `${cov.dateRange.totalDays}d Tape · ${ds.featuresTotal || 88}f (v4)`;
+  }
+
+  const v2N = norm.v2_prob_up;
+  const hybN = norm.v4_hybrid;
+  const v2F = fin.v2_prob_up;
+  const stF = fin.v4_standalone;
+  const stkF = fin.v4_stack;
+
+  const kpis = [
+    {
+      k: '1 Hz Market Tape',
+      v: tot.snapshots ? `${(tot.snapshots / 1e6).toFixed(2)}M snaps` : '—',
+      cls: 'c-cyan',
+      hint: `${cov.dateRange?.start || ''} → ${cov.dateRange?.end || ''} · ${tot.files || 0} files (${tot.totalSizeMb || 0} MB)`,
+    },
+    {
+      k: 'Resolved & Exact PTB',
+      v: tot.resolvedMarkets ? `${tot.resolvedMarkets.toLocaleString()} mkts` : '—',
+      cls: 'c-pos',
+      hint: `${tot.exactPtbMarkets?.toLocaleString() || 0} exact TWAP PTB · ${tot.liveBookPct ?? '—'}% live L2 book`,
+    },
+    {
+      k: 'Median Basis (Bin − CL)',
+      v: bDiag.medianUsd != null ? `+$${bDiag.medianUsd.toFixed(2)}` : '—',
+      cls: 'c-amber',
+      hint: `P05–P95: $${bDiag.p05Usd ?? '—'}–$${bDiag.p95Usd ?? '—'} · Near-PTB skew $${bDiag.nearPtbAbsSkewMedianUsd ?? '—'}`,
+    },
+    {
+      k: 'Normal Window (12m→2m)',
+      v: hybN ? `${hybN.accuracyPct}% Acc` : '—',
+      cls: 'c-cyan',
+      hint: v2N && hybN ? `Brier ${v2N.brier} (v2) → ${hybN.brier} (v4 Hyb) · AUC ${v2N.auc} → ${hybN.auc}` : 'OOS 1,237 mkts',
+    },
+    {
+      k: 'Final 15–45s Brier',
+      v: stkF ? `${stkF.brier} (${stkF.skillVsMktPct >= 0 ? '+' : ''}${stkF.skillVsMktPct}%)` : '—',
+      cls: 'c-pos',
+      hint: v2F && stF ? `v2: ${v2F.brier} → v4 Standalone: ${stF.brier} (${stF.accuracyPct}% Acc)` : 'TWAP physics zone',
+    },
+  ];
+
+  for (const c of kpis) {
+    const box = h('div', 'kpi');
+    box.appendChild(h('div', 'kpi__label', c.k));
+    box.appendChild(h('div', `kpi__val ${c.cls}`, c.v));
+    box.appendChild(h('div', 'kpi__hint', c.hint));
+    kpiWrap?.appendChild(box);
+  }
+
+  drawTapeCoverageChart(document.getElementById('chart-stage2-tape'), cov.daily || []);
+
+  const bp = document.getElementById('stage2-basis-panel');
+  bp?.replaceChildren();
+  if (bp) {
+    const grid = h('div', 'stat-pair-grid');
+    const items = [
+      ['OOS Split', ds.testMarkets ? `${ds.testMarkets} mkts` : '—'],
+      ['OOS Range', ds.testStart ? `${ds.testStart.slice(0, 10)} → ${ds.testEnd?.slice(0, 10)}` : '—'],
+      ['Oracle Coverage', tot.hasOraclePct != null ? `${tot.hasOraclePct}%` : '—'],
+      ['TWAP 60s Cov', tot.hasTwapPct != null ? `${tot.hasTwapPct}%` : '—'],
+      ['Decision Lines', tot.decisions ? tot.decisions.toLocaleString() : '—'],
+      ['Cross-Feed Blocks', tot.crossFeedBlocked != null ? `${tot.crossFeedBlocked} (${tot.crossFeedFlips || 0} flips)` : '—'],
+      ['Near-PTB P95 Skew', bDiag.nearPtbAbsSkewP95Usd != null ? `$${bDiag.nearPtbAbsSkewP95Usd}` : '—'],
+      ['Baseline v2 ECE→v4', v2N && hybN ? `${v2N.ece} → ${hybN.ece}` : '—'],
+    ];
+    for (const [k, v] of items) {
+      const m = h('div', 'stat-mini');
+      m.appendChild(h('div', 'stat-mini__k', k));
+      m.appendChild(h('div', 'stat-mini__v', v));
+      grid.appendChild(m);
+    }
+    bp.appendChild(grid);
+    if (s2.findings) {
+      for (const txt of [s2.findings.normalWindow, s2.findings.finalMinute, s2.findings.executionReplay]) {
+        if (!txt) continue;
+        const p = h('p', 'card__sub', txt);
+        p.style.marginTop = '10px';
+        bp.appendChild(p);
+      }
+    }
+  }
+
+  const ft = document.getElementById('stage2-features-table');
+  ft?.replaceChildren();
+  if (ft && Array.isArray(s2.v4Features)) {
+    ft.appendChild(makeTable(
+      ['Idx', 'Feature Key', 'Formula', 'Quantitative Purpose'],
+      s2.v4Features.map((f) => [
+        `f${f.idx}`,
+        { text: f.name, cls: 'c-cyan' },
+        { text: f.formula, cls: 'mono-dim' },
+        f.role,
+      ]),
+    ));
+  }
+
+  drawStage2WindowBars(document.getElementById('chart-stage2-windows'), norm, fin);
+
+  const wt = document.getElementById('stage2-windows-table');
+  wt?.replaceChildren();
+  const order = ['up_mid', 'microprice', 'mkt_recal', 'v2_prob_up', 'twap_physics', 'v4_standalone', 'v4_hybrid', 'v4_stack'];
+  const wRows = [];
+  for (const k of order) {
+    const rn = norm[k];
+    const rf = fin[k];
+    if (!rn) continue;
+    wRows.push([
+      { text: rn.label, cls: k.startsWith('v4') ? 'c-cyan' : '' },
+      `${rn.accuracyPct}%`,
+      String(rn.auc),
+      String(rn.brier),
+      { text: `${rn.skillVsMktPct >= 0 ? '+' : ''}${rn.skillVsMktPct}%`, cls: rn.skillVsMktPct >= 0 ? 'c-pos' : 'c-neg' },
+      rf ? `${rf.accuracyPct}%` : '—',
+      rf ? String(rf.brier) : '—',
+      rf ? { text: `${rf.skillVsMktPct >= 0 ? '+' : ''}${rf.skillVsMktPct}%`, cls: rf.skillVsMktPct >= 0 ? 'c-pos' : 'c-neg' } : '—',
+    ]);
+  }
+  wt?.appendChild(makeTable(
+    ['Model', 'Norm Acc', 'Norm AUC', 'Norm Brier', 'Norm Skill', '15–45s Acc', '15–45s Brier', '15–45s Skill'],
+    wRows,
+  ));
+
+  const rt = document.getElementById('stage2-replay-table');
+  rt?.replaceChildren();
+  const rRows = [];
+  for (const pr of st.tradingReplay || []) {
+    for (const [k, mlbl] of [['v2NoGate20f', 'v2 (no Gate 20f)'], ['v2WithGate20f', 'v2 + Gate 20f'], ['v4Standalone', 'v4 Standalone + 20f'], ['v4Hybrid', 'v4 Hybrid + 20f']]) {
+      const r = pr[k];
+      if (!r) continue;
+      rRows.push([
+        pr.label,
+        mlbl,
+        String(r.trades),
+        String(r.blockedMarketsBy20f ?? 0),
+        r.wrPct != null ? `${r.wrPct}% (BE ${r.breakevenWrPct}%)` : '—',
+        r.marginPp != null ? { text: `${r.marginPp >= 0 ? '+' : ''}${r.marginPp}pp`, cls: r.marginPp >= 0 ? 'c-pos' : 'c-neg' } : '—',
+        { text: fmtUsd(r.pnlUsd, true), cls: r.pnlUsd >= 0 ? 'c-pos' : 'c-neg' },
+        { text: `${r.roiPct >= 0 ? '+' : ''}${r.roiPct}%`, cls: r.roiPct >= 0 ? 'c-pos' : 'c-neg' },
+        `${r.pf ?? '—'} · ${fmtUsd(r.maxDdUsd)}`,
+      ]);
+    }
+  }
+  rt?.appendChild(makeTable(
+    ['Execution Preset', 'Model / Gate', 'Trades', '20f Blk', 'WR (vs BE)', 'Margin', 'PnL ($2/tr)', 'ROI', 'PF · Max DD'],
+    rRows,
+  ));
+
+  const nrt = document.getElementById('stage2-native-ranks-table');
+  nrt?.replaceChildren();
+  const ranks = st.featureImportance?.v4NativeAndMicroRanks || [];
+  nrt?.appendChild(makeTable(
+    ['Rank / 88', 'Feature', 'XGB Gain', 'Share', 'Splits'],
+    ranks.map((r) => [
+      `#${r.rank}`,
+      { text: r.name, cls: r.isChainlinkNative ? 'c-cyan' : '' },
+      String(r.gain),
+      `${r.gainSharePct}%`,
+      String(r.splits),
+    ]),
+  ));
+
+  const ht = document.getElementById('stage2-hybrid-table');
+  ht?.replaceChildren();
+  if (ht) {
+    const hRows = (st.featureImportance?.v4HybridTop || []).map((r) => [
+      { text: r.name, cls: r.isChainlinkNative ? 'c-cyan' : '' },
+      r.isChainlinkNative ? 'Chainlink v4' : 'Residual/L2',
+      String(r.gain),
+      `${r.gainSharePct}%`,
+      String(r.splits),
+    ]);
+    ht.appendChild(makeTable(['Hybrid Feature', 'Type', 'Gain', 'Share', 'Splits'], hRows));
+    if (st.stackWeights) {
+      const w = st.stackWeights;
+      const p = h('p', 'mono-dim',
+        `Calibrated Stack Weights: intercept=${w.intercept} · logit(mid)=${w.logitMarketMid} · logit(v2)=${w.logitV2Prod} · basisDrift*100=${w.basisDriftPct100} · crossFeedLead*100=${w.crossFeedLeadPct100} · obImb=${w.orderbookImbalance}`);
+      p.style.marginTop = '10px';
+      ht.appendChild(p);
+    }
+  }
+}
+
 async function loadAll() {
   const errBox = document.getElementById('banner-error');
   try {
     errBox.classList.add('is-hidden');
-    const [site, models, studies, updates] = await Promise.all([
+    const [site, models, studies, updates, stage2] = await Promise.all([
       fetchJson('./data/site.json'),
       fetchJson('./data/models.json'),
       fetchJson('./data/studies.json'),
       fetchJson('./data/updates.json'),
+      fetchJson('./data/stage2.json').catch(() => null),
     ]);
     state.site = site;
     state.models = models;
     state.studies = studies;
     state.updates = updates;
+    state.stage2 = stage2;
     renderHeader();
     renderOverview();
     renderModelsTab();
+    renderStage2Tab();
     renderStudiesTab();
     renderUpdatesTab();
   } catch (err) {

@@ -135,6 +135,33 @@ export function computeCrossFeedMetrics(input: CrossFeedMetricsInput): CrossFeed
 }
 
 /**
+ * Fractional oracle return over the last ~windowMs (default 3s) from timestamped
+ * Chainlink spot ticks. Mirrors binanceWs.getRecentPriceWindow() (returned as
+ * a fractional ratio, e.g. 0.0003 for +0.03%, matching featureExtract units).
+ */
+export function computeOracleDeltaWindowRatio(
+  spotTicks: readonly Tick[],
+  nowMs: number,
+  windowMs = 3_000,
+): { deltaRatio: number; tickCount: number } {
+  const cutoff = nowMs - windowMs;
+  let oldest: Tick | null = null;
+  let latest: Tick | null = null;
+  let tickCount = 0;
+  for (const t of spotTicks) {
+    if (!Number.isFinite(t.ts) || !Number.isFinite(t.value) || t.value <= 0) continue;
+    if (t.ts < cutoff || t.ts > nowMs + 500) continue;
+    tickCount++;
+    if (!oldest || t.ts < oldest.ts) oldest = t;
+    if (!latest || t.ts > latest.ts) latest = t;
+  }
+  if (!oldest || !latest || tickCount < 2 || latest.ts <= oldest.ts) {
+    return { deltaRatio: 0, tickCount };
+  }
+  return { deltaRatio: (latest.value - oldest.value) / oldest.value, tickCount };
+}
+
+/**
  * Binance − Chainlink, smoothed. Updated only when both prices are fresh; an
  * optional rolling median window rejects single-poll stale spikes while letting
  * sustained basis regime shifts (e.g. USDT discount widening) track rapidly.

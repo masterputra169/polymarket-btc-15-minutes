@@ -600,6 +600,7 @@ export function drawFeatureImportanceBars(container, catalog, mode = 'xgbSplits'
     'Technical / Momentum': '#10b981',
     Volatility: '#a78bfa',
     'Volume / Flow': '#38bdf8',
+    'Chainlink & TWAP (v4)': '#fb7185',
     'Context / Regime': '#94a3b8',
   };
 
@@ -644,4 +645,163 @@ export function drawFeatureImportanceBars(container, catalog, mode = 'xgbSplits'
   });
 
   container.appendChild(svg);
+}
+
+export function drawTapeCoverageChart(container, daily) {
+  if (!container) return;
+  container.replaceChildren();
+  if (!Array.isArray(daily) || daily.length === 0) {
+    container.appendChild(Object.assign(document.createElement('div'), { className: 'empty-state', textContent: 'No daily Market Tape coverage series loaded.' }));
+    return;
+  }
+
+  const W = 720;
+  const H = 250;
+  const pad = { l: 46, r: 52, t: 22, b: 36 };
+  const innerW = W - pad.l - pad.r;
+  const innerH = H - pad.t - pad.b;
+
+  const basisVals = daily.map((d) => (typeof d.medianBasisUsd === 'number' ? d.medianBasisUsd : 0));
+  const maxBasis = Math.max(40, ...basisVals) * 1.15;
+  const stepX = innerW / daily.length;
+  const barW = Math.max(3, stepX * 0.68);
+  const xCenter = (i) => pad.l + (i + 0.5) * stepX;
+  const yPct = (p) => pad.t + innerH - (Math.max(0, Math.min(100, p)) / 100) * innerH;
+  const yBasis = (b) => pad.t + innerH - (Math.max(0, Math.min(maxBasis, b)) / maxBasis) * innerH;
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg' });
+
+  for (let g = 0; g <= 4; g++) {
+    const pct = g * 25;
+    const y = yPct(pct);
+    svg.appendChild(svgEl('line', { x1: pad.l, x2: W - pad.r, y1: y, y2: y, stroke: 'rgba(148,163,184,0.12)', 'stroke-dasharray': '3,3' }));
+    svg.appendChild(svgEl('text', { x: pad.l - 6, y: y + 4, 'text-anchor': 'end', fill: '#64748b', 'font-size': '10', 'font-family': 'var(--font-mono)' }, `${pct}%`));
+    const bVal = (maxBasis * g) / 4;
+    svg.appendChild(svgEl('text', { x: W - pad.r + 6, y: y + 4, fill: '#f59e0b', 'font-size': '10', 'font-family': 'var(--font-mono)' }, `$${bVal.toFixed(0)}`));
+  }
+
+  const twapPts = [];
+  const basisPts = [];
+  daily.forEach((d, i) => {
+    const cx = xCenter(i);
+    const liveH = Math.max(1, (Math.max(0, Math.min(100, d.liveBookPct ?? 0)) / 100) * innerH);
+    const bar = svgEl('rect', {
+      x: cx - barW / 2,
+      y: pad.t + innerH - liveH,
+      width: barW,
+      height: liveH,
+      rx: 2,
+      fill: '#22d3ee',
+      'fill-opacity': '0.32',
+      style: 'cursor:pointer',
+    });
+    bar.addEventListener('mousemove', (e) => showTip(e,
+      `${d.date} · ${d.markets} mkts · ${(d.snapshots ?? 0).toLocaleString()} snaps\n`
+      + `Live Book: ${d.liveBookPct}% · TWAP: ${d.twapPct}% · Oracle: ${d.oraclePct}%\n`
+      + `Median Basis (Bin - CL): ${d.medianBasisUsd != null ? `$${d.medianBasisUsd.toFixed(2)}` : '—'} · Cross-Feed Blocked: ${d.crossFeedBlocked ?? 0}`));
+    bar.addEventListener('mouseleave', hideTip);
+    svg.appendChild(bar);
+
+    twapPts.push(`${cx.toFixed(1)},${yPct(d.twapPct ?? 0).toFixed(1)}`);
+    if (d.medianBasisUsd != null) {
+      basisPts.push(`${cx.toFixed(1)},${yBasis(d.medianBasisUsd).toFixed(1)}`);
+    }
+  });
+
+  if (twapPts.length > 1) {
+    svg.appendChild(svgEl('polyline', { points: twapPts.join(' '), fill: 'none', stroke: '#10b981', 'stroke-width': '1.8' }));
+  }
+  if (basisPts.length > 1) {
+    svg.appendChild(svgEl('polyline', { points: basisPts.join(' '), fill: 'none', stroke: '#f59e0b', 'stroke-width': '2' }));
+  }
+
+  svg.appendChild(svgEl('text', { x: pad.l, y: H - 10, fill: '#94a3b8', 'font-size': '10.5', 'font-family': 'var(--font-mono)' }, daily[0].date));
+  const midD = daily[Math.floor(daily.length / 2)];
+  svg.appendChild(svgEl('text', { x: W / 2, y: H - 10, 'text-anchor': 'middle', fill: '#94a3b8', 'font-size': '10.5', 'font-family': 'var(--font-mono)' }, `${midD.date} (${daily.length}d)`));
+  svg.appendChild(svgEl('text', { x: W - pad.r, y: H - 10, 'text-anchor': 'end', fill: '#94a3b8', 'font-size': '10.5', 'font-family': 'var(--font-mono)' }, daily[daily.length - 1].date));
+
+  container.appendChild(svg);
+  const leg = document.createElement('div');
+  leg.className = 'chip-list';
+  for (const [lbl, col] of [['Live L2 Book % (bars)', '#22d3ee'], ['Chainlink 60s TWAP %', '#10b981'], ['Median BTC Basis $ (Bin − CL)', '#f59e0b']]) {
+    const b = document.createElement('span');
+    b.className = 'badge';
+    b.style.color = col;
+    b.style.borderColor = col;
+    b.textContent = lbl;
+    leg.appendChild(b);
+  }
+  container.appendChild(leg);
+}
+
+export function drawStage2WindowBars(container, normalWindow, finalWindow) {
+  if (!container) return;
+  container.replaceChildren();
+  const keys = ['up_mid', 'v2_prob_up', 'twap_physics', 'v4_standalone', 'v4_hybrid', 'v4_stack'];
+  const items = keys
+    .map((k) => ({ key: k, n: normalWindow?.[k], f: finalWindow?.[k] }))
+    .filter((x) => x.n || x.f);
+
+  if (items.length === 0) {
+    container.appendChild(Object.assign(document.createElement('div'), { className: 'empty-state', textContent: 'No Stage 2 OOS comparison metrics loaded.' }));
+    return;
+  }
+
+  const W = 720;
+  const rowH = 38;
+  const pad = { l: 190, r: 95, t: 18, b: 22 };
+  const H = pad.t + pad.b + items.length * rowH;
+  const innerW = W - pad.l - pad.r;
+  const minB = 0.07;
+  const maxB = 0.18;
+  const xB = (b) => pad.l + ((maxB - Math.max(minB, Math.min(maxB, b))) / (maxB - minB)) * innerW;
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg' });
+
+  for (const b of [0.16, 0.14, 0.12, 0.10, 0.08]) {
+    const x = xB(b);
+    svg.appendChild(svgEl('line', { x1: x, x2: x, y1: pad.t, y2: H - pad.b, stroke: 'rgba(148,163,184,0.12)', 'stroke-dasharray': '3,3' }));
+    svg.appendChild(svgEl('text', { x, y: H - 6, 'text-anchor': 'middle', fill: '#64748b', 'font-size': '10', 'font-family': 'var(--font-mono)' }, b.toFixed(2)));
+  }
+
+  items.forEach((it, i) => {
+    const y = pad.t + i * rowH;
+    const label = it.n?.label || it.f?.label || it.key;
+    svg.appendChild(svgEl('text', {
+      x: pad.l - 8, y: y + 20, 'text-anchor': 'end',
+      fill: '#e2e8f0', 'font-size': '11', 'font-family': 'var(--font-mono)',
+    }, label));
+
+    if (it.n) {
+      const wN = Math.max(6, xB(it.n.brier) - pad.l);
+      const r1 = svgEl('rect', { x: pad.l, y: y + 4, width: wN, height: 11, rx: 3, fill: '#22d3ee', 'fill-opacity': '0.85', style: 'cursor:pointer' });
+      r1.addEventListener('mousemove', (e) => showTip(e,
+        `${label} · Normal (12m→2m)\nBrier: ${it.n.brier} · Acc: ${it.n.accuracyPct}% · AUC: ${it.n.auc}\nSkill vs Mid: ${it.n.skillVsMktPct >= 0 ? '+' : ''}${it.n.skillVsMktPct}%`));
+      r1.addEventListener('mouseleave', hideTip);
+      svg.appendChild(r1);
+      svg.appendChild(svgEl('text', { x: pad.l + wN + 6, y: y + 13, fill: '#22d3ee', 'font-size': '10', 'font-family': 'var(--font-mono)' }, `N:${it.n.brier}`));
+    }
+    if (it.f) {
+      const wF = Math.max(6, xB(it.f.brier) - pad.l);
+      const r2 = svgEl('rect', { x: pad.l, y: y + 18, width: wF, height: 11, rx: 3, fill: '#10b981', 'fill-opacity': '0.85', style: 'cursor:pointer' });
+      r2.addEventListener('mousemove', (e) => showTip(e,
+        `${label} · Final (15s–45s)\nBrier: ${it.f.brier} · Acc: ${it.f.accuracyPct}% · AUC: ${it.f.auc}\nSkill vs Mid: ${it.f.skillVsMktPct >= 0 ? '+' : ''}${it.f.skillVsMktPct}%`));
+      r2.addEventListener('mouseleave', hideTip);
+      svg.appendChild(r2);
+      svg.appendChild(svgEl('text', { x: pad.l + wF + 6, y: y + 27, fill: '#10b981', 'font-size': '10', 'font-family': 'var(--font-mono)' }, `F:${it.f.brier}`));
+    }
+  });
+
+  container.appendChild(svg);
+  const leg = document.createElement('div');
+  leg.className = 'chip-list';
+  for (const [lbl, col] of [['Longer bar = Lower Brier (better) · Normal 12m→2m', '#22d3ee'], ['Final Minute 15s–45s (TWAP Physics Regime)', '#10b981']]) {
+    const b = document.createElement('span');
+    b.className = 'badge';
+    b.style.color = col;
+    b.style.borderColor = col;
+    b.textContent = lbl;
+    leg.appendChild(b);
+  }
+  container.appendChild(leg);
 }

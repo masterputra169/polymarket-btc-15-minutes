@@ -1413,6 +1413,8 @@ export async function pollOnce() {
       smartFlowSignal: smartFlowSignalForML,
       oraclePrice: getPolyLivePrice() || getChainlinkWssPrice(),
       featurePipeline: getFeaturePipeline(),
+      spotTicks: getSpotTicksBetween(now - 121_000, now),
+      marketEndMs: currentMarketEndMs,
     });
 
     // Update priceToBeat from signal computation
@@ -1432,7 +1434,7 @@ export async function pollOnce() {
       pathEfficiency, peakUpGapRatio, peakDownGapRatio,
       scored, timeAware, ruleEdge,
       mlResult, ensembleUp, ensembleDown, mlAgreesWithRules,
-      edge, session, crossFeed,
+      edge, session, crossFeed, v4Signals,
       mcResult: mcResultRaw,
     } = sig;
 
@@ -2915,7 +2917,7 @@ export async function pollOnce() {
       priceToBeat: priceToBeat.value, marketQuestion,
       ptbSource: priceToBeat.source, ptbExact: isExactPtbSource(priceToBeat.source),
       // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
-      settlePrice, settlePriceSource: settle.source, crossFeed,
+      settlePrice, settlePriceSource: settle.source, crossFeed, v4Signals,
       twapNow: getLatestTwap()?.value ?? null,
       twapFeed: getTwapFeedHealth(),
       deribitIv,

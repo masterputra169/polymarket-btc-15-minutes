@@ -26,6 +26,7 @@
         <nav class="tabs" aria-label="Study sections">
           <button class="tab is-active" data-tab="overview">Overview &amp; Eval</button>
           <button class="tab" data-tab="models">ML Model Lab</button>
+          <button class="tab" data-tab="stage2">Tahap 2 · v4 Lab</button>
           <button class="tab" data-tab="studies">Studies &amp; Reports</button>
           <button class="tab" data-tab="updates">Changelog</button>
         </nav>
@@ -308,7 +309,108 @@
         </article>
       </section>
 
-      <!-- TAB 3: STUDIES & REPORTS -->
+      <!-- TAB 3 (NAV 3): TAHAP 2 / PIPELINE V4 (CHAINLINK-NATIVE + 1 HZ TAPE) -->
+      <section class="view is-hidden" data-view="stage2">
+        <div class="card inspector-bar">
+          <div>
+            <h2 class="card__title">Tahap 2 — Chainlink-Native Pipeline v4 &amp; 1 Hz Market Tape Lab</h2>
+            <p class="card__sub" id="stage2-hdr-sub">Empirical validation of Chainlink-native features (oracle_ptb_dist_pct, twap_physics_z, basis_pct, basis_drift_pct, cross_feed_lead) across strict OOS test markets</p>
+          </div>
+          <div class="inspector-bar__right">
+            <span class="badge badge--cyan" id="stage2-dataset-badge">54d Tape · v4 (88f)</span>
+          </div>
+        </div>
+
+        <section class="kpi-grid" id="stage2-kpis"></section>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">54-Day 1 Hz Market Tape &amp; BTC Basis Regime</h2>
+                <p class="card__sub">Daily Live L2 Book %, Chainlink 60s TWAP %, and Binance − Chainlink Median Basis ($)</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-stage2-tape"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Basis Drift &amp; Cross-Feed Diagnostics</h2>
+                <p class="card__sub" id="stage2-findings-sub">Quantified impact of USDT basis expansion + pre-open TWAP skew on prediction accuracy</p>
+              </div>
+            </div>
+            <div id="stage2-basis-panel"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Pipeline v4 Architecture — 5 Chainlink-Native Features</h2>
+              <p class="card__sub">Feature slots [58..62] added atop 58 Quant base features + live L2 orderbook (63 base + 25 engineered = 88 features)</p>
+            </div>
+          </div>
+          <div class="table-wrap" id="stage2-features-table"></div>
+        </article>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">OOS Calibration Curve vs Window Horizon (Brier ↓)</h2>
+                <p class="card__sub">Normal trading window (12m → 2m left) vs Final minute (15s–45s left) — testing twapModelStudy.py hypothesis</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-stage2-windows"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Normal Window vs Final-Minute Skill Comparison</h2>
+                <p class="card__sub">Chronological market-grouped OOS evaluation (bootstrap 95% CI on market blocks)</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="stage2-windows-table"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Real CLOB Ask Execution Replay + Gate 20f Cross-Feed Alignment (Strict Test OOS)</h2>
+              <p class="card__sub">Official CLOB V2 taker fee (0.07·p·(1−p) per share) against real 1 Hz L2 asks — comparing Baseline v2 vs Gate 20f vs Pipeline v4 Standalone &amp; Hybrid</p>
+            </div>
+          </div>
+          <div class="table-wrap" id="stage2-replay-table"></div>
+        </article>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Chainlink-Native &amp; Microstructure Gain Ranks (88f Standalone)</h2>
+                <p class="card__sub">XGBoost tree gain &amp; split share across strict Tape Train split</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="stage2-native-ranks-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Pipeline v4 Hybrid Residual &amp; Stack Attribution</h2>
+                <p class="card__sub">Top gain contributors inside v2 base-margin residual &amp; calibrated logistic stack weights</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="stage2-hybrid-table"></div>
+          </article>
+        </div>
+      </section>
+
+      <!-- TAB 4: STUDIES & REPORTS -->
       <section class="view is-hidden" data-view="studies">
         <div class="toolbar">
           <input class="input" type="search" id="study-search" placeholder="Search study reports, metrics, JEV, TWAP, filters…" />

@@ -106,7 +106,7 @@ export async function loadMLModel(
 
     // Determine base feature count from model: total features minus 25 engineered
     const baseCount = numFeatures - S.ENGINEERED_FEATURES;
-    if (baseCount >= 54 && baseCount <= 59) setBaseFeatureCount(baseCount);
+    if (baseCount >= 54 && baseCount <= 68) setBaseFeatureCount(baseCount);
 
     S.setState({
       modelVersion: version,

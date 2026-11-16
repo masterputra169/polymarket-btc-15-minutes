@@ -50,6 +50,9 @@ import { getSessionName } from '../../utils.ts';
  */
 export const FEATURE_PIPELINE_VERSION = 3;
 
+/** Pipeline v4: shared builder extended with 1 Hz Chainlink-native, TWAP physics, basis & real L2 orderbook. */
+export const FEATURE_PIPELINE_V4 = 4;
+
 /** Training rows built from the ~1/min lookup series (generator without --trade-history). */
 export const LOOKUP_PRICE_PIPELINE_VERSION = 2;
 
@@ -83,6 +86,22 @@ export interface FeatureSnapshot {
   marketUpLag: number | null;
   /** Funding rate, or null when unavailable. */
   fundingRate?: { ratePct: number } | null;
+  /** Pipeline version (>=4 passes live L2 orderbook and Chainlink-native telemetry). */
+  featurePipeline?: number;
+  /** Pipeline v4: Live L2 orderbook imbalance [-1..1] and spread [0..1]. */
+  orderbookImbalance?: number | null;
+  spreadPct?: number | null;
+  /** Pipeline v4: Chainlink spot price (BTC/USD). */
+  oraclePrice?: number | null;
+  /** Pipeline v4: Settlement estimate (Chainlink spot or final-minute TWAP projection). */
+  settlePrice?: number | null;
+  /** Pipeline v4: Exact Chainlink 60s TWAP Price-To-Beat for the active window. */
+  exactPtb?: number | null;
+  /** Pipeline v4: TWAP physics z-score = (settlePrice - exactPtb) / (sigma * sqrt(T_eff)). */
+  twapPhysicsZ?: number | null;
+  /** Pipeline v4: Fractional 3-second BTC return on Binance vs Chainlink oracle. */
+  binanceDelta3s?: number | null;
+  oracleDelta3s?: number | null;
 }
 
 export interface MlFeatureInputs {
@@ -100,15 +119,76 @@ export function marketMomentum(marketUp: number | null, marketUpLag: number | nu
 }
 
 /**
+ * Compute Pipeline v4 Chainlink-native ratios from live/tape inputs.
+ * Units match ptb_dist_pct / delta_1m_pct (fractional returns, not * 100).
+ */
+export function computeChainlinkNativeFeatures(input: {
+  binancePrice: number | null | undefined;
+  binanceWindowOpen: number | null | undefined;
+  oraclePrice: number | null | undefined;
+  settlePrice: number | null | undefined;
+  exactPtb: number | null | undefined;
+  twapPhysicsZ: number | null | undefined;
+  binanceDelta3s: number | null | undefined;
+  oracleDelta3s: number | null | undefined;
+}): {
+  oraclePtbDistPct: number;
+  twapPhysicsZ: number;
+  basisPct: number;
+  basisDriftPct: number;
+  crossFeedLead: number;
+} {
+  const pos = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  const binOpenOk = pos(input.binancePrice) && pos(input.binanceWindowOpen);
+  const oraOk = pos(input.settlePrice) && pos(input.exactPtb);
+
+  const binancePtbDistPct = binOpenOk
+    ? (input.binancePrice! - input.binanceWindowOpen!) / input.binanceWindowOpen!
+    : 0;
+  const oraclePtbDistPct = oraOk
+    ? (input.settlePrice! - input.exactPtb!) / input.exactPtb!
+    : binancePtbDistPct;
+
+  const zRaw = typeof input.twapPhysicsZ === 'number' && Number.isFinite(input.twapPhysicsZ)
+    ? input.twapPhysicsZ
+    : 0;
+  const twapPhysicsZ = Math.max(-8, Math.min(8, zRaw));
+
+  const basisPct = pos(input.binancePrice) && pos(input.oraclePrice)
+    ? Math.max(-0.02, Math.min(0.02, (input.binancePrice! - input.oraclePrice!) / input.oraclePrice!))
+    : 0;
+
+  const basisDriftPct = (binOpenOk && oraOk)
+    ? Math.max(-0.02, Math.min(0.02, binancePtbDistPct - oraclePtbDistPct))
+    : 0;
+
+  const b3 = typeof input.binanceDelta3s === 'number' && Number.isFinite(input.binanceDelta3s) ? input.binanceDelta3s : 0;
+  const o3 = typeof input.oracleDelta3s === 'number' && Number.isFinite(input.oracleDelta3s) ? input.oracleDelta3s : 0;
+  const crossFeedLead = Math.max(-0.02, Math.min(0.02, b3 - o3));
+
+  return {
+    oraclePtbDistPct,
+    twapPhysicsZ,
+    basisPct,
+    basisDriftPct,
+    crossFeedLead,
+  };
+}
+
+/**
  * Build the ML feature inputs for one instant. Pure: the result depends only
  * on `snapshot`, never on the wall clock or on module state.
  */
 export function buildMlFeatureInputs(snapshot: FeatureSnapshot): MlFeatureInputs {
   const {
     candles1m, candles5m, lastPrice, windowOpenPrice, minutesLeft, nowMs,
-    marketUp, marketUpLag, fundingRate = null,
+    marketUp, marketUpLag, fundingRate = null, featurePipeline = 2,
+    orderbookImbalance = null, spreadPct = null,
+    oraclePrice = null, settlePrice = null, exactPtb = null, twapPhysicsZ = null,
+    binanceDelta3s = null, oracleDelta3s = null,
   } = snapshot;
   const at = new Date(nowMs);
+  const isV4 = Number.isFinite(featurePipeline) && featurePipeline >= 4;
 
   const ind = computeAllIndicators({ candles: candles1m, klines5m: candles5m, lastPrice });
 
@@ -139,6 +219,19 @@ export function buildMlFeatureInputs(snapshot: FeatureSnapshot): MlFeatureInputs
     marketYes: marketUp, marketNo: marketUp != null ? 1 - marketUp : null,
     orderbookUp: null, orderbookDown: null,
   });
+
+  const v4 = isV4
+    ? computeChainlinkNativeFeatures({
+        binancePrice: lastPrice,
+        binanceWindowOpen: windowOpenPrice,
+        oraclePrice,
+        settlePrice,
+        exactPtb,
+        twapPhysicsZ,
+        binanceDelta3s,
+        oracleDelta3s,
+      })
+    : null;
 
   const emaCross = ind.emaCross?.cross;
   const marketState: Record<string, unknown> = {
@@ -172,9 +265,16 @@ export function buildMlFeatureInputs(snapshot: FeatureSnapshot): MlFeatureInputs
     fundingRate,
     marketYesPrice: marketUp,
     marketPriceMomentum: marketMomentum(marketUp, marketUpLag),
-    // No orderbook history exists offline, so neither side uses one here.
-    orderbookImbalance: null,
-    spreadPct: null,
+    // v2/v3 leave L2 book neutral (no 395d offline history); v4 reads 1 Hz tape / live CLOB book.
+    orderbookImbalance: isV4 ? orderbookImbalance : null,
+    spreadPct: isV4 ? spreadPct : null,
+    ...(v4 ? {
+      oraclePtbDistPct: v4.oraclePtbDistPct,
+      twapPhysicsZ: v4.twapPhysicsZ,
+      basisPct: v4.basisPct,
+      basisDriftPct: v4.basisDriftPct,
+      crossFeedLead: v4.crossFeedLead,
+    } : {}),
     momentum5CandleSlope: ind.momentum5CandleSlope,
     volatilityChangeRatio: ind.volatilityChangeRatio,
     priceConsistency: ind.priceConsistency,

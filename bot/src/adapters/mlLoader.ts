@@ -73,7 +73,7 @@ export function loadMLModelFromDisk(force = false): boolean {
 
     // Determine base feature count: total - 25 engineered
     const baseCount = numFeatures - S.ENGINEERED_FEATURES;
-    if (baseCount >= 54 && baseCount <= 59) setBaseFeatureCount(baseCount);
+    if (baseCount >= 54 && baseCount <= 68) setBaseFeatureCount(baseCount);
 
     // A model trained on the shared feature builder says so; anything else is
     // fed the legacy way it was trained on. Never guess upward.

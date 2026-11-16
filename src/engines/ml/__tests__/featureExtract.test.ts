@@ -77,14 +77,14 @@ function makeDefaultInput(overrides = {}) {
 // ────────────────────────────────────────────
 
 describe('feature count', () => {
-  it('returns exactly 84 features (59 base + 25 engineered)', () => {
+  it('pre-allocates 96-slot buffer covering up to Pipeline v4 / 88+ features', () => {
     extractLiveFeaturesInPlace(makeDefaultInput());
-    expect(featureBuf.length).toBe(84);
+    expect(featureBuf.length).toBe(96);
   });
 
-  it('all 84 features are populated (no undefined/NaN) with valid inputs', () => {
+  it('all 96 buffer slots remain finite (no undefined/NaN) with valid inputs', () => {
     extractLiveFeaturesInPlace(makeDefaultInput());
-    for (let i = 0; i < 84; i++) {
+    for (let i = 0; i < featureBuf.length; i++) {
       expect(Number.isFinite(featureBuf[i])).toBe(true);
     }
   });

@@ -58,12 +58,14 @@ async function pull(): Promise<void> {
       : 'No TAPE_S3_* in bot/.env — set TAPE_S3_ENDPOINT, TAPE_S3_BUCKET, TAPE_S3_ACCESS_KEY_ID, TAPE_S3_SECRET_ACCESS_KEY (or use --stats-only).');
     process.exit(2);
   }
+  const concurrency = Math.max(1, Math.min(24, Number(args.concurrency ?? 12) || 12));
   const store = createS3Store(config);
   console.log(`Listing ${describeStore(config)} ...`);
   const objects = await store.list(config.prefix);
 
   let fetched = 0, skipped = 0, bytes = 0;
   const ignored: string[] = [];
+  const queue: Array<{ key: string; dest: string }> = [];
   for (const o of objects) {
     const rel = o.key.slice(config.prefix.length);
     const parsed = parseRelPath(rel);
@@ -71,13 +73,24 @@ async function pull(): Promise<void> {
     if (parsed.date < SINCE) continue;
     const dest = localPath(rel);
     if (existsSync(dest) && statSync(dest).size === o.size) { skipped++; continue; }
-    const body = await store.get(o.key);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(`${dest}.part`, body);
-    renameSync(`${dest}.part`, dest);
-    fetched++;
-    bytes += body.length;
-    process.stdout.write(`\r  ${fetched} downloaded (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+    queue.push({ key: o.key, dest });
+  }
+
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < queue.length) {
+      const item = queue[cursor++];
+      const body = await store.get(item.key);
+      mkdirSync(dirname(item.dest), { recursive: true });
+      writeFileSync(`${item.dest}.part`, body);
+      renameSync(`${item.dest}.part`, item.dest);
+      fetched++;
+      bytes += body.length;
+      process.stdout.write(`\r  ${fetched}/${queue.length} downloaded (${(bytes / 1024 / 1024).toFixed(1)} MB)`);
+    }
+  };
+  if (queue.length > 0) {
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, () => worker()));
   }
   if (fetched) process.stdout.write('\n');
   console.log(`${objects.length} objects in bucket: ${fetched} downloaded, ${skipped} already local${ignored.length ? `, ${ignored.length} not tape files (ignored)` : ''}`);
@@ -85,30 +98,32 @@ async function pull(): Promise<void> {
 
 function stats(): void {
   if (!existsSync(OUT)) { console.log(`No tape at ${OUT}`); return; }
-  const byDay = new Map<string, { files: number; bytes: number; lines: TapeLine[]; bad: number }>();
-  for (const day of readdirSync(OUT).sort()) {
+  const days = readdirSync(OUT).sort();
+  if (days.length === 0) { console.log(`No tape files in ${OUT}`); return; }
+
+  console.log(`\nTape at ${OUT}`);
+  console.log('day          files     MB   snapshots  live-book  of-day  trades  markets  longest-gap  resyncs  bad');
+  let printed = 0;
+  let tot = { snaps: 0, live: 0, trades: 0, mb: 0, decisions: 0 };
+  const stageLines: string[] = [];
+  for (const day of days) {
     let names: string[];
     try { names = readdirSync(join(OUT, day)).sort(); } catch { continue; }
+    let files = 0, bytes = 0, bad = 0;
+    const lines: TapeLine[] = [];
     for (const name of names) {
       const rel = `${day}/${name}`;
       if (!parseRelPath(rel) || day < SINCE) continue;
       const buf = readFileSync(join(OUT, rel));
-      const { lines, bad } = decodeTape(buf);
-      const d = byDay.get(day) ?? { files: 0, bytes: 0, lines: [], bad: 0 };
-      d.files++; d.bytes += buf.length; d.bad += bad;
-      for (const l of lines) d.lines.push(l);
-      byDay.set(day, d);
+      const dec = decodeTape(buf);
+      files++; bytes += buf.length; bad += dec.bad;
+      for (const l of dec.lines) lines.push(l);
     }
-  }
-  if (byDay.size === 0) { console.log(`No tape files in ${OUT}`); return; }
-
-  console.log(`\nTape at ${OUT}`);
-  console.log('day          files     MB   snapshots  live-book  of-day  trades  markets  longest-gap  resyncs  bad');
-  let tot = { snaps: 0, live: 0, trades: 0, mb: 0, decisions: 0 };
-  const stageLines: string[] = [];
-  for (const [day, d] of byDay) {
-    const s = summarizeTape(d.lines);
-    const mb = d.bytes / 1024 / 1024;
+    if (files === 0) continue;
+    printed++;
+    // Summarise day-by-day and drop decoded lines immediately so 50+ days stays low-memory.
+    const s = summarizeTape(lines);
+    const mb = bytes / 1024 / 1024;
     const pctDay = (s.live / 86_400) * 100;
     tot = { snaps: tot.snaps + s.snapshots, live: tot.live + s.live, trades: tot.trades + s.trades, mb: tot.mb + mb, decisions: tot.decisions + s.decisions };
     if (s.decisions > 0) {
@@ -117,12 +132,13 @@ function stats(): void {
       stageLines.push(`${day}  ${s.decisions} decisions: ${parts.join(', ')}`);
     }
     console.log(
-      `${day}  ${String(d.files).padStart(5)}  ${mb.toFixed(1).padStart(5)}  ${String(s.snapshots).padStart(10)}  ` +
+      `${day}  ${String(files).padStart(5)}  ${mb.toFixed(1).padStart(5)}  ${String(s.snapshots).padStart(10)}  ` +
       `${(s.snapshots ? (s.live / s.snapshots) * 100 : 0).toFixed(1).padStart(8)}%  ${pctDay.toFixed(1).padStart(5)}%  ` +
       `${String(s.trades).padStart(6)}  ${String(s.markets).padStart(7)}  ${`${s.longestGapSec}s`.padStart(11)}  ` +
-      `${String(s.resyncs).padStart(7)}  ${String(d.bad).padStart(3)}`,
+      `${String(s.resyncs).padStart(7)}  ${String(bad).padStart(3)}`,
     );
   }
+  if (printed === 0) { console.log(`No tape files in ${OUT}`); return; }
   console.log(`total: ${tot.snaps} snapshots, ${tot.live} with a live book, ${tot.trades} trades, ${tot.decisions} decisions, ${tot.mb.toFixed(1)} MB`);
   if (stageLines.length) {
     console.log("\nDecision trail (one line per second of the bot's decisions; every entry kept):");
@@ -132,4 +148,4 @@ function stats(): void {
 }
 
 if (args['stats-only'] !== 'true') await pull();
-stats();
+if (args['pull-only'] !== 'true') stats();

@@ -5,8 +5,8 @@
 import * as S from './state.ts';
 import { FI } from './featureMap.ts';
 
-// Pre-allocated buffer — sized for max model (84 = 59 base + 25 engineered)
-export const featureBuf = new Float64Array(84);
+// Pre-allocated buffer — sized for max model (up to 71 base + 25 engineered)
+export const featureBuf = new Float64Array(96);
 
 /**
  * Compute 25 engineered features in-place starting at featureBuf[BASE_FEATURES].
@@ -124,6 +124,7 @@ export function extractLiveFeaturesInPlace({
   momentum5CandleSlope, volatilityChangeRatio, priceConsistency,
   fundingRate,
   smBullRatio, smFlowIntensity, smEarlySignal, smFlowAccel, smActivity,
+  oraclePtbDistPct = 0, twapPhysicsZ = 0, basisPct = 0, basisDriftPct = 0, crossFeedLead = 0,
   // The instant being described. Live omits it (now); the training generator
   // passes the row's observation time so hour_sin/hour_cos are not stamped
   // with the moment the generator happened to run.
@@ -259,8 +260,8 @@ export function extractLiveFeaturesInPlace({
   featureBuf[52] = Math.max(-1, Math.min(1, fr / 0.1));  // funding_rate_norm
   featureBuf[53] = 0; // funding_rate_change (no historical comparison live)
 
-  // [54-57] Quant microstructure & regime features — only written when model has 58 base features
-  if (S.BASE_FEATURES === 58) {
+  // [54-57] Quant microstructure & regime features — written for 58-base Quant v2/v3 AND 63-base Pipeline v4
+  if (S.BASE_FEATURES === 58 || S.BASE_FEATURES >= 63) {
     const buy300 = volDeltaBuyRatio300s ?? volDeltaBuyRatio ?? 0.5;
     const buy60 = volDeltaBuyRatio60s ?? buy300;
     const hurst = hurstExponent ?? 0.5;
@@ -271,8 +272,8 @@ export function extractLiveFeaturesInPlace({
     featureBuf[57] = Math.max(0, Math.min(1, (Number.isFinite(rvol) ? rvol : 0.15) / 0.5));
   }
 
-  // [54-58] Smart money features — only written when model has 59 base features (v9a+)
-  if (S.BASE_FEATURES >= 59) {
+  // [54-58] Smart money features — legacy v9a (59 base features, pipeline < 4)
+  if (S.BASE_FEATURES === 59 && S.featurePipeline < 4) {
     // H11: Track SM fallbacks in data quality score
     if (smBullRatio == null && smFlowIntensity == null && smActivity == null) fallbackCount++;
     featureBuf[54] = smBullRatio ?? 0.5;       // sm_bull_ratio
@@ -280,6 +281,15 @@ export function extractLiveFeaturesInPlace({
     featureBuf[56] = smEarlySignal ?? 0.5;     // sm_early_signal
     featureBuf[57] = smFlowAccel ?? 0;         // sm_flow_accel
     featureBuf[58] = smActivity ?? 0;          // sm_activity
+  }
+
+  // [58-62] Chainlink-native Stage-2 features (Pipeline v4: 63 base features)
+  if (S.BASE_FEATURES >= 63) {
+    featureBuf[58] = Number.isFinite(oraclePtbDistPct) ? oraclePtbDistPct : 0;
+    featureBuf[59] = Number.isFinite(twapPhysicsZ) ? Math.max(-8, Math.min(8, twapPhysicsZ)) : 0;
+    featureBuf[60] = Number.isFinite(basisPct) ? Math.max(-0.02, Math.min(0.02, basisPct)) : 0;
+    featureBuf[61] = Number.isFinite(basisDriftPct) ? Math.max(-0.02, Math.min(0.02, basisDriftPct)) : 0;
+    featureBuf[62] = Number.isFinite(crossFeedLead) ? Math.max(-0.02, Math.min(0.02, crossFeedLead)) : 0;
   }
 
   if (S.modelVersion >= 2) {

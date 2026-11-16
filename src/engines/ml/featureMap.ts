@@ -39,6 +39,20 @@ export const QUANT_FI: Record<string, number> = {
   realized_vol_15m_norm: 57,
 };
 
+/**
+ * Pipeline v4 Chainlink-native base feature map (63 base features):
+ * 58 Quant features [0..57] + 5 Chainlink/TWAP/Cross-Feed features [58..62].
+ * Trained strictly on Market Tape 1 Hz snapshots + real L2 book.
+ */
+export const V4_CHAINLINK_FI: Record<string, number> = {
+  ...QUANT_FI,
+  oracle_ptb_dist_pct: 58,
+  twap_physics_z: 59,
+  basis_pct: 60,
+  basis_drift_pct: 61,
+  cross_feed_lead: 62,
+};
+
 export function resolveFeatureIdx(splitName: string): number {
   if (S.featureNameToIdx) {
     const idx = S.featureNameToIdx.get(splitName);

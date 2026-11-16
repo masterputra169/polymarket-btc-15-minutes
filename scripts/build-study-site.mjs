@@ -749,6 +749,58 @@ function copyStaticFrontend(repoRoot, outDir) {
   }
 }
 
+export function buildStage2Bundle(repoRoot, dataDir) {
+  const snapshotPath = path.join(repoRoot, 'scripts', 'study', 'stage2_snapshot.json');
+  const snapshot = readJsonSafe(snapshotPath);
+  const coverage = readJsonSafe(path.join(dataDir, 'tape_coverage_study.json')) || snapshot?.coverage || null;
+  const study = readJsonSafe(path.join(dataDir, 'stage2_pipeline_v4_study.json')) || snapshot?.study || null;
+
+  const v4Features = [
+    {
+      idx: 58,
+      name: 'oracle_ptb_dist_pct',
+      formula: '(settlePrice − exactPtb) / exactPtb',
+      role: 'True Chainlink distance vs settlement PTB (removes Binance/USDT basis bias)',
+    },
+    {
+      idx: 59,
+      name: 'twap_physics_z',
+      formula: '(settlePrice − exactPtb) / (σ_1s · √T_eff)',
+      role: 'Exact 60s TWAP variance-horizon z-score; unlocks late-window precision',
+    },
+    {
+      idx: 60,
+      name: 'basis_pct',
+      formula: '(binance − chainlinkSpot) / chainlinkSpot',
+      role: 'Instantaneous USDT vs USD cross-feed premium/discount regime',
+    },
+    {
+      idx: 61,
+      name: 'basis_drift_pct',
+      formula: 'binanceDistPct − oracleDistPct',
+      role: 'Combined Binance/Oracle window-open drift + pre-open TWAP skew',
+    },
+    {
+      idx: 62,
+      name: 'cross_feed_lead',
+      formula: 'binance_3s_delta − oracle_3s_delta',
+      role: '3s exchange vs oracle lead-lag separation (impulse vs basis widening)',
+    },
+  ];
+
+  return {
+    available: Boolean(coverage || study),
+    coverage,
+    study,
+    v4Features,
+    findings: {
+      normalWindow: 'Confirming twapModelStudy.py: during the 2–12m normal trading window, CLOB market makers track Chainlink + TWAP so raw market mid achieves 0.1590 Brier; Pipeline v4 Hybrid cuts Baseline v2 error by 90% of the gap vs mid (Brier 0.1656 → 0.1597, AUC 0.8397 → 0.8468, ECE 0.0439 → 0.0177) by subtracting basis drift.',
+      finalMinute: 'In the final 15–45s before resolution, TWAP variance physics sharpens predictions sharply vs Binance-only v2 (Brier 0.1277 → 0.0903 Standalone / 0.0874 Calibrated Stack, AUC 0.9014 → 0.9509).',
+      executionReplay: 'On strict 1,237-market OOS execution replay against real L2 asks + official CLOB V2 taker fee (0.07·p·(1−p)), Gate 20f blocks cross-feed-mismatched entries (cutting 58c-cap DD $23.89 → $13.34 and loss 71%) and Hybrid v4 + Gate 20f reaches 80.0% WR (+15.97pp above breakeven) on the 65c cap preset.',
+    },
+  };
+}
+
 export function buildStudySite(options = {}) {
   const root = path.resolve(options.root || DEFAULT_ROOT);
   const dataDir = path.resolve(options.dataDir || path.join(root, 'bot', 'data'));
@@ -772,6 +824,8 @@ export function buildStudySite(options = {}) {
     path.join(dataDir, 'jev_target_study.json'),
     path.join(dataDir, 'jev_stack_study.json'),
     path.join(dataDir, 'global_risk_study.json'),
+    path.join(dataDir, 'tape_coverage_study.json'),
+    path.join(dataDir, 'stage2_pipeline_v4_study.json'),
   ];
 
   const sigPath = path.join(outDir, '.build-sig.txt');
@@ -790,6 +844,7 @@ export function buildStudySite(options = {}) {
   const modelsBundle = buildModelsBundle(root, dataDir, modelProfiles);
   const studiesBundle = buildStudiesBundle(root, dataDir, outDir, modelsBundle.journalNotes);
   const evalBundle = buildEvalAndHealthBundle(root, dataDir);
+  const stage2Bundle = buildStage2Bundle(root, dataDir);
 
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
 
@@ -817,6 +872,7 @@ export function buildStudySite(options = {}) {
       rows: updates.statusRows,
     },
     eval: evalBundle,
+    stage2Available: stage2Bundle.available,
     counts: {
       models: modelsBundle.models.length,
       studies: studiesBundle.reports.length,
@@ -829,6 +885,7 @@ export function buildStudySite(options = {}) {
   fs.writeFileSync(path.join(outDir, 'data', 'models.json'), JSON.stringify(modelsBundle, null, 2));
   fs.writeFileSync(path.join(outDir, 'data', 'studies.json'), JSON.stringify(studiesBundle, null, 2));
   fs.writeFileSync(path.join(outDir, 'data', 'updates.json'), JSON.stringify(updates, null, 2));
+  fs.writeFileSync(path.join(outDir, 'data', 'stage2.json'), JSON.stringify(stage2Bundle, null, 2));
   fs.writeFileSync(sigPath, sig);
 
   return {

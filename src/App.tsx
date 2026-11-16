@@ -345,7 +345,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.arbitrage?.found, data?.arbitrage?.profitPct,
   ]);
 
-  // MLPanel: ML-specific + rule prob + model switcher/profile state
+  // MLPanel: ML-specific + rule prob + model switcher/profile state + Tahap 2 v4 telemetry
   const mlData = useMemo(() => {
     if (!data) return null;
     return {
@@ -355,6 +355,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
       pShort: data.pShort,
       rawUp: data.rawUp,
       ruleUp: data.ruleUp,
+      v4Signals: data.v4Signals ?? null,
     };
   }, [
     data?.ml?.available,
@@ -363,12 +364,19 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.ml?.side,
     data?.ml?.status,
     data?.ml?.modelId,
+    data?.ml?.featurePipeline,
     data?.mlControl?.version,
     data?.mlControl?.activeModelId,
     data?.pLong,
     data?.pShort,
     data?.rawUp,
     data?.ruleUp,
+    data?.v4Signals?.oraclePtbDistPct,
+    data?.v4Signals?.twapPhysicsZ,
+    data?.v4Signals?.basisPct,
+    data?.v4Signals?.basisDriftPct,
+    data?.v4Signals?.crossFeedLead,
+    data?.v4Signals?.hasExactPtb,
   ]);
 
   // AccuracyPanel: feedback + detailed stats + signal performance

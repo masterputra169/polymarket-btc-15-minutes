@@ -29,6 +29,7 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
   const activeModelId = mlControl?.activeModelId ?? ml?.modelId ?? null;
   const [selectedId, setSelectedId] = useState<string>(() => activeModelId || models[0]?.id || '');
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showV4, setShowV4] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [switchStatus, setSwitchStatus] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null);
 
@@ -558,6 +559,91 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
               </span>
             </div>
           </div>
+
+          {/* Tahap 2: Live Pipeline v4 Chainlink-Native Telemetry */}
+          {data?.v4Signals && (
+            <div className="qt-panel-section" style={{ marginTop: '6px' }}>
+              <button
+                type="button"
+                onClick={() => setShowV4(v => !v)}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: 'rgba(34, 211, 238, 0.06)',
+                  border: '1px solid rgba(34, 211, 238, 0.2)',
+                  borderRadius: '6px',
+                  padding: '4px 8px',
+                  cursor: 'pointer',
+                  color: 'var(--text-primary)',
+                  fontSize: '0.7rem',
+                  fontFamily: 'var(--font-mono)',
+                }}
+              >
+                <span>
+                  Tahap 2 · Chainlink-Native (v4){' '}
+                  <span style={{ color: (ml?.featurePipeline ?? 2) >= 4 ? '#34d399' : '#94a3b8' }}>
+                    [{(ml?.featurePipeline ?? 2) >= 4 ? 'v4 LIVE' : `p${ml?.featurePipeline ?? 2} DIAG`}]
+                  </span>
+                </span>
+                <span style={{ color: 'var(--accent-cyan)' }}>{showV4 ? '▾' : '▸'}</span>
+              </button>
+
+              {showV4 && (
+                <div style={{ marginTop: '6px', display: 'grid', gap: '3px' }}>
+                  <div className="data-row">
+                    <span className="data-row__label">oracle_ptb_dist</span>
+                    <span
+                      className={`data-row__value ${data.v4Signals.oraclePtbDistPct >= 0 ? 'c-green' : 'c-red'}`}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}
+                    >
+                      {`${data.v4Signals.oraclePtbDistPct >= 0 ? '+' : ''}${(data.v4Signals.oraclePtbDistPct * 100).toFixed(3)}%`}
+                      {!data.v4Signals.hasExactPtb && (
+                        <span style={{ color: 'var(--text-dim)', marginLeft: '4px' }}>(est)</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-row__label">twap_physics_z</span>
+                    <span
+                      className={`data-row__value ${data.v4Signals.twapPhysicsZ >= 0 ? 'c-green' : 'c-red'}`}
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}
+                    >
+                      {`${data.v4Signals.twapPhysicsZ >= 0 ? '+' : ''}${data.v4Signals.twapPhysicsZ.toFixed(2)}σ`}
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-row__label">basis_pct (Bin−CL)</span>
+                    <span
+                      className="data-row__value"
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: '#f59e0b' }}
+                    >
+                      {`${data.v4Signals.basisPct >= 0 ? '+' : ''}${(data.v4Signals.basisPct * 100).toFixed(3)}%`}
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-row__label">basis_drift_pct</span>
+                    <span
+                      className="data-row__value"
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: Math.abs(data.v4Signals.basisDriftPct * 100) >= 0.035 ? '#fb7185' : 'var(--text-secondary)' }}
+                    >
+                      {`${data.v4Signals.basisDriftPct >= 0 ? '+' : ''}${(data.v4Signals.basisDriftPct * 100).toFixed(3)}%`}
+                    </span>
+                  </div>
+                  <div className="data-row">
+                    <span className="data-row__label">cross_feed_lead</span>
+                    <span
+                      className="data-row__value"
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}
+                    >
+                      {`${data.v4Signals.crossFeedLead >= 0 ? '+' : ''}${(data.v4Signals.crossFeedLead * 100).toFixed(4)}%`}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -580,10 +666,17 @@ export default memo(MLPanel, (prev, next) => {
     a.ml?.source === b.ml?.source &&
     a.ml?.status === b.ml?.status &&
     a.ml?.modelId === b.ml?.modelId &&
+    a.ml?.featurePipeline === b.ml?.featurePipeline &&
     a.mlControl?.version === b.mlControl?.version &&
     a.mlControl?.activeModelId === b.mlControl?.activeModelId &&
     a.pLong === b.pLong &&
     a.pShort === b.pShort &&
-    a.ruleUp === b.ruleUp
+    a.ruleUp === b.ruleUp &&
+    a.v4Signals?.oraclePtbDistPct === b.v4Signals?.oraclePtbDistPct &&
+    a.v4Signals?.twapPhysicsZ === b.v4Signals?.twapPhysicsZ &&
+    a.v4Signals?.basisPct === b.v4Signals?.basisPct &&
+    a.v4Signals?.basisDriftPct === b.v4Signals?.basisDriftPct &&
+    a.v4Signals?.crossFeedLead === b.v4Signals?.crossFeedLead &&
+    a.v4Signals?.hasExactPtb === b.v4Signals?.hasExactPtb
   );
 });

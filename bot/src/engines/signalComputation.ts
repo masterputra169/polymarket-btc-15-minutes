@@ -18,9 +18,14 @@ import { recordOrderFlowBook, recordOrderFlowTrades } from './orderFlowFeatures.
 import { getSignalModifiers } from '../adapters/signalPerfStore.ts';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
-import { computeCrossFeedMetrics } from './settlePrice.ts';
+import { computeCrossFeedMetrics, computeOracleDeltaWindowRatio } from './settlePrice.ts';
 import { isExactPtbSource } from './ptbSources.ts';
-import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS } from '../../../src/engines/ml/featureInputs.ts';
+import { twapVarianceSeconds, spotVolPerSecond } from './twapPhysics.ts';
+import {
+  buildMlFeatureInputs,
+  computeChainlinkNativeFeatures,
+  MARKET_MOMENTUM_WINDOW_MS,
+} from '../../../src/engines/ml/featureInputs.ts';
 import { aggregate5m, CANDLES_5M } from '../../../src/engines/ml/trainingRow.ts';
 import { getRecentPriceWindow, type BinancePriceWindow } from '../streams/binanceWs.ts';
 
@@ -268,6 +273,8 @@ export function computeSignals({
   settlePrice = null,
   clobQuietMs = null,
   binanceRecent3s = null,
+  spotTicks = [],
+  marketEndMs = null,
 }: any) {
   // ── Compute all indicators ──
   const ind = computeAllIndicators({ candles: klines1m, klines5m, lastPrice });
@@ -412,6 +419,44 @@ export function computeSignals({
   // ── ML prediction ──
   const session = getSessionName();
   const binanceWindowOpen = candleOpenAt(klines1m, windowStartMs(marketSlug, now, timeLeftMin));
+  const exactPtbVal = isExactPtbSource(updatedPriceToBeat?.source) ? updatedPriceToBeat?.value : null;
+  const crossFeed = computeCrossFeedMetrics({
+    lastPrice,
+    binanceWindowOpen,
+    settlePrice: settlePrice ?? lastPrice,
+    exactPtb: exactPtbVal,
+    clSpot: oraclePrice ?? null,
+  });
+
+  // Pipeline v4 Chainlink-native telemetry (always computed for diagnostics/UI;
+  // fed into ML feature vector only when loaded model declares featurePipeline >= 4).
+  const binanceDelta3s = recent3s && recent3s.tickCount >= 2 && Number.isFinite(recent3s.deltaPct)
+    ? recent3s.deltaPct / 100 : 0;
+  const oracleDelta3s = computeOracleDeltaWindowRatio(spotTicks, now, 3_000).deltaRatio;
+  const sigma1s = spotVolPerSecond(spotTicks);
+  const secsLeft = marketEndMs != null ? Math.max(0, (marketEndMs - now) / 1000) : Math.max(0, (timeLeftMin ?? 0) * 60);
+  const tEffSqrt = secsLeft > 0 ? Math.sqrt(twapVarianceSeconds(secsLeft)) : null;
+  const twapZ = (sigma1s != null && sigma1s > 0 && tEffSqrt != null && tEffSqrt > 0 && settlePrice != null && exactPtbVal != null)
+    ? (settlePrice - exactPtbVal) / (sigma1s * tEffSqrt) : null;
+  const v4Metrics = computeChainlinkNativeFeatures({
+    binancePrice: lastPrice,
+    binanceWindowOpen,
+    oraclePrice: oraclePrice ?? null,
+    settlePrice: settlePrice ?? lastPrice,
+    exactPtb: exactPtbVal,
+    twapPhysicsZ: twapZ,
+    binanceDelta3s,
+    oracleDelta3s,
+  });
+  const v4Signals = {
+    ...v4Metrics,
+    binanceDelta3s,
+    oracleDelta3s,
+    sigma1s,
+    orderbookImbalance: orderbookSignal?.imbalance ?? null,
+    spreadPct: orderbookUp?.spread ?? null,
+    hasExactPtb: exactPtbVal != null,
+  };
   const mlResult = featurePipeline >= 2
     ? predictWithSharedBuilder()
     : getMLPrediction({
@@ -468,18 +513,19 @@ export function computeSignals({
       marketUp,
       marketUpLag: marketUpAtOrBefore(now - MARKET_MOMENTUM_WINDOW_MS),
       fundingRate,
+      featurePipeline,
+      orderbookImbalance: orderbookSignal?.imbalance ?? null,
+      spreadPct: orderbookUp?.spread ?? null,
+      oraclePrice: oraclePrice ?? null,
+      settlePrice: settlePrice ?? lastPrice,
+      exactPtb: exactPtbVal,
+      twapPhysicsZ: twapZ,
+      binanceDelta3s,
+      oracleDelta3s,
     });
     return getMLPrediction(inputs.marketState, timeAware.adjustedUp, regimeInfo.regime,
       { featureRuleProbUp: inputs.ruleProbUp });
   }
-
-  const crossFeed = computeCrossFeedMetrics({
-    lastPrice,
-    binanceWindowOpen,
-    settlePrice: settlePrice ?? lastPrice,
-    exactPtb: isExactPtbSource(updatedPriceToBeat?.source) ? updatedPriceToBeat?.value : null,
-    clSpot: oraclePrice ?? null,
-  });
 
   // ── Monte Carlo simulation (independent probability from GBM price paths) ──
   const mcResult = simulateBTCPaths({
@@ -522,6 +568,7 @@ export function computeSignals({
     // Price to beat (potentially updated)
     updatedPriceToBeat,
     crossFeed,
+    v4Signals,
 
     // Scoring
     scored, timeAware, ruleEdge,

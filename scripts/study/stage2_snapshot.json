@@ -1,0 +1,1695 @@
+{
+  "coverage": {
+    "generatedAt": "2026-11-16T12:46:18.220Z",
+    "dateRange": {
+      "start": "2026-09-24",
+      "end": "2026-11-16",
+      "totalDays": 54
+    },
+    "totals": {
+      "files": 1408,
+      "totalSizeMb": 800.1,
+      "snapshots": 4587177,
+      "liveBookSnapshots": 4091600,
+      "liveBookPct": 89.2,
+      "hasOraclePct": 100,
+      "hasTwapPct": 97.3,
+      "uniqueMarkets": 5076,
+      "resolvedMarkets": 5076,
+      "exactPtbMarkets": 4939,
+      "decisions": 4469981,
+      "crossFeedBlocked": 243,
+      "crossFeedFlips": 107,
+      "panelRowsExtracted": 67948,
+      "singlePerMarketRows": 4937
+    },
+    "basisDiagnostics": {
+      "sampleCount": 4587106,
+      "p05Usd": 14.27,
+      "medianUsd": 90.42,
+      "p95Usd": 133.53,
+      "nearPtbAbsSkewMedianUsd": 6.61,
+      "nearPtbAbsSkewP95Usd": 33.69
+    },
+    "daily": [
+      {
+        "date": "2026-09-24",
+        "files": 21,
+        "sizeMb": 7.74,
+        "snapshots": 61210,
+        "liveBookPct": 89.3,
+        "oraclePct": 100,
+        "twapPct": 0,
+        "markets": 69,
+        "decisions": 0,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 26.44
+      },
+      {
+        "date": "2026-09-25",
+        "files": 31,
+        "sizeMb": 13.02,
+        "snapshots": 86355,
+        "liveBookPct": 88.9,
+        "oraclePct": 100,
+        "twapPct": 29.6,
+        "markets": 96,
+        "decisions": 75203,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 19.12
+      },
+      {
+        "date": "2026-09-26",
+        "files": 28,
+        "sizeMb": 13.18,
+        "snapshots": 86367,
+        "liveBookPct": 92.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85937,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 16.44
+      },
+      {
+        "date": "2026-09-27",
+        "files": 24,
+        "sizeMb": 13.57,
+        "snapshots": 86382,
+        "liveBookPct": 88.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85962,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 21.04
+      },
+      {
+        "date": "2026-09-28",
+        "files": 24,
+        "sizeMb": 15.38,
+        "snapshots": 86382,
+        "liveBookPct": 87.8,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85974,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 31.55
+      },
+      {
+        "date": "2026-09-29",
+        "files": 25,
+        "sizeMb": 15.33,
+        "snapshots": 86378,
+        "liveBookPct": 88.3,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85942,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 34.98
+      },
+      {
+        "date": "2026-09-30",
+        "files": 24,
+        "sizeMb": 15.31,
+        "snapshots": 86376,
+        "liveBookPct": 89.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85944,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 42.41
+      },
+      {
+        "date": "2026-10-01",
+        "files": 24,
+        "sizeMb": 15.17,
+        "snapshots": 86379,
+        "liveBookPct": 88.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85933,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 40.87
+      },
+      {
+        "date": "2026-10-02",
+        "files": 24,
+        "sizeMb": 15.89,
+        "snapshots": 86378,
+        "liveBookPct": 88.8,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85947,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 20.79
+      },
+      {
+        "date": "2026-10-03",
+        "files": 24,
+        "sizeMb": 14.36,
+        "snapshots": 86378,
+        "liveBookPct": 92.4,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85960,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 15.68
+      },
+      {
+        "date": "2026-10-04",
+        "files": 24,
+        "sizeMb": 14.38,
+        "snapshots": 86381,
+        "liveBookPct": 91.9,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85961,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 14.28
+      },
+      {
+        "date": "2026-10-05",
+        "files": 24,
+        "sizeMb": 15.75,
+        "snapshots": 86380,
+        "liveBookPct": 89.4,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85975,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 19.91
+      },
+      {
+        "date": "2026-10-06",
+        "files": 24,
+        "sizeMb": 15.62,
+        "snapshots": 86372,
+        "liveBookPct": 90,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85945,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 14.84
+      },
+      {
+        "date": "2026-10-07",
+        "files": 24,
+        "sizeMb": 15.67,
+        "snapshots": 86374,
+        "liveBookPct": 89.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85838,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 31.43
+      },
+      {
+        "date": "2026-10-08",
+        "files": 24,
+        "sizeMb": 16.12,
+        "snapshots": 86378,
+        "liveBookPct": 88.5,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85861,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 59.31
+      },
+      {
+        "date": "2026-10-09",
+        "files": 24,
+        "sizeMb": 15.93,
+        "snapshots": 86372,
+        "liveBookPct": 88.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85815,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 73.78
+      },
+      {
+        "date": "2026-10-10",
+        "files": 24,
+        "sizeMb": 14.22,
+        "snapshots": 86380,
+        "liveBookPct": 93,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85822,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 77.23
+      },
+      {
+        "date": "2026-10-11",
+        "files": 24,
+        "sizeMb": 14.07,
+        "snapshots": 86377,
+        "liveBookPct": 92.8,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85936,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 87.17
+      },
+      {
+        "date": "2026-10-12",
+        "files": 24,
+        "sizeMb": 15.29,
+        "snapshots": 86378,
+        "liveBookPct": 88.5,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85923,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 99.13
+      },
+      {
+        "date": "2026-10-13",
+        "files": 24,
+        "sizeMb": 15.18,
+        "snapshots": 86378,
+        "liveBookPct": 89,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85954,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 101.97
+      },
+      {
+        "date": "2026-10-14",
+        "files": 24,
+        "sizeMb": 16.11,
+        "snapshots": 86380,
+        "liveBookPct": 89.3,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85607,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 88.18
+      },
+      {
+        "date": "2026-10-15",
+        "files": 24,
+        "sizeMb": 16.03,
+        "snapshots": 86383,
+        "liveBookPct": 88.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85924,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 98.95
+      },
+      {
+        "date": "2026-10-16",
+        "files": 24,
+        "sizeMb": 15.99,
+        "snapshots": 86383,
+        "liveBookPct": 88.9,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85923,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 109.46
+      },
+      {
+        "date": "2026-10-17",
+        "files": 24,
+        "sizeMb": 15.05,
+        "snapshots": 86384,
+        "liveBookPct": 92.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85926,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 114.99
+      },
+      {
+        "date": "2026-10-18",
+        "files": 25,
+        "sizeMb": 13.52,
+        "snapshots": 78739,
+        "liveBookPct": 90.9,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 88,
+        "decisions": 78300,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 105.28
+      },
+      {
+        "date": "2026-10-19",
+        "files": 54,
+        "sizeMb": 15.56,
+        "snapshots": 86312,
+        "liveBookPct": 90.5,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85854,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 98.85
+      },
+      {
+        "date": "2026-10-20",
+        "files": 31,
+        "sizeMb": 15.82,
+        "snapshots": 86361,
+        "liveBookPct": 88,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85942,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 104.27
+      },
+      {
+        "date": "2026-10-21",
+        "files": 34,
+        "sizeMb": 15.76,
+        "snapshots": 86342,
+        "liveBookPct": 89.1,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85455,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 93.31
+      },
+      {
+        "date": "2026-10-22",
+        "files": 25,
+        "sizeMb": 14.97,
+        "snapshots": 86372,
+        "liveBookPct": 89.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85881,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 92.24
+      },
+      {
+        "date": "2026-10-23",
+        "files": 36,
+        "sizeMb": 15.86,
+        "snapshots": 86348,
+        "liveBookPct": 88.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85799,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 106.33
+      },
+      {
+        "date": "2026-10-24",
+        "files": 24,
+        "sizeMb": 15.2,
+        "snapshots": 86373,
+        "liveBookPct": 91.1,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85885,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 105.33
+      },
+      {
+        "date": "2026-10-25",
+        "files": 33,
+        "sizeMb": 15.44,
+        "snapshots": 86356,
+        "liveBookPct": 90.1,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85823,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 105.17
+      },
+      {
+        "date": "2026-10-26",
+        "files": 30,
+        "sizeMb": 15.39,
+        "snapshots": 86272,
+        "liveBookPct": 87.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 84906,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 122.16
+      },
+      {
+        "date": "2026-10-27",
+        "files": 24,
+        "sizeMb": 14.81,
+        "snapshots": 86378,
+        "liveBookPct": 89.4,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85759,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 131.98
+      },
+      {
+        "date": "2026-10-28",
+        "files": 29,
+        "sizeMb": 14.46,
+        "snapshots": 86347,
+        "liveBookPct": 87.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 82719,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 113.81
+      },
+      {
+        "date": "2026-10-29",
+        "files": 24,
+        "sizeMb": 15.04,
+        "snapshots": 86377,
+        "liveBookPct": 86.3,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85795,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 104.89
+      },
+      {
+        "date": "2026-10-30",
+        "files": 24,
+        "sizeMb": 15.34,
+        "snapshots": 86376,
+        "liveBookPct": 88.1,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85884,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 151.82
+      },
+      {
+        "date": "2026-10-31",
+        "files": 24,
+        "sizeMb": 14.32,
+        "snapshots": 86376,
+        "liveBookPct": 92,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85934,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 132.14
+      },
+      {
+        "date": "2026-11-01",
+        "files": 24,
+        "sizeMb": 13,
+        "snapshots": 86374,
+        "liveBookPct": 91.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 87,
+        "decisions": 85969,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 118.35
+      },
+      {
+        "date": "2026-11-02",
+        "files": 24,
+        "sizeMb": 15.42,
+        "snapshots": 86377,
+        "liveBookPct": 89.9,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85942,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 115.49
+      },
+      {
+        "date": "2026-11-03",
+        "files": 24,
+        "sizeMb": 15.15,
+        "snapshots": 86376,
+        "liveBookPct": 89.4,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85950,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 122.19
+      },
+      {
+        "date": "2026-11-04",
+        "files": 31,
+        "sizeMb": 15.01,
+        "snapshots": 85987,
+        "liveBookPct": 86.3,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 83756,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 103.62
+      },
+      {
+        "date": "2026-11-05",
+        "files": 24,
+        "sizeMb": 15.84,
+        "snapshots": 86369,
+        "liveBookPct": 88.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85922,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 85.17
+      },
+      {
+        "date": "2026-11-06",
+        "files": 24,
+        "sizeMb": 16.13,
+        "snapshots": 86373,
+        "liveBookPct": 89.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85939,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 109.91
+      },
+      {
+        "date": "2026-11-07",
+        "files": 28,
+        "sizeMb": 14.3,
+        "snapshots": 86360,
+        "liveBookPct": 92.7,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85905,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 100.76
+      },
+      {
+        "date": "2026-11-08",
+        "files": 28,
+        "sizeMb": 14.35,
+        "snapshots": 86286,
+        "liveBookPct": 90.9,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85850,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 105.4
+      },
+      {
+        "date": "2026-11-09",
+        "files": 25,
+        "sizeMb": 14.86,
+        "snapshots": 86347,
+        "liveBookPct": 87.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85911,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 95.64
+      },
+      {
+        "date": "2026-11-10",
+        "files": 24,
+        "sizeMb": 15.22,
+        "snapshots": 86367,
+        "liveBookPct": 88,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85918,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 96.1
+      },
+      {
+        "date": "2026-11-11",
+        "files": 24,
+        "sizeMb": 15.66,
+        "snapshots": 86341,
+        "liveBookPct": 89,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85898,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 84.52
+      },
+      {
+        "date": "2026-11-12",
+        "files": 24,
+        "sizeMb": 14.34,
+        "snapshots": 86332,
+        "liveBookPct": 82.1,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 90,
+        "decisions": 78724,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 90.97
+      },
+      {
+        "date": "2026-11-13",
+        "files": 24,
+        "sizeMb": 14.92,
+        "snapshots": 86337,
+        "liveBookPct": 81.5,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 90,
+        "decisions": 78688,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 70.42
+      },
+      {
+        "date": "2026-11-14",
+        "files": 26,
+        "sizeMb": 16.2,
+        "snapshots": 86326,
+        "liveBookPct": 89.2,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 97,
+        "decisions": 85889,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 61.36
+      },
+      {
+        "date": "2026-11-15",
+        "files": 32,
+        "sizeMb": 15.95,
+        "snapshots": 86305,
+        "liveBookPct": 89.6,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 96,
+        "decisions": 85816,
+        "crossFeedBlocked": 0,
+        "medianBasisUsd": 36.6
+      },
+      {
+        "date": "2026-11-16",
+        "files": 20,
+        "sizeMb": 7.94,
+        "snapshots": 43106,
+        "liveBookPct": 86.4,
+        "oraclePct": 100,
+        "twapPct": 100,
+        "markets": 49,
+        "decisions": 42756,
+        "crossFeedBlocked": 243,
+        "medianBasisUsd": 59.41
+      }
+    ]
+  },
+  "study": {
+    "generatedAt": "2026-11-16T12:47:21.787345+00:00",
+    "dataset": {
+      "totalRows": 64963,
+      "totalMarkets": 5074,
+      "trainMarkets": 3044,
+      "valMarkets": 761,
+      "testMarkets": 1237,
+      "testStart": "2026-11-03 11:00Z",
+      "testEnd": "2026-11-16 11:45Z",
+      "featuresBase": 63,
+      "featuresTotal": 88
+    },
+    "stackWeights": {
+      "intercept": -0.0411,
+      "logitMarketMid": 1.1681,
+      "logitV2Prod": -0.0803,
+      "logitTwapPhysics": -0.0179,
+      "basisDriftPct100": 0.6014,
+      "crossFeedLeadPct100": 0.6697,
+      "orderbookImbalance": 0.044
+    },
+    "normalWindow": {
+      "up_mid": {
+        "label": "CLOB L2 Mid (Fresh 1 Hz)",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.25,
+        "auc": 0.8479,
+        "logloss": 0.4798,
+        "brier": 0.159,
+        "ece": 0.0181,
+        "skillVsMktPct": 0.0,
+        "skillCi95": [
+          0.0,
+          0.0
+        ],
+        "skillVsRecalPct": 0.0,
+        "skillRecalCi95": [
+          -0.23,
+          0.22
+        ]
+      },
+      "microprice": {
+        "label": "Stoikov L2 Microprice",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.26,
+        "auc": 0.848,
+        "logloss": 0.4797,
+        "brier": 0.159,
+        "ece": 0.0179,
+        "skillVsMktPct": 0.02,
+        "skillCi95": [
+          -0.02,
+          0.06
+        ],
+        "skillVsRecalPct": 0.02,
+        "skillRecalCi95": [
+          -0.2,
+          0.24
+        ]
+      },
+      "mkt_recal": {
+        "label": "Recalibrated Market",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.27,
+        "auc": 0.8479,
+        "logloss": 0.4796,
+        "brier": 0.159,
+        "ece": 0.0176,
+        "skillVsMktPct": -0.0,
+        "skillCi95": [
+          -0.21,
+          0.23
+        ]
+      },
+      "v2_prob_up": {
+        "label": "Baseline v2 395d (OOS)",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 75.2,
+        "auc": 0.8397,
+        "logloss": 0.4995,
+        "brier": 0.1656,
+        "ece": 0.0439,
+        "skillVsMktPct": -4.12,
+        "skillCi95": [
+          -5.89,
+          -2.59
+        ],
+        "skillVsRecalPct": -4.12,
+        "skillRecalCi95": [
+          -5.76,
+          -2.49
+        ]
+      },
+      "twap_physics": {
+        "label": "TWAP Physics Z",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.27,
+        "auc": 0.8387,
+        "logloss": 0.5593,
+        "brier": 0.1678,
+        "ece": 0.0602,
+        "skillVsMktPct": -5.55,
+        "skillCi95": [
+          -7.42,
+          -3.74
+        ],
+        "skillVsRecalPct": -5.54,
+        "skillRecalCi95": [
+          -7.3,
+          -3.73
+        ]
+      },
+      "v4_standalone": {
+        "label": "Pipeline v4 Standalone (88f)",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.1,
+        "auc": 0.8449,
+        "logloss": 0.4856,
+        "brier": 0.1608,
+        "ece": 0.0172,
+        "skillVsMktPct": -1.09,
+        "skillCi95": [
+          -1.74,
+          -0.47
+        ],
+        "skillVsRecalPct": -1.08,
+        "skillRecalCi95": [
+          -1.73,
+          -0.46
+        ]
+      },
+      "v4_hybrid": {
+        "label": "Pipeline v4 Hybrid Residual",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 75.97,
+        "auc": 0.8468,
+        "logloss": 0.4817,
+        "brier": 0.1597,
+        "ece": 0.0177,
+        "skillVsMktPct": -0.4,
+        "skillCi95": [
+          -0.83,
+          -0.01
+        ],
+        "skillVsRecalPct": -0.4,
+        "skillRecalCi95": [
+          -0.85,
+          0.05
+        ]
+      },
+      "v4_stack": {
+        "label": "Pipeline v4 Calibrated Stack",
+        "rows": 12454,
+        "markets": 1236,
+        "accuracyPct": 76.17,
+        "auc": 0.8478,
+        "logloss": 0.4794,
+        "brier": 0.159,
+        "ece": 0.013,
+        "skillVsMktPct": 0.03,
+        "skillCi95": [
+          -0.25,
+          0.32
+        ],
+        "skillVsRecalPct": 0.04,
+        "skillRecalCi95": [
+          -0.18,
+          0.25
+        ]
+      }
+    },
+    "late60sWindow": {
+      "up_mid": {
+        "label": "CLOB L2 Mid (Fresh 1 Hz)",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.41,
+        "auc": 0.9403,
+        "logloss": 0.3132,
+        "brier": 0.096,
+        "ece": 0.0351,
+        "skillVsMktPct": 0.0,
+        "skillCi95": [
+          0.0,
+          0.0
+        ],
+        "skillVsRecalPct": 0.11,
+        "skillRecalCi95": [
+          -0.55,
+          0.63
+        ]
+      },
+      "microprice": {
+        "label": "Stoikov L2 Microprice",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.27,
+        "auc": 0.9405,
+        "logloss": 0.3127,
+        "brier": 0.0961,
+        "ece": 0.036,
+        "skillVsMktPct": -0.04,
+        "skillCi95": [
+          -0.41,
+          0.35
+        ],
+        "skillVsRecalPct": 0.07,
+        "skillRecalCi95": [
+          -0.69,
+          0.69
+        ]
+      },
+      "mkt_recal": {
+        "label": "Recalibrated Market",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.27,
+        "auc": 0.9403,
+        "logloss": 0.3126,
+        "brier": 0.0961,
+        "ece": 0.0297,
+        "skillVsMktPct": -0.11,
+        "skillCi95": [
+          -0.59,
+          0.56
+        ]
+      },
+      "v2_prob_up": {
+        "label": "Baseline v2 395d (OOS)",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 82.11,
+        "auc": 0.9026,
+        "logloss": 0.4015,
+        "brier": 0.1272,
+        "ece": 0.0471,
+        "skillVsMktPct": -32.43,
+        "skillCi95": [
+          -49.47,
+          -17.69
+        ],
+        "skillVsRecalPct": -32.29,
+        "skillRecalCi95": [
+          -49.75,
+          -18.03
+        ]
+      },
+      "twap_physics": {
+        "label": "TWAP Physics Z",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 84.6,
+        "auc": 0.9226,
+        "logloss": 0.3982,
+        "brier": 0.1105,
+        "ece": 0.0514,
+        "skillVsMktPct": -15.02,
+        "skillCi95": [
+          -26.45,
+          -4.65
+        ],
+        "skillVsRecalPct": -14.9,
+        "skillRecalCi95": [
+          -26.89,
+          -4.97
+        ]
+      },
+      "v4_standalone": {
+        "label": "Pipeline v4 Standalone (88f)",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.13,
+        "auc": 0.9396,
+        "logloss": 0.323,
+        "brier": 0.097,
+        "ece": 0.046,
+        "skillVsMktPct": -1.02,
+        "skillCi95": [
+          -3.88,
+          1.45
+        ],
+        "skillVsRecalPct": -0.91,
+        "skillRecalCi95": [
+          -4.16,
+          1.88
+        ]
+      },
+      "v4_hybrid": {
+        "label": "Pipeline v4 Hybrid Residual",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.13,
+        "auc": 0.9311,
+        "logloss": 0.3338,
+        "brier": 0.1028,
+        "ece": 0.0213,
+        "skillVsMktPct": -7.04,
+        "skillCi95": [
+          -14.8,
+          0.27
+        ],
+        "skillVsRecalPct": -6.92,
+        "skillRecalCi95": [
+          -14.74,
+          0.53
+        ]
+      },
+      "v4_stack": {
+        "label": "Pipeline v4 Calibrated Stack",
+        "rows": 721,
+        "markets": 367,
+        "accuracyPct": 86.55,
+        "auc": 0.9402,
+        "logloss": 0.3131,
+        "brier": 0.0962,
+        "ece": 0.0316,
+        "skillVsMktPct": -0.19,
+        "skillCi95": [
+          -1.27,
+          1.01
+        ],
+        "skillVsRecalPct": -0.09,
+        "skillRecalCi95": [
+          -1.05,
+          0.88
+        ]
+      }
+    },
+    "final15_45sWindow": {
+      "up_mid": {
+        "label": "CLOB L2 Mid (Fresh 1 Hz)",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 87.05,
+        "auc": 0.9507,
+        "logloss": 0.2862,
+        "brier": 0.0876,
+        "ece": 0.045,
+        "skillVsMktPct": 0.0,
+        "skillCi95": [
+          0.0,
+          0.0
+        ],
+        "skillVsRecalPct": -0.08,
+        "skillRecalCi95": [
+          -1.05,
+          0.53
+        ]
+      },
+      "microprice": {
+        "label": "Stoikov L2 Microprice",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 87.05,
+        "auc": 0.9507,
+        "logloss": 0.2866,
+        "brier": 0.0877,
+        "ece": 0.0476,
+        "skillVsMktPct": -0.11,
+        "skillCi95": [
+          -0.72,
+          0.55
+        ],
+        "skillVsRecalPct": -0.18,
+        "skillRecalCi95": [
+          -1.28,
+          0.7
+        ]
+      },
+      "mkt_recal": {
+        "label": "Recalibrated Market",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 87.05,
+        "auc": 0.9507,
+        "logloss": 0.2847,
+        "brier": 0.0876,
+        "ece": 0.0388,
+        "skillVsMktPct": 0.08,
+        "skillCi95": [
+          -0.58,
+          0.95
+        ]
+      },
+      "v2_prob_up": {
+        "label": "Baseline v2 395d (OOS)",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 80.99,
+        "auc": 0.9014,
+        "logloss": 0.3967,
+        "brier": 0.1277,
+        "ece": 0.0312,
+        "skillVsMktPct": -45.76,
+        "skillCi95": [
+          -71.22,
+          -24.62
+        ],
+        "skillVsRecalPct": -45.88,
+        "skillRecalCi95": [
+          -76.75,
+          -24.46
+        ]
+      },
+      "twap_physics": {
+        "label": "TWAP Physics Z",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 84.85,
+        "auc": 0.9307,
+        "logloss": 0.37,
+        "brier": 0.102,
+        "ece": 0.0745,
+        "skillVsMktPct": -16.42,
+        "skillCi95": [
+          -33.99,
+          -2.62
+        ],
+        "skillVsRecalPct": -16.51,
+        "skillRecalCi95": [
+          -32.62,
+          -2.54
+        ]
+      },
+      "v4_standalone": {
+        "label": "Pipeline v4 Standalone (88f)",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 87.33,
+        "auc": 0.9477,
+        "logloss": 0.3057,
+        "brier": 0.0903,
+        "ece": 0.0572,
+        "skillVsMktPct": -3.01,
+        "skillCi95": [
+          -7.97,
+          0.85
+        ],
+        "skillVsRecalPct": -3.09,
+        "skillRecalCi95": [
+          -8.67,
+          0.75
+        ]
+      },
+      "v4_hybrid": {
+        "label": "Pipeline v4 Hybrid Residual",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 86.23,
+        "auc": 0.9383,
+        "logloss": 0.318,
+        "brier": 0.0982,
+        "ece": 0.0276,
+        "skillVsMktPct": -12.02,
+        "skillCi95": [
+          -22.02,
+          -3.75
+        ],
+        "skillVsRecalPct": -12.11,
+        "skillRecalCi95": [
+          -23.18,
+          -3.53
+        ]
+      },
+      "v4_stack": {
+        "label": "Pipeline v4 Calibrated Stack",
+        "rows": 363,
+        "markets": 223,
+        "accuracyPct": 87.05,
+        "auc": 0.9509,
+        "logloss": 0.2838,
+        "brier": 0.0874,
+        "ece": 0.0361,
+        "skillVsMktPct": 0.26,
+        "skillCi95": [
+          -1.34,
+          2.1
+        ],
+        "skillVsRecalPct": 0.18,
+        "skillRecalCi95": [
+          -1.03,
+          1.49
+        ]
+      }
+    },
+    "tradingReplay": [
+      {
+        "presetId": "prod_65c",
+        "label": "65c Cap / Edge>=6% / Conf>=45%",
+        "v2NoGate20f": {
+          "trades": 255,
+          "blockedMarketsBy20f": 58,
+          "wins": 154,
+          "losses": 101,
+          "wrPct": 60.39,
+          "breakevenWrPct": 62.38,
+          "marginPp": -1.99,
+          "avgAskCents": 60.73,
+          "pnlUsd": -16.87,
+          "roiPct": -3.31,
+          "pf": 0.92,
+          "maxDdUsd": 36.29
+        },
+        "v2WithGate20f": {
+          "trades": 218,
+          "blockedMarketsBy20f": 58,
+          "wins": 133,
+          "losses": 85,
+          "wrPct": 61.01,
+          "breakevenWrPct": 63.45,
+          "marginPp": -2.44,
+          "avgAskCents": 61.8,
+          "pnlUsd": -16.84,
+          "roiPct": -3.86,
+          "pf": 0.9,
+          "maxDdUsd": 31.53
+        },
+        "v4Standalone": {
+          "trades": 1,
+          "blockedMarketsBy20f": 0,
+          "wins": 1,
+          "losses": 0,
+          "wrPct": 100.0,
+          "breakevenWrPct": 65.61,
+          "marginPp": 34.39,
+          "avgAskCents": 64.0,
+          "pnlUsd": 1.07,
+          "roiPct": 53.73,
+          "pf": 99.9,
+          "maxDdUsd": 0.0
+        },
+        "v4Hybrid": {
+          "trades": 10,
+          "blockedMarketsBy20f": 7,
+          "wins": 8,
+          "losses": 2,
+          "wrPct": 80.0,
+          "breakevenWrPct": 64.03,
+          "marginPp": 15.97,
+          "avgAskCents": 62.4,
+          "pnlUsd": 5.35,
+          "roiPct": 26.77,
+          "pf": 2.3,
+          "maxDdUsd": 2.05
+        }
+      },
+      {
+        "presetId": "wide_72c",
+        "label": "72c Cap / Edge>=4% / Conf>=45%",
+        "v2NoGate20f": {
+          "trades": 504,
+          "blockedMarketsBy20f": 65,
+          "wins": 329,
+          "losses": 175,
+          "wrPct": 65.28,
+          "breakevenWrPct": 67.2,
+          "marginPp": -1.92,
+          "avgAskCents": 65.64,
+          "pnlUsd": -28.82,
+          "roiPct": -2.86,
+          "pf": 0.92,
+          "maxDdUsd": 48.8
+        },
+        "v2WithGate20f": {
+          "trades": 477,
+          "blockedMarketsBy20f": 65,
+          "wins": 312,
+          "losses": 165,
+          "wrPct": 65.41,
+          "breakevenWrPct": 67.83,
+          "marginPp": -2.42,
+          "avgAskCents": 66.28,
+          "pnlUsd": -35.06,
+          "roiPct": -3.68,
+          "pf": 0.9,
+          "maxDdUsd": 49.96
+        },
+        "v4Standalone": {
+          "trades": 10,
+          "blockedMarketsBy20f": 0,
+          "wins": 5,
+          "losses": 5,
+          "wrPct": 50.0,
+          "breakevenWrPct": 69.03,
+          "marginPp": -19.03,
+          "avgAskCents": 67.5,
+          "pnlUsd": -5.56,
+          "roiPct": -27.78,
+          "pf": 0.46,
+          "maxDdUsd": 7.24
+        },
+        "v4Hybrid": {
+          "trades": 24,
+          "blockedMarketsBy20f": 10,
+          "wins": 17,
+          "losses": 7,
+          "wrPct": 70.83,
+          "breakevenWrPct": 67.96,
+          "marginPp": 2.87,
+          "avgAskCents": 66.42,
+          "pnlUsd": 2.55,
+          "roiPct": 5.32,
+          "pf": 1.18,
+          "maxDdUsd": 5.4
+        }
+      },
+      {
+        "presetId": "tight_58c",
+        "label": "58c Cap / Edge>=6% / Conf>=45%",
+        "v2NoGate20f": {
+          "trades": 81,
+          "blockedMarketsBy20f": 42,
+          "wins": 39,
+          "losses": 42,
+          "wrPct": 48.15,
+          "breakevenWrPct": 55.89,
+          "marginPp": -7.74,
+          "avgAskCents": 54.16,
+          "pnlUsd": -21.73,
+          "roiPct": -13.41,
+          "pf": 0.75,
+          "maxDdUsd": 23.89
+        },
+        "v2WithGate20f": {
+          "trades": 42,
+          "blockedMarketsBy20f": 42,
+          "wins": 22,
+          "losses": 20,
+          "wrPct": 52.38,
+          "breakevenWrPct": 57.03,
+          "marginPp": -4.65,
+          "avgAskCents": 55.31,
+          "pnlUsd": -6.3,
+          "roiPct": -7.5,
+          "pf": 0.85,
+          "maxDdUsd": 13.34
+        },
+        "v4Standalone": {
+          "trades": 0,
+          "blockedMarketsBy20f": 0,
+          "wins": 0,
+          "losses": 0,
+          "wrPct": null,
+          "breakevenWrPct": null,
+          "marginPp": null,
+          "pnlUsd": 0.0,
+          "roiPct": 0.0,
+          "pf": null,
+          "maxDdUsd": 0.0
+        },
+        "v4Hybrid": {
+          "trades": 1,
+          "blockedMarketsBy20f": 7,
+          "wins": 1,
+          "losses": 0,
+          "wrPct": 100.0,
+          "breakevenWrPct": 53.75,
+          "marginPp": 46.25,
+          "avgAskCents": 52.0,
+          "pnlUsd": 1.78,
+          "roiPct": 88.95,
+          "pf": 99.9,
+          "maxDdUsd": 0.0
+        }
+      }
+    ],
+    "featureImportance": {
+      "v4StandaloneTop": [
+        {
+          "name": "oracle_ptb_dist_pct",
+          "isChainlinkNative": true,
+          "gain": 412.28,
+          "gainSharePct": 15.44,
+          "splits": 43
+        },
+        {
+          "name": "twap_physics_z",
+          "isChainlinkNative": true,
+          "gain": 412.18,
+          "gainSharePct": 15.44,
+          "splits": 123
+        },
+        {
+          "name": "ptb_dist_pct",
+          "isChainlinkNative": false,
+          "gain": 334.94,
+          "gainSharePct": 12.55,
+          "splits": 46
+        },
+        {
+          "name": "market_yes_price",
+          "isChainlinkNative": false,
+          "gain": 317.62,
+          "gainSharePct": 11.9,
+          "splits": 615
+        },
+        {
+          "name": "session_offhours",
+          "isChainlinkNative": false,
+          "gain": 62.01,
+          "gainSharePct": 2.32,
+          "splits": 1
+        },
+        {
+          "name": "basis_drift_pct",
+          "isChainlinkNative": true,
+          "gain": 37.56,
+          "gainSharePct": 1.41,
+          "splits": 21
+        },
+        {
+          "name": "minutes_left_norm",
+          "isChainlinkNative": false,
+          "gain": 36.2,
+          "gainSharePct": 1.36,
+          "splits": 23
+        },
+        {
+          "name": "price_position_score",
+          "isChainlinkNative": false,
+          "gain": 35.48,
+          "gainSharePct": 1.33,
+          "splits": 6
+        },
+        {
+          "name": "macd_line",
+          "isChainlinkNative": false,
+          "gain": 33.86,
+          "gainSharePct": 1.27,
+          "splits": 7
+        },
+        {
+          "name": "best_edge",
+          "isChainlinkNative": false,
+          "gain": 30.37,
+          "gainSharePct": 1.14,
+          "splits": 22
+        },
+        {
+          "name": "hour_sin",
+          "isChainlinkNative": false,
+          "gain": 28.24,
+          "gainSharePct": 1.06,
+          "splits": 108
+        },
+        {
+          "name": "hour_cos",
+          "isChainlinkNative": false,
+          "gain": 26.29,
+          "gainSharePct": 0.98,
+          "splits": 73
+        },
+        {
+          "name": "vol_delta_buy_ratio",
+          "isChainlinkNative": false,
+          "gain": 25.16,
+          "gainSharePct": 0.94,
+          "splits": 30
+        },
+        {
+          "name": "vol_buy_x_delta",
+          "isChainlinkNative": false,
+          "gain": 24.97,
+          "gainSharePct": 0.94,
+          "splits": 4
+        },
+        {
+          "name": "crowd_model_divergence",
+          "isChainlinkNative": false,
+          "gain": 24.89,
+          "gainSharePct": 0.93,
+          "splits": 9
+        },
+        {
+          "name": "rsi_norm",
+          "isChainlinkNative": false,
+          "gain": 24.79,
+          "gainSharePct": 0.93,
+          "splits": 12
+        },
+        {
+          "name": "vol_momentum_confirm",
+          "isChainlinkNative": false,
+          "gain": 23.97,
+          "gainSharePct": 0.9,
+          "splits": 4
+        },
+        {
+          "name": "bb_percent_b",
+          "isChainlinkNative": false,
+          "gain": 23.75,
+          "gainSharePct": 0.89,
+          "splits": 2
+        }
+      ],
+      "v4NativeAndMicroRanks": [
+        {
+          "rank": 1,
+          "name": "oracle_ptb_dist_pct",
+          "isChainlinkNative": true,
+          "gain": 412.28,
+          "gainSharePct": 15.44,
+          "splits": 43
+        },
+        {
+          "rank": 2,
+          "name": "twap_physics_z",
+          "isChainlinkNative": true,
+          "gain": 412.18,
+          "gainSharePct": 15.44,
+          "splits": 123
+        },
+        {
+          "rank": 6,
+          "name": "basis_drift_pct",
+          "isChainlinkNative": true,
+          "gain": 37.56,
+          "gainSharePct": 1.41,
+          "splits": 21
+        },
+        {
+          "rank": 37,
+          "name": "basis_pct",
+          "isChainlinkNative": true,
+          "gain": 17.81,
+          "gainSharePct": 0.67,
+          "splits": 18
+        },
+        {
+          "rank": 39,
+          "name": "orderbook_imbalance",
+          "isChainlinkNative": false,
+          "gain": 17.19,
+          "gainSharePct": 0.64,
+          "splits": 1
+        },
+        {
+          "rank": 61,
+          "name": "cross_feed_lead",
+          "isChainlinkNative": true,
+          "gain": 8.63,
+          "gainSharePct": 0.32,
+          "splits": 1
+        },
+        {
+          "rank": 75,
+          "name": "spread_pct",
+          "isChainlinkNative": false,
+          "gain": 0.0,
+          "gainSharePct": 0.0,
+          "splits": 0
+        }
+      ],
+      "v4HybridTop": [
+        {
+          "name": "v2_minus_mkt_logit",
+          "isChainlinkNative": false,
+          "gain": 85.92,
+          "gainSharePct": 37.62,
+          "splits": 404
+        },
+        {
+          "name": "basis_drift_pct",
+          "isChainlinkNative": true,
+          "gain": 24.14,
+          "gainSharePct": 10.57,
+          "splits": 92
+        },
+        {
+          "name": "oracle_ptb_dist_pct",
+          "isChainlinkNative": true,
+          "gain": 20.39,
+          "gainSharePct": 8.93,
+          "splits": 58
+        },
+        {
+          "name": "twap_physics_z",
+          "isChainlinkNative": true,
+          "gain": 14.88,
+          "gainSharePct": 6.51,
+          "splits": 11
+        },
+        {
+          "name": "market_yes_price",
+          "isChainlinkNative": false,
+          "gain": 13.78,
+          "gainSharePct": 6.03,
+          "splits": 117
+        },
+        {
+          "name": "crowd_model_divergence",
+          "isChainlinkNative": false,
+          "gain": 13.71,
+          "gainSharePct": 6.0,
+          "splits": 54
+        },
+        {
+          "name": "imb5",
+          "isChainlinkNative": false,
+          "gain": 13.1,
+          "gainSharePct": 5.73,
+          "splits": 3
+        },
+        {
+          "name": "basis_pct",
+          "isChainlinkNative": true,
+          "gain": 11.47,
+          "gainSharePct": 5.02,
+          "splits": 55
+        },
+        {
+          "name": "imb1",
+          "isChainlinkNative": false,
+          "gain": 9.33,
+          "gainSharePct": 4.08,
+          "splits": 37
+        },
+        {
+          "name": "minutes_left_norm",
+          "isChainlinkNative": false,
+          "gain": 8.01,
+          "gainSharePct": 3.51,
+          "splits": 13
+        },
+        {
+          "name": "cross_feed_lead",
+          "isChainlinkNative": true,
+          "gain": 7.01,
+          "gainSharePct": 3.07,
+          "splits": 3
+        },
+        {
+          "name": "orderbook_imbalance",
+          "isChainlinkNative": false,
+          "gain": 6.67,
+          "gainSharePct": 2.92,
+          "splits": 5
+        },
+        {
+          "name": "spread_pct",
+          "isChainlinkNative": false,
+          "gain": 0.0,
+          "gainSharePct": 0.0,
+          "splits": 0
+        }
+      ]
+    }
+  }
+}

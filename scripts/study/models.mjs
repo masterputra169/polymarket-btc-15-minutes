@@ -7,6 +7,7 @@
 
 export function classifyFeatureGroup(name, isEngineered = false) {
   if (isEngineered) return 'Engineered';
+  if (/^(oracle_ptb_dist_pct|twap_physics_z|basis_pct|basis_drift_pct|cross_feed_lead)$/.test(name)) return 'Chainlink & TWAP (v4)';
   if (/^(market_yes_price|market_price_momentum|orderbook_imbalance|spread_pct)$/.test(name)) return 'Polymarket CLOB';
   if (/^(vol_delta_|hurst_exponent|realized_vol_)/.test(name)) return 'Quant Microstructure';
   if (/^(ptb_dist_|price_to_vwap_|price_consistency|ema_dist_)/.test(name)) return 'Price & PTB';

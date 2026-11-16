@@ -6,6 +6,28 @@
 
 ---
 
+## 2026-11-16 — Tahap 2: Pipeline v4 Chainlink-Native Upgrade, 54d Tape Evaluation & Stage 2 Menu
+
+- **Full 54-Day 1 Hz Market Tape Pull & Extraction (`bot/scripts/tapePull.mts`, `backtest/ml_training/buildTapeV4Dataset.mts`):**
+  - Added 12-worker concurrent R2 downloads, day-by-day memory-bounded stats (`--pull-only`, `--concurrency`), and pulled the complete 54-day Market Tape archive (`2026-09-24 .. 2026-11-16`, **1,408 files / 800.1 MB**, **4,587,177 1 Hz snapshots**, `89.2%` live L2 book, `100%` oracle, `97.3%` TWAP 60s across **5,076 unique resolved markets**, `4,939` exact PTB, `4,469,981` decision lines, `243` cross-feed blocks / `107` flips).
+  - Measured empirical Binance − Chainlink basis across the 54-day tape: median **`+$90.42`** (`P05 = $14.27`, `P95 = $133.53`; near-PTB abs skew median `$6.61`, `P95 = $33.69`).
+  - Built aligned Pipeline v4 datasets (`tape_v4_panel.csv` with **67,948 decision-second rows** across 5,076 markets; `training_data_v4.csv` with **4,937 single-per-market rows**, `63` base + `25` engineered = `88` features).
+- **Pipeline v4 Chainlink-Native Contract & Live Telemetry (`src/engines/ml/`, `bot/src/engines/`):**
+  - Added `FEATURE_PIPELINE_V4 = 4` (`V4_CHAINLINK_FI` in `featureMap.ts`, `computeChainlinkNativeFeatures` in `featureInputs.ts`): `[58] oracle_ptb_dist_pct`, `[59] twap_physics_z`, `[60] basis_pct`, `[61] basis_drift_pct`, `[62] cross_feed_lead`, plus live L2 `orderbookImbalance` & `spreadPct` enabled strictly for `featurePipeline >= 4` (leaving live `20261116-p2-ef8dfd` `v2` vectors unchanged).
+  - Fixed `featureExtract.ts` buffer capacity to `96` slots and isolated legacy SM `[54..58]` strictly to `BASE_FEATURES === 59 && featurePipeline < 4` to prevent offset collisions with `58`-base Quant and `63`-base Pipeline v4.
+  - Added `computeOracleDeltaWindowRatio` (`settlePrice.ts`) and live `v4Signals` emission in `signalComputation.ts` + `loop.ts`.
+- **Stage 2 Empirical Evaluation (`backtest/ml_training/trainStage2PipelineV4.py`, `analysis/2026-11-16/tahap2-pipeline-v4-study.md`):**
+  - Strictly market-grouped OOS evaluation (`64,963` filtered snapshots / `5,074` markets → `3,044` Train / `761` Val / **`1,237` strict Test OOS** `2026-11-03 .. 2026-11-16`, 16-market embargo):
+    - **Normal window (`12m → 2m` left, `12,454` rows):** Baseline `v2` (`75.20%` Acc, `0.8397` AUC, `0.1656` Brier, `ECE 0.0439`, `-4.12%` skill vs fresh CLOB mid) → **Pipeline v4 Hybrid Residual** (`75.97%` Acc, `0.8468` AUC, `0.1597` Brier, `ECE 0.0177`, closing 90% of the Brier gap vs market mid) & **Calibrated Stack** (`76.17%` Acc, `0.8478` AUC, `0.1590` Brier, `+0.03%` skill, `ECE 0.0130`). Confirms `twapModelStudy.py`: Chainlink/TWAP does not beat market mid outright in 2–12m because CLOB makers track Chainlink + TWAP, while eliminating basis-drift error relative to Binance-only `v2`.
+    - **Final minute (`15s–45s` left, `363` rows):** Baseline `v2` (`80.99%` Acc, `0.9014` AUC, `0.1277` Brier) → **Pipeline v4 Standalone** (`87.33%` Acc, `0.9477` AUC, `0.0903` Brier) & **Calibrated Stack** (`87.05%` Acc, `0.9509` AUC, `0.0874` Brier, `+0.26%` skill vs mid).
+    - **Feature Attribution:** Top 2 features by XGBoost gain across all 88 features in `v4 Standalone` are **`#1 oracle_ptb_dist_pct` (`15.44%`)** and **`#2 twap_physics_z` (`15.44%`)**, followed by **`#6 basis_drift_pct` (`1.41%`)**. Production model remains **`20261116-p2-ef8dfd` (395d Quant)** as 4,937 single-row tape markets (Holdout `73.7%` Acc / `0.8216` AUC) remain 7x smaller than the 395d archive.
+    - **Real L2 Ask Execution Replay (CLOB V2 taker fee):** On `58c Cap / Edge >= 6%`, **Gate 20f** blocked `42` mismatched markets (`48.15% → 52.38%` WR, cutting loss `71%` from `-$21.73 → -$6.30`, DD `$23.89 → $13.34`). On `65c Cap / Edge >= 6%`, `v4 Hybrid + Gate 20f` achieved **`80.0%` WR (`+15.97pp` margin above BE, `+$5.35` / `+26.77%` ROI, PF `2.30`)** over `10` strict-OOS filtered trades.
+- **"Menu Tahap 2" UI (`study-site/`, `scripts/build-study-site.mjs`, `scripts/study/stage2_snapshot.json`, `src/components/MlPanel.tsx`, `src/App.tsx`):**
+  - Added dedicated **`Tahap 2 · v4 Lab`** tab to `poly15-study.dollarkilat.xyz` (`./data/stage2.json`) with 54d Tape Coverage & Basis SVG chart (`drawTapeCoverageChart`), Normal vs Final-Minute Brier bar comparison (`drawStage2WindowBars`), Cross-Feed diagnostics, 5 Chainlink-Native feature cards, Real Ask + Gate 20f replay table, and gain/stack tables.
+  - Added collapsible **`Tahap 2 · Chainlink-Native (v4)`** live telemetry drawer inside `ML Engine` on the terminal (`MlPanel.tsx`) displaying live `oracle_ptb_dist_pct`, `twap_physics_z`, `basis_pct`, `basis_drift_pct`, `cross_feed_lead`, and pipeline badge.
+
+---
+
 ## 2026-11-16 — Study Portal DOM Null-Safety Hardening & CSP Script-Src Update
 
 - **DOM Null-Safety & Cache-Race Hardening (`study-site/app.js`, `study-site/charts.js`, `study-site/markdown.js`):**
@@ -23,12 +45,13 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 14:25 WIB_
+_Last updated: 2026-11-16 20:00 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating upgraded All-Time Quant ($100 fresh test) |
 | ML model | **`20261116-p2-ef8dfd` (All-Time `395d` Group-1 Quant, 83f / 67 active LIVE)** · 34,962 mkts (`2025-10-17 → 2026-11-15`) · **75.79% Ensemble Acc (75.83% XGB) · 0.8532 AUC · 0.1567 Brier · 0.0225 XGB ECE · +6.38% skill vs market** |
+| Pipeline v4 / Stage 2 | **Live telemetry + 54d Tape Lab (`FEATURE_PIPELINE_V4=4`, 88f)** · `4,587,177` 1 Hz snapshots / `5,076` resolved mkts (`2026-09-24 → 2026-11-16`) · Normal window Hybrid `75.97%` Acc / `0.1597` Brier (vs `0.1656` v2); Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
 | Model switcher | **Live in dashboard (`ML Engine` panel)** · hot-swap across `20261116-p2-ef8dfd` & prior models + persistent per-model profile overrides (`bot/data/model_profiles.json`: `mlConfMin=0.55`, `hardMlFloor=0.45`, `50c–65c` band) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
@@ -45,13 +68,13 @@ _Last updated: 2026-11-16 14:25 WIB_
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
-| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
-| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
+| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Tahap 2 Chainlink-Native Telemetry** drawer + **Journal Archive Viewer** |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · **Tahap 2 · v4 Lab** (54d Tape + Gate 20f replay + 88f gain rank) + **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
 | Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 107 files / 1,047 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 108 files / 1,052 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
