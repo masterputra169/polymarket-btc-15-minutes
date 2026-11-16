@@ -1,0 +1,781 @@
+#!/usr/bin/env node
+/**
+ * Build the static visual portal for POLY//15 reports, ML experiments,
+ * study documents, changelog, and sanitized paper-eval performance.
+ *
+ * Usage:
+ *   node scripts/build-study-site.mjs [--root <dir>] [--data-dir <dir>] [--out <dir>] [--only-if-changed]
+ */
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_ROOT = path.resolve(HERE, '..');
+
+function parseCli(argv) {
+  const opts = { root: DEFAULT_ROOT, dataDir: null, outDir: null, onlyIfChanged: false, quiet: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--root' && argv[i + 1]) opts.root = path.resolve(argv[++i]);
+    else if (a === '--data-dir' && argv[i + 1]) opts.dataDir = path.resolve(argv[++i]);
+    else if (a === '--out' && argv[i + 1]) opts.outDir = path.resolve(argv[++i]);
+    else if (a === '--only-if-changed') opts.onlyIfChanged = true;
+    else if (a === '--quiet') opts.quiet = true;
+  }
+  opts.dataDir = opts.dataDir || path.join(opts.root, 'bot', 'data');
+  opts.outDir = opts.outDir || path.join(opts.root, 'study-dist');
+  return opts;
+}
+
+function readTextSafe(filePath) {
+  try { return fs.readFileSync(filePath, 'utf8'); } catch { return null; }
+}
+
+function readJsonSafe(filePath) {
+  try {
+    const raw = filePath.endsWith('.gz')
+      ? zlib.gunzipSync(fs.readFileSync(filePath)).toString('utf8')
+      : fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function readJsonLinesSafe(filePath, maxTailBytes = null) {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    let text;
+    if (maxTailBytes != null) {
+      const stat = fs.statSync(filePath);
+      if (stat.size > maxTailBytes) {
+        const fd = fs.openSync(filePath, 'r');
+        const buf = Buffer.alloc(maxTailBytes);
+        fs.readSync(fd, buf, 0, maxTailBytes, stat.size - maxTailBytes);
+        fs.closeSync(fd);
+        const s = buf.toString('utf8');
+        const firstNl = s.indexOf('\n');
+        text = firstNl >= 0 ? s.slice(firstNl + 1) : s;
+      } else {
+        text = fs.readFileSync(filePath, 'utf8');
+      }
+    } else {
+      text = fs.readFileSync(filePath, 'utf8');
+    }
+    const out = [];
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try { out.push(JSON.parse(trimmed)); } catch { /* skip malformed line */ }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+function readEnvFlags(envPath) {
+  const raw = readTextSafe(envPath);
+  const out = { dryRun: null, evalWindowStart: null, evalTargetTrades: null };
+  if (!raw) return out;
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+    if (!m) continue;
+    const [, key, val] = m;
+    const clean = val.trim().replace(/^["']|["']$/g, '');
+    if (key === 'DRY_RUN') out.dryRun = clean === 'true';
+    else if (key === 'EVAL_WINDOW_START') out.evalWindowStart = clean;
+    else if (key === 'EVAL_TARGET_TRADES') {
+      const n = Number(clean);
+      if (Number.isFinite(n)) out.evalTargetTrades = n;
+    }
+  }
+  return out;
+}
+
+function gitMeta(repoRoot) {
+  try {
+    const sha = execFileSync('git', ['-C', repoRoot, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', timeout: 3000 }).trim();
+    const branch = execFileSync('git', ['-C', repoRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', timeout: 3000 }).trim();
+    const commitAt = execFileSync('git', ['-C', repoRoot, 'log', '-1', '--format=%cI'], { encoding: 'utf8', timeout: 3000 }).trim();
+    return { sha, branch, commitAt };
+  } catch {
+    return { sha: null, branch: null, commitAt: null };
+  }
+}
+
+function inferTags(title, body = '') {
+  const s = `${title}\n${body}`.toLowerCase();
+  const tags = [];
+  if (/\b(ml|xgboost|lightgbm|shap|platt|calibration|retrain|model|auc|brier|ece)\b/.test(s)) tags.push('ML');
+  if (/\b(filter|gate|cross-feed|basis|skew|limit|kelly|cut-loss|safety)\b/.test(s)) tags.push('Filters & Risk');
+  if (/\b(chainlink|twap|polybolt|binance|oracle|ws|websocket|clob|tape)\b/.test(s)) tags.push('Oracle & Feeds');
+  if (/\b(ui|dashboard|panel|terminal|modal|login|brand|study)\b/.test(s)) tags.push('UI & Portal');
+  if (/\b(vps|nginx|cloudflare|tunnel|auto-deploy|backup|systemd|ci)\b/.test(s)) tags.push('Infra & Deploy');
+  return tags.length > 0 ? tags : ['General'];
+}
+
+export function parseUpdatesMd(rawMd) {
+  const md = redactSecretText(rawMd || '');
+  const lines = md.split(/\r?\n/);
+
+  let lastUpdated = null;
+  const statusRows = [];
+  let inStatus = false;
+  for (const line of lines) {
+    if (/^##\s+Current status/i.test(line)) { inStatus = true; continue; }
+    if (inStatus && /^---/.test(line)) break;
+    if (inStatus) {
+      const mUpd = /^_Last updated:\s*(.+?)_/i.exec(line.trim());
+      if (mUpd) { lastUpdated = mUpd[1].trim(); continue; }
+      const mRow = /^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|$/.exec(line.trim());
+      if (mRow && !/^Area$/i.test(mRow[1]) && !/^-+$/.test(mRow[1].replace(/\s/g, ''))) {
+        statusRows.push({ area: mRow[1].trim(), state: mRow[2].trim() });
+      }
+    }
+  }
+
+  const entries = [];
+  let cur = null;
+  const flush = () => {
+    if (!cur) return;
+    const body = cur.lines.join('\n').trim();
+    const firstBullet = body.split(/\r?\n/).find((l) => /^[-*\d]/.test(l.trim())) || '';
+    const summary = firstBullet.replace(/^[-*\d.)\s]+/, '').slice(0, 220);
+    entries.push({
+      id: `upd-${entries.length + 1}`,
+      date: cur.date,
+      heading: cur.heading,
+      tags: inferTags(cur.heading, body.slice(0, 600)),
+      summary,
+      body,
+    });
+    cur = null;
+  };
+
+  for (const line of lines) {
+    const h3 = /^###\s+(.+)$/.exec(line);
+    if (h3) {
+      flush();
+      const heading = h3[1].trim();
+      const dMatch = /^(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}(?:\s+\w+)?)?)/.exec(heading);
+      cur = {
+        date: dMatch ? dMatch[1] : null,
+        heading,
+        lines: [],
+      };
+    } else if (cur) {
+      if (/^---$/.test(line.trim()) && cur.lines.length > 0) continue;
+      cur.lines.push(line);
+    }
+  }
+  flush();
+
+  return { lastUpdated, statusRows, entries };
+}
+
+function parseModelsMdStatus(rawMd) {
+  const statusMap = new Map();
+  if (!rawMd) return statusMap;
+  for (const line of rawMd.split(/\r?\n/)) {
+    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/.exec(line.trim());
+    if (m) statusMap.set(m[1], { status: m[2].trim(), pipelineLabel: m[3].trim() });
+  }
+  return statusMap;
+}
+
+function parseTrainingReportTxt(raw) {
+  if (!raw) return null;
+  const out = {};
+  const mMeth = /^Method:\s*(.+)$/m.exec(raw);
+  const mWin = /^Winner:\s*(.+)$/m.exec(raw);
+  const mFeat = /^Features:\s*(.+)$/m.exec(raw);
+  const mTrees = /Trees:\s*(\d+)/m.exec(raw);
+  const mThr = /Threshold:\s*([0-9.]+)/m.exec(raw);
+  const mPruned = /^Pruned features \((\d+)\):\s*(.+)$/m.exec(raw);
+  const mRecency = /^Recency:\s*(.+)$/m.exec(raw);
+  if (mMeth) out.method = mMeth[1].trim();
+  if (mWin) out.winner = mWin[1].trim();
+  if (mFeat) out.featuresDesc = mFeat[1].trim();
+  if (mTrees) out.trees = Number(mTrees[1]);
+  if (mThr) out.optimalThreshold = Number(mThr[1]);
+  if (mPruned) {
+    out.prunedCount = Number(mPruned[1]);
+    out.prunedFeatures = mPruned[2].trim().toLowerCase() === 'none'
+      ? []
+      : mPruned[2].split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  if (mRecency) out.recency = mRecency[1].trim();
+  return out;
+}
+
+function extractModelCalibration(repoRoot, modelId, isActiveLive) {
+  const modelDir = path.join(repoRoot, 'ml_registry', 'models', modelId);
+  const tryReadHeader = (file) => {
+    const j = readJsonSafe(file);
+    if (!j || typeof j !== 'object') return null;
+    return {
+      numFeatures: j.num_features ?? null,
+      numTrees: j.num_trees ?? null,
+      optimalThreshold: j.optimal_threshold ?? null,
+      plattA: j.platt_a ?? null,
+      plattB: j.platt_b ?? null,
+      plattOnLogits: j.platt_on_logits ?? null,
+      plattByPhase: j.platt_by_phase ?? null,
+      prunedFeatures: Array.isArray(j.pruned_features) ? j.pruned_features : null,
+      preExcludedFeatures: Array.isArray(j.pre_excluded_features) ? j.pre_excluded_features : null,
+      zeroFeatures: Array.isArray(j.zero_features) ? j.zero_features : null,
+      trainingMethod: j.training_method ?? null,
+      recencyWeighting: j.recency_weighting ?? null,
+    };
+  };
+
+  let xgb = tryReadHeader(path.join(modelDir, 'xgboost_model.json.gz')) || tryReadHeader(path.join(modelDir, 'xgboost_model.json'));
+  let lgb = tryReadHeader(path.join(modelDir, 'lightgbm_model.json.gz')) || tryReadHeader(path.join(modelDir, 'lightgbm_model.json'));
+  let norm = readJsonSafe(path.join(modelDir, 'norm_browser.json.gz')) || readJsonSafe(path.join(modelDir, 'norm_browser.json'));
+
+  if (!xgb && isActiveLive) xgb = tryReadHeader(path.join(repoRoot, 'public', 'ml', 'xgboost_model.json'));
+  if (!lgb && isActiveLive) lgb = tryReadHeader(path.join(repoRoot, 'public', 'ml', 'lightgbm_model.json'));
+  if (!norm && isActiveLive) norm = readJsonSafe(path.join(repoRoot, 'public', 'ml', 'norm_browser.json'));
+
+  return {
+    xgbHeader: xgb,
+    lgbHeader: lgb,
+    signalModifiers: norm?.signal_modifiers ?? null,
+    phaseThresholds: norm?.phase_thresholds ?? null,
+    trainSamples: norm?.train_samples ?? null,
+    holdoutFrac: norm?.holdout_frac ?? null,
+    ensembleWeights: norm?.ensemble_weights ?? null,
+  };
+}
+
+function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
+  const journalEvents = readJsonLinesSafe(path.join(repoRoot, 'ml_registry', 'journal.jsonl'));
+  const statusMap = parseModelsMdStatus(readTextSafe(path.join(repoRoot, 'ml_registry', 'MODELS.md')));
+  const normLive = readJsonSafe(path.join(repoRoot, 'public', 'ml', 'norm_browser.json'));
+  const liveDirId = normLive?.model_id ?? null;
+
+  // Group events per model ID
+  const eventsById = new Map();
+  const oosBenchmarks = [];
+  const journalNotes = [];
+  for (const ev of journalEvents) {
+    if (ev.id) {
+      if (!eventsById.has(ev.id)) eventsById.set(ev.id, []);
+      eventsById.get(ev.id).push(ev);
+    }
+    if (ev.event === 'evaluated') {
+      // Strip bulky allPresets arrays from evaluated records; keep tiers & curated topPresets
+      if (ev.fullOos && typeof ev.fullOos === 'object') {
+        const compactFullOos = {};
+        for (const [k, v] of Object.entries(ev.fullOos)) {
+          if (v && typeof v === 'object' && 'allPresets' in v) {
+            const { allPresets: _omit, ...rest } = v;
+            compactFullOos[k] = rest;
+          } else {
+            compactFullOos[k] = v;
+          }
+        }
+        oosBenchmarks.push({ ...ev, fullOos: compactFullOos });
+      } else {
+        oosBenchmarks.push(ev);
+      }
+    } else if (ev.event === 'note' && typeof ev.text === 'string') {
+      journalNotes.push({
+        ts: ev.ts ?? null,
+        date: typeof ev.ts === 'string' ? ev.ts.slice(0, 10) : null,
+        modelId: ev.id ?? null,
+        actor: ev.actor ?? 'manual',
+        text: redactSecretText(ev.text),
+      });
+    }
+  }
+
+  const activeModelId = modelProfiles?.activeModelId || liveDirId || [...statusMap.entries()].find(([, v]) => v.status === 'live')?.[0] || null;
+
+  const modelsDir = path.join(repoRoot, 'ml_registry', 'models');
+  const dirIds = fs.existsSync(modelsDir)
+    ? fs.readdirSync(modelsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name)
+    : [];
+
+  const allIds = new Set([...dirIds, ...statusMap.keys()]);
+  const detailed = [];
+  const legacyV1 = [];
+
+  for (const id of allIds) {
+    const mdInfo = statusMap.get(id) || {};
+    const manifest = readJsonSafe(path.join(modelsDir, id, 'manifest.json'));
+    const reportTxt = readTextSafe(path.join(modelsDir, id, 'training_report.txt'));
+    const reportJson = readJsonSafe(path.join(modelsDir, id, 'training_report.json'));
+    const trainingMeta = readJsonSafe(path.join(modelsDir, id, 'training_data.meta.json'));
+    const evs = eventsById.get(id) || [];
+    const latestGate = [...evs].reverse().find((e) => e.event === 'gate') || null;
+    const latestEval = [...evs].reverse().find((e) => e.event === 'evaluated') || null;
+    const latestDeploy = [...evs].reverse().find((e) => e.event === 'deployed') || null;
+    const pipeline = manifest?.featurePipeline ?? (mdInfo.pipelineLabel === 'v2' ? 2 : mdInfo.pipelineLabel === 'v3' ? 3 : 1);
+    const status = id === activeModelId ? 'live' : (mdInfo.status || (latestDeploy ? 'retired' : 'candidate'));
+
+    if (pipeline === 1 && !manifest?.metrics?.ensemble && !id.startsWith('20260905')) {
+      legacyV1.push({
+        id,
+        status,
+        featurePipeline: pipeline,
+        accuracy: manifest?.metrics?.xgb?.accuracy ?? null,
+        auc: manifest?.metrics?.xgb?.auc ?? null,
+        ece: manifest?.metrics?.xgb?.calibration_ece ?? null,
+      });
+      continue;
+    }
+
+    const cal = extractModelCalibration(repoRoot, id, id === activeModelId || id === liveDirId);
+    const parsedReport = parseTrainingReportTxt(reportTxt);
+    const profile = modelProfiles?.profiles?.[id] ?? null;
+
+    detailed.push({
+      id,
+      status,
+      isActive: id === activeModelId,
+      featurePipeline: pipeline,
+      registeredAt: manifest?.registeredAt ?? null,
+      source: manifest?.source ?? null,
+      notes: Array.isArray(manifest?.notes) ? manifest.notes.map(redactSecretText) : [],
+      trainingMeta: manifest?.training?.meta ?? trainingMeta ?? null,
+      metrics: manifest?.metrics ?? null,
+      reportSummary: parsedReport || (reportJson ? {
+        method: reportJson.training_method ?? null,
+        trees: reportJson.num_trees ?? null,
+        optimalThreshold: reportJson.optimal_threshold ?? null,
+        prunedCount: Array.isArray(reportJson.pruned_features) ? reportJson.pruned_features.length : null,
+        prunedFeatures: reportJson.pruned_features ?? null,
+      } : null),
+      reportText: reportTxt ? redactSecretText(reportTxt) : null,
+      calibration: {
+        xgb: cal.xgbHeader,
+        lgb: cal.lgbHeader,
+        ensembleWeights: manifest?.metrics?.ensembleWeights ?? cal.ensembleWeights ?? null,
+        signalModifiers: cal.signalModifiers,
+        phaseThresholds: cal.phaseThresholds,
+      },
+      gate: latestGate ? { pass: !!latestGate.pass, checks: latestGate.checks ?? [], ts: latestGate.ts ?? null } : null,
+      latestEval: latestEval ? (() => {
+        const { summary: _omitSummary, exact2175: _omitEx, fullOos: _omitFo, ...head } = latestEval;
+        return head;
+      })() : null,
+      profile,
+      events: evs.map((e) => ({ ts: e.ts ?? null, event: e.event, actor: e.actor ?? null, note: e.note ? redactSecretText(e.note) : null })),
+    });
+  }
+
+  detailed.sort((a, b) => b.id.localeCompare(a.id));
+  legacyV1.sort((a, b) => b.id.localeCompare(a.id));
+
+  return {
+    activeModelId,
+    liveDirModelId: liveDirId,
+    models: detailed,
+    legacyV1,
+    oosBenchmarks,
+    journalNotes,
+  };
+}
+
+function buildStudiesBundle(repoRoot, dataDir, outDir, journalNotes) {
+  const reports = [];
+  const analysisRoot = path.join(repoRoot, 'analysis');
+  const assetsRoot = path.join(outDir, 'assets', 'reports');
+
+  if (fs.existsSync(analysisRoot)) {
+    const dateDirs = fs.readdirSync(analysisRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+      .sort((a, b) => b.localeCompare(a));
+
+    for (const dateName of dateDirs) {
+      const dirPath = path.join(analysisRoot, dateName);
+      const walk = (curDir, relSub = '') => {
+        for (const ent of fs.readdirSync(curDir, { withFileTypes: true })) {
+          const full = path.join(curDir, ent.name);
+          const relPath = relSub ? `${relSub}/${ent.name}` : ent.name;
+          if (ent.isDirectory()) {
+            walk(full, relPath);
+            continue;
+          }
+          if (/\.(png|jpg|jpeg|svg|webp)$/i.test(ent.name)) {
+            const dest = path.join(assetsRoot, dateName, relPath);
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.copyFileSync(full, dest);
+            continue;
+          }
+          if (!ent.name.endsWith('.md')) continue;
+          const raw = redactSecretText(readTextSafe(full) || '');
+          const h1 = /^#\s+(.+)$/m.exec(raw);
+          const title = h1 ? h1[1].trim() : ent.name.replace(/\.md$/, '');
+          const firstPara = raw
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .find((l) => l && !l.startsWith('#') && !l.startsWith('|') && !l.startsWith('```') && !l.startsWith('>')) || '';
+          // Rewrite local image paths ./foo.png or foo.png to /assets/reports/<date>/...
+          const rewritten = raw.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (m, alt, imgTarget) => {
+            const cleanTarget = imgTarget.trim().replace(/^\.\//, '');
+            if (/^(https?:|data:|\/)/i.test(cleanTarget) || cleanTarget.includes('..')) return m;
+            const resolvedSub = relSub ? `${relSub}/${cleanTarget}` : cleanTarget;
+            return `![${alt}](./assets/reports/${dateName}/${resolvedSub})`;
+          });
+
+          reports.push({
+            id: `${dateName}/${relPath}`,
+            date: dateName,
+            file: `analysis/${dateName}/${relPath}`,
+            title,
+            excerpt: firstPara.slice(0, 220),
+            tags: inferTags(title, raw.slice(0, 1200)),
+            words: raw.split(/\s+/).filter(Boolean).length,
+            markdown: rewritten,
+          });
+        }
+      };
+      walk(dirPath);
+    }
+  }
+
+  const quantStudyFiles = [
+    { key: 'calibration', file: 'calibration_study.json', title: 'Model vs Market Shrinkage Calibration Study' },
+    { key: 'shadowDecision', file: 'shadow_decision_study.json', title: 'Shadow Decision & Candidate Filter Split Study' },
+    { key: 'jevTarget', file: 'jev_target_study.json', title: 'JEV Walk-Forward Target Study' },
+    { key: 'jevStack', file: 'jev_stack_study.json', title: 'JEV + ML + Market Stacking Study' },
+    { key: 'globalRisk', file: 'global_risk_study.json', title: 'Global Risk Window Event Study' },
+  ];
+
+  const quantStudies = {};
+  for (const spec of quantStudyFiles) {
+    const data = readJsonSafe(path.join(dataDir, spec.file));
+    if (data && typeof data === 'object') {
+      quantStudies[spec.key] = { title: spec.title, file: spec.file, data };
+    }
+  }
+
+  return {
+    reports,
+    quantStudies,
+    registryNotes: [...journalNotes].reverse(),
+  };
+}
+
+function polyTakerFeePerShare(price) {
+  if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0 || price >= 1) return 0;
+  return 0.07 * price * (1 - price);
+}
+
+function buildEvalAndHealthBundle(repoRoot, dataDir) {
+  const envFlags = readEnvFlags(path.join(repoRoot, 'bot', '.env'));
+  const state = readJsonSafe(path.join(dataDir, 'state.json'));
+  const rawJournal = readJsonLinesSafe(path.join(dataDir, 'trade_journal.jsonl'));
+  const trades = rawJournal.map(sanitizeTradeEntry).filter(Boolean);
+
+  // Determine start baseline cleanly (from env/state; $100 reset if eval run active)
+  let totalWins = 0;
+  let totalLosses = 0;
+  let grossWinPnl = 0;
+  let grossLossPnl = 0;
+  let netPnl = 0;
+  let sumPrices = 0;
+  let priceCount = 0;
+  let sumBreakeven = 0;
+  let running = state?.startOfDayBankroll && state.totalTrades <= 50 ? state.startOfDayBankroll : null;
+  if (running == null && typeof state?.bankroll === 'number') {
+    const tradeSum = trades.reduce((acc, t) => acc + (t.pnl ?? 0), 0);
+    running = Math.round((state.bankroll - tradeSum) * 100) / 100;
+  }
+  if (running == null) running = 100;
+
+  let peak = running;
+  let maxDd = 0;
+  const equityCurve = [{ idx: 0, ts: trades[0]?.enteredAt ?? Date.now(), bankroll: running, pnl: 0, cumPnl: 0, label: 'Start' }];
+  let cumPnl = 0;
+
+  const byPhase = {};
+  const byModel = {};
+  const bySide = {};
+  const basisSamples = [];
+  const skewSamples = [];
+
+  const bump = (map, key, t) => {
+    const k = key || 'UNKNOWN';
+    if (!map[k]) map[k] = { trades: 0, wins: 0, losses: 0, pnl: 0 };
+    map[k].trades++;
+    if (t.outcome === 'WIN') map[k].wins++;
+    else if (t.outcome === 'LOSS') map[k].losses++;
+    map[k].pnl = Math.round((map[k].pnl + (t.pnl ?? 0)) * 100) / 100;
+  };
+
+  for (let i = 0; i < trades.length; i++) {
+    const t = trades[i];
+    const pnl = t.pnl ?? 0;
+    netPnl = Math.round((netPnl + pnl) * 100) / 100;
+    cumPnl = Math.round((cumPnl + pnl) * 100) / 100;
+    running = Math.round((running + pnl) * 100) / 100;
+    if (running > peak) peak = running;
+    const dd = Math.round((peak - running) * 100) / 100;
+    if (dd > maxDd) maxDd = dd;
+
+    if (t.outcome === 'WIN') { totalWins++; grossWinPnl += Math.max(0, pnl); }
+    else if (t.outcome === 'LOSS') { totalLosses++; grossLossPnl += Math.abs(Math.min(0, pnl)); }
+
+    if (t.tokenPrice != null && t.tokenPrice > 0 && t.tokenPrice < 1) {
+      sumPrices += t.tokenPrice;
+      sumBreakeven += t.tokenPrice + polyTakerFeePerShare(t.tokenPrice);
+      priceCount++;
+    }
+    if (t.liveBasisUsd != null) basisSamples.push(t.liveBasisUsd);
+    if (t.crossFeedSkewUsd != null) skewSamples.push(t.crossFeedSkewUsd);
+
+    bump(byPhase, t.phase, t);
+    bump(byModel, t.modelId, t);
+    bump(bySide, t.side, t);
+
+    equityCurve.push({
+      idx: i + 1,
+      ts: t.exitedAt ?? t.ts ?? t.enteredAt,
+      slug: t.slug,
+      side: t.side,
+      outcome: t.outcome,
+      pnl,
+      cumPnl,
+      bankroll: running,
+    });
+  }
+
+  const settledCount = totalWins + totalLosses;
+  const winRatePct = settledCount > 0 ? +((totalWins / settledCount) * 100).toFixed(2) : null;
+  const avgEntryCents = priceCount > 0 ? +((sumPrices / priceCount) * 100).toFixed(2) : null;
+  const breakevenWrPct = priceCount > 0 ? +((sumBreakeven / priceCount) * 100).toFixed(2) : null;
+  const profitFactor = grossLossPnl > 0 ? +(grossWinPnl / grossLossPnl).toFixed(2) : grossWinPnl > 0 ? 99.9 : null;
+
+  // PTB health summary (last ~256 KB)
+  const ptbLines = readJsonLinesSafe(path.join(dataDir, 'ptb_health.jsonl'), 256 * 1024);
+  let ptbTotal = 0;
+  let ptbExact = 0;
+  const ptbBySource = {};
+  for (const row of ptbLines) {
+    if (typeof row.total === 'number' && typeof row.exact === 'number') {
+      ptbTotal += row.total;
+      ptbExact += row.exact;
+    }
+    if (row.bySource && typeof row.bySource === 'object') {
+      for (const [src, cnt] of Object.entries(row.bySource)) {
+        if (typeof cnt === 'number') ptbBySource[src] = (ptbBySource[src] || 0) + cnt;
+      }
+    }
+  }
+
+  // Legacy pre-reset archive summary (if present)
+  const archState = readJsonSafe(path.join(dataDir, 'archive_20261116_pre_alltime_100', 'state.json'));
+  const archiveSummary = archState ? {
+    label: 'Pre-AllTime Legacy Eval Archive',
+    totalTrades: archState.totalTrades ?? 0,
+    wins: archState.wins ?? 0,
+    losses: archState.losses ?? 0,
+    winRatePct: archState.totalTrades > 0 ? +((archState.wins / archState.totalTrades) * 100).toFixed(2) : null,
+    endBankroll: archState.bankroll ?? null,
+    peakBankroll: archState.peakBankroll ?? null,
+  } : null;
+
+  const median = (arr) => {
+    if (!arr.length) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    return +s[Math.floor(s.length / 2)].toFixed(2);
+  };
+
+  // Downsample equityCurve cleanly when very long (> 350 points), always keeping start & last 120 points.
+  let compactCurve = equityCurve;
+  if (equityCurve.length > 350) {
+    const head = equityCurve.slice(0, equityCurve.length - 120);
+    const tail = equityCurve.slice(-120);
+    const step = Math.ceil(head.length / 220);
+    compactCurve = [head[0], ...head.filter((_, i) => i > 0 && i % step === 0), ...tail];
+  }
+
+  return {
+    botMode: envFlags.dryRun === false ? 'LIVE' : envFlags.dryRun === true ? 'DRY_RUN' : 'PAPER / ENV',
+    evalWindowStart: envFlags.evalWindowStart,
+    evalTargetTrades: envFlags.evalTargetTrades,
+    hasLiveData: Boolean(state || trades.length > 0),
+    bankroll: state?.bankroll ?? running,
+    startBankroll: equityCurve[0].bankroll,
+    peakBankroll: state?.peakBankroll ?? peak,
+    hasOpenPosition: Boolean(state?.currentPosition && !state.currentPosition.settled),
+    totalTrades: state?.totalTrades ?? trades.length,
+    wins: state?.wins ?? totalWins,
+    losses: state?.losses ?? totalLosses,
+    winRatePct,
+    netPnl,
+    avgEntryCents,
+    breakevenWrPct,
+    marginVsBreakevenPp: winRatePct != null && breakevenWrPct != null ? +(winRatePct - breakevenWrPct).toFixed(2) : null,
+    profitFactor,
+    maxDrawdownUsd: maxDd,
+    byPhase,
+    byModel,
+    bySide,
+    equityCurve: compactCurve,
+    recentTrades: trades.slice(-80).reverse(),
+    crossFeed: {
+      trackedTrades: basisSamples.length,
+      medianBasisUsd: median(basisSamples),
+      medianSkewUsd: median(skewSamples),
+    },
+    ptbHealth: ptbTotal > 0 ? {
+      totalPolls: ptbTotal,
+      exactPolls: ptbExact,
+      exactPct: +((ptbExact / ptbTotal) * 100).toFixed(2),
+      bySource: ptbBySource,
+    } : null,
+    archiveSummary,
+  };
+}
+
+function computeSignature(pathsToCheck) {
+  const parts = [];
+  const walkStat = (p) => {
+    if (!fs.existsSync(p)) return;
+    const st = fs.statSync(p);
+    if (st.isDirectory()) {
+      for (const name of fs.readdirSync(p).sort()) {
+        if (name === 'node_modules' || name === 'tape' || name === '.git') continue;
+        walkStat(path.join(p, name));
+      }
+    } else {
+      parts.push(`${path.basename(p)}:${st.size}:${Math.floor(st.mtimeMs)}`);
+    }
+  };
+  for (const p of pathsToCheck) walkStat(p);
+  return parts.join('|');
+}
+
+function copyStaticFrontend(repoRoot, outDir) {
+  const siteSrc = path.join(repoRoot, 'study-site');
+  if (!fs.existsSync(siteSrc)) throw new Error(`Missing study-site templates at ${siteSrc}`);
+  fs.mkdirSync(outDir, { recursive: true });
+  for (const file of fs.readdirSync(siteSrc)) {
+    const src = path.join(siteSrc, file);
+    if (fs.statSync(src).isFile()) {
+      fs.copyFileSync(src, path.join(outDir, file));
+    }
+  }
+  const brandSrc = path.join(repoRoot, 'public', 'brand');
+  if (fs.existsSync(brandSrc)) {
+    const brandOut = path.join(outDir, 'brand');
+    fs.mkdirSync(brandOut, { recursive: true });
+    for (const file of fs.readdirSync(brandSrc)) {
+      const s = path.join(brandSrc, file);
+      if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(brandOut, file));
+    }
+  }
+  for (const rootAsset of ['favicon.ico', 'favicon.svg', 'site.webmanifest']) {
+    const s = path.join(repoRoot, 'public', rootAsset);
+    if (fs.existsSync(s)) fs.copyFileSync(s, path.join(outDir, rootAsset));
+  }
+}
+
+export function buildStudySite(options = {}) {
+  const root = path.resolve(options.root || DEFAULT_ROOT);
+  const dataDir = path.resolve(options.dataDir || path.join(root, 'bot', 'data'));
+  const outDir = path.resolve(options.outDir || path.join(root, 'study-dist'));
+  const onlyIfChanged = Boolean(options.onlyIfChanged);
+
+  const watched = [
+    path.join(root, 'UPDATES.md'),
+    path.join(root, 'ml_registry', 'journal.jsonl'),
+    path.join(root, 'ml_registry', 'MODELS.md'),
+    path.join(root, 'analysis'),
+    path.join(root, 'study-site'),
+    path.join(root, 'scripts', 'build-study-site.mjs'),
+    path.join(dataDir, 'model_profiles.json'),
+    path.join(dataDir, 'state.json'),
+    path.join(dataDir, 'trade_journal.jsonl'),
+    path.join(dataDir, 'ptb_health.jsonl'),
+    path.join(dataDir, 'calibration_study.json'),
+    path.join(dataDir, 'shadow_decision_study.json'),
+    path.join(dataDir, 'jev_target_study.json'),
+    path.join(dataDir, 'jev_stack_study.json'),
+    path.join(dataDir, 'global_risk_study.json'),
+  ];
+
+  const sigPath = path.join(outDir, '.build-sig.txt');
+  const sig = computeSignature(watched);
+  if (onlyIfChanged && fs.existsSync(sigPath) && fs.readFileSync(sigPath, 'utf8') === sig) {
+    return { skipped: true, outDir };
+  }
+
+  fs.mkdirSync(path.join(outDir, 'data'), { recursive: true });
+  copyStaticFrontend(root, outDir);
+
+  const generatedAt = new Date().toISOString();
+  const git = gitMeta(root);
+  const updates = parseUpdatesMd(readTextSafe(path.join(root, 'UPDATES.md')) || '');
+  const modelProfiles = readJsonSafe(path.join(dataDir, 'model_profiles.json'));
+  const modelsBundle = buildModelsBundle(root, dataDir, modelProfiles);
+  const studiesBundle = buildStudiesBundle(root, dataDir, outDir, modelsBundle.journalNotes);
+  const evalBundle = buildEvalAndHealthBundle(root, dataDir);
+
+  const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
+
+  const sitePayload = {
+    generatedAt,
+    git,
+    botMode: evalBundle.botMode,
+    activeModelId: modelsBundle.activeModelId,
+    activeModelSummary: activeModel ? {
+      id: activeModel.id,
+      status: activeModel.status,
+      featurePipeline: activeModel.featurePipeline,
+      rows: activeModel.trainingMeta?.rows ?? null,
+      ensembleAcc: activeModel.metrics?.ensemble?.accuracy ?? activeModel.metrics?.xgb?.accuracy ?? null,
+      ensembleAuc: activeModel.metrics?.ensemble?.auc ?? activeModel.metrics?.xgb?.auc ?? null,
+      ensembleBrier: activeModel.metrics?.ensemble?.brier ?? activeModel.metrics?.xgb?.brier ?? null,
+      calibrationEce: activeModel.metrics?.ensemble?.calibration_ece ?? activeModel.metrics?.xgb?.calibration_ece ?? null,
+      brierSkillVsMarket: activeModel.metrics?.ensemble?.brier_skill_vs_market ?? activeModel.metrics?.xgb?.brier_skill_vs_market ?? null,
+      prunedCount: activeModel.reportSummary?.prunedCount ?? activeModel.calibration?.xgb?.prunedFeatures?.length ?? null,
+      hasPhaseCalibration: Boolean(activeModel.calibration?.xgb?.plattByPhase),
+      profileLabel: activeModel.profile?.label ?? null,
+    } : null,
+    currentStatus: {
+      lastUpdated: updates.lastUpdated,
+      rows: updates.statusRows,
+    },
+    eval: evalBundle,
+    counts: {
+      models: modelsBundle.models.length,
+      studies: studiesBundle.reports.length,
+      quantStudies: Object.keys(studiesBundle.quantStudies).length,
+      updates: updates.entries.length,
+    },
+  };
+
+  fs.writeFileSync(path.join(outDir, 'data', 'site.json'), JSON.stringify(sitePayload, null, 2));
+  fs.writeFileSync(path.join(outDir, 'data', 'models.json'), JSON.stringify(modelsBundle, null, 2));
+  fs.writeFileSync(path.join(outDir, 'data', 'studies.json'), JSON.stringify(studiesBundle, null, 2));
+  fs.writeFileSync(path.join(outDir, 'data', 'updates.json'), JSON.stringify(updates, null, 2));
+  fs.writeFileSync(sigPath, sig);
+
+  return {
+    skipped: false,
+    outDir,
+    generatedAt,
+    counts: sitePayload.counts,
+    activeModelId: sitePayload.activeModelId,
+  };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const cli = parseCli(process.argv.slice(2));
+  const res = buildStudySite(cli);
+  if (!cli.quiet) {
+    if (res.skipped) console.log(`[study-build] unchanged — skipped (${res.outDir})`);
+    else console.log(`[study-build] built ${res.outDir} | active=${res.activeModelId} | models=${res.counts.models} studies=${res.counts.studies} updates=${res.counts.updates}`);
+  }
+}

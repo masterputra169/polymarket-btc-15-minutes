@@ -23,7 +23,7 @@ export const GATE_IDS = [
   'too_early', 'too_late', 'time_unknown', 'btc_dist', 'edge_ceiling', 'counter_trend',
   'trending_early', 'trending_price', 'spread', 'spread_widening', 'vpin', 'low_vol',
   'cooldown', 'max_trades', 'session_block', 'time_gate', 'ptb_source',
-  'sentiment', 'macro', 'llm', 'other',
+  'cross_feed', 'sentiment', 'macro', 'llm', 'other',
 ] as const;
 
 export type GateId = typeof GATE_IDS[number];
@@ -72,6 +72,7 @@ const RULES: ReadonlyArray<{ gate: GateId; re: RegExp }> = [
   { gate: 'ml_degraded', re: /^ML degraded: / },                             // 13
   { gate: 'vpin', re: /^VPIN / },                                            // 14
   { gate: 'spread_widening', re: /^Spread widening: / },                     // 15
+  { gate: 'cross_feed', re: /^Cross-feed / },                                // 20f
   { gate: 'sentiment', re: /^Sentiment: / },                                 // 17
   { gate: 'macro', re: /^Macro: / },                                         // 18
   { gate: 'llm', re: /^LLM regime: / },                                      // 19

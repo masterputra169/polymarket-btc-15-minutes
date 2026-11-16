@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 11:06 WIB_
+_Last updated: 2026-11-16 12:05 WIB_
 
 | Area | State |
 |---|---|
@@ -31,6 +31,8 @@ _Last updated: 2026-11-16 11:06 WIB_
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · public read-only visual portal (ML Model Lab, Studies, Changelog & sanitized `$100` eval) · auto-rebuilt on push & every 2m |
+| Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
@@ -51,6 +53,25 @@ _Last updated: 2026-11-16 11:06 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 12:05 WIB — Binance-vs-Chainlink Cross-Feed Alignment (Tahap 1) & Public Study Portal (`poly15-study.dollarkilat.xyz`)
+
+**What changed:**
+1. **Cross-Feed Skew Telemetry & Gate 20f ([settlePrice.ts](bot/src/engines/settlePrice.ts), [filterThresholds.ts](bot/src/safety/filterThresholds.ts), [tradeFilters.ts](bot/src/safety/tradeFilters.ts), [decisionTrailCore.mts](backtest/ml_training/decisionTrailCore.mts)):**
+   - Added `computeCrossFeedMetrics()` comparing ML's Binance-relative distance (`Binance_now - Binance_window_open`) against Polymarket's Chainlink settlement distance (`settlePrice - exactPtb`) so mid-window basis drift and pre-open 60s TWAP skew are measured separately from steady venue basis.
+   - Added Gate `20f` (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`): blocks entries when Binance exaggerates the signal side near PTB (`Cross-feed flip` if Oracle is on the opposite side of PTB, or `Cross-feed skew` if Oracle lead `< 0.035%` while skew `>= 0.035%`), while leaving steady-basis and strong aligned-Oracle leads unaffected and preserving all legacy golden hashes.
+   - Wired through [signalComputation.ts](bot/src/engines/signalComputation.ts), [tradePipeline.ts](bot/src/engines/tradePipeline.ts) (recorded on `entryData` as `liveBasisUsd`, `crossFeedSkewUsd`, `binanceWindowOpen`), and [loop.ts](bot/src/loop.ts) limit filter checks.
+   - Classified `/^Cross-feed /` under `cross_feed` in `decisionTrailCore.mts`.
+2. **Median-Window `BasisTracker`, `autoSettle` & Chainlink Spot Fallback ([settlePrice.ts](bot/src/engines/settlePrice.ts), [loop.ts](bot/src/loop.ts)):**
+   - Extended `BasisTracker` with optional rolling-median window (`new BasisTracker(0.15, 10, 21)` in `loop.ts`) so single-poll stale glitches are rejected while sustained basis regime moves (`+$24 → +$62`) track quickly if Chainlink spot drops.
+   - Added fresh `chainlinkWss` (<15s) fallback for `clSpot` before falling back to `binance - basis`, and fixed `autoSettle(marketSlug, settlePrice, priceToBeat.value, timeLeftMin)` to evaluate predictions with Chainlink/TWAP `settlePrice` rather than raw Binance `lastPrice`.
+3. **Public Visual Study & Report Portal ([study-site/](study-site/), [build-study-site.mjs](scripts/build-study-site.mjs), [redact.mjs](scripts/study/redact.mjs), [nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf)):**
+   - Built a zero-external-dependency static Quant Terminal portal published at `https://poly15-study.dollarkilat.xyz/` with four tabs: **Overview & `$100` Eval** (SVG equity curve, phase/side/model breakdown, PTB health, strictly sanitized recent trades), **ML Model Lab** (interactive multi-model Accuracy/AUC/Skill/Brier/ECE bars, OOS confidence-tier curves, 4-phase Power-θ chart, TreeSHAP pruning chips & quality gates), **Studies & Reports** (searchable `analysis/` Markdown viewer + VPS quant JSON summaries), and **Changelog** (searchable `UPDATES.md` timeline).
+   - Updated [auto-deploy.sh](scripts/auto-deploy.sh), [health-alert.sh](scripts/health-alert.sh), [backup-secrets.sh](scripts/backup-secrets.sh), and added [poly15-study-refresh.service](scripts/poly15-study-refresh.service) + [poly15-study-refresh.timer](scripts/poly15-study-refresh.timer) so commits (including docs/study-only pushes without restarting the bot) and VPS trade updates auto-publish within 2–5 minutes.
+
+**Files:** [settlePrice.ts](bot/src/engines/settlePrice.ts); [filterThresholds.ts](bot/src/safety/filterThresholds.ts); [tradeFilters.ts](bot/src/safety/tradeFilters.ts); [decisionTrailCore.mts](backtest/ml_training/decisionTrailCore.mts); [signalComputation.ts](bot/src/engines/signalComputation.ts); [tradePipeline.ts](bot/src/engines/tradePipeline.ts); [loop.ts](bot/src/loop.ts); [settlePrice.test.ts](bot/src/engines/__tests__/settlePrice.test.ts); [filterThresholds.test.ts](bot/src/safety/__tests__/filterThresholds.test.ts); [decisionTrailStudy.test.ts](bot/tests/decisionTrailStudy.test.ts); [quantUpgrades.pipeline.test.ts](bot/src/engines/__tests__/quantUpgrades.pipeline.test.ts); [studySiteBuilder.test.ts](bot/src/__tests__/studySiteBuilder.test.ts); [build-study-site.mjs](scripts/build-study-site.mjs); [redact.mjs](scripts/study/redact.mjs); [study-site/](study-site/); [auto-deploy.sh](scripts/auto-deploy.sh); [poly15-study-refresh.service](scripts/poly15-study-refresh.service); [poly15-study-refresh.timer](scripts/poly15-study-refresh.timer); [nginx-polybtc15-study.conf](scripts/nginx-polybtc15-study.conf); [health-alert.sh](scripts/health-alert.sh); [backup-secrets.sh](scripts/backup-secrets.sh); [package.json](package.json); [.gitignore](.gitignore); [UPDATES.md](UPDATES.md).
 
 ---
 

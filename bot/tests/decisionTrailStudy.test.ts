@@ -57,6 +57,8 @@ describe('categorizeReason', () => {
     ['Macro: CPI in 5 min', 'macro'],
     ['LLM regime: bearish vs UP', 'llm'],
     ['ML degraded: 40% acc (last 20) < 45%', 'ml_degraded'],
+    ['Cross-feed flip: Binance +0.040% vs Oracle -0.015% for UP (skew 0.055% ≥ 0.035%)', 'cross_feed'],
+    ['Cross-feed skew: Oracle only +0.010% while Binance +0.060% for UP (skew 0.050% ≥ 0.035%)', 'cross_feed'],
   ];
   it.each(cases)('%s → %s', (reason, gate) => {
     expect(categorizeReason(reason)).toBe(gate);

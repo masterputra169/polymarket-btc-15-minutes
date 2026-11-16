@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>POLY//15 Study — ML Reports, Experiments & Live Eval Portal</title>
+    <meta name="theme-color" content="#040810" />
+    <meta name="description" content="Public visual research portal for POLY//15 BTC 15m: ML experiments, calibration curves, quantitative studies, changelog, and sanitized paper evaluation progress." />
+    <link rel="icon" href="./favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./brand/favicon-32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./brand/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar__inner">
+        <a class="brand" href="#overview" id="brand-link">
+          <img class="brand__mark" src="./brand/poly15-mark.svg" alt="POLY//15" width="32" height="32" />
+          <div>
+            <div class="brand__title">POLY//15 <span class="brand__tag">STUDY PORTAL</span></div>
+            <div class="brand__sub" id="hdr-meta">Loading telemetry…</div>
+          </div>
+        </a>
+
+        <nav class="tabs" aria-label="Study sections">
+          <button class="tab is-active" data-tab="overview">Overview &amp; Eval</button>
+          <button class="tab" data-tab="models">ML Model Lab</button>
+          <button class="tab" data-tab="studies">Studies &amp; Reports</button>
+          <button class="tab" data-tab="updates">Changelog</button>
+        </nav>
+
+        <div class="topbar__actions">
+          <span class="pill" id="pill-mode">—</span>
+          <span class="pill pill--cyan" id="pill-model">—</span>
+          <button class="btn btn--ghost" id="btn-refresh" title="Reload published JSON data">Refresh</button>
+          <a class="btn btn--primary" href="https://poly15.dollarkilat.xyz/" target="_blank" rel="noopener noreferrer">Terminal ↗</a>
+        </div>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section id="banner-error" class="card card--error is-hidden"></section>
+
+      <!-- TAB 1: OVERVIEW & PAPER EVAL -->
+      <section class="view" data-view="overview">
+        <div class="kpi-grid" id="overview-kpis"></div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">$100 Fresh Evaluation — Equity &amp; PnL Curve</h2>
+                <p class="card__sub" id="equity-sub">Cumulative balance across settled evaluation trades</p>
+              </div>
+              <span class="badge badge--emerald" id="equity-badge">LIVE SYNC</span>
+            </div>
+            <div class="chart-box" id="chart-equity"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Active ML Model Snapshot</h2>
+                <p class="card__sub" id="active-model-sub">Production ensemble &amp; calibration health</p>
+              </div>
+              <button class="btn btn--small" id="btn-open-models">Compare Models →</button>
+            </div>
+            <div id="active-model-panel"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Breakdown by Phase, Side &amp; Model</h2>
+                <p class="card__sub">Settled trades win rate &amp; PnL split (CLOB V2 taker fee)</p>
+              </div>
+            </div>
+            <div id="eval-breakdown"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Oracle PTB &amp; Legacy Archive</h2>
+                <p class="card__sub">Chainlink 60s TWAP lock health + pre-reset benchmark</p>
+              </div>
+            </div>
+            <div id="health-archive-panel"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Recent Evaluated Trades (Sanitized)</h2>
+              <p class="card__sub">Includes basis &amp; cross-feed skew telemetry when recorded</p>
+            </div>
+            <span class="mono-dim" id="trades-count"></span>
+          </div>
+          <div class="table-wrap" id="recent-trades-table"></div>
+        </article>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Current System State (UPDATES.md)</h2>
+              <p class="card__sub" id="status-updated-at"></p>
+            </div>
+          </div>
+          <div class="table-wrap" id="current-status-table"></div>
+        </article>
+      </section>
+
+      <!-- TAB 2: ML MODEL LAB -->
+      <section class="view is-hidden" data-view="models">
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Model Benchmark Comparison</h2>
+              <p class="card__sub">Registered pipeline v2/v3 ensemble models on their own held-out test splits &amp; head-to-head OOS slices</p>
+            </div>
+            <div class="segmented" id="metric-switcher">
+              <button class="seg is-active" data-metric="accuracy">Accuracy %</button>
+              <button class="seg" data-metric="auc">ROC-AUC</button>
+              <button class="seg" data-metric="skill">Market Skill %</button>
+              <button class="seg" data-metric="brier">Brier (↓ better)</button>
+              <button class="seg" data-metric="ece">Calib ECE (↓ better)</button>
+            </div>
+          </div>
+          <div class="chart-box" id="chart-models-bar"></div>
+        </article>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Head-to-Head Shared OOS Confidence Tiers</h2>
+                <p class="card__sub" id="oos-slice-sub">Win rate by predicted confidence tier (full OOS slice)</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-oos-tiers"></div>
+            <div class="table-wrap" id="oos-presets-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Per-Phase Power-θ Calibration &amp; Feature Audit</h2>
+                <p class="card__sub">1-DOF phase temperature &amp; fold-stable TreeSHAP pruning</p>
+              </div>
+              <select class="select" id="model-inspector-select" aria-label="Inspect model"></select>
+            </div>
+            <div id="model-inspector-detail"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Full Model Registry Ledger</h2>
+              <p class="card__sub">All recent v2/v3 candidates, quality gates, and legacy v1 archive summary</p>
+            </div>
+          </div>
+          <div class="table-wrap" id="models-ledger-table"></div>
+        </article>
+      </section>
+
+      <!-- TAB 3: STUDIES & REPORTS -->
+      <section class="view is-hidden" data-view="studies">
+        <div class="toolbar">
+          <input class="input" type="search" id="study-search" placeholder="Search study reports, metrics, JEV, TWAP, filters…" />
+          <div class="pill-group" id="study-tag-filters"></div>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Quantitative JSON Studies (VPS &amp; Registry)</h2>
+              <p class="card__sub">Calibration, Shadow Split Filters, JEV Stacking &amp; Global Risk empirical summaries</p>
+            </div>
+          </div>
+          <div class="quant-grid" id="quant-studies-grid"></div>
+        </article>
+
+        <div class="split-layout">
+          <aside class="card sidebar-list" id="reports-list"></aside>
+          <article class="card report-reader" id="report-viewer">
+            <div class="empty-state">Select a study report on the left to inspect its full findings, tables, and charts.</div>
+          </article>
+        </div>
+      </section>
+
+      <!-- TAB 4: CHANGELOG / UPDATES -->
+      <section class="view is-hidden" data-view="updates">
+        <div class="toolbar">
+          <input class="input" type="search" id="update-search" placeholder="Search releases, commits, fixes, parameters…" />
+          <div class="pill-group" id="update-tag-filters"></div>
+        </div>
+        <div class="timeline" id="updates-timeline"></div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div>POLY//15 Public Study Portal · Read-only static build (no trading keys, secrets, or wallet identifiers published)</div>
+      <div class="mono-dim" id="footer-build"></div>
+    </footer>
+
+    <div class="tooltip is-hidden" id="chart-tooltip"></div>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

@@ -38,6 +38,9 @@ fi
 
 curl -fsS --max-time 5 http://127.0.0.1:3101/health >/dev/null 2>&1 || add_issue "bot report health endpoint down"
 curl -fsS --max-time 5 http://127.0.0.1:3102/health >/dev/null 2>&1 || add_issue "auth health endpoint down"
+if [ -e /etc/nginx/sites-enabled/polybtc15-study ]; then
+  curl -fsS --max-time 5 http://127.0.0.1:8082/health >/dev/null 2>&1 || add_issue "study portal health endpoint down"
+fi
 
 if [ -f "$AUTO_STATE" ]; then
   RESULT=$(sed -n 's/.*"last_result":"\([^"]*\)".*/\1/p' "$AUTO_STATE" | head -1)

@@ -76,26 +76,97 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
   return { price: (sum + i.spot * remaining) / (TWAP_WINDOW_MS / 1_000), source: 'chainlink_final_minute' };
 }
 
+export interface CrossFeedMetricsInput {
+  lastPrice: number | null | undefined;
+  binanceWindowOpen: number | null | undefined;
+  settlePrice: number | null | undefined;
+  exactPtb: number | null | undefined;
+  clSpot?: number | null | undefined;
+}
+
+export interface CrossFeedMetrics {
+  binanceWindowOpen: number | null;
+  binanceDistUsd: number | null;
+  binanceDistPct: number | null;
+  oracleDistUsd: number | null;
+  oracleDistPct: number | null;
+  liveBasisUsd: number | null;
+  /** binanceDistUsd − oracleDistUsd = basis drift + pre-open TWAP skew. */
+  crossFeedSkewUsd: number | null;
+  crossFeedSkewPct: number | null;
+}
+
+const finitePos = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x) && x > 0;
+
+/**
+ * Measure alignment between ML's Binance-relative distance (Binance_now − Binance_open)
+ * and Polymarket's Chainlink settlement distance (settlePrice − exact TWAP PTB).
+ * Constant exchange basis cancels across both ends of the Binance distance; non-zero skew
+ * reveals mid-window basis drift or pre-open TWAP divergence.
+ */
+export function computeCrossFeedMetrics(input: CrossFeedMetricsInput): CrossFeedMetrics {
+  const { lastPrice, binanceWindowOpen, settlePrice, exactPtb, clSpot = null } = input;
+  const hasBin = finitePos(lastPrice) && finitePos(binanceWindowOpen);
+  const hasOra = finitePos(settlePrice) && finitePos(exactPtb);
+
+  const binanceDistUsd = hasBin ? lastPrice - binanceWindowOpen : null;
+  const binanceDistPct = hasBin ? (binanceDistUsd! / binanceWindowOpen) * 100 : null;
+
+  const oracleDistUsd = hasOra ? settlePrice - exactPtb : null;
+  const oracleDistPct = hasOra ? (oracleDistUsd! / exactPtb) * 100 : null;
+
+  const liveBasisUsd = finitePos(lastPrice) && finitePos(clSpot) ? lastPrice - clSpot : null;
+
+  const crossFeedSkewUsd =
+    binanceDistUsd != null && oracleDistUsd != null ? binanceDistUsd - oracleDistUsd : null;
+  const crossFeedSkewPct =
+    binanceDistPct != null && oracleDistPct != null ? binanceDistPct - oracleDistPct : null;
+
+  return {
+    binanceWindowOpen: finitePos(binanceWindowOpen) ? binanceWindowOpen : null,
+    binanceDistUsd,
+    binanceDistPct,
+    oracleDistUsd,
+    oracleDistPct,
+    liveBasisUsd,
+    crossFeedSkewUsd,
+    crossFeedSkewPct,
+  };
+}
+
 /**
  * Binance − Chainlink, smoothed. Updated only when both prices are fresh; an
- * outlier (a stale side) is clipped so one bad poll cannot move it far.
+ * optional rolling median window rejects single-poll stale spikes while letting
+ * sustained basis regime shifts (e.g. USDT discount widening) track rapidly.
  */
 export class BasisTracker {
   private value: number | null = null;
   private readonly alpha: number;
   private readonly maxStep: number;
+  private readonly medianWindow: number;
+  private readonly recent: number[] = [];
 
-  constructor(alpha = 0.02, maxStep = 5) {
+  constructor(alpha = 0.02, maxStep = 5, medianWindow = 0) {
     this.alpha = alpha;
     this.maxStep = maxStep;
+    this.medianWindow = Math.max(0, Math.floor(medianWindow));
   }
 
   update(binance: number | null, chainlink: number | null): void {
     if (binance == null || chainlink == null || !(binance > 0) || !(chainlink > 0)) return;
     const d = binance - chainlink;
     if (!Number.isFinite(d) || Math.abs(d) > 500) return;
-    if (this.value == null) { this.value = d; return; }
-    const step = Math.max(-this.maxStep, Math.min(this.maxStep, this.alpha * (d - this.value)));
+
+    let target = d;
+    if (this.medianWindow > 1) {
+      this.recent.push(d);
+      if (this.recent.length > this.medianWindow) this.recent.shift();
+      const sorted = [...this.recent].sort((a, b) => a - b);
+      target = sorted[Math.floor(sorted.length / 2)];
+    }
+
+    if (this.value == null) { this.value = target; return; }
+    const step = Math.max(-this.maxStep, Math.min(this.maxStep, this.alpha * (target - this.value)));
     this.value += step;
   }
 

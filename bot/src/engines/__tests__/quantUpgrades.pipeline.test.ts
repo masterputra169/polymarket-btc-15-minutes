@@ -112,14 +112,32 @@ function makeDeps() {
 beforeEach(() => { vi.clearAllMocks(); });
 
 describe('tradePipeline Quant Upgrades (R4 300s & 3s Lead-Lag)', () => {
-  test('accelerates confirmation to 15/180 on aligned lead-lag impulse and forwards Gate 20d/20e inputs', async () => {
+  test('accelerates confirmation to 15/180 on aligned lead-lag impulse and forwards Gate 20d/20e/20f inputs', async () => {
     const deps = makeDeps();
-    const ok = await executeDirectionalTrade(baseSignal(), deps);
+    const ok = await executeDirectionalTrade(baseSignal({
+      crossFeed: {
+        binanceWindowOpen: 94990,
+        binanceDistUsd: 60,
+        binanceDistPct: 0.063,
+        oracleDistUsd: 35,
+        oracleDistPct: 0.037,
+        liveBasisUsd: 25,
+        crossFeedSkewUsd: 25,
+        crossFeedSkewPct: 0.026,
+      },
+    }), deps);
     expect(ok).toBe(true);
     expect(deps.isSignalStable).toHaveBeenCalledWith(15);
     expect(deps.applyTradeFilters).toHaveBeenCalledWith(expect.objectContaining({
       buyRatio300s: 0.78,
       leadLagDirection: 'UP',
+      binanceDistPct: 0.063,
+      oracleDistPct: 0.037,
+    }));
+    expect(deps.captureEntrySnapshot).toHaveBeenCalledWith(expect.objectContaining({
+      liveBasisUsd: 25,
+      crossFeedSkewUsd: 25,
+      binanceWindowOpen: 94990,
     }));
   });
 

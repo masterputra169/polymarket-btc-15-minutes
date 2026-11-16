@@ -427,8 +427,9 @@ function verifyClosedMarketPtb(slug: string | null): void {
 // Settlement estimates of the last minutes, for the 30 s drift on the tape (record-only).
 const settleHistory = new SettleHistory(120_000);
 
-// Binance − Chainlink, tracked so the settlement estimate survives a Chainlink outage.
-const basisTracker = new BasisTracker();
+// Binance − Chainlink, tracked with a 21-sample rolling median + responsive EWMA
+// so single-poll glitches are ignored while sustained basis shifts track rapidly.
+const basisTracker = new BasisTracker(0.15, 10, 21);
 
 // ── Pre-scheduled PTB capture ──
 // Polymarket snapshots Chainlink Data Streams at eventStartTime for PTB.
@@ -1381,8 +1382,14 @@ export async function pollOnce() {
     // What BTC is compared with the price to beat by: a Chainlink-based estimate of
     // the settlement TWAP (engines/settlePrice.ts). Binance ran ~$24 above Chainlink
     // on the 2026-09 tape, so Binance − PTB read every window as more bullish than it was.
-    const clSpot = getPolyLiveLastUpdate() && Date.now() - getPolyLiveLastUpdate() < 10_000 ? getPolyLivePrice() : null;
-    if (wsFresh) basisTracker.update(lastPrice, clSpot);
+    const polyLiveFresh = getPolyLiveLastUpdate() && Date.now() - getPolyLiveLastUpdate() < 10_000
+      ? getPolyLivePrice()
+      : null;
+    const clWssFresh = isChainlinkWssConnected() && getChainlinkWssLastUpdate() && Date.now() - getChainlinkWssLastUpdate() < 15_000
+      ? getChainlinkWssPrice()
+      : null;
+    const clSpot = polyLiveFresh ?? clWssFresh;
+    if (wsFresh && clSpot != null) basisTracker.update(lastPrice, clSpot);
     const settle = estimateSettlePrice({
       nowMs: now, endMs: currentMarketEndMs, spot: clSpot,
       spotTicks: currentMarketEndMs ? getSpotTicksBetween(currentMarketEndMs - 61_000, now) : [],
@@ -1425,7 +1432,7 @@ export async function pollOnce() {
       pathEfficiency, peakUpGapRatio, peakDownGapRatio,
       scored, timeAware, ruleEdge,
       mlResult, ensembleUp, ensembleDown, mlAgreesWithRules,
-      edge, session,
+      edge, session, crossFeed,
       mcResult: mcResultRaw,
     } = sig;
 
@@ -2112,7 +2119,7 @@ export async function pollOnce() {
 
     // ── 9. Feedback tracking (stale cleanup) ──
     try {
-      autoSettle(marketSlug, lastPrice, priceToBeat.value, timeLeftMin);
+      autoSettle(marketSlug, settlePrice, priceToBeat.value, timeLeftMin);
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
 
     // ── 9b. Limit Order Strategy (passive entry at optimal prices) ──
@@ -2196,6 +2203,8 @@ export async function pollOnce() {
           mlAccuracy: getMLAccuracy?.() ?? null,
           buyRatio: volDelta?.buyRatio ?? null,
           ptbSource: priceToBeat?.source ?? null,
+          binanceDistPct: crossFeed?.binanceDistPct ?? null,
+          oracleDistPct: crossFeed?.oracleDistPct ?? null,
         });
 
         if (!limFilterResult.pass) {
@@ -2751,7 +2760,7 @@ export async function pollOnce() {
           smartFlowSignal,
           mcResult,
           pathEfficiency, peakUpGapRatio, peakDownGapRatio,
-          leadLagImpulse,
+          leadLagImpulse, crossFeed,
         }, {
           updateConfirmation,
           isSignalStable,
@@ -2906,7 +2915,7 @@ export async function pollOnce() {
       priceToBeat: priceToBeat.value, marketQuestion,
       ptbSource: priceToBeat.source, ptbExact: isExactPtbSource(priceToBeat.source),
       // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
-      settlePrice, settlePriceSource: settle.source,
+      settlePrice, settlePriceSource: settle.source, crossFeed,
       twapNow: getLatestTwap()?.value ?? null,
       twapFeed: getTwapFeedHealth(),
       deribitIv,

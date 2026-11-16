@@ -4,7 +4,7 @@
  * the settlement TWAP that is already written.
  */
 import { describe, test, expect } from 'vitest';
-import { estimateSettlePrice, BasisTracker, TWAP_WINDOW_MS } from '../settlePrice.ts';
+import { estimateSettlePrice, BasisTracker, computeCrossFeedMetrics, TWAP_WINDOW_MS } from '../settlePrice.ts';
 
 const END = 1790352900000;
 const secs = (from: number, n: number, value: (i: number) => number) =>
@@ -68,5 +68,63 @@ describe('BasisTracker', () => {
     b.update(84_000, null);            // ignored
     b.update(90_000, 84_000);          // absurd: ignored
     expect(b.get()).toBe(26);
+  });
+
+  test('median-window mode ignores a single outlier spike while converging smoothly on sustained shifts', () => {
+    const b = new BasisTracker(0.15, 10, 5);
+    for (let i = 0; i < 5; i++) b.update(65_024, 65_000);
+    expect(b.get()).toBeCloseTo(24, 6);
+
+    // Single poll spike (+$150 basis): median stays 24 -> unmoved.
+    b.update(65_150, 65_000);
+    expect(b.get()).toBeCloseTo(24, 6);
+
+    // Sustained shift to +$62 USDT basis across >= 3 of 5 polls moves tracker toward 62.
+    for (let i = 0; i < 20; i++) b.update(65_062, 65_000);
+    expect(b.get()!).toBeGreaterThan(58);
+    expect(b.get()!).toBeLessThanOrEqual(62);
+  });
+});
+
+describe('computeCrossFeedMetrics', () => {
+  test('steady exchange basis cancels out across Binance window open and now', () => {
+    const m = computeCrossFeedMetrics({
+      lastPrice: 65_062,
+      binanceWindowOpen: 64_962,
+      settlePrice: 65_000,
+      exactPtb: 64_900,
+      clSpot: 65_000,
+    });
+    expect(m.liveBasisUsd).toBe(62);
+    expect(m.binanceDistUsd).toBe(100);
+    expect(m.oracleDistUsd).toBe(100);
+    expect(m.crossFeedSkewUsd).toBe(0);
+    expect(m.crossFeedSkewPct).toBeCloseTo(0, 3);
+  });
+
+  test('detects cross-feed skew when Binance is above open while Chainlink settles below PTB', () => {
+    const m = computeCrossFeedMetrics({
+      lastPrice: 65_062,
+      binanceWindowOpen: 65_022,
+      settlePrice: 65_000,
+      exactPtb: 65_015,
+      clSpot: 65_000,
+    });
+    expect(m.binanceDistUsd).toBe(40);
+    expect(m.oracleDistUsd).toBe(-15);
+    expect(m.crossFeedSkewUsd).toBe(55);
+    expect(m.crossFeedSkewPct!).toBeGreaterThan(0.08);
+  });
+
+  test('returns nulls safely when inputs are missing', () => {
+    const m = computeCrossFeedMetrics({
+      lastPrice: null,
+      binanceWindowOpen: null,
+      settlePrice: 65_000,
+      exactPtb: null,
+    });
+    expect(m.binanceDistPct).toBeNull();
+    expect(m.oracleDistPct).toBeNull();
+    expect(m.crossFeedSkewPct).toBeNull();
   });
 });

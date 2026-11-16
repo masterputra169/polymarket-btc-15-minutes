@@ -18,6 +18,11 @@ if [ ! -f "$KEY" ]; then
   chown root:root "$KEY"
 fi
 
+EXTRA_FILES=()
+if [ -f /etc/nginx/sites-available/polybtc15-study ]; then
+  EXTRA_FILES+=(etc/nginx/sites-available/polybtc15-study)
+fi
+
 tar -czf "$TMP" -C / --dereference \
   opt/polybtc15/auth.env \
   opt/polybtc15/dashboard-password.hash \
@@ -25,7 +30,8 @@ tar -czf "$TMP" -C / --dereference \
   etc/cloudflared/config.yml \
   etc/nginx/sites-available/polybtc15 \
   etc/systemd/system/polybot-dashboard-auth.service \
-  etc/systemd/system/cloudflared-named.service
+  etc/systemd/system/cloudflared-named.service \
+  "${EXTRA_FILES[@]}"
 
 openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 -in "$TMP" -out "$ARCHIVE" -pass file:"$KEY"
 chmod 600 "$ARCHIVE"

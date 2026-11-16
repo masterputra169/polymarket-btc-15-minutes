@@ -28,7 +28,8 @@
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
     "report:dryrun:railway": "node bot/scripts/railwayDryRunReport.mts --days 7",
     "ml:registry": "node bot/scripts/mlRegistry.mts",
-    "tape:pull": "node bot/scripts/tapePull.mts"
+    "tape:pull": "node bot/scripts/tapePull.mts",
+    "study:build": "node scripts/build-study-site.mjs"
   },
   "dependencies": {
     "motion": "^14.4.0",

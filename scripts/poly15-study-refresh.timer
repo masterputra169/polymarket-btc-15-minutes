@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically publish updated POLY//15 reports and paper eval metrics
+
+[Timer]
+OnBootSec=45s
+OnUnitActiveSec=2min
+RandomizedDelaySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

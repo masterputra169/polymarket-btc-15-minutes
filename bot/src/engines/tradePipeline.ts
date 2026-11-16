@@ -271,6 +271,7 @@ export async function executeDirectionalTrade({
   peakUpGapRatio = null,
   peakDownGapRatio = null,
   leadLagImpulse = null,
+  crossFeed = null,
 }, deps) {
   // ── ML availability gate ──
   // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
@@ -365,6 +366,8 @@ export async function executeDirectionalTrade({
     peakGapRatio: rec.side === 'UP' ? peakUpGapRatio : rec.side === 'DOWN' ? peakDownGapRatio : null,
     orderbookImbalance: orderbookSignal?.imbalance ?? null,
     leadLagDirection: leadLagImpulse?.active ? leadLagImpulse.direction : null,
+    binanceDistPct: crossFeed?.binanceDistPct ?? null,
+    oracleDistPct: crossFeed?.oracleDistPct ?? null,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);
@@ -610,6 +613,9 @@ export async function executeDirectionalTrade({
     side: betSide, tokenPrice: betMarketPrice, btcPrice: lastPrice,
     priceToBeat: priceToBeat.value, marketSlug, cost: orderCost, size: shares,
     ptbSource: priceToBeat.source ?? null, settlePrice,
+    liveBasisUsd: crossFeed?.liveBasisUsd ?? null,
+    crossFeedSkewUsd: crossFeed?.crossFeedSkewUsd ?? null,
+    binanceWindowOpen: crossFeed?.binanceWindowOpen ?? null,
     conditionId: currentConditionId, // lets the fallback verifier ask the CLOB oracle later
     confidence: rec.confidence, phase: rec.phase, reason: rec.reason,
     edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,

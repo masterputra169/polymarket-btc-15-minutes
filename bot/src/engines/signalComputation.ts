@@ -18,6 +18,8 @@ import { recordOrderFlowBook, recordOrderFlowTrades } from './orderFlowFeatures.
 import { getSignalModifiers } from '../adapters/signalPerfStore.ts';
 import { getTrainedSignalModifiers } from '../adapters/mlLoader.ts';
 import { simulateBTCPaths } from './monteCarlo.ts';
+import { computeCrossFeedMetrics } from './settlePrice.ts';
+import { isExactPtbSource } from './ptbSources.ts';
 import { buildMlFeatureInputs, MARKET_MOMENTUM_WINDOW_MS } from '../../../src/engines/ml/featureInputs.ts';
 import { aggregate5m, CANDLES_5M } from '../../../src/engines/ml/trainingRow.ts';
 import { getRecentPriceWindow, type BinancePriceWindow } from '../streams/binanceWs.ts';
@@ -409,6 +411,7 @@ export function computeSignals({
 
   // ── ML prediction ──
   const session = getSessionName();
+  const binanceWindowOpen = candleOpenAt(klines1m, windowStartMs(marketSlug, now, timeLeftMin));
   const mlResult = featurePipeline >= 2
     ? predictWithSharedBuilder()
     : getMLPrediction({
@@ -459,7 +462,7 @@ export function computeSignals({
       candles1m: klines1m,
       candles5m: aggregate5m(klines1m).slice(-CANDLES_5M),
       lastPrice,
-      windowOpenPrice: candleOpenAt(klines1m, windowStartMs(marketSlug, now, timeLeftMin)),
+      windowOpenPrice: binanceWindowOpen,
       minutesLeft: timeLeftMin,
       nowMs: now,
       marketUp,
@@ -469,6 +472,14 @@ export function computeSignals({
     return getMLPrediction(inputs.marketState, timeAware.adjustedUp, regimeInfo.regime,
       { featureRuleProbUp: inputs.ruleProbUp });
   }
+
+  const crossFeed = computeCrossFeedMetrics({
+    lastPrice,
+    binanceWindowOpen,
+    settlePrice: settlePrice ?? lastPrice,
+    exactPtb: isExactPtbSource(updatedPriceToBeat?.source) ? updatedPriceToBeat?.value : null,
+    clSpot: oraclePrice ?? null,
+  });
 
   // ── Monte Carlo simulation (independent probability from GBM price paths) ──
   const mcResult = simulateBTCPaths({
@@ -510,6 +521,7 @@ export function computeSignals({
 
     // Price to beat (potentially updated)
     updatedPriceToBeat,
+    crossFeed,
 
     // Scoring
     scored, timeAware, ruleEdge,

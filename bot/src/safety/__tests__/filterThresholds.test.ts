@@ -166,5 +166,43 @@ describe('tradeFilters honours the thresholds', () => {
     expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'DOWN', orderbookImbalance: -0.44 }).reasons)).toEqual([]);
     expect(obReason(active.applyTradeFilters({ ...input, signalSide: 'UP', orderbookImbalance: null }).reasons)).toEqual([]);
   });
+
+  test('FILTER_CROSS_FEED_SKEW_PCT blocks Binance-vs-Chainlink PTB flips & inflated coin flips while allowing aligned leads', async () => {
+    const cfReason = (rs: string[]) => rs.filter(r => r.startsWith('Cross-feed '));
+
+    const def = await load({});
+    expect(def.getFilterThresholds().crossFeedSkewPct).toBe(0.035);
+
+    // 1. Cross-feed PTB flip: Binance thinks UP (+0.04%), Chainlink actually DOWN (-0.015%) -> skew 0.055% >= 0.035%
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.04, oracleDistPct: -0.015,
+    }).reasons)).toHaveLength(1);
+
+    // 2. Phantom near-PTB lead: Binance +0.06%, Chainlink barely +0.01% (< 0.035%), skew 0.050% -> BLOCKED
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.06, oracleDistPct: 0.01,
+    }).reasons)).toHaveLength(1);
+
+    // 3. Symmetry on DOWN side: Binance -0.04% vs Chainlink +0.01% -> BLOCKED
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'DOWN', binanceDistPct: -0.04, oracleDistPct: 0.01,
+    }).reasons)).toHaveLength(1);
+
+    // 4. Screenshot scenario: wide steady/aligned lead where Oracle is ALREADY strongly UP (+0.199%) -> PASS
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.294, oracleDistPct: 0.199,
+    }).reasons)).toEqual([]);
+
+    // 5. Constant basis (skew 0.005%) near PTB -> PASS
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.03, oracleDistPct: 0.025,
+    }).reasons)).toEqual([]);
+
+    // 6. Disabled via FILTER_CROSS_FEED_SKEW_PCT=0 -> PASS
+    const off = await load({ FILTER_CROSS_FEED_SKEW_PCT: '0' });
+    expect(cfReason(off.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.04, oracleDistPct: -0.015,
+    }).reasons)).toEqual([]);
+  });
 });
 

@@ -192,13 +192,18 @@ DOCS_ONLY=1
 while IFS= read -r f; do
   [ -z "$f" ] && continue
   case "$f" in
-    analysis/*|docs/*|ml_registry/*|.github/*|UPDATES.md|README.md|CLAUDE.md|*.md) ;;
+    analysis/*|docs/*|ml_registry/*|study-site/*|.github/*|UPDATES.md|README.md|CLAUDE.md|*.md|scripts/build-study-site.mjs|scripts/study/*) ;;
     *) DOCS_ONLY=0; break ;;
   esac
 done <<< "$CHANGED"
 if [ "$DOCS_ONLY" = "1" ]; then
-  LAST_SEEN_SHA="$TARGET"; LAST_RESULT="docs-only"; write_state
-  log "docs-only; no server deploy"; exit 0
+  git -C "$REPO" reset --hard "$TARGET" >/dev/null
+  if [ -f "$REPO/scripts/build-study-site.mjs" ]; then
+    mkdir -p "$REPO/study-dist"
+    node "$REPO/scripts/build-study-site.mjs" --root "$REPO" --data-dir "$REPO/bot/data" --out "$REPO/study-dist" --quiet || true
+  fi
+  DEPLOYED_SHA="$TARGET"; LAST_SEEN_SHA="$TARGET"; LAST_RESULT="docs-published"; write_state
+  log "docs/study-only updated & published; bot untouched"; exit 0
 fi
 
 guard
@@ -265,6 +270,10 @@ wait_http "http://127.0.0.1:3101/health" || { log "bot health failed"; exit 1; }
 wait_http "http://127.0.0.1:3102/health" || { log "auth health failed"; exit 1; }
 curl -fsS --max-time 5 "http://127.0.0.1:8080/" | grep -q 'id="root"' || { log "dashboard check failed"; exit 1; }
 SWITCH_STARTED=0
+if [ -f "$REPO/scripts/build-study-site.mjs" ]; then
+  mkdir -p "$REPO/study-dist"
+  node "$REPO/scripts/build-study-site.mjs" --root "$REPO" --data-dir "$REPO/bot/data" --out "$REPO/study-dist" --quiet || log "study-dist build warning"
+fi
 DEPLOYED_SHA="$TARGET"; LAST_SEEN_SHA="$TARGET"; LAST_RESULT="success"; write_state
 rm -rf "$BACKUP"; BACKUP=""
 rm -f "$STATE_DIR/last-block"

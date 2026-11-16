@@ -309,6 +309,8 @@ export function applyTradeFilters({
   orderbookImbalance = null, // UP bid pressure - DOWN bid pressure in [-1, 1]
   buyRatio300s = null,       // 300s (5-minute) Binance taker buy ratio in [0, 1]
   leadLagDirection = null,   // active 3s Binance lead-lag impulse direction ('UP'|'DOWN'|null)
+  binanceDistPct = null,     // (Binance_now − Binance_open) / Binance_open * 100
+  oracleDistPct = null,      // (Chainlink_settle − exact_PTB) / exact_PTB * 100
 }: Record<string, any>) {
   const reasons = [];
 
@@ -804,6 +806,32 @@ export function applyTradeFilters({
   // Never buy into a fresh 3-second BTC impulse moving against our signal side.
   if (T.blockOpposingLeadLag >= 0.5 && leadLagDirection && signalSide && leadLagDirection !== signalSide) {
     reasons.push(`Opposing 3s BTC lead-lag impulse: Binance spiking ${leadLagDirection} vs signal ${signalSide}`);
+  }
+
+  // 20f. Cross-feed Binance vs Chainlink alignment guard (basis drift / TWAP open skew)
+  // ML features measure Binance vs Binance open while Polymarket settles on Chainlink TWAP vs exact PTB.
+  // Steady basis cancels across Binance open/now; block only when cross-feed skew inflates a near-PTB lead
+  // or puts Binance and Chainlink on opposite sides of PTB for the entry direction.
+  if (
+    T.crossFeedSkewPct > 0
+    && signalSide != null
+    && binanceDistPct != null && Number.isFinite(binanceDistPct)
+    && oracleDistPct != null && Number.isFinite(oracleDistPct)
+  ) {
+    const signedBinance = signalSide === 'UP' ? binanceDistPct : -binanceDistPct;
+    const signedOracle = signalSide === 'UP' ? oracleDistPct : -oracleDistPct;
+    const inflationPct = signedBinance - signedOracle;
+    if (signedBinance > 0 && inflationPct >= T.crossFeedSkewPct) {
+      if (signedOracle <= 0) {
+        reasons.push(
+          `Cross-feed flip: Binance ${signedBinance >= 0 ? '+' : ''}${signedBinance.toFixed(3)}% vs Oracle ${signedOracle >= 0 ? '+' : ''}${signedOracle.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${T.crossFeedSkewPct.toFixed(3)}%)`,
+        );
+      } else if (signedOracle < T.crossFeedSkewPct) {
+        reasons.push(
+          `Cross-feed skew: Oracle only +${signedOracle.toFixed(3)}% while Binance +${signedBinance.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${T.crossFeedSkewPct.toFixed(3)}%)`,
+        );
+      }
+    }
   }
 
   const sessionQuality = SESSION_QUALITY[session] ?? 0.70;

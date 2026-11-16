@@ -1,0 +1,18 @@
+[Unit]
+Description=Refresh POLY//15 static study portal bundle when data/reports change
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/polybtc15
+ExecStart=/usr/local/bin/node /opt/polybtc15/scripts/build-study-site.mjs --root /opt/polybtc15 --data-dir /opt/polybtc15/bot/data --out /opt/polybtc15/study-dist --only-if-changed --quiet
+Nice=15
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/polybtc15/study-dist
+ProtectHome=read-only

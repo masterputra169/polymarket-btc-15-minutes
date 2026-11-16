@@ -7,6 +7,7 @@ package-lock.json
 
 # Build output
 dist/
+study-dist/
 build/
 
 # Environment variables (any real env file; only the *.example templates are tracked)
