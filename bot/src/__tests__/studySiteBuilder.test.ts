@@ -111,6 +111,19 @@ describe('parseUpdatesMd & buildStudySite', () => {
         expect(site.eval.wins).toBe(1);
         expect(site.eval.bankroll).toBe(101.67);
 
+        const modelsJson = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'models.json'), 'utf8'));
+        expect(Array.isArray(modelsJson.timelineModels)).toBe(true);
+        expect(modelsJson.timelineModels.length).toBeGreaterThanOrEqual(20);
+        expect(Array.isArray(modelsJson.experiments)).toBe(true);
+        expect(modelsJson.experiments.length).toBeGreaterThanOrEqual(5);
+        const activeM = modelsJson.models.find((m: any) => m.id === modelsJson.activeModelId);
+        expect(activeM).toBeDefined();
+        expect(activeM.featureCatalog.length).toBeGreaterThanOrEqual(70);
+        expect(activeM.calibrationBins).toHaveLength(10);
+        expect(activeM.confidenceBuckets.length).toBeGreaterThanOrEqual(5);
+        expect(activeM.metrics?.lgb?.auc).toBeGreaterThan(0.8);
+        expect(activeM.xgbParams?.max_depth).toBeDefined();
+
         // --only-if-changed skips cleanly on unchanged second call
         const second = buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, onlyIfChanged: true });
         expect(second.skipped).toBe(true);

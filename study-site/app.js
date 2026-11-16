@@ -1,5 +1,15 @@
 import { renderMarkdown } from './markdown.js';
-import { drawEquityChart, drawMetricBars, drawTierCurve, drawPhaseThetaChart } from './charts.js';
+import {
+  drawEquityChart,
+  drawMetricBars,
+  drawTierCurve,
+  drawPhaseThetaChart,
+  drawEvolutionChart,
+  drawCalibrationCurve,
+  drawConfidenceBuckets,
+  drawPhaseResponseCurve,
+  drawFeatureImportanceBars,
+} from './charts.js';
 
 const state = {
   site: null,
@@ -9,6 +19,12 @@ const state = {
   activeTab: 'overview',
   metricKey: 'accuracy',
   selectedModelId: null,
+  featMode: 'xgbSplits',
+  featStatus: 'ALL',
+  featGroup: 'ALL',
+  featQuery: '',
+  presetSlice: 'fullOos',
+  showLegacyModels: false,
   selectedReportId: null,
   studyQuery: '',
   studyTag: 'ALL',
@@ -244,161 +260,307 @@ function renderOverview() {
   cst.appendChild(makeTable(['Area', 'Current State'], sRows));
 }
 
-function renderModelsTab() {
-  const { models } = state;
-  if (!models) return;
-
-  const list = models.models;
-  const specs = {
-    accuracy: {
-      title: 'Test Accuracy',
-      minFloor: 0.72,
-      format: (v) => `${(v * 100).toFixed(2)}%`,
-      pick: (m) => m.metrics?.ensemble?.accuracy ?? m.metrics?.xgb?.accuracy ?? null,
-    },
-    auc: {
-      title: 'Test ROC-AUC',
-      minFloor: 0.82,
-      format: (v) => v.toFixed(4),
-      pick: (m) => m.metrics?.ensemble?.auc ?? m.metrics?.xgb?.auc ?? null,
-    },
-    skill: {
-      title: 'Brier Skill vs Market',
-      minFloor: -0.02,
-      format: (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`,
-      pick: (m) => m.metrics?.ensemble?.brier_skill_vs_market ?? m.metrics?.xgb?.brier_skill_vs_market ?? null,
-    },
-    brier: {
-      title: 'Test Brier Score (↓ better)',
-      minFloor: 0.14,
-      format: (v) => v.toFixed(4),
-      pick: (m) => m.metrics?.ensemble?.brier ?? m.metrics?.xgb?.brier ?? null,
-    },
-    ece: {
-      title: 'Calibration ECE (↓ better)',
-      minFloor: 0,
-      format: (v) => v.toFixed(4),
-      pick: (m) => m.metrics?.ensemble?.calibration_ece ?? m.metrics?.xgb?.calibration_ece ?? null,
-    },
-  };
-  const spec = specs[state.metricKey] || specs.accuracy;
-  const items = list.map((m) => ({
-    label: m.id,
-    value: spec.pick(m),
-    isActive: m.isActive,
-    highlight: m.latestEval?.fullOos_skillPct != null,
-    sub: `${m.trainingMeta?.rows ? m.trainingMeta.rows.toLocaleString() + ' mkts' : ''} · ${m.status}`,
-  }));
-  drawMetricBars(document.getElementById('chart-models-bar'), items, spec);
-
-  // OOS shared slice comparison (find newest evaluated event carrying fullOos presets/tiers)
-  const richEval = [...models.oosBenchmarks].reverse().find((e) => e.fullOos && typeof e.fullOos === 'object');
-  const tierSeries = [];
-  const presetRows = [];
-  if (richEval?.fullOos) {
-    for (const [k, obj] of Object.entries(richEval.fullOos)) {
-      if (obj && typeof obj === 'object' && obj.tiers) {
-        tierSeries.push({ label: `${k} (${obj.name || ''})`, tiers: obj.tiers });
-        const p55 = obj.preset_55_58_06 || obj.preset_45_65_06;
-        presetRows.push([
-          k,
-          obj.name || '—',
-          `${obj.acc?.toFixed(2) ?? '—'}%`,
-          obj.auc?.toFixed(4) ?? '—',
-          obj.skillPct != null ? `+${obj.skillPct}%` : '—',
-          obj.ece?.toFixed(4) ?? '—',
-          p55 ? `${p55.wr}% (${p55.trades} tr, ROI +${p55.roiPct}%)` : '—',
-        ]);
-      }
-    }
-    document.getElementById('oos-slice-sub').textContent =
-      `Benchmark slice ${richEval.fullOos.slice || 'shared OOS'} (official CLOB V2 taker fee)`;
+function renderModelKpis(m) {
+  const badges = document.getElementById('ml-selected-badges');
+  badges.replaceChildren();
+  badges.appendChild(h('span', `badge ${m.isActive ? 'badge--emerald' : 'badge--cyan'}`, `${m.status}${m.isActive ? ' ★ LIVE' : ''}`));
+  badges.appendChild(h('span', 'badge badge--cyan', `Pipeline v${m.featurePipeline}`));
+  if (m.trainingMeta?.rows) {
+    badges.appendChild(h('span', 'badge', `${m.trainingMeta.rows.toLocaleString()} mkts · ${m.trainingMeta.days || '?'}d`));
   }
-  drawTierCurve(document.getElementById('chart-oos-tiers'), tierSeries);
-
-  // Append latest agent fullOos eval row (e.g. 20261116-p2-ef8dfd) cleanly if separate
-  const latestAgentEval = models.models.find((m) => m.latestEval?.fullOos_acc != null);
-  if (latestAgentEval) {
-    const e = latestAgentEval.latestEval;
-    presetRows.unshift([
-      latestAgentEval.id,
-      'Group-1 TreeSHAP + 4-Phase',
-      `${e.fullOos_acc}%`,
-      `${e.fullOos_auc}`,
-      `+${e.fullOos_skillPct}%`,
-      `${e.fullOos_ece}`,
-      `exact2175: ${e.exact2175_auc} AUC · +${e.exact2175_skillPct}% skill`,
-    ]);
-  }
-  const opWrap = document.getElementById('oos-presets-table');
-  opWrap.replaceChildren();
-  if (presetRows.length) {
-    opWrap.appendChild(makeTable(['Model', 'Config', 'OOS Acc', 'OOS AUC', 'Skill', 'ECE', 'Preset / Exact'], presetRows));
+  const activeCount = m.featureCatalog ? m.featureCatalog.filter((f) => f.status === 'active').length : m.calibration?.xgb?.numFeatures;
+  const totalFeats = m.featureCatalog?.length || activeCount;
+  if (activeCount != null) badges.appendChild(h('span', 'badge', `${activeCount}/${totalFeats} features`));
+  if (m.gate) {
+    badges.appendChild(h('span', `badge ${m.gate.pass ? 'badge--emerald' : 'badge--rose'}`, `Gates ${m.gate.checks?.length || 0}/${m.gate.checks?.length || 0} ${m.gate.pass ? 'PASS' : 'FAIL'}`));
   }
 
-  // Selector for Model Inspector
-  const sel = document.getElementById('model-inspector-select');
-  sel.replaceChildren();
-  for (const m of list) {
-    const opt = h('option', null, `${m.id} (${m.status}${m.isActive ? ' ★' : ''})`);
-    opt.value = m.id;
-    sel.appendChild(opt);
-  }
-  if (!state.selectedModelId || !list.some((m) => m.id === state.selectedModelId)) {
-    state.selectedModelId = models.activeModelId || list[0]?.id || null;
-  }
-  sel.value = state.selectedModelId || '';
-  renderModelInspector();
+  const ens = m.metrics?.ensemble;
+  const xgb = m.metrics?.xgb;
+  const primary = ens || xgb || {};
+  const prunedCnt = m.reportSummary?.prunedCount ?? m.calibration?.xgb?.prunedFeatures?.length ?? 0;
 
-  // Ledger table
-  const led = document.getElementById('models-ledger-table');
-  led.replaceChildren();
-  const lRows = list.map((m) => [
-    { text: m.isActive ? `${m.id} ★` : m.id, cls: m.isActive ? 'c-cyan' : '' },
-    m.status,
-    `v${m.featurePipeline}`,
-    m.trainingMeta?.rows ? `${m.trainingMeta.rows.toLocaleString()} (${m.trainingMeta.days || '?'}d)` : '—',
-    fmtPct(m.metrics?.ensemble?.accuracy ?? m.metrics?.xgb?.accuracy),
-    fmtNum(m.metrics?.ensemble?.auc ?? m.metrics?.xgb?.auc),
-    fmtNum(m.metrics?.ensemble?.brier ?? m.metrics?.xgb?.brier),
-    fmtNum(m.metrics?.ensemble?.calibration_ece ?? m.metrics?.xgb?.calibration_ece),
-    fmtPct(m.metrics?.ensemble?.brier_skill_vs_market ?? m.metrics?.xgb?.brier_skill_vs_market),
-    m.reportSummary?.prunedCount != null ? `${m.reportSummary.prunedCount} pruned` : '0',
-    m.gate ? (m.gate.pass ? `${m.gate.checks.length}/${m.gate.checks.length} PASS` : 'FAIL') : '—',
-  ]);
-  led.appendChild(makeTable(['Model ID', 'Status', 'Pipe', 'Dataset', 'Test Acc', 'AUC', 'Brier', 'ECE', 'Skill', 'Pruning', 'Gate'], lRows));
+  const kpiWrap = document.getElementById('ml-kpi-grid');
+  kpiWrap.replaceChildren();
+  const cards = [
+    {
+      k: 'Ensemble Test Acc',
+      v: fmtPct(primary.accuracy),
+      cls: 'c-cyan',
+      hint: `XGB ${fmtPct(xgb?.accuracy)} · LGB ${fmtPct(m.metrics?.lgb?.accuracy)}`,
+    },
+    {
+      k: 'Ensemble ROC-AUC',
+      v: fmtNum(primary.auc),
+      cls: 'c-pos',
+      hint: `XGB ${fmtNum(xgb?.auc)} · LGB ${fmtNum(m.metrics?.lgb?.auc)}`,
+    },
+    {
+      k: 'Skill vs Market',
+      v: primary.brier_skill_vs_market != null ? `${primary.brier_skill_vs_market >= 0 ? '+' : ''}${(primary.brier_skill_vs_market * 100).toFixed(2)}%` : '—',
+      cls: (primary.brier_skill_vs_market ?? 0) >= 0 ? 'c-pos' : 'c-neg',
+      hint: `Model Brier ${fmtNum(primary.brier)} vs Mkt ${fmtNum(primary.market_brier)}`,
+    },
+    {
+      k: 'Calibration ECE / MCE',
+      v: `${fmtNum(primary.calibration_ece)} / ${fmtNum(primary.calibration_mce)}`,
+      cls: (primary.calibration_ece ?? 1) <= 0.03 ? 'c-pos' : 'c-warn',
+      hint: m.calibration?.xgb?.plattByPhase ? '4-Phase Power-θ (Holdout Cal)' : 'Global Platt Sigmoid',
+    },
+    {
+      k: 'CV → Holdout Audit',
+      v: xgb?.holdout_auc != null ? `${fmtNum(xgb.cv_auc)} → ${fmtNum(xgb.holdout_auc)}` : fmtNum(xgb?.cv_auc),
+      cls: 'c-cyan',
+      hint: xgb?.test_holdout_acc_gap != null
+        ? `CV Acc ${fmtPct(xgb.cv_acc)} · Holdout ${fmtPct(xgb.holdout_accuracy)} · Gap ${(xgb.test_holdout_acc_gap * 100).toFixed(2)}pp`
+        : `${primary.test_samples ? primary.test_samples.toLocaleString() + ' test samples' : 'Temporal split'}`,
+    },
+    {
+      k: 'Feature Disposition',
+      v: `${activeCount ?? '—'} Active / ${prunedCnt} Pruned`,
+      cls: 'c-warn',
+      hint: `${m.calibration?.xgb?.numTrees ?? m.reportSummary?.trees ?? '—'} XGB trees + ${m.calibration?.lgb?.numTrees ?? '—'} LGB trees`,
+    },
+  ];
+  for (const c of cards) {
+    const box = h('div', 'kpi');
+    box.appendChild(h('div', 'kpi__label', c.k));
+    box.appendChild(h('div', `kpi__val ${c.cls}`, c.v));
+    box.appendChild(h('div', 'kpi__hint', c.hint));
+    kpiWrap.appendChild(box);
+  }
 }
 
-function renderModelInspector() {
-  const wrap = document.getElementById('model-inspector-detail');
+function renderSubmodelMatrix(m) {
+  const wrap = document.getElementById('ml-submodel-table');
   wrap.replaceChildren();
-  const m = state.models?.models?.find((x) => x.id === state.selectedModelId);
-  if (!m) { wrap.appendChild(h('div', 'empty-state', 'No model selected.')); return; }
+  const xgb = m.metrics?.xgb;
+  const lgb = m.metrics?.lgb;
+  const ens = m.metrics?.ensemble;
+  const w = m.calibration?.ensembleWeights;
+
+  const weightStr = (k) => (w && typeof w[k] === 'number' ? `${(w[k] * 100).toFixed(1)}%` : '—');
+  const mktBrier = ens?.market_brier ?? xgb?.market_brier ?? null;
+
+  const cols = [
+    { name: `Ensemble (${w ? `${weightStr('xgb')}/${weightStr('lgb')}` : 'Blend'})`, src: ens, meta: ens?.weight_source || 'oof_blend' },
+    { name: `XGBoost (${m.calibration?.xgb?.numTrees ?? '—'} trees)`, src: xgb, meta: `w=${weightStr('xgb')}` },
+    { name: `LightGBM (${m.calibration?.lgb?.numTrees ?? '—'} trees)`, src: lgb, meta: `w=${weightStr('lgb')}` },
+  ];
+
+  const rows = [
+    ['Test Accuracy', ...cols.map((c) => fmtPct(c.src?.accuracy))],
+    ['Test ROC-AUC', ...cols.map((c) => fmtNum(c.src?.auc))],
+    ['5-Fold CV Accuracy', fmtPct(xgb?.cv_acc ?? lgb?.cv_acc), fmtPct(xgb?.cv_acc), fmtPct(lgb?.cv_acc)],
+    ['5-Fold CV AUC', fmtNum(xgb?.cv_auc ?? lgb?.cv_auc), fmtNum(xgb?.cv_auc), fmtNum(lgb?.cv_auc)],
+    ['Strict Holdout Acc / AUC', 'Holdout Cal Source', xgb?.holdout_accuracy != null ? `${fmtPct(xgb.holdout_accuracy)} / ${fmtNum(xgb.holdout_auc)}` : '—', 'Blended via OOF'],
+    ['LogLoss / Brier Score', ...cols.map((c) => `${fmtNum(c.src?.logloss)} / ${fmtNum(c.src?.brier)}`)],
+    ['Calib ECE / MCE', ...cols.map((c) => `${fmtNum(c.src?.calibration_ece)} / ${fmtNum(c.src?.calibration_mce)}`)],
+    ['Brier Skill vs Market', ...cols.map((c) => fmtPct(c.src?.brier_skill_vs_market))],
+    ['High-Conf Precision', `${m.calibration?.xgb?.numFeatures ?? '—'} features`, xgb?.high_conf_accuracy != null ? `${fmtPct(xgb.high_conf_accuracy)} (${xgb.high_conf_count} @ ≥${((xgb.high_conf_threshold ?? 0.65) * 100).toFixed(0)}%)` : '—', 'Leaf-wise gain'],
+    ['Market Baseline Brier', fmtNum(mktBrier), `${ens?.test_samples ?? xgb?.test_samples ?? '—'} test rows`, `${ens?.holdout_samples ?? xgb?.holdout_samples ?? '—'} holdout`],
+  ];
+  wrap.appendChild(makeTable(['Metric', cols[0].name, cols[1].name, cols[2].name], rows));
+}
+
+function renderAuditPanel(m) {
+  const wrap = document.getElementById('ml-audit-panel');
+  wrap.replaceChildren();
+  const xgb = m.metrics?.xgb || {};
+  const val = m.validation || {};
+  const p = m.xgbParams || {};
+
+  const gapGrid = h('div', 'stat-pair-grid');
+  const auditPairs = [
+    ['CV → Test Acc Gap', xgb.cv_test_acc_gap != null ? `${(xgb.cv_test_acc_gap * 100).toFixed(2)} pp` : '—'],
+    ['CV → Test AUC Gap', xgb.cv_test_auc_gap != null ? `${xgb.cv_test_auc_gap.toFixed(4)}` : '—'],
+    ['Test → Holdout Acc Gap', xgb.test_holdout_acc_gap != null ? `${(xgb.test_holdout_acc_gap * 100).toFixed(2)} pp` : '—'],
+    ['Optimal Thr (OOF)', fmtNum(m.calibration?.xgb?.optimalThreshold ?? m.reportSummary?.optimalThreshold, 3)],
+    ['Split / Samples', `${val.split || 'temporal'} · ${val.test_samples ?? xgb.test_samples ?? '—'} test`],
+    ['Recency Weighting', m.calibration?.xgb?.recencyWeighting ? `${m.calibration.xgb.recencyWeighting.half_life_days || m.calibration.xgb.recencyWeighting.halfLifeDays || '?'}d half-life` : (m.reportSummary?.recency || '—')],
+  ];
+  for (const [k, v] of auditPairs) {
+    const d = h('div', 'stat-mini');
+    d.appendChild(h('div', 'stat-mini__k', k));
+    d.appendChild(h('div', 'stat-mini__v', v));
+    gapGrid.appendChild(d);
+  }
+  wrap.appendChild(gapGrid);
+
+  if (Object.keys(p).length > 0) {
+    const sec = h('div', 'audit-section');
+    sec.appendChild(h('h4', null, 'Optuna Tuned XGBoost Hyperparameters'));
+    const chips = h('div', 'chip-list');
+    const keys = ['max_depth', 'learning_rate', 'min_child_weight', 'subsample', 'colsample_bytree', 'gamma', 'reg_alpha', 'reg_lambda', 'scale_pos_weight'];
+    for (const k of keys) {
+      if (p[k] == null) continue;
+      const num = Number(p[k]);
+      const valTxt = Number.isFinite(num) && !Number.isInteger(num) ? num.toFixed(4) : String(p[k]);
+      chips.appendChild(h('span', 'badge badge--cyan', `${k}=${valTxt}`));
+    }
+    sec.appendChild(chips);
+    wrap.appendChild(sec);
+  }
+
+  const mod = m.calibration?.signalModifiers;
+  const pt = m.calibration?.phaseThresholds;
+  if (mod || pt) {
+    const sec = h('div', 'audit-section');
+    sec.appendChild(h('h4', null, 'Learned Signal Modifiers & Phase Thresholds'));
+    const chips = h('div', 'chip-list');
+    if (pt) {
+      for (const [ph, cfg] of Object.entries(pt)) {
+        chips.appendChild(h('span', 'badge badge--emerald', `${ph}: edge≥${(cfg.minEdge * 100).toFixed(0)}% prob≥${(cfg.minProb * 100).toFixed(0)}%`));
+      }
+    }
+    if (mod) {
+      for (const [k, v] of Object.entries(mod)) {
+        chips.appendChild(h('span', 'badge', `${k}=${typeof v === 'number' ? v.toFixed(2) : v}`));
+      }
+    }
+    sec.appendChild(chips);
+    wrap.appendChild(sec);
+  }
+}
+
+function renderCalibrationSection(m) {
+  drawCalibrationCurve(document.getElementById('chart-calib-bins'), m.calibrationBins);
+  const cWrap = document.getElementById('ml-calib-table');
+  cWrap.replaceChildren();
+  if (m.calibrationBins?.length) {
+    cWrap.appendChild(makeTable(
+      ['Decile', 'Pred Avg', 'Emp UP Rate', 'Abs Gap', 'Samples (Cov)'],
+      m.calibrationBins.map((b) => [
+        `[${(b.min_prob * 100).toFixed(0)}–${(b.max_prob * 100).toFixed(0)}%]`,
+        fmtPct(b.avg_predicted),
+        fmtPct(b.observed_rate),
+        { text: `${(b.gap * 100).toFixed(2)} pp`, cls: Math.abs(b.gap) <= 0.025 ? 'c-pos' : 'c-warn' },
+        `${b.count} (${b.coverage_pct}%)`,
+      ]),
+    ));
+  }
+
+  drawConfidenceBuckets(document.getElementById('chart-conf-buckets'), m.confidenceBuckets);
+  const bWrap = document.getElementById('ml-buckets-table');
+  bWrap.replaceChildren();
+  if (m.confidenceBuckets?.length) {
+    bWrap.appendChild(makeTable(
+      ['Conf Band', 'Test Accuracy', 'Count', 'Coverage'],
+      m.confidenceBuckets.map((b) => [
+        `${Math.round(b.min_confidence * 100)}%–${Math.round(b.max_confidence * 100)}%`,
+        { text: fmtPct(b.accuracy), cls: b.accuracy >= 0.78 ? 'c-pos' : b.accuracy >= 0.60 ? 'c-cyan' : 'c-neg' },
+        String(b.count),
+        `${b.coverage_pct}%`,
+      ]),
+    ));
+  }
 
   const xgbP = m.calibration?.xgb?.plattByPhase;
   const lgbP = m.calibration?.lgb?.plattByPhase;
+  drawPhaseThetaChart(document.getElementById('chart-phase-theta'), xgbP, lgbP);
+  drawPhaseResponseCurve(document.getElementById('chart-phase-response'), xgbP, lgbP);
+
+  const pWrap = document.getElementById('ml-phase-table');
+  pWrap.replaceChildren();
   if (xgbP || lgbP) {
-    wrap.appendChild(h('div', 'mono-dim', 'Per-Phase Power-θ Calibration (XGB cyan / LGB emerald):'));
-    const cbox = h('div', 'chart-box');
-    drawPhaseThetaChart(cbox, xgbP, lgbP);
-    wrap.appendChild(cbox);
-  } else {
-    wrap.appendChild(h('p', 'mono-dim', `Legacy Global Platt Calibration: XGB A=${fmtNum(m.calibration?.xgb?.plattA)} B=${fmtNum(m.calibration?.xgb?.plattB)}`));
+    const phases = ['EARLY', 'MID', 'LATE', 'VERY_LATE'];
+    pWrap.appendChild(makeTable(
+      ['Phase', 'XGB θ (a, b)', 'LGB θ (a, b)', 'Calibration Action'],
+      phases.map((ph) => {
+        const xp = xgbP?.[ph];
+        const lp = lgbP?.[ph];
+        const avgTheta = xp && lp ? (xp.theta + lp.theta) / 2 : (xp?.theta ?? lp?.theta);
+        return [
+          ph,
+          xp ? `${xp.theta.toFixed(4)} (${xp.a.toFixed(3)}, ${xp.b >= 0 ? '+' : ''}${xp.b.toFixed(3)})` : '—',
+          lp ? `${lp.theta.toFixed(4)} (${lp.a.toFixed(3)}, ${lp.b >= 0 ? '+' : ''}${lp.b.toFixed(3)})` : '—',
+          avgTheta == null ? '—' : avgTheta < 0.98 ? 'Soften overconfidence' : avgTheta > 1.03 ? 'Sharpen late certainty' : 'Near identity (θ≈1)',
+        ];
+      }),
+    ));
+  }
+}
+
+function renderFeatureExplorer(m) {
+  const catalog = m?.featureCatalog || [];
+  drawFeatureImportanceBars(document.getElementById('chart-feat-importance'), catalog, state.featMode);
+
+  const counts = { ALL: catalog.length, active: 0, pruned: 0, pre_excluded: 0, zero_split: 0 };
+  const groups = new Set(['ALL']);
+  for (const f of catalog) {
+    counts[f.status] = (counts[f.status] || 0) + 1;
+    if (f.group) groups.add(f.group);
   }
 
-  const pruned = m.reportSummary?.prunedFeatures || m.calibration?.xgb?.prunedFeatures || [];
-  if (pruned.length > 0) {
-    const pTitle = h('div', 'mono-dim', `Pruned Features (${pruned.length}):`);
-    pTitle.style.marginTop = '10px';
-    wrap.appendChild(pTitle);
-    const chips = h('div', 'chip-list');
-    for (const f of pruned) chips.appendChild(h('span', 'badge badge--amber', f));
-    wrap.appendChild(chips);
+  const stChips = document.getElementById('feat-status-chips');
+  stChips.replaceChildren();
+  const statusLabels = [
+    ['ALL', `All (${counts.ALL})`],
+    ['active', `Active (${counts.active})`],
+    ['pruned', `Fold-Pruned (${counts.pruned})`],
+    ['pre_excluded', `Pre-Excluded (${counts.pre_excluded})`],
+    ['zero_split', `0 Splits (${counts.zero_split})`],
+  ];
+  for (const [key, label] of statusLabels) {
+    if (key !== 'ALL' && !counts[key]) continue;
+    const b = h('button', `filter-chip ${state.featStatus === key ? 'is-active' : ''}`, label);
+    b.addEventListener('click', () => { state.featStatus = key; renderFeatureExplorer(m); });
+    stChips.appendChild(b);
   }
+
+  const grChips = document.getElementById('feat-group-chips');
+  grChips.replaceChildren();
+  for (const g of groups) {
+    const b = h('button', `filter-chip ${state.featGroup === g ? 'is-active' : ''}`, g);
+    b.addEventListener('click', () => { state.featGroup = g; renderFeatureExplorer(m); });
+    grChips.appendChild(b);
+  }
+
+  const q = state.featQuery.trim().toLowerCase();
+  const filtered = catalog.filter((f) => {
+    if (state.featStatus !== 'ALL' && f.status !== state.featStatus) return false;
+    if (state.featGroup !== 'ALL' && f.group !== state.featGroup) return false;
+    if (q && !f.name.toLowerCase().includes(q) && !String(f.idx).includes(q)) return false;
+    return true;
+  });
+
+  const metricOf = (f) => (state.featMode === 'lgbGainPct' ? (f.lgbGainPct ?? 0) : state.featMode === 'xgbRootSplits' ? (f.xgbRootSplits ?? 0) : (f.xgbSplits ?? 0));
+  filtered.sort((a, b) => (metricOf(b) - metricOf(a)) || (a.idx - b.idx));
+
+  const tWrap = document.getElementById('ml-features-table');
+  tWrap.replaceChildren();
+  if (filtered.length === 0) {
+    tWrap.appendChild(h('div', 'empty-state', 'No features match this filter.'));
+    return;
+  }
+
+  const statusBadge = (s) => {
+    const cls = s === 'active' ? 'c-pos' : s === 'pruned' || s === 'pre_excluded' ? 'c-warn' : 'mono-dim';
+    return { text: s, cls };
+  };
+  tWrap.appendChild(makeTable(
+    ['#', 'Feature Name', 'Group', 'Status', 'XGB Splits', 'XGB Share', 'Root', 'LGB Splits', 'LGB Gain %', 'Norm μ ± σ'],
+    filtered.map((f) => [
+      String(f.idx),
+      { text: `${f.name}${f.isEngineered ? ' *' : ''}`, cls: f.status === 'active' ? 'c-cyan' : 'mono-dim' },
+      f.group || '—',
+      statusBadge(f.status),
+      f.xgbSplits != null ? String(f.xgbSplits) : '—',
+      f.xgbSharePct != null ? `${f.xgbSharePct.toFixed(2)}%` : '—',
+      f.xgbRootSplits != null ? String(f.xgbRootSplits) : '—',
+      f.lgbSplits != null ? String(f.lgbSplits) : '—',
+      f.lgbGainPct != null ? `${f.lgbGainPct.toFixed(2)}%` : '—',
+      f.mean != null ? `${f.mean.toFixed(3)} ± ${f.std?.toFixed(3) ?? '?'}` : '—',
+    ]),
+  ));
+}
+
+function renderGatesAndReport(m) {
+  const wrap = document.getElementById('ml-gates-report');
+  wrap.replaceChildren();
 
   if (m.gate?.checks?.length) {
-    const gTitle = h('div', 'mono-dim', `Quality Gate Checks (${m.gate.pass ? 'PASS' : 'FAIL'}):`);
-    gTitle.style.marginTop = '12px';
+    const gTitle = h('div', 'mono-dim', `Quality Gates (${m.gate.pass ? 'ALL PASSED' : 'FAILED'}):`);
     wrap.appendChild(gTitle);
     const chips = h('div', 'chip-list');
     for (const c of m.gate.checks) {
@@ -416,6 +578,170 @@ function renderModelInspector() {
       wrap.appendChild(p);
     }
   }
+
+  if (m.reportText) {
+    const rTitle = h('div', 'mono-dim', 'Raw training_report.txt:');
+    rTitle.style.marginTop = '12px';
+    wrap.appendChild(rTitle);
+    wrap.appendChild(h('pre', 'report-pre', m.reportText));
+  }
+}
+
+function renderModelInspector() {
+  const m = state.models?.models?.find((x) => x.id === state.selectedModelId) || state.models?.models?.[0];
+  if (!m) return;
+  renderModelKpis(m);
+  renderSubmodelMatrix(m);
+  renderAuditPanel(m);
+  renderCalibrationSection(m);
+  renderFeatureExplorer(m);
+  renderGatesAndReport(m);
+}
+
+function renderOosSection() {
+  const { models } = state;
+  const richEval = [...(models?.oosBenchmarks || [])].reverse().find((e) => e.fullOos && typeof e.fullOos === 'object');
+  const sliceKey = state.presetSlice === 'exact2175' ? 'exact2175' : 'fullOos';
+  const sliceObj = richEval?.[sliceKey] || richEval?.fullOos;
+
+  const tierSeries = [];
+  const presetRows = [];
+
+  if (sliceObj) {
+    document.getElementById('oos-slice-sub').textContent =
+      `Benchmark slice ${sliceObj.slice || 'shared OOS'} (official CLOB V2 taker fee · Market Brier ${fmtNum(sliceObj.brierMkt)})`;
+
+    for (const [k, obj] of Object.entries(sliceObj)) {
+      if (!obj || typeof obj !== 'object' || !obj.tiers) continue;
+      tierSeries.push({ label: `${obj.name || k} (${k.slice(-6)})`, tiers: obj.tiers });
+      const list = Array.isArray(obj.topPresets) && obj.topPresets.length
+        ? obj.topPresets
+        : [obj.preset_45_72_06, obj.preset_55_58_06, obj.preset_45_65_06].filter(Boolean);
+      for (const pr of list) {
+        presetRows.push([
+          `${obj.name || k}`,
+          `≥${Math.round((pr.confMin ?? 0) * 100)}% / ≤${Math.round((pr.cap ?? 0) * 100)}¢ / ${(pr.minEdge * 100).toFixed(0)}%`,
+          String(pr.trades),
+          `${pr.wr}%`,
+          { text: fmtUsd(pr.pnl, true), cls: pr.pnl >= 0 ? 'c-pos' : 'c-neg' },
+          { text: `${pr.roiPct >= 0 ? '+' : ''}${pr.roiPct}%`, cls: pr.roiPct >= 0 ? 'c-pos' : 'c-neg' },
+          `${pr.pf} · DD ${fmtUsd(pr.maxDd)}`,
+        ]);
+      }
+    }
+  }
+  drawTierCurve(document.getElementById('chart-oos-tiers'), tierSeries);
+
+  const opWrap = document.getElementById('oos-presets-table');
+  opWrap.replaceChildren();
+  const latestAgentEval = models?.models?.find((m) => m.latestEval?.fullOos_acc != null);
+  if (latestAgentEval) {
+    const e = latestAgentEval.latestEval;
+    opWrap.appendChild(h('p', 'mono-dim',
+      `Latest Live Model (${latestAgentEval.id}) vs ${e.vs_previous}: `
+      + `Full OOS Acc ${e.fullOos_acc}% · AUC ${e.fullOos_auc} · Skill +${e.fullOos_skillPct}% · ECE ${e.fullOos_ece} · `
+      + `Exact2175 AUC ${e.exact2175_auc} (+${e.exact2175_skillPct}% skill)`));
+  }
+  if (presetRows.length) {
+    opWrap.appendChild(makeTable(['Model Config', 'Conf / Cap / Edge', 'Trades', 'WR', 'PnL', 'ROI', 'PF · Max DD'], presetRows));
+  } else {
+    opWrap.appendChild(h('div', 'empty-state', 'No preset sweep rows in this slice.'));
+  }
+}
+
+function renderModelsLedger() {
+  const { models } = state;
+  const detailedMap = new Map((models.models || []).map((m) => [m.id, m]));
+  const srcList = state.showLegacyModels
+    ? [...(models.timelineModels || [])].reverse()
+    : [...(models.timelineModels || [])].reverse().filter((m) => (m.featurePipeline ?? 1) >= 2);
+
+  const btn = document.getElementById('btn-toggle-legacy');
+  if (btn) btn.textContent = state.showLegacyModels ? `Hide v1 Archive (${models.timelineModels?.length || 0} total)` : `Show All 27 Incl. v1 Archive`;
+
+  const led = document.getElementById('models-ledger-table');
+  led.replaceChildren();
+  const lRows = srcList.map((t) => {
+    const d = detailedMap.get(t.id);
+    const acc = d?.metrics?.ensemble?.accuracy ?? d?.metrics?.xgb?.accuracy ?? t.accuracy;
+    const auc = d?.metrics?.ensemble?.auc ?? d?.metrics?.xgb?.auc ?? t.auc;
+    const brier = d?.metrics?.ensemble?.brier ?? d?.metrics?.xgb?.brier;
+    const ece = d?.metrics?.ensemble?.calibration_ece ?? d?.metrics?.xgb?.calibration_ece ?? t.ece;
+    const skill = d?.metrics?.ensemble?.brier_skill_vs_market ?? d?.metrics?.xgb?.brier_skill_vs_market ?? t.skill;
+    return [
+      { text: t.isActive ? `${t.id} ★` : t.id, cls: t.isActive ? 'c-cyan' : '' },
+      t.status,
+      `v${t.featurePipeline ?? 1}`,
+      d?.trainingMeta?.rows ? `${d.trainingMeta.rows.toLocaleString()} (${d.trainingMeta.days || '?'}d)` : (t.dataRange || '—'),
+      fmtPct(acc),
+      fmtNum(auc),
+      fmtNum(brier),
+      fmtNum(ece),
+      skill != null ? { text: `${skill >= 0 ? '+' : ''}${(skill * 100).toFixed(2)}%`, cls: skill >= 0 ? 'c-pos' : 'c-neg' } : '—',
+      d?.reportSummary?.prunedCount != null ? `${d.reportSummary.prunedCount} pruned` : '—',
+      d?.gate ? (d.gate.pass ? `${d.gate.checks.length}/${d.gate.checks.length} PASS` : 'FAIL') : '—',
+    ];
+  });
+  led.appendChild(makeTable(['Model ID', 'Status', 'Pipe', 'Dataset', 'Test Acc', 'AUC', 'Brier', 'ECE', 'Skill', 'Pruning', 'Gate'], lRows));
+}
+
+function renderModelsTab() {
+  const { models } = state;
+  if (!models) return;
+
+  const list = models.models || [];
+  drawEvolutionChart(document.getElementById('chart-model-evolution'), models.timelineModels);
+
+  const specs = {
+    accuracy: { title: 'Test Accuracy', minFloor: 0.72, format: (v) => `${(v * 100).toFixed(2)}%`, pick: (m) => m.metrics?.ensemble?.accuracy ?? m.metrics?.xgb?.accuracy ?? null },
+    auc: { title: 'Test ROC-AUC', minFloor: 0.82, format: (v) => v.toFixed(4), pick: (m) => m.metrics?.ensemble?.auc ?? m.metrics?.xgb?.auc ?? null },
+    skill: { title: 'Brier Skill vs Market', minFloor: -0.02, format: (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`, pick: (m) => m.metrics?.ensemble?.brier_skill_vs_market ?? m.metrics?.xgb?.brier_skill_vs_market ?? null },
+    brier: { title: 'Test Brier Score (↓ better)', minFloor: 0.14, format: (v) => v.toFixed(4), pick: (m) => m.metrics?.ensemble?.brier ?? m.metrics?.xgb?.brier ?? null },
+    ece: { title: 'Calibration ECE (↓ better)', minFloor: 0, format: (v) => v.toFixed(4), pick: (m) => m.metrics?.ensemble?.calibration_ece ?? m.metrics?.xgb?.calibration_ece ?? null },
+  };
+  const spec = specs[state.metricKey] || specs.accuracy;
+  const items = list.map((m) => ({
+    label: m.id,
+    value: spec.pick(m),
+    isActive: m.isActive,
+    highlight: m.latestEval?.fullOos_skillPct != null,
+    sub: `${m.trainingMeta?.rows ? m.trainingMeta.rows.toLocaleString() + ' mkts' : ''} · ${m.status}`,
+  }));
+  drawMetricBars(document.getElementById('chart-models-bar'), items, spec);
+
+  const sel = document.getElementById('model-inspector-select');
+  sel.replaceChildren();
+  for (const m of list) {
+    const opt = h('option', null, `${m.id} (${m.status}${m.isActive ? ' ★' : ''})`);
+    opt.value = m.id;
+    sel.appendChild(opt);
+  }
+  if (!state.selectedModelId || !list.some((m) => m.id === state.selectedModelId)) {
+    state.selectedModelId = models.activeModelId || list[0]?.id || null;
+  }
+  sel.value = state.selectedModelId || '';
+
+  renderModelInspector();
+  renderOosSection();
+
+  const expWrap = document.getElementById('ml-experiments-table');
+  expWrap.replaceChildren();
+  const exps = models.experiments || [];
+  if (exps.length === 0) {
+    expWrap.appendChild(h('div', 'empty-state', 'No offline experiment summaries found.'));
+  } else {
+    expWrap.appendChild(makeTable(
+      ['Date', 'Model', 'Experiment & Outcome', 'Key Metrics'],
+      exps.map((e) => [
+        e.date || '—',
+        e.modelId || '—',
+        e.verdict ? `${e.title} [${e.verdict}]` : e.title,
+        (e.highlights || []).join(' | ') || '—',
+      ]),
+    ));
+  }
+
+  renderModelsLedger();
 }
 
 function renderStudiesTab() {
@@ -610,6 +936,32 @@ function wireEvents() {
   document.getElementById('model-inspector-select')?.addEventListener('change', (e) => {
     state.selectedModelId = e.target.value;
     renderModelInspector();
+  });
+  document.querySelectorAll('#feat-mode-switcher .seg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#feat-mode-switcher .seg').forEach((b) => b.classList.remove('is-active'));
+      btn.classList.add('is-active');
+      state.featMode = btn.dataset.featMode;
+      const m = state.models?.models?.find((x) => x.id === state.selectedModelId) || state.models?.models?.[0];
+      if (m) renderFeatureExplorer(m);
+    });
+  });
+  document.getElementById('feat-search')?.addEventListener('input', (e) => {
+    state.featQuery = e.target.value;
+    const m = state.models?.models?.find((x) => x.id === state.selectedModelId) || state.models?.models?.[0];
+    if (m) renderFeatureExplorer(m);
+  });
+  document.querySelectorAll('#preset-slice-switcher .seg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#preset-slice-switcher .seg').forEach((b) => b.classList.remove('is-active'));
+      btn.classList.add('is-active');
+      state.presetSlice = btn.dataset.presetSlice;
+      renderOosSection();
+    });
+  });
+  document.getElementById('btn-toggle-legacy')?.addEventListener('click', () => {
+    state.showLegacyModels = !state.showLegacyModels;
+    renderModelsLedger();
   });
   document.getElementById('study-search')?.addEventListener('input', (e) => {
     state.studyQuery = e.target.value;

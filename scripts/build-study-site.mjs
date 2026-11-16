@@ -12,6 +12,7 @@ import zlib from 'node:zlib';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
+import { buildFeatureCatalog, extractExperimentSummary } from './study/models.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(HERE, '..');
@@ -182,8 +183,26 @@ function parseModelsMdStatus(rawMd) {
   const statusMap = new Map();
   if (!rawMd) return statusMap;
   for (const line of rawMd.split(/\r?\n/)) {
-    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/.exec(line.trim());
-    if (m) statusMap.set(m[1], { status: m[2].trim(), pipelineLabel: m[3].trim() });
+    const m = /^\|\s*`([^`]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|/.exec(line.trim());
+    if (m) {
+      const parsePct = (s) => {
+        const x = parseFloat(String(s).replace(/[%+]/g, ''));
+        return Number.isFinite(x) ? +(x / 100).toFixed(4) : null;
+      };
+      const parseNum = (s) => {
+        const x = parseFloat(String(s));
+        return Number.isFinite(x) ? x : null;
+      };
+      statusMap.set(m[1], {
+        status: m[2].trim(),
+        pipelineLabel: m[3].trim(),
+        dataRange: m[4].trim(),
+        mdAccuracy: parsePct(m[5]),
+        mdAuc: parseNum(m[6]),
+        mdEce: parseNum(m[7]),
+        mdSkill: parsePct(m[8]),
+      });
+    }
   }
   return statusMap;
 }
@@ -213,43 +232,68 @@ function parseTrainingReportTxt(raw) {
   return out;
 }
 
-function extractModelCalibration(repoRoot, modelId, isActiveLive) {
+function extractModelCalibration(repoRoot, modelId, isActiveLive, reportSummary) {
   const modelDir = path.join(repoRoot, 'ml_registry', 'models', modelId);
-  const tryReadHeader = (file) => {
-    const j = readJsonSafe(file);
-    if (!j || typeof j !== 'object') return null;
-    return {
-      numFeatures: j.num_features ?? null,
-      numTrees: j.num_trees ?? null,
-      optimalThreshold: j.optimal_threshold ?? null,
-      plattA: j.platt_a ?? null,
-      plattB: j.platt_b ?? null,
-      plattOnLogits: j.platt_on_logits ?? null,
-      plattByPhase: j.platt_by_phase ?? null,
-      prunedFeatures: Array.isArray(j.pruned_features) ? j.pruned_features : null,
-      preExcludedFeatures: Array.isArray(j.pre_excluded_features) ? j.pre_excluded_features : null,
-      zeroFeatures: Array.isArray(j.zero_features) ? j.zero_features : null,
-      trainingMethod: j.training_method ?? null,
-      recencyWeighting: j.recency_weighting ?? null,
-    };
-  };
+  const readModelJson = (name) =>
+    readJsonSafe(path.join(modelDir, `${name}.json.gz`))
+    || readJsonSafe(path.join(modelDir, `${name}.json`))
+    || (isActiveLive ? readJsonSafe(path.join(repoRoot, 'public', 'ml', `${name}.json`)) : null);
 
-  let xgb = tryReadHeader(path.join(modelDir, 'xgboost_model.json.gz')) || tryReadHeader(path.join(modelDir, 'xgboost_model.json'));
-  let lgb = tryReadHeader(path.join(modelDir, 'lightgbm_model.json.gz')) || tryReadHeader(path.join(modelDir, 'lightgbm_model.json'));
-  let norm = readJsonSafe(path.join(modelDir, 'norm_browser.json.gz')) || readJsonSafe(path.join(modelDir, 'norm_browser.json'));
+  const xgbJson = readModelJson('xgboost_model');
+  const lgbJson = readModelJson('lightgbm_model');
+  const normJson = readModelJson('norm_browser');
 
-  if (!xgb && isActiveLive) xgb = tryReadHeader(path.join(repoRoot, 'public', 'ml', 'xgboost_model.json'));
-  if (!lgb && isActiveLive) lgb = tryReadHeader(path.join(repoRoot, 'public', 'ml', 'lightgbm_model.json'));
-  if (!norm && isActiveLive) norm = readJsonSafe(path.join(repoRoot, 'public', 'ml', 'norm_browser.json'));
+  const xgbHeader = xgbJson ? {
+    numFeatures: xgbJson.num_features ?? null,
+    engineeredFeatures: xgbJson.engineered_features ?? null,
+    numTrees: xgbJson.num_trees ?? null,
+    bestIteration: xgbJson.best_iteration ?? null,
+    optimalThreshold: xgbJson.optimal_threshold ?? null,
+    plattA: xgbJson.platt_a ?? null,
+    plattB: xgbJson.platt_b ?? null,
+    plattOnLogits: xgbJson.platt_on_logits ?? null,
+    plattByPhase: xgbJson.platt_by_phase ?? null,
+    prunedFeatures: Array.isArray(xgbJson.pruned_features) ? xgbJson.pruned_features : null,
+    preExcludedFeatures: Array.isArray(xgbJson.pre_excluded_features) ? xgbJson.pre_excluded_features : null,
+    zeroFeatures: Array.isArray(xgbJson.zero_features) ? xgbJson.zero_features : null,
+    trainingMethod: xgbJson.training_method ?? null,
+    recencyWeighting: xgbJson.recency_weighting ?? null,
+  } : null;
+
+  const lgbHeader = lgbJson ? {
+    numFeatures: lgbJson.num_features ?? null,
+    numTrees: lgbJson.num_trees ?? null,
+    initScore: lgbJson.init_score ?? null,
+    plattA: lgbJson.platt_a ?? null,
+    plattB: lgbJson.platt_b ?? null,
+    plattOnLogits: lgbJson.platt_on_logits ?? null,
+    plattByPhase: lgbJson.platt_by_phase ?? null,
+  } : null;
+
+  const xgbMetricsFull = xgbJson?.metrics && typeof xgbJson.metrics === 'object' ? xgbJson.metrics : null;
+  const calibrationBins = Array.isArray(xgbMetricsFull?.calibration_bins) ? xgbMetricsFull.calibration_bins : null;
+  const confidenceBuckets = Array.isArray(xgbMetricsFull?.confidence_buckets) ? xgbMetricsFull.confidence_buckets : null;
+
+  const lgbMetrics = lgbJson?.metrics && typeof lgbJson.metrics === 'object' ? lgbJson.metrics : null;
+  const xgbParams = xgbJson?.params && typeof xgbJson.params === 'object' ? xgbJson.params : null;
+  const validation = xgbJson?.validation && typeof xgbJson.validation === 'object' ? xgbJson.validation : null;
+  const featureCatalog = buildFeatureCatalog({ xgbJson, lgbJson, normJson, reportSummary });
 
   return {
-    xgbHeader: xgb,
-    lgbHeader: lgb,
-    signalModifiers: norm?.signal_modifiers ?? null,
-    phaseThresholds: norm?.phase_thresholds ?? null,
-    trainSamples: norm?.train_samples ?? null,
-    holdoutFrac: norm?.holdout_frac ?? null,
-    ensembleWeights: norm?.ensemble_weights ?? null,
+    xgbHeader,
+    lgbHeader,
+    xgbMetricsFull,
+    lgbMetrics,
+    xgbParams,
+    validation,
+    calibrationBins,
+    confidenceBuckets,
+    featureCatalog,
+    signalModifiers: normJson?.signal_modifiers ?? xgbJson?.signal_modifiers ?? null,
+    phaseThresholds: normJson?.phase_thresholds ?? xgbJson?.phase_thresholds ?? null,
+    trainSamples: normJson?.train_samples ?? null,
+    holdoutFrac: normJson?.holdout_frac ?? null,
+    ensembleWeights: normJson?.ensemble_weights ?? lgbJson?.ensemble_weights ?? null,
   };
 }
 
@@ -259,9 +303,9 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
   const normLive = readJsonSafe(path.join(repoRoot, 'public', 'ml', 'norm_browser.json'));
   const liveDirId = normLive?.model_id ?? null;
 
-  // Group events per model ID
   const eventsById = new Map();
   const oosBenchmarks = [];
+  const experiments = [];
   const journalNotes = [];
   for (const ev of journalEvents) {
     if (ev.id) {
@@ -269,21 +313,8 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
       eventsById.get(ev.id).push(ev);
     }
     if (ev.event === 'evaluated') {
-      // Strip bulky allPresets arrays from evaluated records; keep tiers & curated topPresets
-      if (ev.fullOos && typeof ev.fullOos === 'object') {
-        const compactFullOos = {};
-        for (const [k, v] of Object.entries(ev.fullOos)) {
-          if (v && typeof v === 'object' && 'allPresets' in v) {
-            const { allPresets: _omit, ...rest } = v;
-            compactFullOos[k] = rest;
-          } else {
-            compactFullOos[k] = v;
-          }
-        }
-        oosBenchmarks.push({ ...ev, fullOos: compactFullOos });
-      } else {
-        oosBenchmarks.push(ev);
-      }
+      experiments.push(extractExperimentSummary(ev));
+      oosBenchmarks.push(ev);
     } else if (ev.event === 'note' && typeof ev.text === 'string') {
       journalNotes.push({
         ts: ev.ts ?? null,
@@ -304,7 +335,7 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
 
   const allIds = new Set([...dirIds, ...statusMap.keys()]);
   const detailed = [];
-  const legacyV1 = [];
+  const timelineModels = [];
 
   for (const id of allIds) {
     const mdInfo = statusMap.get(id) || {};
@@ -319,20 +350,25 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
     const pipeline = manifest?.featurePipeline ?? (mdInfo.pipelineLabel === 'v2' ? 2 : mdInfo.pipelineLabel === 'v3' ? 3 : 1);
     const status = id === activeModelId ? 'live' : (mdInfo.status || (latestDeploy ? 'retired' : 'candidate'));
 
+    timelineModels.push({
+      id,
+      status,
+      isActive: id === activeModelId,
+      featurePipeline: pipeline,
+      dataRange: mdInfo.dataRange && mdInfo.dataRange !== '—' ? mdInfo.dataRange : (manifest?.training?.meta?.rows ? `${manifest.training.meta.rows} mkts` : null),
+      accuracy: manifest?.metrics?.ensemble?.accuracy ?? manifest?.metrics?.xgb?.accuracy ?? mdInfo.mdAccuracy ?? null,
+      auc: manifest?.metrics?.ensemble?.auc ?? manifest?.metrics?.xgb?.auc ?? mdInfo.mdAuc ?? null,
+      ece: manifest?.metrics?.ensemble?.calibration_ece ?? manifest?.metrics?.xgb?.calibration_ece ?? mdInfo.mdEce ?? null,
+      skill: manifest?.metrics?.ensemble?.brier_skill_vs_market ?? manifest?.metrics?.xgb?.brier_skill_vs_market ?? mdInfo.mdSkill ?? null,
+      era: pipeline === 1 ? 'v1 (pre-fix / look-ahead era)' : pipeline === 3 ? 'v3 (per-second prints)' : 'v2 (shared live builder)',
+    });
+
     if (pipeline === 1 && !manifest?.metrics?.ensemble && !id.startsWith('20260905')) {
-      legacyV1.push({
-        id,
-        status,
-        featurePipeline: pipeline,
-        accuracy: manifest?.metrics?.xgb?.accuracy ?? null,
-        auc: manifest?.metrics?.xgb?.auc ?? null,
-        ece: manifest?.metrics?.xgb?.calibration_ece ?? null,
-      });
       continue;
     }
 
-    const cal = extractModelCalibration(repoRoot, id, id === activeModelId || id === liveDirId);
     const parsedReport = parseTrainingReportTxt(reportTxt);
+    const cal = extractModelCalibration(repoRoot, id, id === activeModelId || id === liveDirId, parsedReport);
     const profile = modelProfiles?.profiles?.[id] ?? null;
 
     detailed.push({
@@ -344,7 +380,16 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
       source: manifest?.source ?? null,
       notes: Array.isArray(manifest?.notes) ? manifest.notes.map(redactSecretText) : [],
       trainingMeta: manifest?.training?.meta ?? trainingMeta ?? null,
-      metrics: manifest?.metrics ?? null,
+      metrics: manifest?.metrics ? {
+        ...manifest.metrics,
+        xgb: manifest.metrics.xgb ?? cal.xgbMetricsFull ?? null,
+        lgb: cal.lgbMetrics ?? null,
+      } : null,
+      xgbParams: cal.xgbParams,
+      validation: cal.validation,
+      calibrationBins: cal.calibrationBins,
+      confidenceBuckets: cal.confidenceBuckets,
+      featureCatalog: cal.featureCatalog,
       reportSummary: parsedReport || (reportJson ? {
         method: reportJson.training_method ?? null,
         trees: reportJson.num_trees ?? null,
@@ -371,14 +416,16 @@ function buildModelsBundle(repoRoot, dataDir, modelProfiles) {
   }
 
   detailed.sort((a, b) => b.id.localeCompare(a.id));
-  legacyV1.sort((a, b) => b.id.localeCompare(a.id));
+  timelineModels.sort((a, b) => a.id.localeCompare(b.id));
+  experiments.sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
 
   return {
     activeModelId,
     liveDirModelId: liveDirId,
     models: detailed,
-    legacyV1,
+    timelineModels,
     oosBenchmarks,
+    experiments,
     journalNotes,
   };
 }
@@ -694,6 +741,7 @@ export function buildStudySite(options = {}) {
     path.join(root, 'analysis'),
     path.join(root, 'study-site'),
     path.join(root, 'scripts', 'build-study-site.mjs'),
+    path.join(root, 'scripts', 'study'),
     path.join(dataDir, 'model_profiles.json'),
     path.join(dataDir, 'state.json'),
     path.join(dataDir, 'trade_journal.jsonl'),

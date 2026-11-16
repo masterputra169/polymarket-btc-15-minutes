@@ -116,21 +116,136 @@
 
       <!-- TAB 2: ML MODEL LAB -->
       <section class="view is-hidden" data-view="models">
+        <div class="card toolbar inspector-bar">
+          <div>
+            <h2 class="card__title">Model Lab Inspector</h2>
+            <p class="card__sub">Select any registered pipeline v2/v3 artifact to inspect sub-models, calibration, trees, features &amp; Optuna config</p>
+          </div>
+          <div class="inspector-bar__right">
+            <div class="chip-list" id="ml-selected-badges"></div>
+            <select class="select" id="model-inspector-select" aria-label="Inspect model"></select>
+          </div>
+        </div>
+
+        <section class="kpi-grid" id="ml-kpi-grid"></section>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">27-Model Evolution Timeline (v1 → v2 → v3)</h2>
+                <p class="card__sub">Chronological test Accuracy &amp; ROC-AUC across look-ahead fix boundary</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-model-evolution"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Candidate Benchmark Comparison</h2>
+                <p class="card__sub">Registered v2/v3 ensemble models on held-out test splits</p>
+              </div>
+              <div class="segmented" id="metric-switcher">
+                <button class="seg is-active" data-metric="accuracy">Acc %</button>
+                <button class="seg" data-metric="auc">AUC</button>
+                <button class="seg" data-metric="skill">Skill %</button>
+                <button class="seg" data-metric="brier">Brier ↓</button>
+                <button class="seg" data-metric="ece">ECE ↓</button>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-models-bar"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">XGBoost vs LightGBM vs Ensemble Matrix</h2>
+                <p class="card__sub">Per-learner test accuracy, AUC, Brier, ECE, skill vs market &amp; high-confidence slices</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="ml-submodel-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Generalization Audit &amp; Optuna Hyperparameters</h2>
+                <p class="card__sub">5-Fold CV vs Test vs Strict Holdout gaps, hyperparameters &amp; rule signal modifiers</p>
+              </div>
+            </div>
+            <div id="ml-audit-panel"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Calibration Reliability Curve (10 Deciles)</h2>
+                <p class="card__sub">Predicted probability vs empirical UP outcome against y = x diagonal</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-calib-bins"></div>
+            <div class="table-wrap" id="ml-calib-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Confidence Band Precision &amp; Coverage</h2>
+                <p class="card__sub">Held-out win rate and trade frequency across confidence thresholds (0.50 → 1.00)</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-conf-buckets"></div>
+            <div class="table-wrap" id="ml-buckets-table"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">4-Phase Power-θ Temperature</h2>
+                <p class="card__sub">EARLY / MID / LATE / VERY_LATE scaling per tree learner</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-phase-theta"></div>
+            <div class="table-wrap" id="ml-phase-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Phase-Calibrated Probability Mapping</h2>
+                <p class="card__sub">Sigmoid(a·logit(p_raw) + b) response showing confidence dampening early vs sharpening late</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-phase-response"></div>
+          </article>
+        </div>
+
         <article class="card">
           <div class="card__head">
             <div>
-              <h2 class="card__title">Model Benchmark Comparison</h2>
-              <p class="card__sub">Registered pipeline v2/v3 ensemble models on their own held-out test splits &amp; head-to-head OOS slices</p>
+              <h2 class="card__title">Tree-Extracted Feature Importance &amp; 83-Feature Explorer</h2>
+              <p class="card__sub">Exact tree split counts, root-node frequency, LightGBM gain share &amp; TreeSHAP pruning disposition</p>
             </div>
-            <div class="segmented" id="metric-switcher">
-              <button class="seg is-active" data-metric="accuracy">Accuracy %</button>
-              <button class="seg" data-metric="auc">ROC-AUC</button>
-              <button class="seg" data-metric="skill">Market Skill %</button>
-              <button class="seg" data-metric="brier">Brier (↓ better)</button>
-              <button class="seg" data-metric="ece">Calib ECE (↓ better)</button>
+            <div class="segmented" id="feat-mode-switcher">
+              <button class="seg is-active" data-feat-mode="xgbSplits">XGB Splits</button>
+              <button class="seg" data-feat-mode="lgbGainPct">LGB Gain %</button>
+              <button class="seg" data-feat-mode="xgbRootSplits">Root Splits</button>
             </div>
           </div>
-          <div class="chart-box" id="chart-models-bar"></div>
+          <div class="chart-box" id="chart-feat-importance"></div>
+          <div class="toolbar feat-toolbar">
+            <input type="search" id="feat-search" class="input" placeholder="Filter 83 features by name or index..." />
+            <div class="pill-group" id="feat-status-chips"></div>
+            <div class="pill-group" id="feat-group-chips"></div>
+          </div>
+          <div class="table-wrap table-scroll" id="ml-features-table"></div>
         </article>
 
         <div class="grid-2">
@@ -142,27 +257,52 @@
               </div>
             </div>
             <div class="chart-box" id="chart-oos-tiers"></div>
-            <div class="table-wrap" id="oos-presets-table"></div>
           </article>
 
           <article class="card">
             <div class="card__head">
               <div>
-                <h2 class="card__title">Per-Phase Power-θ Calibration &amp; Feature Audit</h2>
-                <p class="card__sub">1-DOF phase temperature &amp; fold-stable TreeSHAP pruning</p>
+                <h2 class="card__title">OOS Entry Presets &amp; Quant Benchmark</h2>
+                <p class="card__sub">Backtested PnL, WR, Profit Factor &amp; Max DD with official CLOB V2 taker fee</p>
               </div>
-              <select class="select" id="model-inspector-select" aria-label="Inspect model"></select>
+              <div class="segmented" id="preset-slice-switcher">
+                <button class="seg is-active" data-preset-slice="fullOos">Full OOS (2,267)</button>
+                <button class="seg" data-preset-slice="exact2175">Exact 2,175</button>
+              </div>
             </div>
-            <div id="model-inspector-detail"></div>
+            <div class="table-wrap" id="oos-presets-table"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">ML Experiment &amp; Ablation Ledger</h2>
+                <p class="card__sub">Recorded offline evaluations, residual studies, TWAP physics tests &amp; promotions</p>
+              </div>
+            </div>
+            <div class="table-wrap table-scroll" id="ml-experiments-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Quality Gates &amp; Training Report</h2>
+                <p class="card__sub">11 automated promotion gates &amp; raw training_report.txt output</p>
+              </div>
+            </div>
+            <div id="ml-gates-report"></div>
           </article>
         </div>
 
         <article class="card">
           <div class="card__head">
             <div>
-              <h2 class="card__title">Full Model Registry Ledger</h2>
-              <p class="card__sub">All recent v2/v3 candidates, quality gates, and legacy v1 archive summary</p>
+              <h2 class="card__title">Full Model Registry Ledger (27 Registered Models)</h2>
+              <p class="card__sub">All pipeline v2/v3 models plus toggleable v1 historical archive</p>
             </div>
+            <button class="btn btn--ghost" id="btn-toggle-legacy">Show v1 Archive</button>
           </div>
           <div class="table-wrap" id="models-ledger-table"></div>
         </article>

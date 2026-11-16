@@ -8,7 +8,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-16 12:05 WIB_
+_Last updated: 2026-11-16 13:35 WIB_
 
 | Area | State |
 |---|---|
@@ -31,7 +31,7 @@ _Last updated: 2026-11-16 12:05 WIB_
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Journal Archive Viewer** |
-| Study portal | https://poly15-study.dollarkilat.xyz/ · public read-only visual portal (ML Model Lab, Studies, Changelog & sanitized `$100` eval) · auto-rebuilt on push & every 2m |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · full **ML Model Lab** (27-model evolution, XGB vs LGB vs Ensemble, CV/Holdout & Optuna params, decile calibration, confidence bands, 4-phase response, 83-feature tree explorer, OOS presets, experiments & raw reports) + Studies + Changelog + `$100` eval |
 | Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
@@ -53,6 +53,22 @@ _Last updated: 2026-11-16 12:05 WIB_
 | Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
 
 > This status block is the only section edited in place. Everything below is append-only.
+
+---
+
+### 2026-11-16 13:35 WIB — Complete ML Model Lab Expansion on `poly15-study.dollarkilat.xyz`
+
+**What changed:**
+1. **Rich Tree & Calibration Metadata Extractor ([models.mjs](scripts/study/models.mjs), [build-study-site.mjs](scripts/build-study-site.mjs)):**
+   - Added pure offline tree/calibration extraction over registered `xgboost_model.json(.gz)`, `lightgbm_model.json(.gz)`, and `norm_browser.json(.gz)` bundles: extracts per-feature XGBoost split counts, XGB split shares %, root-node splits, LightGBM split counts, LightGBM split gain shares %, normalization mean/std, semantic group classification, and TreeSHAP/pre-excluded/zero-split dispositions without bloating `models.json` with raw trees.
+   - Added LightGBM test/CV metrics, XGBoost 5-fold CV & strict holdout gap metrics, Optuna hyperparameters (`xgb.params`), validation split config (`xgb.validation`), 10-decile calibration reliability bins (`calibration_bins`), 8 confidence band precision/coverage buckets (`confidence_buckets`), `signal_modifiers`, `phase_thresholds`, all 27 registered models (`timelineModels` incl. `v1`–`v3` archive rows parsed from `MODELS.md`), and all 13 `evaluated` experiment summaries from `ml_registry/journal.jsonl`.
+2. **Full Visual ML Lab UI & SVG Chart Suite ([charts.js](study-site/charts.js), [index.html](study-site/index.html), [app.js](study-site/app.js), [styles.css](study-site/styles.css)):**
+   - Added five pure-SVG interactive visualizations under strict `'self'` CSP (zero `innerHTML`, zero external libraries): 27-model chronological Accuracy & ROC-AUC evolution timeline (`drawEvolutionChart`), 10-decile calibration reliability curve against `y = x` (`drawCalibrationCurve`), 8-band confidence accuracy & coverage bars (`drawConfidenceBuckets`), 4-phase calibrated probability response curves (`drawPhaseResponseCurve`), and top-18 tree-extracted feature importance bars switchable across `XGB Splits` / `LGB Gain %` / `Root Splits` (`drawFeatureImportanceBars`).
+   - Added interactive sticky Model Inspector bar, XGBoost vs LightGBM vs Ensemble breakdown table, CV/Holdout generalization audit & Optuna hyperparameter chips, searchable/filterable 83-feature catalog explorer, switchable `Full OOS (2,267)` / `Exact 2,175` preset sweep comparison, ML experiment/ablation ledger, toggleable v1 archive registry table, and quality gates + raw `training_report.txt` viewer.
+3. **Verification ([studySiteBuilder.test.ts](bot/src/__tests__/studySiteBuilder.test.ts)):**
+   - Expanded `buildStudySite` integration test assertions to cover `timelineModels`, `experiments`, `featureCatalog`, `calibrationBins`, `confidenceBuckets`, `metrics.lgb`, and `xgbParams`.
+
+**Files:** [models.mjs](scripts/study/models.mjs); [build-study-site.mjs](scripts/build-study-site.mjs); [charts.js](study-site/charts.js); [index.html](study-site/index.html); [app.js](study-site/app.js); [styles.css](study-site/styles.css); [studySiteBuilder.test.ts](bot/src/__tests__/studySiteBuilder.test.ts); [UPDATES.md](UPDATES.md).
 
 ---
 

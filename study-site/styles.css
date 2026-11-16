@@ -218,3 +218,22 @@ tr:hover td { background: rgba(148, 163, 184, 0.04); }
   border-radius: 8px; padding: 7px 10px; font-family: var(--font-mono); font-size: 0.74rem;
   color: var(--text); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); white-space: pre-line;
 }
+
+.inspector-bar {
+  position: sticky; top: 64px; z-index: 15;
+  background: rgba(11, 18, 32, 0.94); backdrop-filter: blur(10px);
+}
+.inspector-bar__right { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.feat-toolbar { margin: 12px 0; gap: 10px; }
+.table-scroll { max-height: 410px; overflow-y: auto; }
+.table-scroll thead th { position: sticky; top: 0; background: var(--bg-card); z-index: 2; }
+.report-pre {
+  background: #030711; border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px; font-family: var(--font-mono); font-size: 0.75rem; line-height: 1.45;
+  color: #cbd5e1; max-height: 290px; overflow: auto; white-space: pre-wrap; margin: 10px 0 0;
+}
+.audit-section { margin-top: 12px; }
+.audit-section h4 {
+  margin: 0 0 6px; font-family: var(--font-mono); font-size: 0.72rem;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim);
+}
