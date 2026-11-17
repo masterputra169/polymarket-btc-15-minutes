@@ -218,7 +218,7 @@ import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment 
 import { getGlobalRisk } from './monitoring/globalRisk.ts';
 import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
-import { maybeJevAnalyze, maybeJevDecisionShadow, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
+import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -419,6 +419,12 @@ function verifyClosedMarketPtb(slug: string | null): void {
   ptbVerifyScheduled.add(slug);
   if (ptbVerifyScheduled.size > 50) ptbVerifyScheduled.delete(ptbVerifyScheduled.values().next().value as string);
   scheduleOfficialPtbCheck({ slug, used: priceToBeat.value, usedSource: priceToBeat.source });
+  if (isExactPtbSource(priceToBeat.source) && priceToBeat.value != null) {
+    const ptbVal = priceToBeat.value;
+    void closeTwapFor(slug).then((closeTwap) => {
+      if (closeTwap != null) recordJevWindowOutcome(slug, closeTwap >= ptbVal ? 'UP' : 'DOWN');
+    }).catch(() => {});
+  }
 }
 
 // Settlement estimates of the last minutes, for the 30 s drift on the tape (record-only).
@@ -2027,6 +2033,7 @@ export async function pollOnce() {
         timeLeftMin, session: getSessionName(),
         btcPrice: lastPrice, priceToBeat: priceToBeat.value, ptbSource: priceToBeat.source,
         ptbExact: isExactPtbSource(priceToBeat.source), settlePrice: settle.price,
+        basisUsd: basisTracker.get(), twapPhysicsZ: phys?.z ?? null, twapProbUp: phys?.p ?? null,
         delta1m, delta3m, atrPct: atr?.atrPct ?? null, atrRatio: atr?.atrRatio ?? null,
         rsi: rsiNow, rsiSlope, macdHist: macd?.hist ?? null, vwapDist, vwapSlope,
         bbPercentB: bb?.percentB ?? null, bbWidth: bb?.width ?? null,
@@ -2034,10 +2041,17 @@ export async function pollOnce() {
         emaCrossSignal: emaCross?.cross ?? null, emaDistPct: emaCross?.distancePct ?? null,
         volDeltaBuyRatio: volDelta?.buyRatio ?? null,
         marketUp, marketDown,
+        spread: orderbookUp?.spread ?? null,
+        bidLiquidity: orderbookUp?.bidLiquidity ?? null,
+        askLiquidity: orderbookUp?.askLiquidity ?? null,
         mlProbUp: mlResult.available ? mlResult.mlProbUp : null,
         mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
         mlSide: mlResult.available ? mlResult.mlSide : null,
-        mlAgreesWithRules, ensembleUp,
+        mlAgreesWithRules,
+        baseMlProbUp: mlResult.available ? (mlResult.baseMlProbUp ?? null) : null,
+        hybridDeltaProb: mlResult.available ? (mlResult.hybridDeltaProb ?? null) : null,
+        hybridActive: mlResult.available ? Boolean(mlResult.hybridActive) : false,
+        ensembleUp,
         edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
         regime: regimeInfo?.regime ?? null, regimeConfidence: regimeInfo?.confidence ?? null,
         smartFlowSignal: smartFlowSignal?.direction ?? null, signalConfirmCount: getConfirmCount(),

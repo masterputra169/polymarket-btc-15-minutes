@@ -6,6 +6,21 @@
 
 ---
 
+## 2026-11-17 — JEV Layer v3 Upgrade (10-Bin Laplace Calibration, Bayesian Prior Anchoring, TypeSafe Risk Desk `score` & Brier Skill Guard)
+
+- **10-bin Laplace + PAVA + piecewise `lerp` calibration (`bot/src/ai/jevSettleCalibration.ts` → `2026-11-17-laplace10-lerp`):**
+  - Replaced `2026-10-26-pava-70` (which clamped every raw `0.08..0.86` probability to `0.4462` and prevented UP signal agreement) with 10-bin Laplace Beta(1,1) + PAVA monotone blocks and smooth linear interpolation (`lerp`) across bucket centers (`0.05..0.95`, `fitLaplaceCalibrationBins()` + `calibrateWithBins()`), adapted from `skharchikov/polymarket-bot/trading-bot/src/calibration.rs`.
+  - Validated on chronological 70/30 OOS split across `2,429` resolved VPS `jev_log.jsonl` markets (`1,700` train / `729` OOS): raw Brier `0.25438` → old `pava-70` `0.24884` → **`laplace10-lerp` `0.24031`** (log-loss `0.70711 → 0.69082 → 0.67364`; `jev_decision.jsonl` `720`-mkt OOS Brier `0.25014 → 0.23593`).
+- **Bayesian log-odds prior anchoring, Composite Risk Desk & Rolling Brier Skill Guard (`bot/src/ai/jevBayesian.ts`):**
+  - Implemented `probToOdds`, `oddsToProb`, `dampenLr` (`LR^confidence`), and `computeBayesianAnchor` (`skharchikov/bayesian.rs`) anchoring calibrated JEV probabilities onto live `market_odds.up` (`JEV_BAYESIAN_MAX_WEIGHT=0.20`, OOS Brier `0.23447` vs `0.23454` raw market).
+  - Implemented TypeSafe Composite Risk Desk (`computeCompositeRiskScore`: weighted `chopHazard` `0.40`, `exhaustionRisk` `0.35`, `flowContradiction` `0.25`) and 3-zone routing (`routeJevDecision`: `risk_veto` / `confident` / `uncertain_passthrough`, keeping `1arley/jev-advisor-gateway` fail-safe pass-through).
+  - Implemented `evaluateBrierSkillGate` (`JEV_BRIER_GATE=true`, `window=100`, `minSamples=30`), automatically demoting active JEV veto/gate/sizing overrides whenever rolling JEV Brier trails market mid (`JEV_MODE=shadow` stays active in production while `v3` collects forward data).
+- **v3 State, Risk Desk `score` Questions, Timing & Loop Settlement Hook (`bot/src/ai/jevAdvisor.ts`, `bot/src/config.ts`, `bot/src/loop.ts`):**
+  - Fixed `buildJevState()` (`independent_v3` / `collaborative_v3`) to expose live `order_flow` microstructure (`vpin`, `ofi`, `microprice_edge_pct`, `depth_imbalance`, `top_imbalance`, `trade_imbalance`), `order_book` (`spread`, `bid_liquidity_usd`, `ask_liquidity_usd`), `settle_distance_to_ptb_usd` (Chainlink TWAP settle distance vs PTB), `binance_chainlink_basis_usd`, `twap_physics_z` / `twap_prob_up`, and Hybrid residual telemetry under `algo_view` (`independent=true` still strips `algo_view` cleanly).
+  - Extended `buildJevQuestions()` with three atomic 5-level TypeSafe `score` questions (`chop_hazard`, `exhaustion_risk`, `flow_contradiction`) evaluated in the same System One call, backward-compatible `parseJevAnswers()`, `maxTimeLeftMin=14.2` early-noise gate (`~48s` open buffer), warm Brier loading in `initJevAdvisor()`, and exact TWAP close outcome recording via `verifyClosedMarketPtb()` → `recordJevWindowOutcome()`.
+- **Dashboard telemetry (`src/components/JevPanel.tsx`, `src/App.tsx`):** Surfaced `bayesianProbUp`-prioritized `Settle UP`, color-coded `Risk Desk` composite hazard score (with breakdown tooltip), and Rolling Brier Skill badge (`BS WARM` / `PASS` / `DEMOTED`).
+- **Tests (`bot/src/ai/__tests__/jevBayesian.test.ts`, `jevSettleCalibration.test.ts`, `jevAdvisor.test.ts`):** Added unit and end-to-end Brier auto-demotion coverage (`40` JEV AI tests passing across `5` files).
+
 ## 2026-11-17 — Remove Daily Profit Target Feature & Dashboard Target Bar
 
 - **Bot safety & loop removal (`bot/src/safety/dailyProfitTarget.ts` deleted, `bot/src/loop.ts`, `bot/src/config.ts`, `bot/src/statusServer.ts`, `bot/src/trading/journalAnalytics.ts`):** Removed `dailyProfitTargetUsd` (`DAILY_PROFIT_TARGET_USD`), sticky WIB `profitTargetPaused` entry blocks across limit/arb/pre-market/directional gates, `resetProfitTarget` RPC handler, and `profit_target.json` reset creation (also cleaned `profit_target.json` and `DAILY_PROFIT_TARGET_USD` from local & VPS runtime configs so the false `+$30.00 / $30.00` dry-run pause never halts trading).
@@ -99,11 +114,12 @@
 
 ## Current status
 
-_Last updated: 2026-11-17 09:15 WIB_
+_Last updated: 2026-11-17 09:46 WIB_
 
 | Area | State |
 |---|---|
 | Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating All-Time Quant + Live Hybrid Residual v4 ($100 fresh test) |
+| JEV / TypeSafe layer | **v3 LIVE in SHADOW** (`typesafe/jev-1.14` via OpenRouter, `JEV_MODE=shadow`, `independent_v3` state w/ order flow + Chainlink TWAP distance + Risk Desk 3× `score`, `2026-11-17-laplace10-lerp` cal + Bayesian prior anchor + Rolling Brier Skill Guard) |
 | ML model | **`20261116-p2-ef8dfd` + `v4-hybrid-20261116` Overlay LIVE** (`83f` v2 base + `412` depth-2 Chainlink/TWAP/L2 residual trees; `ML_HYBRID_RESIDUAL_ENABLED=true`) · Val Acc `73.68% → 74.93%`, AUC `0.8252 → 0.8355`, Brier `0.1723 → 0.1653`, ECE `0.0411 → 0.0141` (parity `3.16e-07`) |
 | Pipeline v4 / Stage 2 | **Hybrid Residual v4 LIVE + 54d Tape Lab** (`4,587,177` 1 Hz snapshots / `5,076` resolved mkts `2026-09-24 → 2026-11-16`) · Normal window OOS `75.97%` Acc / `0.1597` Brier; Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
@@ -128,7 +144,7 @@ _Last updated: 2026-11-17 09:15 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 114 files / 1,070 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 115 files / 1,080 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

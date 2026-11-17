@@ -1,34 +1,53 @@
 /**
  * JEV decision advisor - TypeSafe System One model (docs.typesafe.ai).
  *
- * One call per market (default) asks JEV three typed questions against the
- * current market state:
- *   - direction      choice: UP / DOWN / NO_EDGE (+ probabilities, confidence)
- *   - settle_above_ptb noul: probability BTC settles above the PTB at close
- *   - regime         choice: trending_up / trending_down / choppy / mean_reverting / neutral
+ * v3 architecture:
+ *   - Sends rich v3 state including Chainlink TWAP settle distance, Binance/Chainlink basis,
+ *     TWAP z-score, L2 book liquidity/spread, and live order-flow features (VPIN, OFI, microprice edge).
+ *   - Asks six typed questions in one parallel System One evaluation:
+ *       1) direction        (choice: UP / DOWN / NO_EDGE)
+ *       2) settle_above_ptb (noul: calibrated with 10-bin Laplace + PAVA + lerp + Bayesian prior)
+ *       3) regime           (choice: trending_up / trending_down / mean_reverting / choppy / neutral)
+ *       4) chop_hazard      (score 0..4: two-sided chop / whipsaw risk)
+ *       5) exhaustion_risk  (score 0..4: overextended spike / snapback risk)
+ *       6) flow_contradiction (score 0..4: L2 orderbook / VPIN / basis divergence vs momentum)
+ *   - Combines risk dimensions deterministically in code (`jevBayesian.ts`), anchors probability
+ *     onto Polymarket odds log-odds prior, routes via 3-zone confidence gating, and enforces a
+ *     Rolling Brier Skill Guard that auto-demotes active veto if JEV trails market mid.
  *
  * Default is SHADOW: the answer is written to bot/data/jev_log.jsonl and the
- * trading path is untouched. JEV becomes an advisory (veto) only when
- * JEV_SHADOW=false is set deliberately after the shadow log has been scored
- * with bot/scripts/jevEvaluate.mts. JEV never triggers entries.
+ * trading path is untouched.
  *
  * Contract:
- *   initJevAdvisor()          - startup log + readiness check
- *   maybeJevAnalyze(snapshot) - fire-and-forget, called from the poll loop
- *   getJevStatus()            - dashboard / diagnostics snapshot
- *   checkJevAdvisory(side)    - future active-mode veto (null while shadow)
+ *   initJevAdvisor()                 - startup log, key check, & Brier history warmup
+ *   maybeJevAnalyze(snapshot)        - fire-and-forget, called from the poll loop
+ *   recordJevWindowOutcome(slug, y)  - feeds resolved market outcome into rolling Brier guard
+ *   getJevStatus()                   - dashboard / diagnostics snapshot
+ *   checkJevAdvisory(side, slug)     - future active-mode veto (null while shadow / demoted)
  */
-import { appendFileSync, mkdirSync } from 'fs';
-import { dirname } from 'path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { dirname, resolve } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { isTypesafeConfigured, resolveJevProviderConfig, systemOne, TypesafeError } from './typesafeClient.ts';
 import { calibrateJevSettleUp, JEV_SETTLE_CALIBRATION_VERSION } from './jevSettleCalibration.ts';
+import {
+  computeBayesianAnchor,
+  computeCompositeRiskScore,
+  evaluateBrierSkillGate,
+  normalizeTypesafeScore,
+  routeJevDecision,
+  type BrierObservation,
+  type BrierSkillReport,
+  type ConfidenceRoute,
+  type RiskDeskScores,
+} from './jevBayesian.ts';
 import type { OrderFlowFeatures } from '../engines/orderFlowFeatures.ts';
 import { maybeRecordPolicyCandidate } from './jevPolicyShadow.ts';
-import type { TypesafeAnswer, TypesafeQuestion } from './typesafeClient.ts';
+import type { TypesafeAnswer, TypesafeQuestion, TypesafeScoreAnswer } from './typesafeClient.ts';
 
 const log = createLogger('JEV');
+const RISK_SCORE_LEVELS = 5;
 
 export interface JevSnapshot {
   t: number;
@@ -48,6 +67,9 @@ export interface JevSnapshot {
   ptbSource: string | null;
   ptbExact: boolean;
   settlePrice: number | null;
+  basisUsd?: number | null;
+  twapPhysicsZ?: number | null;
+  twapProbUp?: number | null;
   delta1m: number | null;
   delta3m: number | null;
   atrPct: number | null;
@@ -66,10 +88,16 @@ export interface JevSnapshot {
   volDeltaBuyRatio: number | null;
   marketUp: number | null;
   marketDown: number | null;
+  spread?: number | null;
+  bidLiquidity?: number | null;
+  askLiquidity?: number | null;
   mlProbUp: number | null;
   mlConfidence: number | null;
   mlSide: string | null;
   mlAgreesWithRules: boolean | null;
+  baseMlProbUp?: number | null;
+  hybridDeltaProb?: number | null;
+  hybridActive?: boolean;
   ensembleUp: number | null;
   edgeUp: number | null;
   edgeDown: number | null;
@@ -92,8 +120,18 @@ export interface JevDecision {
   settleUpProbability: number;
   /** Calibrated settle probability; optional for older tests/records. */
   settleUpCalibrated?: number;
+  /** Market-anchored Bayesian log-odds posterior; optional for older tests/records. */
+  bayesianProbUp?: number;
   regime: string;
   regimeConfidence: number;
+  /** TypeSafe Risk Desk normalized dimension scores in [0, 1]. */
+  chopHazard?: number | null;
+  exhaustionRisk?: number | null;
+  flowContradiction?: number | null;
+  /** Weighted composite risk score in [0, 1] combining Risk Desk dimensions. */
+  compositeRisk?: number | null;
+  riskConfidence?: number | null;
+  route?: ConfidenceRoute;
   latencyMs: number;
   inputTokens: number | null;
   outputTokens: number | null;
@@ -108,13 +146,15 @@ interface JevRecord extends JevDecision {
   mode: 'shadow' | 'active';
   stateVariant?: string;
   decisionShadow?: boolean;
+  entryRefresh?: boolean;
   rules: { action: string; side: string | null; confidence: string | null; reason: string | null; phase: string | null };
   market: { timeLeftMin: number | null; session: string | null; btcPrice: number | null; priceToBeat: number | null; ptbSource: string | null; ptbExact: boolean; marketUp: number | null; marketDown: number | null };
-  ml: { probUp: number | null; confidence: number | null; side: string | null; agreesWithRules: boolean | null };
+  ml: { probUp: number | null; confidence: number | null; side: string | null; agreesWithRules: boolean | null; baseMlProbUp?: number | null; hybridDeltaProb?: number | null; hybridActive?: boolean };
   edge: { up: number | null; down: number | null; best: number | null };
   features: {
     timeLeftMin: number | null; session: string | null; phase: string | null;
     btcPrice: number | null; priceToBeat: number | null; settlePrice: number | null;
+    basisUsd?: number | null; twapPhysicsZ?: number | null; twapProbUp?: number | null;
     delta1m: number | null; delta3m: number | null; atrPct: number | null; atrRatio: number | null;
     rsi: number | null; rsiSlope: number | null; macdHist: number | null;
     vwapDist: number | null; vwapSlope: number | null; bbPercentB: number | null; bbWidth: number | null;
@@ -122,6 +162,7 @@ interface JevRecord extends JevDecision {
     volDeltaBuyRatio: number | null; smartFlowSignal: string | null; signalConfirmCount: number | null;
     regime: string | null; regimeConfidence: number | null;
     mlProbUp: number | null; mlConfidence: number | null; marketUp: number | null; marketDown: number | null;
+    spread?: number | null; bidLiquidity?: number | null; askLiquidity?: number | null;
     orderFlow?: OrderFlowFeatures;
   };
 }
@@ -136,8 +177,22 @@ let _pausedUntil = 0;
 let _current: (JevDecision & { ts: number; slug: string | null; marketUp?: number | null; marketDown?: number | null }) | null = null;
 const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCostUsd: 0, lastError: null as string | null };
 
-/** Compact state object. JSON structure is cheaper for JEV than prose. */
+const _pendingOutcomesBySlug = new Map<string, { marketProbUp: number; jevProbUp: number; ts: number }>();
+const _recordedSlugs = new Set<string>();
+const _brierHistory: BrierObservation[] = [];
+
+function roundOpt(v: number | null | undefined, digits = 4): number | null {
+  if (v == null || !Number.isFinite(v)) return null;
+  const f = Math.pow(10, digits);
+  return Math.round(v * f) / f;
+}
+
+/** Compact structured state object (v3). JSON structure is cheaper and sharper for JEV than prose. */
 export function buildJevState(s: JevSnapshot, independent = false): Record<string, unknown> {
+  const basisUsd = s.basisUsd != null && Number.isFinite(s.basisUsd)
+    ? s.basisUsd
+    : (s.btcPrice != null && s.settlePrice != null ? s.btcPrice - s.settlePrice : null);
+
   const state: Record<string, unknown> = {
     market: {
       asset: 'BTC/USD',
@@ -151,17 +206,39 @@ export function buildJevState(s: JevSnapshot, independent = false): Record<strin
       btc_price_now: s.btcPrice,
       expected_settlement_price: s.settlePrice,
       distance_to_ptb_usd: s.btcPrice != null && s.priceToBeat != null ? +(s.btcPrice - s.priceToBeat).toFixed(2) : null,
+      settle_distance_to_ptb_usd: s.settlePrice != null && s.priceToBeat != null ? +(s.settlePrice - s.priceToBeat).toFixed(2) : null,
+      binance_chainlink_basis_usd: roundOpt(basisUsd, 2),
+      twap_physics_z: roundOpt(s.twapPhysicsZ, 3),
+      twap_prob_up: roundOpt(s.twapProbUp, 4),
     },
     market_odds: { up: s.marketUp, down: s.marketDown },
+    order_book: {
+      spread: roundOpt(s.spread ?? s.orderFlow?.spread, 4),
+      bid_liquidity_usd: roundOpt(s.bidLiquidity, 2),
+      ask_liquidity_usd: roundOpt(s.askLiquidity, 2),
+    },
     momentum: { delta_1m_usd: s.delta1m, delta_3m_usd: s.delta3m, vwap_distance: s.vwapDist, vwap_slope: s.vwapSlope, ema_cross: s.emaCrossSignal, ema_distance_pct: s.emaDistPct },
     volatility: { atr_pct: s.atrPct, atr_ratio: s.atrRatio, bb_percent_b: s.bbPercentB, bb_width: s.bbWidth },
     oscillators: { rsi: s.rsi, rsi_slope: s.rsiSlope, macd_hist: s.macdHist, stoch_k: s.stochK, stoch_d: s.stochD },
-    order_flow: { volume_delta_buy_ratio: s.volDeltaBuyRatio, smart_flow: s.smartFlowSignal },
+    order_flow: {
+      volume_delta_buy_ratio: s.volDeltaBuyRatio,
+      smart_flow: s.smartFlowSignal,
+      vpin: roundOpt(s.orderFlow?.vpin, 4),
+      ofi: roundOpt(s.orderFlow?.ofi, 2),
+      microprice_edge_pct: roundOpt(s.orderFlow?.micropriceEdgePct, 4),
+      depth_imbalance: roundOpt(s.orderFlow?.depthImbalance, 4),
+      top_imbalance: roundOpt(s.orderFlow?.topImbalance, 4),
+      trade_imbalance: roundOpt(s.orderFlow?.tradeImbalance, 4),
+      trade_count: s.orderFlow?.tradeCount ?? null,
+    },
     algo_view: {
       ml_prob_up: s.mlProbUp,
       ml_confidence: s.mlConfidence,
       ml_side: s.mlSide,
       ml_agrees_with_rules: s.mlAgreesWithRules,
+      base_ml_prob_up: roundOpt(s.baseMlProbUp, 4),
+      hybrid_delta_prob: roundOpt(s.hybridDeltaProb, 4),
+      hybrid_active: s.hybridActive ?? false,
       ensemble_prob_up: s.ensembleUp,
       edge_up: s.edgeUp,
       edge_down: s.edgeDown,
@@ -179,7 +256,7 @@ export function buildJevState(s: JevSnapshot, independent = false): Record<strin
     },
   };
   if (independent) delete state.algo_view;
-  state.state_variant = independent ? 'independent_v2' : 'collaborative';
+  state.state_variant = independent ? 'independent_v3' : 'collaborative_v3';
   return state;
 }
 
@@ -188,58 +265,209 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
     direction: {
       type: 'choice',
       instructions: independent
-        ? 'This is a 15-minute BTC up/down market. The state contains market odds and technical/order-flow features but NO bot recommendation. Form your own view. Which side is more likely to win: UP (BTC settles above the price to beat), DOWN (below), or NO_EDGE when there is no material edge beyond what the odds already price?'
-        : 'This is a 15-minute BTC up/down market. The market odds and the algo view are included in the state; they already reflect public information. Which side is more likely to win: UP (BTC settles above the price to beat), DOWN (below), or NO_EDGE when there is no material edge beyond what the odds already price?',
+        ? 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, momentum, volatility, and order_flow to form an independent view (NO bot recommendation in state). Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?'
+        : 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, order_flow, and algo_view. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?',
       criteria: {
-        UP: 'BTC is more likely than the market odds imply to settle above the price to beat.',
-        DOWN: 'BTC is more likely than the market odds imply to settle below the price to beat.',
-        NO_EDGE: 'The state shows no material edge; the market odds and algo view are about right.',
+        UP: 'Expected settlement is above PTB with momentum and order flow supporting higher probability than market_odds.up.',
+        DOWN: 'Expected settlement is below PTB with momentum and order flow supporting higher probability than market_odds.down.',
+        NO_EDGE: 'No material edge beyond market_odds, or mixed/choppy evidence.',
       },
     },
     settle_above_ptb: {
       type: 'noul',
-      instructions: 'Will BTC settle above the price to beat at the end of this 15-minute window? Return a calibrated probability. The market odds and the noisiness of a 15-minute BTC move are part of the state; use the odds as a prior and avoid extreme 0 or 1 answers unless the evidence is overwhelming.',
+      instructions: 'Estimate the probability that Chainlink 60s TWAP settles at or above price_to_beat at market close. Anchor around market_odds.up, adjusted by settle_distance_to_ptb_usd, twap_physics_z, and remaining time; avoid 0 or 1 extremes unless near-certain.',
       criteria: {
-        true: 'The expected settlement price is above the price to beat.',
-        false: 'The expected settlement price is at or below the price to beat.',
+        true: 'Chainlink 60s TWAP settles >= price_to_beat.',
+        false: 'Chainlink 60s TWAP settles < price_to_beat.',
       },
     },
     regime: {
       type: 'choice',
-      instructions: 'Classify the current intraday BTC regime from the momentum, volatility and order-flow state.',
+      instructions: 'Classify the current intraday BTC regime from momentum, volatility, and order-flow state.',
       criteria: {
-        trending_up: 'Directional upward drift with momentum confirmation.',
-        trending_down: 'Directional downward drift with momentum confirmation.',
-        mean_reverting: 'Price keeps returning toward a level; breakouts fail.',
-        choppy: 'Two-sided, noisy, no persistence.',
-        neutral: 'No clear regime.',
+        trending_up: 'Directional upward drift with momentum and flow confirmation.',
+        trending_down: 'Directional downward drift with momentum and flow confirmation.',
+        mean_reverting: 'Price keeps snapping back toward PTB or VWAP; breakouts stall.',
+        choppy: 'Two-sided whipsaw noise with weak persistence.',
+        neutral: 'Balanced/quiet regime without strong trend.',
       },
+    },
+    chop_hazard: {
+      type: 'score',
+      instructions: 'Score the structural chop / whipsaw hazard in this 15-minute window based on narrow settle distance to PTB, flat slope, low ATR/BB width, and noisy oscillators.',
+      criteria: [
+        'Clean persistent directional movement far from PTB; minimal whipsaw risk.',
+        'Mild noise, trend mostly intact.',
+        'Mixed signals or moderate oscillation near VWAP/PTB.',
+        'Repeated reversals across PTB or compressed choppy range.',
+        'Severe two-sided chop right on PTB with contradicting short-term swings.',
+      ],
+    },
+    exhaustion_risk: {
+      type: 'score',
+      instructions: 'Score short-term exhaustion / snapback risk where an overextended move (extreme RSI, Stoch, stretched BB %B, large delta) is vulnerable to mean-reversion before settle.',
+      criteria: [
+        'Fresh move with plenty of room; oscillators neutral and unstretched.',
+        'Healthy trend progression with mild extension.',
+        'Moderately stretched oscillators; minor pullback possible.',
+        'Overbought/oversold extension with slowing slope or fading delta.',
+        'Extreme parabolic spike (RSI/BB/Stoch pinned) with stalled slope; high reversal hazard.',
+      ],
+    },
+    flow_contradiction: {
+      type: 'score',
+      instructions: 'Score how strongly order flow (VPIN, depth/top/trade imbalance, microprice_edge_pct, OFI) and Binance/Chainlink basis contradict price direction.',
+      criteria: [
+        'Order flow, L2 book imbalance, and momentum align in the same direction.',
+        'Mostly aligned order flow with minor noise.',
+        'Neutral or thin order flow without strong confirmation.',
+        'Noticeable divergence between spot move and VPIN/book/trade imbalance.',
+        'Strong flow contradiction: heavy opposite-side book pressure, high VPIN, or adverse basis against spot drift.',
+      ],
     },
   };
 }
 
-export function parseJevAnswers(model: string, answers: Record<string, TypesafeAnswer>): JevDecision {
+function extractScoreDimension(ans: TypesafeAnswer | undefined): { normalized: number; confidence: number } | null {
+  if (!ans || ans.type !== 'score') return null;
+  const sAns = ans as TypesafeScoreAnswer;
+  const normalized = normalizeTypesafeScore(sAns.score, RISK_SCORE_LEVELS);
+  if (normalized == null) return null;
+  return { normalized, confidence: Number.isFinite(sAns.confidence) ? sAns.confidence : 0 };
+}
+
+export function parseJevAnswers(
+  model: string,
+  answers: Record<string, TypesafeAnswer>,
+  ctx: { marketUp?: number | null; bayesianMaxWeight?: number; minConfidence?: number; riskVetoThreshold?: number } = {},
+): JevDecision {
   const directionAnswer = answers.direction;
   if (!directionAnswer || directionAnswer.type !== 'choice') throw new Error('JEV direction answer missing');
   const settleAnswer = answers.settle_above_ptb;
   if (!settleAnswer || settleAnswer.type !== 'noul') throw new Error('JEV settle answer missing');
   const regimeAnswer = answers.regime;
   if (!regimeAnswer || regimeAnswer.type !== 'choice') throw new Error('JEV regime answer missing');
+
   const choice = directionAnswer.choice === 'UP' || directionAnswer.choice === 'DOWN' ? directionAnswer.choice : 'NO_EDGE';
+  const settleUpCalibrated = calibrateJevSettleUp(settleAnswer.noul);
+
+  const chopDim = extractScoreDimension(answers.chop_hazard);
+  const exhaustDim = extractScoreDimension(answers.exhaustion_risk);
+  const flowDim = extractScoreDimension(answers.flow_contradiction);
+  const riskScores: RiskDeskScores = {
+    chopHazard: chopDim,
+    exhaustionRisk: exhaustDim,
+    flowContradiction: flowDim,
+  };
+  const composite = computeCompositeRiskScore(riskScores);
+  const bayes = computeBayesianAnchor(
+    ctx.marketUp ?? null,
+    settleUpCalibrated,
+    directionAnswer.confidence,
+    ctx.bayesianMaxWeight ?? BOT_CONFIG.jev?.bayesianMaxWeight ?? 0.20,
+  );
+  const route = routeJevDecision({
+    direction: choice,
+    directionConfidence: directionAnswer.confidence,
+    compositeRisk: composite.compositeRisk,
+    riskConfidence: composite.riskConfidence,
+    minConfidence: ctx.minConfidence ?? BOT_CONFIG.jev?.minConfidence ?? 0.60,
+    riskVetoThreshold: ctx.riskVetoThreshold ?? BOT_CONFIG.jev?.riskVetoThreshold ?? 0.78,
+  });
+
   return {
     model,
     direction: choice,
     directionProbabilities: directionAnswer.probabilities,
     directionConfidence: directionAnswer.confidence,
     settleUpProbability: settleAnswer.noul,
-    settleUpCalibrated: calibrateJevSettleUp(settleAnswer.noul),
+    settleUpCalibrated,
+    bayesianProbUp: +bayes.posterior.toFixed(4),
     regime: regimeAnswer.choice,
     regimeConfidence: regimeAnswer.confidence,
+    chopHazard: chopDim ? +chopDim.normalized.toFixed(4) : null,
+    exhaustionRisk: exhaustDim ? +exhaustDim.normalized.toFixed(4) : null,
+    flowContradiction: flowDim ? +flowDim.normalized.toFixed(4) : null,
+    compositeRisk: composite.compositeRisk != null ? +composite.compositeRisk.toFixed(4) : null,
+    riskConfidence: composite.dimensionsPresent > 0 ? +composite.riskConfidence.toFixed(4) : null,
+    route,
     latencyMs: 0,
     inputTokens: null,
     outputTokens: null,
     costUsd: null,
   };
+}
+
+function pushBrierObservation(obs: BrierObservation): void {
+  if (_recordedSlugs.has(obs.slug)) return;
+  if (!(obs.marketProbUp > 0.01 && obs.marketProbUp < 0.99)) return;
+  if (!Number.isFinite(obs.jevProbUp)) return;
+  _recordedSlugs.add(obs.slug);
+  _brierHistory.push(obs);
+  const maxKeep = Math.max(20, BOT_CONFIG.jev?.brierGateWindow ?? 100);
+  while (_brierHistory.length > maxKeep) {
+    const dropped = _brierHistory.shift();
+    if (dropped) _recordedSlugs.delete(dropped.slug);
+  }
+}
+
+/** Record settled market outcome (`'UP' | 'DOWN' | 0 | 1`) for the rolling Brier skill guard. */
+export function recordJevWindowOutcome(slug: string | null | undefined, outcome: 'UP' | 'DOWN' | 0 | 1): boolean {
+  if (!slug) return false;
+  const pred = _pendingOutcomesBySlug.get(slug);
+  if (!pred) return false;
+  _pendingOutcomesBySlug.delete(slug);
+  const outcomeUp: 0 | 1 = outcome === 'UP' || outcome === 1 ? 1 : 0;
+  pushBrierObservation({
+    slug,
+    ts: pred.ts,
+    marketProbUp: pred.marketProbUp,
+    jevProbUp: pred.jevProbUp,
+    outcomeUp,
+  });
+  return true;
+}
+
+function warmLoadBrierHistory(): void {
+  const cfg = BOT_CONFIG.jev;
+  if (!cfg?.logFile || !existsSync(cfg.logFile)) return;
+  const outcomesFile = resolve(dirname(cfg.logFile), 'jev_outcomes.json');
+  if (!existsSync(outcomesFile)) return;
+  try {
+    const outcomes = JSON.parse(readFileSync(outcomesFile, 'utf8')) as Record<string, 'UP' | 'DOWN'>;
+    const rawLines = readFileSync(cfg.logFile, 'utf8').split('\n').filter(Boolean);
+    const maxKeep = Math.max(20, cfg.brierGateWindow ?? 100);
+    const tail = rawLines.slice(-Math.max(maxKeep * 3, 300));
+    for (const line of tail) {
+      let row: Partial<JevRecord> | null = null;
+      try { row = JSON.parse(line) as Partial<JevRecord>; } catch { row = null; }
+      if (!row?.slug) continue;
+      const out = outcomes[row.slug];
+      if (out !== 'UP' && out !== 'DOWN') continue;
+      const mktUp = row.market?.marketUp;
+      if (typeof mktUp !== 'number' || mktUp <= 0.01 || mktUp >= 0.99) continue;
+      const jevP = row.bayesianProbUp ?? row.settleUpCalibrated ?? (typeof row.settleUpProbability === 'number' ? calibrateJevSettleUp(row.settleUpProbability) : null);
+      if (jevP == null || !Number.isFinite(jevP)) continue;
+      pushBrierObservation({
+        slug: row.slug,
+        ts: Number(row.ts) || Date.now(),
+        marketProbUp: mktUp,
+        jevProbUp: jevP,
+        outcomeUp: out === 'UP' ? 1 : 0,
+      });
+    }
+  } catch {
+    // Non-critical warmup; starts empty cleanly if malformed
+  }
+}
+
+export function getJevBrierSkill(): BrierSkillReport {
+  const cfg = BOT_CONFIG.jev;
+  return evaluateBrierSkillGate(_brierHistory, {
+    windowSize: cfg?.brierGateWindow ?? 100,
+    minSamples: cfg?.brierGateMinSamples ?? 30,
+    enabled: cfg?.brierGateEnabled ?? true,
+  });
 }
 
 export function initJevAdvisor(): void {
@@ -248,6 +476,7 @@ export function initJevAdvisor(): void {
     log.info('JEV: disabled (set JEV_ENABLED=true to enable)');
     return;
   }
+  warmLoadBrierHistory();
   const prov = resolveJevProviderConfig();
   if (!prov.configured) {
     const keyName = prov.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'TYPESAFE_API_KEY';
@@ -255,7 +484,13 @@ export function initJevAdvisor(): void {
     return;
   }
   const mode = cfg.shadowMode ? 'SHADOW' : 'ACTIVE';
-  log.info('JEV: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model + ' every=' + (cfg.intervalMs > 0 ? Math.round(cfg.intervalMs / 1000) + 's' : 'market') + ' log=' + cfg.logFile);
+  const skill = getJevBrierSkill();
+  log.info(
+    'JEV v3: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model +
+    ' every=' + (cfg.intervalMs > 0 ? Math.round(cfg.intervalMs / 1000) + 's' : 'market') +
+    ' brierGuard=' + skill.status + '(' + skill.samples + ')' +
+    ' log=' + cfg.logFile,
+  );
 }
 
 async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 'normal'): Promise<void> {
@@ -267,11 +502,21 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
     { state: buildJevState(snapshot, independent), questions: buildJevQuestions(independent), model: prov.model },
     { apiKey: prov.apiKey, baseUrl: prov.baseUrl, timeoutMs: BOT_CONFIG.jev.timeoutMs },
   );
-  const parsed = parseJevAnswers(res.model, res.answers);
+  const parsed = parseJevAnswers(res.model, res.answers, {
+    marketUp: snapshot.marketUp,
+    bayesianMaxWeight: BOT_CONFIG.jev.bayesianMaxWeight,
+    minConfidence: BOT_CONFIG.jev.minConfidence,
+    riskVetoThreshold: BOT_CONFIG.jev.riskVetoThreshold,
+  });
   parsed.latencyMs = Date.now() - started;
   parsed.inputTokens = res.usage?.input_tokens ?? null;
   parsed.outputTokens = res.usage?.output_tokens ?? null;
   parsed.costUsd = res.usage?.cost ?? null;
+
+  const basisUsd = snapshot.basisUsd != null
+    ? snapshot.basisUsd
+    : (snapshot.btcPrice != null && snapshot.settlePrice != null ? snapshot.btcPrice - snapshot.settlePrice : null);
+
   const record: JevRecord = {
     ts: Date.now(),
     iso: new Date().toISOString(),
@@ -280,11 +525,20 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
     mode: BOT_CONFIG.jev.shadowMode ? 'shadow' : 'active',
     rules: { action: snapshot.action, side: snapshot.side, confidence: snapshot.confidence, reason: snapshot.reason, phase: snapshot.phase },
     market: { timeLeftMin: snapshot.timeLeftMin, session: snapshot.session, btcPrice: snapshot.btcPrice, priceToBeat: snapshot.priceToBeat, ptbSource: snapshot.ptbSource, ptbExact: snapshot.ptbExact, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown },
-    ml: { probUp: snapshot.mlProbUp, confidence: snapshot.mlConfidence, side: snapshot.mlSide, agreesWithRules: snapshot.mlAgreesWithRules },
+    ml: {
+      probUp: snapshot.mlProbUp,
+      confidence: snapshot.mlConfidence,
+      side: snapshot.mlSide,
+      agreesWithRules: snapshot.mlAgreesWithRules,
+      baseMlProbUp: snapshot.baseMlProbUp ?? null,
+      hybridDeltaProb: snapshot.hybridDeltaProb ?? null,
+      hybridActive: snapshot.hybridActive ?? false,
+    },
     edge: { up: snapshot.edgeUp, down: snapshot.edgeDown, best: snapshot.bestEdge },
     features: {
       timeLeftMin: snapshot.timeLeftMin, session: snapshot.session, phase: snapshot.phase,
       btcPrice: snapshot.btcPrice, priceToBeat: snapshot.priceToBeat, settlePrice: snapshot.settlePrice,
+      basisUsd: roundOpt(basisUsd, 2), twapPhysicsZ: roundOpt(snapshot.twapPhysicsZ, 3), twapProbUp: roundOpt(snapshot.twapProbUp, 4),
       delta1m: snapshot.delta1m, delta3m: snapshot.delta3m, atrPct: snapshot.atrPct, atrRatio: snapshot.atrRatio,
       rsi: snapshot.rsi, rsiSlope: snapshot.rsiSlope, macdHist: snapshot.macdHist,
       vwapDist: snapshot.vwapDist, vwapSlope: snapshot.vwapSlope, bbPercentB: snapshot.bbPercentB, bbWidth: snapshot.bbWidth,
@@ -292,11 +546,14 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
       volDeltaBuyRatio: snapshot.volDeltaBuyRatio, smartFlowSignal: snapshot.smartFlowSignal, signalConfirmCount: snapshot.signalConfirmCount,
       regime: snapshot.regime, regimeConfidence: snapshot.regimeConfidence,
       mlProbUp: snapshot.mlProbUp, mlConfidence: snapshot.mlConfidence, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown,
+      spread: roundOpt(snapshot.spread ?? snapshot.orderFlow?.spread, 4),
+      bidLiquidity: roundOpt(snapshot.bidLiquidity, 2),
+      askLiquidity: roundOpt(snapshot.askLiquidity, 2),
       orderFlow: snapshot.orderFlow,
     },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
-    ...(independent ? { stateVariant: 'independent_v2' } : {}),
+    stateVariant: independent ? 'independent_v3' : 'collaborative_v3',
     ...(decision ? { decisionShadow: true } : {}),
   };
   try {
@@ -306,7 +563,20 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
   } catch (err: unknown) {
     log.warn('JEV: cannot write log - ' + (err instanceof Error ? err.message : String(err)));
   }
-  if (!decision) _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
+  if (!decision) {
+    _current = { ...parsed, ts: record.ts, slug: record.slug, marketUp: snapshot.marketUp, marketDown: snapshot.marketDown };
+    if (record.slug && snapshot.marketUp != null && snapshot.marketUp > 0.01 && snapshot.marketUp < 0.99) {
+      _pendingOutcomesBySlug.set(record.slug, {
+        marketProbUp: snapshot.marketUp,
+        jevProbUp: parsed.bayesianProbUp ?? parsed.settleUpCalibrated ?? parsed.settleUpProbability,
+        ts: record.ts,
+      });
+      if (_pendingOutcomesBySlug.size > 200) {
+        const oldestKey = _pendingOutcomesBySlug.keys().next().value;
+        if (oldestKey) _pendingOutcomesBySlug.delete(oldestKey);
+      }
+    }
+  }
 
   // Fixed-policy forward shadow: only the designated policy/market calls, never
   // the post-fill refresh; candidate recording is record-only and never throws.
@@ -338,7 +608,16 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
   _stats.lastLatencyMs = parsed.latencyMs;
   _stats.lastCostUsd = parsed.costUsd ?? 0;
   _stats.totalCostUsd += parsed.costUsd ?? 0;
-  log.info((decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' + parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up raw ' + Math.round(parsed.settleUpProbability * 100) + '% -> cal ' + Math.round((parsed.settleUpCalibrated ?? parsed.settleUpProbability) * 100) + '% | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' + (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd | cal ' + JEV_SETTLE_CALIBRATION_VERSION);
+  const riskTag = parsed.compositeRisk != null ? ' | risk ' + Math.round(parsed.compositeRisk * 100) + '%' : '';
+  const bayesTag = parsed.bayesianProbUp != null ? ' bayes ' + Math.round(parsed.bayesianProbUp * 100) + '%' : '';
+  log.info(
+    (decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' +
+    parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up raw ' +
+    Math.round(parsed.settleUpProbability * 100) + '% -> cal ' +
+    Math.round((parsed.settleUpCalibrated ?? parsed.settleUpProbability) * 100) + '%' + bayesTag + riskTag +
+    ' | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' +
+    (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd | cal ' + JEV_SETTLE_CALIBRATION_VERSION,
+  );
 }
 
 /** Fire-and-forget: called from the poll loop, never awaited, never throws. */
@@ -356,21 +635,13 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
   }
   if (Date.now() < _pausedUntil) return;
   if (_inFlight) {
-    // A forced entry refresh can arrive while the candidate call is in flight.
-    // Queue it; the in-flight promise runs it when it finishes.
     if (force) _pendingRefresh = { ...snapshot, entryRefresh: true };
     return;
   }
-  // Only evaluate markets with the exact TWAP price-to-beat and after the window
-  // has settled: at poll #1 the PTB can still be the approximate oracle/spot value,
-  // which made JEV answer against a wrong state (and cost a paid call).
-  // Entry-time mode: a JEV opinion about a WAIT poll is not the decision the bot
-  // actually makes. Call only when decide() has produced an ENTER candidate.
   if (cfg.callOn === 'entry' && snapshot.action !== 'ENTER') return;
   if (!snapshot.ptbExact) return;
-  if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
-  // A policy sample must be at the fixed market-open checkpoint. Forced entry
-  // refreshes are analysis, not part of the sample, and are not blocked here.
+  const maxTimeLeft = cfg.maxTimeLeftMin ?? 14.2;
+  if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > maxTimeLeft || snapshot.timeLeftMin < 0.5)) return;
   if (!force && cfg.callOn === 'policy' && snapshot.timeLeftMin != null && snapshot.timeLeftMin < cfg.policyMinTimeLeft) return;
   const now = Date.now();
   if (!force && snapshot.slug && snapshot.slug === _lastSlug && cfg.intervalMs === 0) return;
@@ -383,7 +654,6 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
       if (err instanceof TypesafeError && (err.status === 401 || err.status === 402)) {
         _pausedUntil = Date.now() + 10 * 60_000;
         log.warn('JEV paused 10 min (HTTP ' + err.status + '): ' + _stats.lastError + (err.status === 402 ? ' - top up OpenRouter credits at https://openrouter.ai/settings/credits' : ''));
-        // Tell the operator on Telegram/Discord; a silent pause can waste a whole evaluation day.
         void import('../monitoring/notifier.ts')
           .then(m => m.notify('warn', 'JEV paused 10 min (HTTP ' + err.status + '): ' + _stats.lastError + (err.status === 402 ? ' — top up OpenRouter credits' : ''), { key: 'jev:paused' }))
           .catch(() => {});
@@ -399,9 +669,7 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
     });
 }
 
-/** Entry-time decision shadow: one call at the actual ENTER candidate.
- * Record-only; never blocks, never changes the trade. Separate log from the
- * fixed-policy sample so selection bias cannot contaminate the research sample. */
+/** Entry-time decision shadow: one call at the actual ENTER candidate. Record-only. */
 export function maybeJevDecisionShadow(snapshot: JevSnapshot): void {
   const cfg = BOT_CONFIG.jev;
   if (!cfg || !cfg.enabled || !cfg.decisionShadow) return;
@@ -409,9 +677,9 @@ export function maybeJevDecisionShadow(snapshot: JevSnapshot): void {
   if (snapshot.action !== 'ENTER') return;
   if (!snapshot.slug || snapshot.slug === _decisionSlug) return;
   if (!snapshot.ptbExact) return;
-  if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > 14.4 || snapshot.timeLeftMin < 0.5)) return;
+  const maxTimeLeft = cfg.maxTimeLeftMin ?? 14.2;
+  if (snapshot.timeLeftMin != null && (snapshot.timeLeftMin > maxTimeLeft || snapshot.timeLeftMin < 0.5)) return;
   if (Date.now() < _pausedUntil) return;
-  // If another call is in flight, skip this attempt; a later ENTER poll retries.
   if (_inFlight) return;
   _decisionSlug = snapshot.slug;
   _inFlight = true;
@@ -458,6 +726,8 @@ export function getJevLatestForTape(): (JevDecision & { ts: number; slug: string
 export function getJevPrimarySide(slug?: string | null): 'UP' | 'DOWN' | null {
   const cfg = BOT_CONFIG.jev;
   if (!cfg || cfg.mode !== 'primary') return null;
+  const skill = getJevBrierSkill();
+  if ((cfg.brierGateEnabled ?? true) && !skill.allowActiveVeto) return null;
   const d = freshDecision(slug);
   if (!d) return null;
   if (d.direction !== 'UP' && d.direction !== 'DOWN') return null;
@@ -470,6 +740,8 @@ export function getJevPrimarySide(slug?: string | null): 'UP' | 'DOWN' | null {
 export function getJevSizingMultiplier(side: string, slug?: string | null): number {
   const cfg = BOT_CONFIG.jev;
   if (!cfg || cfg.mode === 'shadow' || !cfg.sizingWeight) return 1;
+  const skill = getJevBrierSkill();
+  if ((cfg.brierGateEnabled ?? true) && !skill.allowActiveVeto) return 1;
   const d = freshDecision(slug);
   if (!d || d.direction !== side) return 1;
   if (d.directionConfidence < cfg.minConfidence) return 1;
@@ -483,7 +755,8 @@ export function getJevSizingMultiplier(side: string, slug?: string | null): numb
 export function getJevSummary(slug?: string | null): string | null {
   const d = freshDecision(slug);
   if (!d) return null;
-  return 'JEV: ' + d.direction + ' ' + Math.round(d.directionConfidence * 100) + '% | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '% | ' + d.regime;
+  const base = 'JEV: ' + d.direction + ' ' + Math.round(d.directionConfidence * 100) + '% | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '% | ' + d.regime;
+  return d.compositeRisk != null ? base + ' | risk ' + Math.round(d.compositeRisk * 100) + '%' : base;
 }
 
 export function getJevStatus() {
@@ -495,6 +768,8 @@ export function getJevStatus() {
     primaryMinConfidence: BOT_CONFIG.jev?.primaryMinConfidence ?? null,
     settleMargin: BOT_CONFIG.jev?.settleMargin ?? null,
     sizingWeight: BOT_CONFIG.jev?.sizingWeight ?? null,
+    calibrationVersion: JEV_SETTLE_CALIBRATION_VERSION,
+    brierSkill: getJevBrierSkill(),
     model: BOT_CONFIG.jev?.model ?? null,
     provider: resolveJevProviderConfig().provider,
     calls: _stats.calls,
@@ -507,25 +782,46 @@ export function getJevStatus() {
   };
 }
 
-/** Future active-mode veto. Returns null while shadow (the default). */
-/** Mode-aware advisory. Returns null in shadow/primary (primary is handled in the loop). */
+/** Mode-aware advisory. Returns null in shadow/primary (or when Brier skill guard demotes active JEV). */
 export function checkJevAdvisory(side: string, slug?: string | null): { action: 'block'; reason: string } | null {
   const cfg = BOT_CONFIG.jev;
   if (!cfg || !cfg.enabled) return null;
   if (cfg.mode === 'shadow' || cfg.mode === 'primary') return null;
+
+  const skill = getJevBrierSkill();
+  if ((cfg.brierGateEnabled ?? true) && !skill.allowActiveVeto) return null;
+
   const d = freshDecision(slug);
   if (!d) return null;
+
+  const route = d.route ?? routeJevDecision({
+    direction: d.direction,
+    directionConfidence: d.directionConfidence,
+    compositeRisk: d.compositeRisk ?? null,
+    riskConfidence: d.riskConfidence ?? 0,
+    minConfidence: cfg.minConfidence,
+    riskVetoThreshold: cfg.riskVetoThreshold ?? 0.78,
+  });
+
+  if (route === 'risk_veto') {
+    const riskPct = Math.round((d.compositeRisk ?? 0) * 100);
+    return {
+      action: 'block',
+      reason: 'JEV Risk Desk block (risk ' + riskPct + '%, chop ' + Math.round((d.chopHazard ?? 0) * 100) + '%, flow ' + Math.round((d.flowContradiction ?? 0) * 100) + '%)',
+    };
+  }
+
   const conf = Math.round(d.directionConfidence * 100);
   if (cfg.mode === 'veto') {
-    if (d.direction === 'NO_EDGE') return null;
+    if (route === 'uncertain_passthrough' || d.direction === 'NO_EDGE') return null;
     if (d.directionConfidence < cfg.minConfidence) return null;
     if (d.direction !== side) {
-      // Only veto when JEV's settle probability also supports the opposite side.
       if (!settleSupports(d.direction, d.settleUpCalibrated ?? d.settleUpProbability, cfg.settleMargin)) return null;
       return { action: 'block', reason: 'JEV ' + d.direction + ' (' + conf + '%) disagrees with ' + side + ' | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '%' };
     }
     return null;
   }
+
   // gate: require a confident JEV agreement with the entry side and its settle probability
   if (d.direction !== side) {
     return { action: 'block', reason: 'JEV gate: needs ' + side + ', got ' + d.direction + ' (' + conf + '%)' };
@@ -538,19 +834,25 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
   }
   return null;
 }
+
 export function resetJevAdvisorForTests(): void {
   _lastSlug = null;
-  _pendingRefresh = null;
+  _decisionSlug = null;
   _lastCallMs = 0;
   _inFlight = false;
+  _pendingRefresh = null;
   _warnedNoKey = false;
+  _pausedUntil = 0;
   _current = null;
   _stats.calls = 0;
   _stats.errors = 0;
   _stats.lastLatencyMs = 0;
+  _stats.lastCostUsd = 0;
   _stats.lastError = null;
   _stats.totalCostUsd = 0;
-  _pausedUntil = 0;
+  _pendingOutcomesBySlug.clear();
+  _recordedSlugs.clear();
+  _brierHistory.length = 0;
 }
 
 /** Test-only: inject a cached decision so mode logic can be unit-tested without a network call. */
@@ -559,7 +861,14 @@ export function __setJevDecisionForTests(partial: {
   directionConfidence: number;
   settleUpProbability: number;
   settleUpCalibrated?: number;
+  bayesianProbUp?: number;
   regime: string;
+  compositeRisk?: number | null;
+  riskConfidence?: number | null;
+  chopHazard?: number | null;
+  exhaustionRisk?: number | null;
+  flowContradiction?: number | null;
+  route?: ConfidenceRoute;
   slug?: string | null;
   ts?: number;
   marketUp?: number | null;
@@ -572,8 +881,15 @@ export function __setJevDecisionForTests(partial: {
     directionConfidence: partial.directionConfidence,
     settleUpProbability: partial.settleUpProbability,
     settleUpCalibrated: partial.settleUpCalibrated,
+    bayesianProbUp: partial.bayesianProbUp,
     regime: partial.regime,
     regimeConfidence: 0,
+    chopHazard: partial.chopHazard ?? null,
+    exhaustionRisk: partial.exhaustionRisk ?? null,
+    flowContradiction: partial.flowContradiction ?? null,
+    compositeRisk: partial.compositeRisk ?? null,
+    riskConfidence: partial.riskConfidence ?? null,
+    route: partial.route,
     latencyMs: 0,
     inputTokens: null,
     outputTokens: null,
@@ -584,5 +900,3 @@ export function __setJevDecisionForTests(partial: {
     marketDown: partial.marketDown ?? null,
   };
 }
-
-/** Fire-and-forget: called from the poll loop, never awaited, never throws. */

@@ -8,12 +8,27 @@ interface JevLast {
   directionConfidence?: number | null;
   settleUpProbability?: number | null;
   settleUpCalibrated?: number | null;
+  bayesianProbUp?: number | null;
   regime?: string | null;
   regimeConfidence?: number | null;
+  compositeRisk?: number | null;
+  riskConfidence?: number | null;
+  chopHazard?: number | null;
+  exhaustionRisk?: number | null;
+  flowContradiction?: number | null;
+  route?: string | null;
   latencyMs?: number | null;
   costUsd?: number | null;
   marketUp?: number | null;
   marketDown?: number | null;
+}
+
+interface JevBrierSkill {
+  status?: 'warmup' | 'pass' | 'demoted';
+  samples?: number;
+  jevBrier?: number | null;
+  marketBrier?: number | null;
+  skillScore?: number | null;
 }
 
 export interface JevStatusData {
@@ -22,6 +37,8 @@ export interface JevStatusData {
   mode?: string;
   provider?: string;
   model?: string | null;
+  calibrationVersion?: string | null;
+  brierSkill?: JevBrierSkill | null;
   shadowMode?: boolean;
   calls?: number;
   errors?: number | null;
@@ -53,10 +70,13 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
   if (!data) return null;
   const mode = data.mode ?? (data.shadowMode === false ? 'veto' : 'shadow');
   const last = data.last ?? null;
-  const settle = last?.settleUpCalibrated ?? last?.settleUpProbability ?? null;
+  const settle = last?.bayesianProbUp ?? last?.settleUpCalibrated ?? last?.settleUpProbability ?? null;
   const upEdge = settle != null && last?.marketUp != null ? settle - last.marketUp : null;
   const downEdge = settle != null && last?.marketDown != null ? (1 - settle) - last.marketDown : null;
+  const risk = last?.compositeRisk ?? null;
+  const skill = data.brierSkill ?? null;
   const tone = !data.enabled || !data.configured ? 'var(--text-muted)' : MODE_COLOR[mode] ?? 'var(--text-secondary)';
+  const riskColor = risk == null ? 'var(--text-muted)' : risk >= 0.78 ? 'var(--red-bright)' : risk >= 0.55 ? 'var(--yellow-bright)' : 'var(--green-bright)';
   return (
     <div className="card span-2" style={{ animationDelay: '0.25s' }}>
       <div className="card__header">
@@ -64,6 +84,18 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
         <span className={`card__badge ${data.enabled && data.configured ? 'badge--live' : ''}`} style={{ color: tone }}>
           {data.enabled ? (data.configured ? mode.toUpperCase() : 'NO KEY') : 'OFF'}
         </span>
+        {skill && (
+          <span
+            className="card__badge"
+            title={skill.jevBrier != null && skill.marketBrier != null ? `JEV Brier ${skill.jevBrier.toFixed(4)} vs Mkt ${skill.marketBrier.toFixed(4)} (n=${skill.samples})` : undefined}
+            style={{
+              marginLeft: 6,
+              color: skill.status === 'pass' ? 'var(--green-bright)' : skill.status === 'demoted' ? 'var(--red-bright)' : 'var(--text-muted)',
+            }}
+          >
+            BS {skill.status?.toUpperCase() ?? 'WARM'}{skill.samples ? ` (${skill.samples})` : ''}
+          </span>
+        )}
         <span style={{ marginLeft: 'auto', fontSize: '0.62rem', color: 'var(--text-muted)' }}>
           {data.provider ?? 'openrouter'} · {data.model ?? 'typesafe/jev-1.14'}
         </span>
@@ -75,7 +107,17 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
               {last.direction ?? '-'} <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>({pct(last.directionConfidence)})</span>
             </span></div>
           <div className="data-row"><span className="data-row__label">Settle UP</span>
-            <span className="data-row__value">{pct(settle)}</span></div>
+            <span className="data-row__value" title={last.settleUpProbability != null ? `Raw ${pct(last.settleUpProbability)} -> Cal ${pct(last.settleUpCalibrated)} -> Bayes ${pct(last.bayesianProbUp)}` : undefined}>
+              {pct(settle)}
+            </span></div>
+          <div className="data-row"><span className="data-row__label">Risk Desk</span>
+            <span
+              className="data-row__value"
+              style={{ color: riskColor, fontWeight: 600 }}
+              title={risk != null ? `Chop ${pct(last.chopHazard)} | Exhaust ${pct(last.exhaustionRisk)} | Flow ${pct(last.flowContradiction)}` : undefined}
+            >
+              {pct(risk)}
+            </span></div>
           <div className="data-row"><span className="data-row__label">Regime</span>
             <span className="data-row__value">{last.regime ?? '-'}</span></div>
           <div className="data-row"><span className="data-row__label">Latency</span>
@@ -97,6 +139,7 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
       <div style={{ marginTop: 8, fontSize: '0.64rem', color: 'var(--text-muted)' }}>
         calls {data.calls ?? 0} · errors {data.errors ?? 0} · last latency {data.lastLatencyMs != null ? Math.round(data.lastLatencyMs) + 'ms' : '-'}
         {data.totalCostUsd != null ? ' · total $' + data.totalCostUsd.toFixed(4) : ''}
+        {skill?.skillScore != null ? ' · skill ' + (skill.skillScore >= 0 ? '+' : '') + (skill.skillScore * 100).toFixed(1) + '%' : ''}
         {data.lastError ? ' · ' + data.lastError.slice(0, 80) : ''}
       </div>
     </div>

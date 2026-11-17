@@ -515,8 +515,10 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
   // JevPanel: JEV / TypeSafe decision layer status (mode, last decision, calls).
 const jevData = useMemo(() => data?.jev ?? null, [
   data?.jev?.calls, data?.jev?.errors, data?.jev?.mode, data?.jev?.configured,
+  data?.jev?.brierSkill?.status, data?.jev?.brierSkill?.samples, data?.jev?.brierSkill?.skillScore,
   data?.jev?.last?.ts, data?.jev?.last?.direction, data?.jev?.last?.directionConfidence,
-  data?.jev?.last?.settleUpProbability, data?.jev?.last?.regime, data?.jev?.last?.marketUp, data?.jev?.last?.marketDown,
+  data?.jev?.last?.settleUpProbability, data?.jev?.last?.bayesianProbUp, data?.jev?.last?.compositeRisk,
+  data?.jev?.last?.regime, data?.jev?.last?.marketUp, data?.jev?.last?.marketDown,
   data?.jev?.lastCostUsd, data?.jev?.totalCostUsd,
 ]);
 

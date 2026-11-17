@@ -348,6 +348,12 @@ const BOT_CONFIG = {
     // Keep the fixed-policy sample at the market-open checkpoint. A restart in
     // the middle of a window must not add a late, selection-biased sample call.
     policyMinTimeLeft: envNum(process.env.JEV_POLICY_MIN_TIME_LEFT, 13.5, 10, 14.4),
+    maxTimeLeftMin: envNum(process.env.JEV_MAX_TIME_LEFT_MIN, 14.2, 5, 14.9),
+    bayesianMaxWeight: envNum(process.env.JEV_BAYESIAN_MAX_WEIGHT, 0.20, 0, 1),
+    riskVetoThreshold: envNum(process.env.JEV_RISK_VETO_THRESHOLD, 0.78, 0.50, 0.99),
+    brierGateEnabled: process.env.JEV_BRIER_GATE !== 'false',
+    brierGateWindow: envInt(process.env.JEV_BRIER_WINDOW, 100, 20, 500),
+    brierGateMinSamples: envInt(process.env.JEV_BRIER_MIN_SAMPLES, 30, 5, 200),
     policyFile: resolve(__dirname, '..', 'data', 'jev_policy.jsonl'),
   },
 };
