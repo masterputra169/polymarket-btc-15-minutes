@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-17 — Remove Daily Profit Target Feature & Dashboard Target Bar
+
+- **Bot safety & loop removal (`bot/src/safety/dailyProfitTarget.ts` deleted, `bot/src/loop.ts`, `bot/src/config.ts`, `bot/src/statusServer.ts`, `bot/src/trading/journalAnalytics.ts`):** Removed `dailyProfitTargetUsd` (`DAILY_PROFIT_TARGET_USD`), sticky WIB `profitTargetPaused` entry blocks across limit/arb/pre-market/directional gates, `resetProfitTarget` RPC handler, and `profit_target.json` reset creation (also cleaned `profit_target.json` and `DAILY_PROFIT_TARGET_USD` from local & VPS runtime configs so the false `+$30.00 / $30.00` dry-run pause never halts trading).
+- **Dashboard UI (`src/components/BotPanel.tsx`, `src/App.tsx`):** Removed `Target` progress bar from `Position & Book` in `BOT CORE` (`BotPanel`) and dropped `profitTarget` / `profitTargetPaused` from snapshot memoization.
+- **Tests (`bot/src/trading/__tests__/journalArchives.test.ts`):** Updated session archive reset expectations after removing `profit_target.json` creation.
+
 ## 2026-11-17 — Live CLOB Hardening (`GhostGuard`, Outage Latch, Warmup/Heartbeat), Pessimistic Queue Sim & GitHub Research Studies
 
 - **Ghost-fill defense (`bot/src/trading/ghostGuard.ts`, `bot/src/trading/fillTracker.ts`, `bot/src/loop.ts`):** Added real-time `OrderBookTrade/GhostGuard` anomaly scoring (`scorePredictiveGhostFill`, `>= 0.65` warning after 5 samples) and non-blocking Polygon `eth_getTransactionReceipt` verification on matched trade `transaction_hash`es (`real` vs `ghost` `0x0` vs `pending` vs `rpc_error`). Confirmed on-chain reverts trigger immediate rejection (`ghostFill: true`), open-order cancel (`GHOST_GUARD_AUTO_CANCEL`), and position unwind instead of trusting ghost CLOB fills.
@@ -93,7 +99,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-17 08:50 WIB_
+_Last updated: 2026-11-17 09:15 WIB_
 
 | Area | State |
 |---|---|

@@ -171,7 +171,6 @@ import {
   updatePositionMarketPrice,
   getTradeTimestamps,
   setTradeTimestamps,
-  getPendingRedeemValue,
 } from './trading/positionTracker.ts';
 import { sellFillFee, takerFee } from './engines/settlementMath.ts';
 import { closePosition } from './trading/positionManager.ts';
@@ -204,9 +203,6 @@ import {
   getLastLossTimestamp as getFilterLastLoss,
   importLastLossTimestamp,
 } from './safety/tradeFilters.ts';
-
-// Daily profit target (WIB timezone)
-import { checkProfitTarget, getProfitTargetStatus, isTargetReached, initDayBaseline } from './safety/dailyProfitTarget.ts';
 
 // Orderbook flow tracking
 import { checkFlowAlignment, resetFlow } from './engines/orderbookFlow.ts';
@@ -745,36 +741,6 @@ export async function pollOnce() {
       }
     }
 
-    // ── 1a2. Daily profit target check (WIB timezone) ──
-    // NOTE: Does NOT return early — position management (fill tracking, settlement,
-    // cut-loss) must still run. Only blocks new trade entries (checked in section 7+).
-    // STICKY: once target reached, stays paused for the rest of the WIB day.
-    // Use resetProfitTarget() (via dashboard RPC) to manually resume.
-    // Uses on-chain USDC when available, falls back to internal bankroll.
-    let profitTargetPaused = isTargetReached(); // sticky — persisted across polls & restarts
-    if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
-      const pos = getCurrentPosition();
-      const deployedCost = (pos && !pos.settled) ? (pos.cost ?? 0) : 0;
-      const unredeemedValue = getPendingRedeemValue();
-
-      // Prefer on-chain USDC; fallback to internal bankroll + deployed cost
-      const usdcBal = getUsdcBalanceData();
-      const balanceForCheck = (usdcBal && Number.isFinite(usdcBal.balance))
-        ? usdcBal.balance
-        : getBankroll() + deployedCost; // bankroll already deducted position cost, add it back
-
-      const wasReached = isTargetReached();
-      const ptCheck = checkProfitTarget(balanceForCheck, deployedCost, unredeemedValue);
-      if (ptCheck.reached && !wasReached) {
-        const source = usdcBal ? 'on-chain' : 'internal';
-        notify('info',
-          `PROFIT TARGET REACHED! +$${ptCheck.profit.toFixed(2)} / $${ptCheck.target.toFixed(2)} target (${source}) | ` +
-          `Bot paused for the rest of the day (WIB) | Bankroll: $${getBankroll().toFixed(2)}`
-        );
-      }
-      profitTargetPaused = isTargetReached(); // update after checkProfitTarget may set it
-    }
-
     // ── 1b. Check pending order fills (non-blocking) ──
     syncClobHeartbeat(hasPendingOrder() || isLimitOrderActive() ? 1 : 0);
     const fillResults = await checkPendingFill();
@@ -827,14 +793,6 @@ export async function pollOnce() {
           log.info(`Startup USDC check: on-chain=$${onChain.toFixed(2)} | local=$${localBankroll.toFixed(2)} | drift=$${drift.toFixed(2)}`);
           const pos = getCurrentPosition();
           const hasPos = pos && !pos.settled;
-          // Initialize daily profit target baseline from on-chain balance + deployed capital + unredeemed.
-          // CRITICAL: unredeemed must be in baseline so it's not counted as today's profit when
-          // bot restarts after winning positions from a previous session haven't been redeemed yet.
-          if (BOT_CONFIG.dailyProfitTargetUsd > 0) {
-            const deployedCost = hasPos ? (pos.cost ?? 0) : 0;
-            const startupUnredeemed = getPendingRedeemValue();
-            initDayBaseline(onChain, deployedCost, startupUnredeemed);
-          }
           // M17: Use 5% relative threshold instead of fixed $5 — $5 doesn't scale with bankroll
           const driftPct = localBankroll > 0 ? (drift / localBankroll) * 100 : 0;
           const driftSignificant = driftPct > 5;
@@ -2142,7 +2100,7 @@ export async function pollOnce() {
     let smartRouteFOK = false;
     const effLimitCfg = getEffectiveLimitOrderConfig();
     const effRouterCfg = getEffectiveOrderRouterConfig();
-    if (effLimitCfg.enabled && !BOT_CONFIG.dryRun && !settlementPending && !profitTargetPaused) {
+    if (effLimitCfg.enabled && !BOT_CONFIG.dryRun && !settlementPending) {
       const limitActive = isLimitOrderActive();
       // Compute elapsed minutes since market opened (15 min markets)
       const elapsedMin = timeLeftMin != null ? Math.max(0, 15 - timeLeftMin) : null;
@@ -2570,9 +2528,6 @@ export async function pollOnce() {
     if (settlementPending) {
       log.debug('Settlement in progress — skipping trade entry this poll (signal/broadcast still active)');
     }
-    if (profitTargetPaused) {
-      log.debug('Profit target reached — skipping trade entry this poll (position management still active)');
-    }
     // alreadyHasPosition forward-declared at try-block start (audit fix 2026-05-14, TDZ).
     // OR-merge: preserve true from limit-fill paths above; otherwise check current state.
     alreadyHasPosition = alreadyHasPosition || hasOpenPosition(marketSlug);
@@ -2606,7 +2561,7 @@ export async function pollOnce() {
     const preMarketEnabled = process.env.PREMARKET_LONG_ENABLED === 'true';
     const pmStatus = preMarketEnabled ? getPreMarketStatus(BOT_CONFIG.preMarketLong) : null;
     const preMarketWindowActive = pmStatus?.inWindow && pmStatus?.tradedToday;
-    if (preMarketEnabled && !profitTargetPaused && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
+    if (preMarketEnabled && !alreadyHasPosition && !hasPending && !settlementPending && !signalStale) {
       const pmCheck = checkPreMarketEntry({
         hasPosition: alreadyHasPosition,
         bankroll,
@@ -2716,7 +2671,7 @@ export async function pollOnce() {
     if (rec.action === 'ENTER') {
       const tapePre = [
         preMarketEnteredThisPoll && 'premarket_entered', preMarketWindowActive && 'premarket_window',
-        profitTargetPaused && 'profit_target', settlementPending && 'settlement_pending',
+        settlementPending && 'settlement_pending',
         signalStale && 'signal_stale', tooCloseToExpiry && 'too_close_to_expiry',
         hasPending && 'pending_order', smartSellTriggered && 'smart_sell', alreadyHasPosition && 'has_position',
         (limitOrderBlocksFOK && !smartRouteFOK) && 'limit_order_active',
@@ -2726,7 +2681,7 @@ export async function pollOnce() {
     }
 
     // 10a. Arbitrage execution (priority over directional)
-    if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
+    if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && arb.found && arb.spreadHealthy && !alreadyHasPosition && !hasPending &&
         poly.tokens?.upTokenId && poly.tokens?.downTokenId) {
       // try/catch required: unhandled throw from executeArbitrage crashes the entire bot process
       try {
@@ -2758,7 +2713,7 @@ export async function pollOnce() {
     // 10b. Directional trade
     // Bug 2 fix: !smartSellTriggered — prevent immediate rebuy after smart sell in same poll.
     // After smart sell, position is cleared but signal may still say ENTER → circular buy-sell loop.
-    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !profitTargetPaused && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK) && fokFallbackDeniedForSlug !== marketSlug) {
+    else if (!preMarketEnteredThisPoll && !preMarketWindowActive && !settlementPending && !signalStale && !tooCloseToExpiry && rec.action === 'ENTER' && !hasPending && !smartSellTriggered && !alreadyHasPosition && (!limitOrderBlocksFOK || smartRouteFOK) && fokFallbackDeniedForSlug !== marketSlug) {
       // try/catch required: unhandled throw from executeDirectionalTrade crashes the entire bot process
       try {
         const tapeEntered = await executeDirectionalTrade({
@@ -3063,10 +3018,6 @@ export async function pollOnce() {
 
       // Limit order status
       limitOrder: getEffectiveLimitOrderConfig().enabled ? getLimitOrderStatus() : { enabled: false },
-
-      // Daily profit target (WIB timezone)
-      profitTarget: getProfitTargetStatus(),
-      profitTargetPaused,
 
       // Market tape recorder health (record-only; the file count is refreshed every 10s)
       tape: getTapeDashboardStatus(10_000),

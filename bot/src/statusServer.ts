@@ -9,7 +9,6 @@ import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
 import { setBankroll, getBankroll, acquireSellLock, releaseSellLock, settleTradeEarlyExit, earlyExitPnl, partialExit, getCurrentPosition, unwindPosition, settleTrade, setLastSettled } from './trading/positionTracker.ts';
 import { computeSettlementPnl, sellFillFee } from './engines/settlementMath.ts';
-import { resetProfitTarget, getProfitTargetStatus } from './safety/dailyProfitTarget.ts';
 import { writeJournalEntry, clearEntrySnapshot } from './trading/tradeJournal.ts';
 import { ARCHIVE_ID_RE, getArchivedJournalAnalytics, listJournalArchives } from './trading/journalAnalytics.ts';
 import { resetCutLossState } from './trading/cutLoss.ts';
@@ -437,11 +436,6 @@ export function startStatusServer() {
         } else if (msg.type === 'removeTracker' && _removeTracker && typeof msg.address === 'string' && EVM_ADDRESS_RE.test(msg.address)) {
           const ok = _removeTracker(msg.address);
           respond('removeTracker', { ok, address: msg.address });
-        // ── Profit Target reset ──
-        } else if (msg.type === 'resetProfitTarget') {
-          resetProfitTarget();
-          if (_resumeBot) _resumeBot('profitTargetReset');
-          respond('resetProfitTarget', { ok: true, status: getProfitTargetStatus() });
 
         // ── AI Agent commands ──
         } else if (msg.type === 'analyzeNow') {

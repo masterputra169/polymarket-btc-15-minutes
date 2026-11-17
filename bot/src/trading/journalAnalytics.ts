@@ -526,11 +526,6 @@ export function archiveSessionData({
   );
 
   if (suffix === '') {
-    const wibDate = new Date(nowMs).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
-    writeFileSync(
-      join(dataDir, 'profit_target.json'),
-      JSON.stringify({ wibDate, baseline: roundedBankroll, targetReached: false, savedAt: nowMs }, null, 2),
-    );
     if (existsSync(join(dataDir, 'feedback.json'))) {
       writeFileSync(join(dataDir, 'feedback.json'), '[]');
     }

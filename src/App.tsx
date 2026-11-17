@@ -537,8 +537,6 @@ const botData = useMemo(() => {
       metEngine: data.metEngine,
       positions: data.positions,
       limitOrder: data.limitOrder,
-      profitTarget: data.profitTarget,
-      profitTargetPaused: data.profitTargetPaused,
     };
   }, [
     data?.paused, data?.dryRun,
@@ -555,8 +553,6 @@ const botData = useMemo(() => {
     data?.fillTracker?.fillRate, data?.fillTracker?.pending,
     data?.btcPrice, data?.priceToBeat, data?.timeLeftMin,
     data?.usdcBalance?.balance,
-    data?.profitTarget?.profit, data?.profitTarget?.targetReached,
-    data?.profitTargetPaused,
   ]);
 
   const botPosition = data?.positions?.botPosition ?? null;

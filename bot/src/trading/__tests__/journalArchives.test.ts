@@ -59,7 +59,6 @@ function seedOldSession(dir: string) {
       { type: 'SETTLE', pnl: -2.8, bankrollAfter: 17.53, _ts: t2 },
     ].map(r => JSON.stringify(r)).join('\n') + '\n',
   );
-  writeFileSync(join(dir, 'profit_target.json'), JSON.stringify({ wibDate: '2026-11-16', baseline: 17.53, targetReached: false }));
   writeFileSync(join(dir, 'feedback.json'), JSON.stringify([{ marketSlug: 'old', correct: false }]));
   writeFileSync(join(dir, 'signal_perf.json'), JSON.stringify({ rsi: { wins: 1, losses: 2 } }));
 }
@@ -103,7 +102,6 @@ describe('journalArchives & archiveSessionData', () => {
     expect(newState.wins).toBe(0);
     expect(newState.losses).toBe(0);
     expect(readFileSync(TEST_PATHS.journalFile, 'utf-8')).toBe('');
-    expect(JSON.parse(readFileSync(join(TEST_PATHS.dir, 'profit_target.json'), 'utf-8')).baseline).toBe(100);
     expect(readFileSync(join(TEST_PATHS.dir, 'feedback.json'), 'utf-8')).toBe('[]');
 
     // Active analytics has complete zero defaults AND lists the archive
