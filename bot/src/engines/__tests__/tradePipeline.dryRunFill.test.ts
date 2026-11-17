@@ -368,4 +368,27 @@ describe('the depth gate reads the book of the side being traded', () => {
     expect(snap.hybridActive).toBe(true);
     expect(snap.hybridId).toBe('v4-hybrid-20261116');
   });
+
+  test('blocks entry cleanly while CLOB outage latch is active and records queue-ahead telemetry', async () => {
+    const { recordClobOrderFailure, resetClobOutageStats } = await import('../../trading/clobOutageLatch.ts');
+    resetClobOutageStats();
+
+    // Normal entry attaches queue-ahead shadow telemetry
+    const depsOk = makeDeps({ getLastBookQuoteMs: () => Date.now() - 100 });
+    const ok = await executeDirectionalTrade(signal({
+      orderbookUp: { spread: 0.01, askLiquidity: 9999, bidSize: 42 },
+    }), depsOk);
+    expect(ok).toBe(true);
+    const snapOk = depsOk.captureEntrySnapshot.mock.calls[0][0];
+    expect(snapOk.queueAheadShares).toBe(42);
+    expect(snapOk.queueBookFresh).toBe(true);
+
+    // Outage cooldown blocks subsequent trades without hitting order/record hooks
+    recordClobOrderFailure('HTTP 425 service not ready', 60_000);
+    const depsBlocked = makeDeps();
+    const blocked = await executeDirectionalTrade(signal(), depsBlocked);
+    expect(blocked).toBe(false);
+    expect(depsBlocked.recordTrade).not.toHaveBeenCalled();
+    resetClobOutageStats();
+  });
 });

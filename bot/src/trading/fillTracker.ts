@@ -18,7 +18,15 @@
  * Better to retry a sell (worst case: "not enough balance" error) than strand a position.
  */
 
-import { getOpenOrders, cancelOrder, getTradeHistory } from './clobClient.ts';
+import { getOpenOrders, cancelOrder, cancelAllOrders, getTradeHistory } from './clobClient.ts';
+import {
+  extractTxHashFromTrade,
+  getGhostGuardStats,
+  recordGhostGuardVerdict,
+  recordPredictiveWarning,
+  scorePredictiveGhostFill,
+  verifyTxReceiptOnChain,
+} from './ghostGuard.ts';
 import { createLogger } from '../logger.ts';
 import { EXECUTION } from '../../../src/config.ts';
 
@@ -44,6 +52,15 @@ let pendingOrders = new Map();  // orderId → { orderId, tokenId, price, size, 
 let fillHistory = [];            // last N fills
 let fillRate = 1.0;              // rolling fill rate (initially optimistic)
 let uncertainFills = [];         // Track uncertain fills for manual review (sell orders that timed out)
+const RECENT_SIZE_MAX = 20;
+let recentTradeSizes: number[] = [];
+
+export function avgRecentTradeSize(): number | null {
+  if (recentTradeSizes.length === 0) return null;
+  let sum = 0;
+  for (const s of recentTradeSizes) sum += s;
+  return sum / recentTradeSizes.length;
+}
 
 /**
  * Record a newly placed order for tracking.
@@ -58,8 +75,17 @@ let uncertainFills = [];         // Track uncertain fills for manual review (sel
  * @param {boolean} [info.gtd]
  * @param {boolean} [info.confirmed] - If true, CLOB response included fill data (makingAmount/takingAmount).
  *   This is direct proof of fill — skip trade history verification entirely.
+ * @param {number|null} [info.midPrice] - Mid price at placement for GhostGuard anomaly scoring.
  */
-export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false, gtd = false }) {
+export function trackOrderPlacement(orderId, { tokenId, price, size, side, confirmed = false, gtd = false, midPrice = null }: {
+  tokenId?: string;
+  price?: number;
+  size?: number;
+  side?: string;
+  confirmed?: boolean;
+  gtd?: boolean;
+  midPrice?: number | null;
+}) {
   // M9: Cap pending orders to prevent unbounded growth if checkPendingFill fails repeatedly
   const MAX_PENDING = 20;
   if (pendingOrders.size >= MAX_PENDING && !pendingOrders.has(orderId)) {
@@ -69,7 +95,7 @@ export function trackOrderPlacement(orderId, { tokenId, price, size, side, confi
     pendingOrders.delete(oldest);
   }
   pendingOrders.set(orderId, {
-    orderId, tokenId, price, size, side,
+    orderId, tokenId, price, size, side, midPrice,
     placedAt: Date.now(),
     confirmed,         // CLOB response had fill data → skip verification
     gtd,               // GTD limit order → longer verification, default to assumed-filled (not rejected)
@@ -89,10 +115,23 @@ export function trackOrderPlacement(orderId, { tokenId, price, size, side, confi
  *
  * @returns {Promise<null | Array<{ orderId: any, filled: boolean, cancelled?: boolean, rejected?: boolean, uncertain?: boolean, verified?: boolean, timeToFill?: number, adverseSelection?: boolean }>>}
  */
-export async function checkPendingFill() {
+export interface PendingFillResult {
+  orderId: any;
+  filled: boolean;
+  cancelled?: boolean;
+  rejected?: boolean;
+  uncertain?: boolean;
+  verified?: boolean;
+  ghostFill?: boolean;
+  txHash?: string;
+  timeToFill?: number;
+  adverseSelection?: boolean;
+}
+
+export async function checkPendingFill(): Promise<PendingFillResult[] | null> {
   if (pendingOrders.size === 0) return null;
 
-  const results = [];
+  const results: PendingFillResult[] = [];
 
   try {
     const openOrders = await Promise.race([
@@ -145,6 +184,7 @@ export async function checkPendingFill() {
       // ── Trade history verification (multi-attempt) ──
       const adverseSelection = elapsed < ADVERSE_SELECTION_MS;
       let tradeFound = false;
+      let matchedTrade: any = null;
       let apiError = false;
 
       try {
@@ -167,6 +207,7 @@ export async function checkPendingFill() {
 
         if (matchingTrade) {
           tradeFound = true;
+          matchedTrade = matchingTrade;
         }
       } catch (err) {
         apiError = true;
@@ -176,10 +217,74 @@ export async function checkPendingFill() {
       pending.verifyAttempts = (pending.verifyAttempts || 0) + 1;
 
       if (tradeFound) {
-        // ── Confirmed via trade history ──
-        const fill = { orderId, filled: true, rejected: false, verified: true, timeToFill: elapsed, adverseSelection };
+        const tPrice = parseFloat(matchedTrade?.price ?? matchedTrade?.fill_price ?? 0) || pending.price;
+        const tSize = parseFloat(matchedTrade?.size ?? matchedTrade?.amount ?? 0) || pending.size;
+        const predictive = scorePredictiveGhostFill({
+          tradePrice: tPrice,
+          midPrice: pending.midPrice ?? pending.price,
+          tradeSize: tSize,
+          rollingAvgSize: avgRecentTradeSize(),
+          sampleCount: recentTradeSizes.length,
+        });
+        if (predictive?.suspicious) {
+          recordPredictiveWarning();
+          log.warn(
+            `[GhostGuard] Suspicious fill pattern on ${orderId}: score=${predictive.score.toFixed(2)} ` +
+            `(priceDev=${(predictive.priceDeviation * 100).toFixed(1)}%, sizeRatio=${predictive.sizeRatio.toFixed(2)}x)`
+          );
+        }
+
+        const txHash = extractTxHashFromTrade(matchedTrade);
+        const deadlineMs = pending.gtd ? GTD_VERIFY_DEADLINE_MS : FILL_VERIFY_DEADLINE_MS;
+        let receiptVerified = true;
+
+        if (txHash && process.env.GHOST_GUARD_ENABLED !== 'false') {
+          const verdict = await verifyTxReceiptOnChain(txHash);
+          recordGhostGuardVerdict(verdict);
+          if (verdict.status === 'ghost') {
+            log.error(`[GhostGuard] GHOST FILL DETECTED for ${orderId}: tx ${txHash} reverted on-chain (block=${verdict.blockNumber ?? '?'})`);
+            if (process.env.GHOST_GUARD_AUTO_CANCEL !== 'false') {
+              void cancelAllOrders().catch(cancelErr => log.warn(`[GhostGuard] Auto-cancel failed: ${cancelErr?.message ?? cancelErr}`));
+            }
+            const ghostRes = {
+              orderId,
+              filled: false,
+              rejected: true,
+              ghostFill: true,
+              verified: true,
+              txHash,
+              timeToFill: elapsed,
+              adverseSelection: false,
+            };
+            recordFill(ghostRes);
+            pendingOrders.delete(orderId);
+            results.push(ghostRes);
+            continue;
+          }
+          if (verdict.status === 'pending' && elapsed < deadlineMs) {
+            log.debug(`[GhostGuard] Receipt pending for ${orderId} (${txHash.slice(0, 12)}...) — deferring fill confirmation`);
+            continue;
+          }
+          receiptVerified = verdict.status === 'real';
+        }
+
+        if (tSize > 0 && Number.isFinite(tSize)) {
+          recentTradeSizes.push(tSize);
+          if (recentTradeSizes.length > RECENT_SIZE_MAX) recentTradeSizes = recentTradeSizes.slice(-RECENT_SIZE_MAX);
+        }
+
+        // ── Confirmed via trade history (+ GhostGuard receipt when available) ──
+        const fill = {
+          orderId,
+          filled: true,
+          rejected: false,
+          verified: receiptVerified,
+          txHash: txHash ?? undefined,
+          timeToFill: elapsed,
+          adverseSelection,
+        };
         recordFill(fill);
-        log.info(`Order ${orderId} fill CONFIRMED via trade history (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s)${adverseSelection ? ' [ADVERSE]' : ''}`);
+        log.info(`Order ${orderId} fill CONFIRMED via trade history (attempt ${pending.verifyAttempts}, ${(elapsed / 1000).toFixed(1)}s)${adverseSelection ? ' [ADVERSE]' : ''}${txHash ? ` [tx:${receiptVerified ? 'REAL' : 'UNVERIFIED'}]` : ''}`);
         pendingOrders.delete(orderId);
         results.push(fill);
       } else if (!apiError && !pending.gtd && elapsed >= FILL_VERIFY_DEADLINE_MS && pending.verifyAttempts >= FILL_VERIFY_MIN_ATTEMPTS) {
@@ -351,6 +456,7 @@ export function getFillTrackerStatus() {
   for (const p of pendingOrders.values()) {
     if (!oldestPending || p.placedAt < oldestPending.placedAt) oldestPending = p;
   }
+  const ghostGuard = getGhostGuardStats();
   return {
     pending: pendingOrders.size > 0,
     pendingCount: pendingOrders.size,
@@ -361,5 +467,7 @@ export function getFillTrackerStatus() {
     totalTracked: fillHistory.length,
     uncertainFillCount: uncertainFills.length,
     lastFillTime: fillHistory.length > 0 ? fillHistory[fillHistory.length - 1].ts : null,
+    ghostFillCount: ghostGuard.ghost,
+    ghostGuard,
   };
 }

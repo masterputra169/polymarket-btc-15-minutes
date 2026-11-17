@@ -46,7 +46,7 @@ import { loadFeedbackFromDisk, saveFeedbackToDisk } from './src/adapters/feedbac
 import { loadSignalPerfFromDisk, saveSignalPerfToDisk } from './src/adapters/signalPerfStore.ts';
 import { loadState, saveState as savePositionState, getStats, getCurrentPosition, getBankroll, setBankroll, resetDailyBaseline } from './src/trading/positionTracker.ts';
 import { forceDryRunEnv } from './src/trading/tradingMode.ts';
-import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval } from './src/trading/clobClient.ts';
+import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, getUsdcBalance, updateConditionalApproval, stopClobHeartbeat } from './src/trading/clobClient.ts';
 import { GTD_MIN_LEAD_SEC, worstCaseLimitLeadSec } from './src/trading/orderConstraints.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
@@ -484,6 +484,7 @@ async function main() {
     try { flushPtbHealth(); } catch { /* ignore */ }
 
     // Cancel open orders (live mode only)
+    stopClobHeartbeat();
     if (!BOT_CONFIG.dryRun) {
       try {
         await cancelAllOrders();

@@ -35,6 +35,8 @@ vi.mock('@polymarket/clob-client-v2', async (importOriginal) => {
     async resolveTransactionsHashes(): Promise<never> { throw new Error('settlement wait must be bypassed'); }
     async createOrDeriveApiKey() { return { key: 'derived-key', secret: 'derived-secret', passphrase: 'derived-pass' }; }
     async getVersion() { return 2; }
+    async getClobMarketInfo(conditionID: string) { this.calls.push(['getClobMarketInfo', conditionID]); return { condition_id: conditionID }; }
+    async postHeartbeat(heartbeatId?: string) { this.calls.push(['postHeartbeat', heartbeatId]); return { heartbeat_id: 'hb-next-1' }; }
     async updateBalanceAllowance(params: any) { this.calls.push(['updateBalanceAllowance', params]); }
     async createAndPostMarketOrder(...args: any[]) {
       this.calls.push(['createAndPostMarketOrder', ...args]);
@@ -265,5 +267,28 @@ describe('responses', () => {
     expect(clob.readAllowance({ balance: '1', allowances: { '0xother': '1' } }, exchange)).toBeNull();
     expect(clob.readAllowance({ balance: '1', allowance: '42' }, exchange)).toBe(42);
     expect(clob.readAllowance(null, exchange)).toBeNull();
+  });
+
+  test('warms up market metadata once per conditionId, sends heartbeats, and trips outage latch on post_only_mode', async () => {
+    const { clob } = await loadModules();
+    const { isClobOutageActive, resetClobOutageStats } = await import('../clobOutageLatch.ts');
+    resetClobOutageStats();
+
+    await clob.initClobClient();
+    await clob.warmupMarketMetadata('0xcond1');
+    await clob.warmupMarketMetadata('0xcond1'); // deduplicated
+    const hb = await clob.sendClobHeartbeatOnce();
+    expect(hb).toBe('hb-next-1');
+
+    const inst = lastInstance();
+    expect(inst.calls.filter((c: any[]) => c[0] === 'getClobMarketInfo')).toHaveLength(1);
+    expect(inst.calls.filter((c: any[]) => c[0] === 'postHeartbeat')).toHaveLength(1);
+
+    sdk.nextResponse = { success: false, errorMsg: 'post_only_mode active', orderID: '' };
+    await expect(clob.placeBuyOrder({ tokenId: TOKEN, price: 0.5, size: 5 })).rejects.toThrow(/post_only_mode/);
+    const outage = isClobOutageActive();
+    expect(outage.active).toBe(true);
+    expect(outage.reason).toBe('post_only_mode');
+    resetClobOutageStats();
   });
 });

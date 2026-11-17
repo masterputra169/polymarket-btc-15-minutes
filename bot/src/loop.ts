@@ -40,6 +40,7 @@ import {
   getOrderbook as getClobOrderbook,
   getRecentTrades as getClobRecentTrades,
   getFeedHealth as getClobFeedHealth,
+  getLastBookQuoteMs,
   isClobConnected,
   setTokenIds,
 } from './streams/clobWs.ts';
@@ -134,7 +135,7 @@ import {
 } from './trading/fillTracker.ts';
 
 // Trading
-import { placeBuyOrder, placeLimitBuyOrder, getOrderById, getOrderStatus, cancelOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance } from './trading/clobClient.ts';
+import { placeBuyOrder, placeLimitBuyOrder, getOrderById, getOrderStatus, cancelOrder, isClientReady, getUsdcBalance, getOpenOrders, cancelAllOrders, getTradeHistory, updateConditionalApproval, getConditionalTokenBalance, warmupMarketMetadata, syncClobHeartbeat } from './trading/clobClient.ts';
 import {
   recordTrade,
   settleTrade,
@@ -775,19 +776,22 @@ export async function pollOnce() {
     }
 
     // ── 1b. Check pending order fills (non-blocking) ──
+    syncClobHeartbeat(hasPendingOrder() || isLimitOrderActive() ? 1 : 0);
     const fillResults = await checkPendingFill();
     if (fillResults) {
       for (const fillResult of fillResults) {
         if (fillResult.rejected) {
-          // FOK order was rejected (not filled) — unwind phantom position
-          log.warn(`FOK REJECTED: order ${fillResult.orderId} — unwinding phantom position`);
+          const rejectReason = fillResult.ghostFill
+            ? `Ghost fill reverted on-chain (${fillResult.txHash ?? 'unknown tx'})`
+            : 'FOK rejection — no matching trade in history';
+          log.warn(`${fillResult.ghostFill ? 'GHOST FILL REVERTED' : 'FOK REJECTED'}: order ${fillResult.orderId} — unwinding phantom position`);
           const pos = getCurrentPosition();
           if (pos && !pos.settled) {
             unwindPosition();
-            writeJournalEntry({ outcome: 'REJECTED', pnl: 0, exitData: { reason: 'FOK rejection — no matching trade in history' } });
+            writeJournalEntry({ outcome: 'REJECTED', pnl: 0, exitData: { reason: rejectReason, ghostFill: Boolean(fillResult.ghostFill), txHash: fillResult.txHash ?? null } });
             clearEntrySnapshot();
           }
-          notify('warn', `FOK order rejected — position unwound | Bankroll: $${getBankroll().toFixed(2)}`);
+          notify('warn', `${fillResult.ghostFill ? 'Ghost fill reverted on-chain' : 'FOK order rejected'} — position unwound | Bankroll: $${getBankroll().toFixed(2)}`);
         } else if (fillResult.uncertain) {
           // Sell order couldn't be verified — release sell lock so cut-loss can retry
           log.warn(`UNCERTAIN FILL: sell order ${fillResult.orderId} unverified after ${(fillResult.timeToFill / 1000).toFixed(1)}s — releasing sell lock for retry`);
@@ -1035,7 +1039,10 @@ export async function pollOnce() {
           }
         }
         const mktCondId = polyFetched.market?.conditionId ?? polyFetched.market?.condition_id;
-        if (mktCondId) currentConditionId = mktCondId;
+        if (mktCondId) {
+          currentConditionId = mktCondId;
+          if (isClientReady()) void warmupMarketMetadata(mktCondId);
+        }
       } else {
         log.debug(`Polymarket fetch failed: ${polyFetched.reason} — will retry next poll`);
       }
@@ -2796,6 +2803,7 @@ export async function pollOnce() {
           updateConditionalApproval: BOT_CONFIG.dryRun ? null : updateConditionalApproval,
           // MetEngine smart money gate (Feature 1+2) — null if disabled
           querySmartMoney: BOT_CONFIG.metEngine?.enabled ? querySmartMoney : null,
+          getLastBookQuoteMs,
         });
         if (tapeEntered === true) {
           noteTapeEntered();

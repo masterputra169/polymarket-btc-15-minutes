@@ -28,6 +28,7 @@ import { checkGtdExpiration, getOrderConstraints, prepareOrder } from './orderCo
 import type { OrderKind, OrderSide, PreparedOrder } from './orderConstraints.ts';
 import { describeApprovals, evaluateV2Readiness, readWalletState } from './v2Readiness.ts';
 import { polygonRpcUrl } from './polygonRpc.ts';
+import { recordClobOrderFailure } from './clobOutageLatch.ts';
 
 const log = createLogger('CLOB');
 
@@ -97,9 +98,25 @@ function validateOrderResponse(result, action) {
     throw new Error(`${action}: empty response from CLOB API`);
   }
   if (result.success === false) {
+    const tripped = recordClobOrderFailure(result);
+    if (tripped.tripped) {
+      log.warn(`[ClobOutage] Latch active (${tripped.reason}) after ${action} rejection`);
+    }
     throw new Error(`${action}: order rejected: ${result.errorMsg || 'unknown reason'}`);
   }
   return result;
+}
+
+async function postWithOutageCheck<T>(action: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    const tripped = recordClobOrderFailure(err);
+    if (tripped.tripped) {
+      log.warn(`[ClobOutage] Latch active (${tripped.reason}) after ${action} error`);
+    }
+    throw err;
+  }
 }
 
 /**
@@ -254,7 +271,7 @@ export async function placeBuyOrder({ tokenId, price, size }: OrderParams) {
   // is charged on top at match. orderType is the 3rd positional arg.
   // H13: timeout prevents bot from hanging indefinitely on slow CLOB API.
   // Loosely typed on purpose: callers read makingAmount / takingAmount as before.
-  const result: any = await withTimeout(
+  const result: any = await postWithOutageCheck('BUY', () => withTimeout(
     c.createAndPostMarketOrder(
       { tokenID: tokenId, price: order.price, amount: order.buyAmountUsd, side: Side.BUY, orderType: OrderType.FOK },
       orderOptions(order),
@@ -262,7 +279,7 @@ export async function placeBuyOrder({ tokenId, price, size }: OrderParams) {
     ),
     ORDER_TIMEOUT_MS,
     'createAndPostMarketOrder BUY timeout (15s)',
-  );
+  ));
 
   validateOrderResponse(result, 'BUY');
 
@@ -297,7 +314,7 @@ export async function placeLimitBuyOrder({ tokenId, price, size, expiration, pos
 
   // postOnly is the 4th positional arg (V2); it is not supported for FOK/FAK.
   // Loosely typed on purpose: callers read makingAmount / takingAmount as before.
-  const result: any = await withTimeout(
+  const result: any = await postWithOutageCheck('LIMIT_BUY', () => withTimeout(
     c.createAndPostOrder(
       { tokenID: tokenId, price: order.price, side: Side.BUY, size: order.size, expiration },
       orderOptions(order),
@@ -306,7 +323,7 @@ export async function placeLimitBuyOrder({ tokenId, price, size, expiration, pos
     ),
     ORDER_TIMEOUT_MS,
     'GTD BUY timeout (15s)',
-  );
+  ));
 
   validateOrderResponse(result, 'LIMIT_BUY');
   const orderId = extractOrderId(result);
@@ -414,7 +431,7 @@ export async function placeSellOrder({ tokenId, price, size }: OrderParams) {
   // FOK SELL uses createAndPostMarketOrder: amount = shares to sell (not dollars).
   // orderType is the 3rd positional arg. H13: timeout bounds a slow CLOB API.
   // Loosely typed on purpose: callers read makingAmount / takingAmount as before.
-  const result: any = await withTimeout(
+  const result: any = await postWithOutageCheck('SELL', () => withTimeout(
     c.createAndPostMarketOrder(
       { tokenID: tokenId, price: order.price, amount: order.size, side: Side.SELL, orderType: OrderType.FOK },
       orderOptions(order),
@@ -422,7 +439,7 @@ export async function placeSellOrder({ tokenId, price, size }: OrderParams) {
     ),
     ORDER_TIMEOUT_MS,
     'createAndPostMarketOrder SELL timeout (15s)',
-  );
+  ));
 
   validateOrderResponse(result, 'SELL');
 
@@ -666,4 +683,92 @@ export async function getTradeHistory({ market, assetId, after, before }: TradeH
     return [];
   }
   return result ?? [];
+}
+
+// ── Metadata Cache Warm-up & Dead-Man's-Switch Heartbeat (clob-client-v2) ──
+const warmedMarkets = new Set<string>();
+const warmupInFlight = new Map<string, Promise<boolean>>();
+
+/**
+ * Pre-fetch and cache tickSize / negRisk / feeRateBps for an incoming market
+ * conditionId so the first order does not pay a cold metadata REST round-trip.
+ */
+export async function warmupMarketMetadata(conditionId: string | null | undefined): Promise<boolean> {
+  if (!client || !conditionId) return false;
+  if (warmedMarkets.has(conditionId)) return true;
+  const existing = warmupInFlight.get(conditionId);
+  if (existing) return existing;
+
+  const p = (async () => {
+    try {
+      const c = client as unknown as { getClobMarketInfo?: (id: string) => Promise<unknown> };
+      if (typeof c?.getClobMarketInfo !== 'function') return false;
+      await withTimeout(c.getClobMarketInfo(conditionId), 5_000, 'getClobMarketInfo timeout (5s)');
+      if (warmedMarkets.size > 64) warmedMarkets.clear();
+      warmedMarkets.add(conditionId);
+      log.debug(`Warmed CLOB market metadata cache for ${conditionId.slice(0, 12)}...`);
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.debug(`CLOB market warmup skipped for ${conditionId.slice(0, 12)}...: ${msg}`);
+      return false;
+    } finally {
+      warmupInFlight.delete(conditionId);
+    }
+  })();
+  warmupInFlight.set(conditionId, p);
+  return p;
+}
+
+const HEARTBEAT_INTERVAL_MS = 4_000;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let lastHeartbeatId: string | undefined;
+let heartbeatBusy = false;
+
+/** Send one CLOB Dead-Man's-Switch heartbeat frame cleanly. */
+export async function sendClobHeartbeatOnce(): Promise<string | null> {
+  if (!client) return null;
+  const c = client as unknown as {
+    postHeartbeat?: (id?: string) => Promise<{ heartbeat_id?: string; error_msg?: string }>;
+  };
+  if (typeof c.postHeartbeat !== 'function' || heartbeatBusy) return lastHeartbeatId ?? null;
+  heartbeatBusy = true;
+  try {
+    const res = await withTimeout(c.postHeartbeat(lastHeartbeatId), 3_500, 'postHeartbeat timeout');
+    if (res?.heartbeat_id) lastHeartbeatId = res.heartbeat_id;
+    return lastHeartbeatId ?? null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.debug(`CLOB heartbeat failed (resetting session id): ${msg}`);
+    lastHeartbeatId = undefined;
+    return null;
+  } finally {
+    heartbeatBusy = false;
+  }
+}
+
+/**
+ * Manage CLOB exchange Dead-Man's-Switch heartbeat loop in live mode.
+ * Only starts when `CLOB_HEARTBEAT_ENABLED === 'true'` and resting orders exist.
+ */
+export function syncClobHeartbeat(activeRestingOrders: number): void {
+  if (!client || process.env.CLOB_HEARTBEAT_ENABLED !== 'true' || activeRestingOrders <= 0) {
+    stopClobHeartbeat();
+    return;
+  }
+  if (heartbeatTimer) return;
+  void sendClobHeartbeatOnce();
+  heartbeatTimer = setInterval(() => {
+    void sendClobHeartbeatOnce();
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref?.();
+}
+
+export function stopClobHeartbeat(): void {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  lastHeartbeatId = undefined;
+  heartbeatBusy = false;
 }

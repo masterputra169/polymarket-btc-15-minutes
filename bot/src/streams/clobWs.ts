@@ -57,6 +57,7 @@ let pingTimer = null;
 let hbTimer = null;
 let lastMsgMs = 0;
 let lastDataMsgMs = 0;
+let lastBookQuoteMs = 0;
 let subscribed = false;
 let shuttingDown = false;
 let quoteSeq = 0;
@@ -88,6 +89,8 @@ export function getOrderbook() { return { up: { ..._orderbook.up }, down: { ..._
 export function getRecentTrades() { return _recentTrades.slice(); }
 export function getTokenIds() { return { ...tokenIds }; }
 export function getLastUpdate() { return _lastUpdate; }
+/** Timestamp of last genuine quote (`book` or `price_change`), excluding trade-only frames. */
+export function getLastBookQuoteMs() { return lastBookQuoteMs; }
 export function isClobConnected() { return _connected; }
 
 /** A side is only usable once we hold both of its quotes. */
@@ -149,6 +152,7 @@ function handleBookEvent(data) {
   const assetId = data.asset_id;
   if (!isFollowed(assetId)) return;
   markQuote();
+  lastBookQuoteMs = Date.now();
   const bids = Array.isArray(data.bids) ? data.bids : [];
   const asks = Array.isArray(data.asks) ? data.asks : [];
   const bidLevel = bestLevelFromLevels(bids, 'bid');
@@ -178,6 +182,7 @@ function handlePriceChange(data) {
   if (changes.length === 0) return;
 
   markQuote();
+  lastBookQuoteMs = Date.now();
 
   for (const change of changes) {
     const assetId = change.asset_id;
@@ -349,6 +354,7 @@ function invalidateOrderbook() {
   _orderbook.down = { bestBid: null, bestAsk: null, spread: null, bidLiquidity: 0, askLiquidity: 0, bidSize: 0, askSize: 0 };
   _recentTrades.length = 0;
   _lastUpdate = 0;
+  lastBookQuoteMs = 0;
 }
 
 /**
@@ -489,6 +495,7 @@ export function setTokenIds(upTokenId, downTokenId) {
   _recentTrades.length = 0;
   invalidateOrderbook();
   lastDataMsgMs = 0;
+  lastBookQuoteMs = 0;
 
   // A replacement already in flight is subscribed to the market we just left.
   // Re-point it: if it is open, resubscribe in place; if it is still

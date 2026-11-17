@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-11-17 — Live CLOB Hardening (`GhostGuard`, Outage Latch, Warmup/Heartbeat), Pessimistic Queue Sim & GitHub Research Studies
+
+- **Ghost-fill defense (`bot/src/trading/ghostGuard.ts`, `bot/src/trading/fillTracker.ts`, `bot/src/loop.ts`):** Added real-time `OrderBookTrade/GhostGuard` anomaly scoring (`scorePredictiveGhostFill`, `>= 0.65` warning after 5 samples) and non-blocking Polygon `eth_getTransactionReceipt` verification on matched trade `transaction_hash`es (`real` vs `ghost` `0x0` vs `pending` vs `rpc_error`). Confirmed on-chain reverts trigger immediate rejection (`ghostFill: true`), open-order cancel (`GHOST_GUARD_AUTO_CANCEL`), and position unwind instead of trusting ghost CLOB fills.
+- **CLOB taker-outage cooldown latch (`bot/src/trading/clobOutageLatch.ts`, `bot/src/trading/clobClient.ts`, `bot/src/engines/tradePipeline.ts`):** Added self-expiring `90s` fail-open latch (`max 120s`, `djienne/clob_health` pattern) when order POSTs hit `post_only_mode`, HTTP `425`, or `503` so both live and dry-run skip attempts until exchange matching recovers.
+- **CLOB V2 warmup & Dead-Man's-Switch (`bot/src/trading/clobClient.ts`, `bot/src/loop.ts`, `bot/index.ts`):** Verified `@polymarket/clob-client-v2@1.2.0` natively exposes `getClobMarketInfo()` and `postHeartbeat()`. Added deduplicated `warmupMarketMetadata(conditionId)` on market discovery and `syncClobHeartbeat()` (`4s` keepalive while resting open orders exist, opt-in via `CLOB_HEARTBEAT_ENABLED=true`, stopped cleanly on shutdown).
+- **Pessimistic `queue_ahead` & quote freshness separation (`bot/src/engines/queueSim.ts`, `bot/src/streams/clobWs.ts`, `bot/src/engines/tradePipeline.ts`):** Added `getLastBookQuoteMs()` updated strictly on `book`/`price_change` (excluding `last_trade_price`), `queueSim.ts` FIFO queue-ahead simulator with `> 500ms` stale-book cancellation (`ItzJulkar` rules), shadow `queueAheadShares` / `queueBookFresh` telemetry in journal entries, and opt-in `DRY_RUN_QUEUE_SIM=true`.
+- **Empirical GitHub studies (`backtest/ml_training/logitMicroStudy.py`, `cross5m15mStudy.mts`, plus `npm run tape:pull -- --since 2026-11-16`):**
+  - `logitMicroStudy.py` (`63,952` rows / `5,074` mkts, `999`-mkt OOS Val): adding `holypolyfoundation/bs-p` logit-spread / VWM / curvature features (`Acc 74.49% / AUC 0.8308 / Brier 0.1678`) gave zero improvement over live `v4-hybrid-20261116` (`Acc 74.50% / AUC 0.8308 / Brier 0.1678`) and reduced 50–65c Taker PnL (`+$4.75 → -$0.06`), while `djienne` curved edge (`1 - (1 - p)^alpha`) lost money (`-$4.55` to `-$11.21`) — so both were cleanly rejected from live inference.
+  - `cross5m15mStudy.mts`: live Polymarket `5m + 15m` boundary probe showed naive `ask5 + ask15 < 1` can trap `PTB_5m > PTB_15m` gap risk (observed on BTC/ETH `0.991`), while true PTB-covered butterfly opportunities (`SOL 5m_UP 96c + 15m_DOWN 0.1c = net 0.964`, `+3.62%` edge net of V2 fees) do appear near aligned window boundaries.
+
 ## 2026-11-17 — Fix GTD Limit Adverse-Selection JOIN & Edge Math, Hybrid Journal Telemetry & Retrain Coupling
 
 - **Fix GTD Limit order adverse selection & `limitEdge` bug (`bot/src/engines/limitOrderManager.ts`, `bot/src/loop.ts`):**
@@ -83,7 +93,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-17 00:25 WIB_
+_Last updated: 2026-11-17 08:50 WIB_
 
 | Area | State |
 |---|---|
@@ -97,7 +107,7 @@ _Last updated: 2026-11-17 00:25 WIB_
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit JOIN 15s & Hybrid-aligned** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, active profile `limitMlThreshold=0.30` / `limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `makerJoinPrice` JOIN + fixed `sideProb - targetPrice` `limitEdge`) |
+| Order router | **Limit JOIN 15s + GhostGuard + Outage Latch** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, profile `limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `GhostGuard` tx receipt checks, `90s` `425`/`post_only_mode` latch, `warmupMarketMetadata`, `queueSim` telemetry + opt-in `DRY_RUN_QUEUE_SIM`) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **25% Hybrid floor (profile override)** (`hardMlFloor=0.25` overrides `.env` `0.45` for `v4-hybrid-20261116`; `mlConfMin=0.30`) |
 | Mid-phase guard | **65c unified ceiling (Hybrid profile)** (`midPhaseMaxPrice=0` overrides `.env` `0.62` for calibrated Hybrid v4 entries in 5–11m MID window) |
@@ -112,7 +122,7 @@ _Last updated: 2026-11-17 00:25 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 110 files / 1,058 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 114 files / 1,070 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
 | Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
 | Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

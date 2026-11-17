@@ -27,6 +27,8 @@ import {
 } from './makerFillGate.ts';
 import { routeOrder } from './orderRouter.ts';
 import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
+import { isClobOutageActive } from '../trading/clobOutageLatch.ts';
+import { estimateQueueFillFeasibility } from './queueSim.ts';
 
 const log = createLogger('TradePipeline');
 
@@ -281,6 +283,14 @@ export async function executeDirectionalTrade({
   if (!mlResult?.available && process.env.ALLOW_RULE_ONLY_TRADING !== 'true') {
     log.warn('ML model unavailable — entry blocked (set ALLOW_RULE_ONLY_TRADING=true to trade on rules alone)');
     noteTapeStage('pre', ['ML unavailable']);
+    return false;
+  }
+
+  const clobOutage = isClobOutageActive();
+  if (clobOutage.active) {
+    const remSec = Math.ceil(clobOutage.remainingMs / 1000);
+    log.warn(`[ClobOutage] Holding entry — CLOB matching cooldown active (${clobOutage.reason}, ${remSec}s left)`);
+    noteTapeStage('pre', [`CLOB outage: ${clobOutage.reason}`]);
     return false;
   }
 
@@ -688,7 +698,23 @@ export async function executeDirectionalTrade({
     const joinPx = makerSimOn
       ? makerJoinPrice(betBook?.bestBid ?? null, betBook?.bestAsk ?? betMarketPrice, limCfg.minEntryPrice ?? 0.50)
       : null;
-    const makerFilled = joinPx != null && dryRunMakerWouldFill(marketSlug, limCfg.dryRunMakerFillRate ?? 0.60);
+    const bookQuoteMs = typeof deps.getLastBookQuoteMs === 'function' ? deps.getLastBookQuoteMs() : 0;
+    const bookQuoteAgeMs = bookQuoteMs > 0 ? Math.max(0, Date.now() - bookQuoteMs) : null;
+    const queueShadow = estimateQueueFillFeasibility({
+      initialBookSizeAtBid: betBook?.bidSize ?? 0,
+      shares,
+      spread: betBook?.spread ?? null,
+      lastBookQuoteAgeMs: bookQuoteAgeMs,
+    });
+    entryData.queueAheadShares = queueShadow.queueAhead;
+    entryData.queueBookAgeMs = bookQuoteAgeMs;
+    entryData.queueBookFresh = queueShadow.bookFresh;
+    entryData.queueExpectedPressure = queueShadow.expectedQueuePressure;
+
+    // Optional strict queue-ahead guard (DRY_RUN_QUEUE_SIM=true) rejects stale books (>500ms)
+    // and enforces pessimistic queue pressure while preserving the baseline fill simulator by default.
+    const strictQueueBlocked = process.env.DRY_RUN_QUEUE_SIM === 'true' && !queueShadow.bookFresh;
+    const makerFilled = !strictQueueBlocked && joinPx != null && dryRunMakerWouldFill(marketSlug, limCfg.dryRunMakerFillRate ?? 0.60);
 
     let dryFillPrice;
     let fillModel;
@@ -831,7 +857,7 @@ export async function executeDirectionalTrade({
     // H9 FIX: Use parseClobAmount > 0 for fill confirmation (not just truthy)
     const fillConfirmed = parseClobAmount(orderResult?.makingAmount, 0) > 0 || parseClobAmount(orderResult?.takingAmount, 0) > 0;
     if (orderId) {
-      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed });
+      deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed, midPrice: betMarketPrice });
     }
     deps.recordTrade({
       side: betSide, tokenId,
