@@ -25,7 +25,7 @@
  *   getJevStatus()                   - dashboard / diagnostics snapshot
  *   checkJevAdvisory(side, slug)     - future active-mode veto (null while shadow / demoted)
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
@@ -180,6 +180,33 @@ const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCos
 const _pendingOutcomesBySlug = new Map<string, { marketProbUp: number; jevProbUp: number; ts: number }>();
 const _recordedSlugs = new Set<string>();
 const _brierHistory: BrierObservation[] = [];
+let _persistOutcomes = false;
+
+function persistJevOutcome(slug: string, outcomeLabel: 'UP' | 'DOWN'): void {
+  if (!_persistOutcomes) return;
+  const logFile = BOT_CONFIG.jev?.logFile;
+  if (!logFile) return;
+  const outcomesFile = resolve(dirname(logFile), 'jev_outcomes.json');
+  try {
+    mkdirSync(dirname(outcomesFile), { recursive: true });
+    let outcomes: Record<string, 'UP' | 'DOWN'> = {};
+    if (existsSync(outcomesFile)) {
+      try {
+        const parsed = JSON.parse(readFileSync(outcomesFile, 'utf8'));
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          outcomes = parsed as Record<string, 'UP' | 'DOWN'>;
+        }
+      } catch { /* start fresh if corrupted */ }
+    }
+    if (outcomes[slug] === outcomeLabel) return;
+    outcomes[slug] = outcomeLabel;
+    const tmp = `${outcomesFile}.tmp.${process.pid}`;
+    writeFileSync(tmp, JSON.stringify(outcomes), 'utf8');
+    renameSync(tmp, outcomesFile);
+  } catch {
+    // Non-critical disk persistence; never break settlement or polling
+  }
+}
 
 function roundOpt(v: number | null | undefined, digits = 4): number | null {
   if (v == null || !Number.isFinite(v)) return null;
@@ -414,10 +441,11 @@ function pushBrierObservation(obs: BrierObservation): void {
 /** Record settled market outcome (`'UP' | 'DOWN' | 0 | 1`) for the rolling Brier skill guard. */
 export function recordJevWindowOutcome(slug: string | null | undefined, outcome: 'UP' | 'DOWN' | 0 | 1): boolean {
   if (!slug) return false;
+  const outcomeUp: 0 | 1 = outcome === 'UP' || outcome === 1 ? 1 : 0;
+  persistJevOutcome(slug, outcomeUp === 1 ? 'UP' : 'DOWN');
   const pred = _pendingOutcomesBySlug.get(slug);
   if (!pred) return false;
   _pendingOutcomesBySlug.delete(slug);
-  const outcomeUp: 0 | 1 = outcome === 'UP' || outcome === 1 ? 1 : 0;
   pushBrierObservation({
     slug,
     ts: pred.ts,
@@ -437,7 +465,7 @@ function warmLoadBrierHistory(): void {
     const outcomes = JSON.parse(readFileSync(outcomesFile, 'utf8')) as Record<string, 'UP' | 'DOWN'>;
     const rawLines = readFileSync(cfg.logFile, 'utf8').split('\n').filter(Boolean);
     const maxKeep = Math.max(20, cfg.brierGateWindow ?? 100);
-    const tail = rawLines.slice(-Math.max(maxKeep * 3, 300));
+    const tail = rawLines.slice(-Math.max(maxKeep * 10, 1500));
     for (const line of tail) {
       let row: Partial<JevRecord> | null = null;
       try { row = JSON.parse(line) as Partial<JevRecord>; } catch { row = null; }
@@ -476,6 +504,7 @@ export function initJevAdvisor(): void {
     log.info('JEV: disabled (set JEV_ENABLED=true to enable)');
     return;
   }
+  _persistOutcomes = true;
   warmLoadBrierHistory();
   const prov = resolveJevProviderConfig();
   if (!prov.configured) {
@@ -836,6 +865,7 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
 }
 
 export function resetJevAdvisorForTests(): void {
+  _persistOutcomes = false;
   _lastSlug = null;
   _decisionSlug = null;
   _lastCallMs = 0;

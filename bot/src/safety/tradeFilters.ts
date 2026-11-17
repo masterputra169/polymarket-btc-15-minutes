@@ -44,6 +44,10 @@ import {
 
 const log = createLogger('Filter');
 
+const FILTER_LOG_THROTTLE_MS = 5_000;
+let lastFilteredLogMs = 0;
+let lastFilteredKey = '';
+
 // Every number the gates below compare against (filterThresholds.ts): the
 // former literals as defaults, FILTER_* env overrides read once at load.
 const THRESHOLDS = readFilterThresholds(process.env);
@@ -838,7 +842,13 @@ export function applyTradeFilters({
 
   const pass = reasons.length === 0;
   if (!pass) {
-    log.info(`Filtered: ${reasons.join(' | ')}`);
+    const key = reasons.join(' | ');
+    const nowMs = Date.now();
+    if (key !== lastFilteredKey || nowMs - lastFilteredLogMs >= FILTER_LOG_THROTTLE_MS) {
+      lastFilteredKey = key;
+      lastFilteredLogMs = nowMs;
+      log.info(`Filtered: ${key}`);
+    }
   }
 
   return { pass, reasons, sessionQuality };

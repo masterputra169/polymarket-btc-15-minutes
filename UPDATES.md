@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-17 — Log Audit Cleanup (Hot-Path Log Throttle, Dry-Run Reconciler Skip, TWAP Close Settlement Quiet Verify & JEV Outcomes Persistence)
+
+- **Hot-path `50ms` log throttling (`bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`):** Rate-limited `[Filter] Filtered`, `[TradePipeline] Signal unstable, holding`, `Fast-entry`, and `Smart filter blocked` to log immediately on reason/key changes and at most once per `5s` (`10s` for `Fast-entry`) instead of `12–20×/s` (`87,192` journal lines observed in 8h) while leaving tape recording (`noteTapeStage` / `noteTapeFilters`) untouched.
+- **Dry-run wallet reconciliation skip (`bot/src/trading/journalReconciler.ts`):** `reconcile()` now returns early when `BOT_CONFIG.dryRun` is `true` (eliminating `data-api fetch failed` fallback warnings after every dry-run settlement), and logs HTTP status / error detail when `data-api` fails in live mode.
+- **Quiet `twap_close` fallback settlement (`bot/src/engines/settlement.ts`):** When fallback settlement uses `priceSource === 'twap_close'` (verified `8/8` matching Oracle) with `>= 0.05%` PTB gap, logs `Settlement twap_close` at `info` level without firing noisy `price_fallback` Telegram warnings; razor-close (`< 0.05%`) and non-TWAP fallbacks still warn and notify.
+- **Persist JEV window outcomes (`bot/src/ai/jevAdvisor.ts`, `bot/src/ai/__tests__/jevAdvisor.test.ts`):** Added atomic `persistJevOutcome()` into `jev_outcomes.json` when initialized in runtime (disabled in `resetJevAdvisorForTests()`) and expanded `warmLoadBrierHistory()` scan tail so `brierGuard` survives restarts with fresh resolved outcomes.
+- **VPS `.env` & security skill setup (`polyvps:/opt/polybtc15/bot/.env`, `.agents/skills/security-audit`):** Synced legacy `FILTER_ML_CONF_RELAXED=0.25`, `FILTER_HARD_ML_FLOOR=0.25`, and `FILTER_MID_PHASE_MAX_PRICE=0` in VPS `.env` to match the active `20261116-p2-ef8dfd` profile, and installed Cloudflare's `security-audit` skill.
+
 ## 2026-11-17 — JEV Layer v3 Upgrade (10-Bin Laplace Calibration, Bayesian Prior Anchoring, TypeSafe Risk Desk `score` & Brier Skill Guard)
 
 - **10-bin Laplace + PAVA + piecewise `lerp` calibration (`bot/src/ai/jevSettleCalibration.ts` → `2026-11-17-laplace10-lerp`):**
@@ -114,7 +122,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-17 09:46 WIB_
+_Last updated: 2026-11-17 10:21 WIB_
 
 | Area | State |
 |---|---|
@@ -144,9 +152,9 @@ _Last updated: 2026-11-17 09:46 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 115 files / 1,080 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
-| Disk | 9.0 GB used / 39 GB (25%); 29 GB free; journal capped at 150 MB |
-| Swap | 2 GB active (`/swap.img`), redundant `swap2.img` removed |
+| Tests | 115 files / 1,081 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
+| Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
 | Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
 | Kelly shrink | **0.60** (`KELLY_PROB_SHRINK=0.60`, `MIN_BET_PCT=0.005`; resolved `Adjusted Kelly < min 2.0%` deadlock) |

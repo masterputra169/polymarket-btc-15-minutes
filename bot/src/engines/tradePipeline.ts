@@ -32,6 +32,29 @@ import { estimateQueueFillFeasibility } from './queueSim.ts';
 
 const log = createLogger('TradePipeline');
 
+const PIPELINE_LOG_THROTTLE_MS = 5_000;
+let _lastUnstableLogAt = 0;
+let _lastUnstableKey = '';
+let _lastFastEntryLogAt = 0;
+let _lastFastEntryKey = '';
+let _lastFilterBlockLogAt = 0;
+let _lastFilterBlockKey = '';
+
+function logThrottled(
+  msg: string,
+  key: string,
+  prevAt: number,
+  prevKey: string,
+  intervalMs = PIPELINE_LOG_THROTTLE_MS,
+): [number, string] {
+  const now = Date.now();
+  if (key !== prevKey || now - prevAt >= intervalMs) {
+    log.info(msg);
+    return [now, key];
+  }
+  return [prevAt, prevKey];
+}
+
 /** Live CLOB minimum for BTC 15m — dry-run must match when fixed sizing is on. */
 const LIVE_MIN_SHARES = 5;
 
@@ -323,7 +346,13 @@ export async function executeDirectionalTrade({
 
   if (!deps.isSignalStable(requiredPolls)) {
     const reasons = deps.getInstabilityReasons(requiredPolls);
-    log.info(`Signal unstable, holding: ${reasons.join(' | ')}`);
+    const unstableKey = `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${reasons.map(r => r.replace(/confirm \d+\/\d+/, 'confirm')).join('|')}`;
+    [_lastUnstableLogAt, _lastUnstableKey] = logThrottled(
+      `Signal unstable, holding: ${reasons.join(' | ')}`,
+      unstableKey,
+      _lastUnstableLogAt,
+      _lastUnstableKey,
+    );
     noteTapeStage('unstable', reasons);
     return false;
   }
@@ -336,7 +365,13 @@ export async function executeDirectionalTrade({
         : r4Surge
           ? `300s R4 taker surge (${((volDelta?.buyRatio300s ?? 0) * 100).toFixed(0)}%)`
           : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
-    log.info(`Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`);
+    [_lastFastEntryLogAt, _lastFastEntryKey] = logThrottled(
+      `Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`,
+      `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${fastReason.replace(/\([^)]*\)/, '')}`,
+      _lastFastEntryLogAt,
+      _lastFastEntryKey,
+      10_000,
+    );
   }
 
   // ── Tilt protection ──
@@ -423,7 +458,13 @@ export async function executeDirectionalTrade({
   }
 
   if (!filterResult.pass) {
-    log.info(`Smart filter blocked: ${filterResult.reasons.join(' | ')}`);
+    const msgKey = filterResult.reasons.join(' | ');
+    [_lastFilterBlockLogAt, _lastFilterBlockKey] = logThrottled(
+      `Smart filter blocked: ${msgKey}`,
+      msgKey,
+      _lastFilterBlockLogAt,
+      _lastFilterBlockKey,
+    );
     return false;
   }
 

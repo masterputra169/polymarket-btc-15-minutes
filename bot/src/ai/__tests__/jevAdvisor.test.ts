@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { rmSync } from 'fs';
+import { rmSync, mkdtempSync, readFileSync, existsSync } from 'fs';
 import {
   buildJevState,
   buildJevQuestions,
   parseJevAnswers,
+  initJevAdvisor,
   getJevStatus,
   maybeJevAnalyze,
   resetJevAdvisorForTests,
@@ -325,6 +326,22 @@ describe('JEV mode collaboration & Risk Desk gating', () => {
       if (savedKey == null) delete process.env.OPENROUTER_API_KEY;
       else process.env.OPENROUTER_API_KEY = savedKey;
       try { rmSync(tmpLog, { force: true }); } catch {}
+    }
+  });
+
+  it('persists live window outcomes to jev_outcomes.json once initialized', () => {
+    const savedLogFile = cfg.logFile;
+    const tmpDir = mkdtempSync(join(tmpdir(), 'jev-out-'));
+    cfg.logFile = join(tmpDir, 'jev_log.jsonl');
+    try {
+      initJevAdvisor();
+      recordJevWindowOutcome('btc-updown-15m-persist-1', 'UP');
+      const outPath = join(tmpDir, 'jev_outcomes.json');
+      expect(existsSync(outPath)).toBe(true);
+      expect(JSON.parse(readFileSync(outPath, 'utf8'))).toEqual({ 'btc-updown-15m-persist-1': 'UP' });
+    } finally {
+      cfg.logFile = savedLogFile;
+      try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     }
   });
 });

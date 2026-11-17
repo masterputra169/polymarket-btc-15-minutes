@@ -61,7 +61,10 @@ async function fetchDataApiActivity(walletAddr, sinceMs) {
         headers: { 'User-Agent': 'polymarket-bot-reconciler/2.0' },
       });
       clearTimeout(timeout);
-      if (!res.ok) return null;
+      if (!res.ok) {
+        log.debug(`data-api HTTP ${res.status} at offset=${offset}`);
+        return null;
+      }
       const page = await res.json();
       if (!Array.isArray(page) || page.length === 0) break;
       // Activity returned newest-first by default; we keep scanning until we
@@ -74,7 +77,8 @@ async function fetchDataApiActivity(walletAddr, sinceMs) {
       }
       if (crossedBoundary || page.length < DATA_API_PAGE_SIZE) break;
       offset += DATA_API_PAGE_SIZE;
-    } catch {
+    } catch (err) {
+      log.debug(`data-api fetch error: ${err instanceof Error ? err.message : String(err)}`);
       return null; // network/timeout → signal fallback
     }
   }
@@ -534,6 +538,10 @@ async function _reconcileFromDataApi(activity, now) {
 }
 
 async function reconcile() {
+  if (BOT_CONFIG.dryRun) {
+    log.debug('DRY RUN — skipping on-chain wallet reconciliation');
+    return;
+  }
   const now = Date.now();
   const intervalMs = BOT_CONFIG.reconcileIntervalMs || 30 * 60 * 1000;
   // First run (no journal history): look back 48h to catch all trades

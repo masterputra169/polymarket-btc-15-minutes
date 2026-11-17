@@ -172,22 +172,27 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
   if (source === 'price_fallback' && ptbValue != null && btcPrice != null) {
     const pctFromPtb = Math.abs(btcPrice - ptbValue) / ptbValue;
     const gapPct = (pctFromPtb * 100).toFixed(3);
-    // Risk label based on gap from PTB (closer = less reliable)
-    const riskLabel = pctFromPtb < 0.001 ? '🔴 SANGAT BERISIKO (gap &lt;0.1%)' :
-                      pctFromPtb < 0.005 ? '🟠 Berisiko (gap &lt;0.5%)' :
-                      pctFromPtb < 0.01  ? '🟡 Hati-hati (gap &lt;1%)' : '🟢 Gap cukup aman';
-    log.warn(`Settlement price_fallback: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${gapPct}% gap) | ${riskLabel}`);
-    notify('warn', [
-      `⚠️ Settlement <b>price_fallback</b>`,
-      `Oracle CLOB + Gamma gagal setelah ~2 menit`,
-      ``,
-      `Sisi: <b>${pos.side}</b> | Hasil: <b>${won ? 'WIN' : 'LOSS'}</b>`,
-      `₿ BTC: $${btcPrice.toFixed(0)} vs PTB: $${ptbValue.toFixed(0)}`,
-      `Gap: ${gapPct}% | ${riskLabel}`,
-      ``,
-      `<i>journalReconciler akan verifikasi ulang dalam ~30 menit</i>`,
-      pos.marketSlug ? `<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>` : null,
-    ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
+    const isTwapClose = priceSource === 'twap_close';
+    if (isTwapClose && pctFromPtb >= 0.0005) {
+      log.info(`Settlement twap_close: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${gapPct}% gap) — awaiting oracle verify`);
+    } else {
+      // Risk label based on gap from PTB (closer = less reliable)
+      const riskLabel = pctFromPtb < 0.001 ? '🔴 SANGAT BERISIKO (gap &lt;0.1%)' :
+                        pctFromPtb < 0.005 ? '🟠 Berisiko (gap &lt;0.5%)' :
+                        pctFromPtb < 0.01  ? '🟡 Hati-hati (gap &lt;1%)' : '🟢 Gap cukup aman';
+      log.warn(`Settlement price_fallback: BTC $${btcPrice.toFixed(2)} vs PTB $${ptbValue.toFixed(2)} (${gapPct}% gap, ${priceSource}) | ${riskLabel}`);
+      notify('warn', [
+        `⚠️ Settlement <b>price_fallback</b>`,
+        `Oracle CLOB + Gamma gagal setelah ~2 menit`,
+        ``,
+        `Sisi: <b>${pos.side}</b> | Hasil: <b>${won ? 'WIN' : 'LOSS'}</b>`,
+        `₿ BTC: $${btcPrice.toFixed(0)} vs PTB: $${ptbValue.toFixed(0)}`,
+        `Gap: ${gapPct}% (${priceSource}) | ${riskLabel}`,
+        ``,
+        `<i>journalReconciler akan verifikasi ulang dalam ~30 menit</i>`,
+        pos.marketSlug ? `<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>` : null,
+      ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
+    }
   }
 
   // FINTECH: Round P&L to cents, net of the taker entry fee (matches positionTracker math).
