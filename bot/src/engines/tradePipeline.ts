@@ -775,6 +775,8 @@ export async function executeDirectionalTrade({
         sideProb: betEnsembleProb,
         ask,
         minEdge: limCfg.fokFallbackMinEdge ?? 0.05,
+        mlConfidence: mlResult?.available ? mlResult.mlConfidence : null,
+        minMlConfidence: limCfg.fokFallbackMinMlConf ?? 0.32,
       });
       if (!fokGate.allow) {
         log.info(

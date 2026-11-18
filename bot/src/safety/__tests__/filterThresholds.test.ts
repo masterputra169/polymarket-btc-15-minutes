@@ -204,5 +204,25 @@ describe('tradeFilters honours the thresholds', () => {
       ...input, signalSide: 'UP', binanceDistPct: 0.04, oracleDistPct: -0.015,
     }).reasons)).toEqual([]);
   });
+
+  test('FILTER_CHOPPY_ML_MIN blocks low ML in choppy regime and FILTER_MID_PHASE_MAX_PRICE honours 63c ceiling', async () => {
+    const mod = await load({
+      FILTER_CHOPPY_ML_MIN: '0.40',
+      FILTER_MID_PHASE_MAX_PRICE: '0.63',
+      FILTER_BASE_HARD_CAP: '0.65',
+    });
+
+    const choppyBlock = mod.applyTradeFilters({ ...input, regime: 'choppy', mlConfidence: 0.36 });
+    expect(choppyBlock.reasons).toContain('Choppy regime: ML conf 36% < 40% min');
+
+    const choppyOk = mod.applyTradeFilters({ ...input, regime: 'choppy', mlConfidence: 0.40 });
+    expect(choppyOk.reasons.filter(r => r.startsWith('Choppy regime:'))).toEqual([]);
+
+    const midAllowed = mod.applyTradeFilters({ ...input, marketPrice: 0.63, timeLeftMin: 7, bestEdge: 0.12 });
+    expect(midAllowed.reasons.filter(r => r.startsWith('MID phase price'))).toEqual([]);
+
+    const midBlockedHighEdge = mod.applyTradeFilters({ ...input, marketPrice: 0.64, timeLeftMin: 7, bestEdge: 0.12 });
+    expect(midBlockedHighEdge.reasons).toContain('MID phase price 64c > 63c ceiling');
+  });
 });
 

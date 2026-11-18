@@ -71,11 +71,15 @@ export function shouldAllowFokFallback({
   sideProb,
   ask,
   minEdge,
+  mlConfidence,
+  minMlConfidence,
 }: {
   cancelReason: MakerCancelReason | string;
   sideProb: number | null | undefined;
   ask: number | null | undefined;
   minEdge: number;
+  mlConfidence?: number | null;
+  minMlConfidence?: number;
 }): { allow: boolean; reason: string } {
   const reason = String(cancelReason || 'other');
   if (
@@ -93,6 +97,20 @@ export function shouldAllowFokFallback({
     if (reason !== 'other') {
       return { allow: false, reason: `no_fok_after_${reason}` };
     }
+  }
+
+  if (
+    typeof minMlConfidence === 'number' &&
+    Number.isFinite(minMlConfidence) &&
+    minMlConfidence > 0 &&
+    typeof mlConfidence === 'number' &&
+    Number.isFinite(mlConfidence) &&
+    mlConfidence < minMlConfidence
+  ) {
+    return {
+      allow: false,
+      reason: `no_fok_ml_${(mlConfidence * 100).toFixed(0)}%<${(minMlConfidence * 100).toFixed(0)}%`,
+    };
   }
 
   const edge = feeAdjustedEdge(sideProb, ask);

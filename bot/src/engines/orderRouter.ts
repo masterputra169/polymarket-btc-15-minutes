@@ -50,6 +50,13 @@ export function routeOrder({ bestAsk, mlConf, elapsedMin, delta1m, mlSide, regim
   // At 75¢ with v16 ≥80% WR = 99.3%: EV = 0.993×$0.25 - 0.007×$0.75 = +$0.243/token.
   // Even conservatively at 85% live WR: 0.85×$0.25 - 0.15×$0.75 = +$0.10/token.
   const isTrending = regime === 'trending';
+  const choppyMlMin = Math.max(0.40, cfg.limitMlThreshold ?? 0.45);
+  if (regime === 'choppy' && mlConf < choppyMlMin) {
+    return {
+      route: 'WAIT',
+      reason: `choppy+ml${(mlConf * 100) | 0}%<${(choppyMlMin * 100) | 0}%`,
+    };
+  }
   const maxPrice = isTrending ? (cfg.fokMaxPriceTrending ?? cfg.fokMaxPrice) : cfg.fokMaxPrice;
 
   // Rule 1: ML ≥ 80% + reasonable price → FOK immediately

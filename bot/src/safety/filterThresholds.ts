@@ -90,6 +90,7 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   trendingMlWith: { env: 'FILTER_TRENDING_ML_WITH', def: 0.55, min: 0, max: 1, doc: 'trending ML floor, signal with BTC' },
   trendingMlAgainst: { env: 'FILTER_TRENDING_ML_AGAINST', def: 0.65, min: 0, max: 1, doc: 'trending ML floor, signal against BTC' },
   trendingEdgeBypass: { env: 'FILTER_TRENDING_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that waives the trending ML floor' },
+  choppyMlMin: { env: 'FILTER_CHOPPY_ML_MIN', def: 0, min: 0, max: 1, doc: 'minimum ML confidence in choppy regime (0 disables)' },
   // 12. Spread
   spreadThinEdgeAbove: { env: 'FILTER_SPREAD_THIN_EDGE_ABOVE', def: 0.04, min: 0, max: 1, doc: 'spread above which a thin edge is refused' },
   // 13. ML rolling accuracy

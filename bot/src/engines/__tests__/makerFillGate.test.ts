@@ -85,6 +85,29 @@ describe('shouldAllowFokFallback', () => {
     });
     expect(r.allow).toBe(false);
   });
+
+  test('blocks low ML confidence below minMlConfidence and allows >= minMlConfidence', () => {
+    const blocked = shouldAllowFokFallback({
+      cancelReason: 'unfilled_timeout',
+      sideProb: 0.72,
+      ask: 0.55,
+      minEdge: 0.05,
+      mlConfidence: 0.30,
+      minMlConfidence: 0.32,
+    });
+    expect(blocked.allow).toBe(false);
+    expect(blocked.reason).toBe('no_fok_ml_30%<32%');
+
+    const allowed = shouldAllowFokFallback({
+      cancelReason: 'unfilled_timeout',
+      sideProb: 0.72,
+      ask: 0.55,
+      minEdge: 0.05,
+      mlConfidence: 0.32,
+      minMlConfidence: 0.32,
+    });
+    expect(allowed.allow).toBe(true);
+  });
 });
 
 describe('makerJoinPrice', () => {

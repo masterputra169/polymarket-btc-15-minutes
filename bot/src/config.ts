@@ -187,6 +187,7 @@ const BOT_CONFIG = {
     maxUnfilledSec: envInt(process.env.LIMIT_MAX_UNFILLED_SEC, 45, 10, 300),
     minRemainingEdge: envNum(process.env.LIMIT_MIN_REMAINING_EDGE, 0.03, 0, 0.20),
     fokFallbackMinEdge: envNum(process.env.LIMIT_FOK_FALLBACK_MIN_EDGE, 0.05, 0, 0.20), // fee-adjusted
+    fokFallbackMinMlConf: envNum(process.env.LIMIT_FOK_FALLBACK_MIN_ML_CONF, 0.32, 0, 0.95),
     dryRunMakerSim: process.env.DRY_RUN_MAKER_SIM !== 'false', // when LIMIT_ORDER_ENABLED, dry-run uses maker fill model
     dryRunMakerFillRate: envNum(process.env.DRY_RUN_MAKER_FILL_RATE, 0.60, 0, 1),
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),

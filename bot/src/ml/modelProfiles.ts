@@ -88,6 +88,7 @@ export interface ModelLimitOrderOverride {
   minRemainingEdge?: number;
   maxEntryPrice?: number;
   maxUnfilledSec?: number;
+  fokFallbackMinMlConf?: number;
 }
 
 export interface ModelConfigProfile {
@@ -164,6 +165,7 @@ const BOUNDS = {
     minRemainingEdge: { min: 0, max: 0.20 },
     maxEntryPrice: { min: 0.45, max: 0.75 },
     maxUnfilledSec: { min: 10, max: 120 },
+    fokFallbackMinMlConf: { min: 0.20, max: 0.90 },
   },
   phase: {
     minEdge: { min: 0.01, max: 0.30 },

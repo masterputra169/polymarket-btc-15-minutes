@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-18 — Win-Rate Optimization Fixes (`WAIT` Leak Guard, FOK Fallback ML Floor `32%`, MID `63c` Cap & Choppy `40%` Floor)
+
+- **Block `routeOrder() === 'WAIT'` leak into FOK (`bot/src/loop.ts`):** When the Smart Order Router returns `WAIT`, live mode now sets `limitOrderBlocksFOK = true` so step 10b does not immediately fall through to FOK taker execution. Paired with raising `mlConfRelaxed: 0.25 -> 0.30`, `hardMlFloor: 0.25 -> 0.30`, and `lateMlRelaxed: 0.28 -> 0.32` in `bot/data/model_profiles.json` (`20261116-p2-ef8dfd`), this eliminates `0.25–0.29` low-conviction signals that leaked into `fok_limit` (`4/8` = `50.0% WR`, `-$5.04` in Live Eval).
+- **FOK fallback ML confidence gate `>= 32%` (`bot/src/engines/makerFillGate.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/config.ts`, `bot/src/ml/modelProfiles.ts`):** Extended `shouldAllowFokFallback()` with optional `mlConfidence` and `minMlConfidence` (`fokFallbackMinMlConf`, default `0.32` / `LIMIT_FOK_FALLBACK_MIN_ML_CONF`) so cancelled/unfilled maker attempts do not chase taker asks when `mlConfidence < 0.32` (`no_fok_ml_X%<Y%`), addressing the `1/4` (`25.0% WR`, `-$8.02`) sub-`32%` taker fallback bucket vs `6/6` (`100.0% WR`, `+$10.37`) at `>= 32%`.
+- **Re-enable MID phase `63c` cap & align hard ceiling (`bot/src/safety/tradeFilters.ts`, `bot/data/model_profiles.json`):** Updated `midHardCeil` in `applyTradeFilters()` to `Math.min(Math.max(0.62, T.midPhaseMaxPrice), T.baseHardCap)` (preventing silent `62c` clamp when `midPhaseMaxPrice=0.63`) and enabled `"midPhaseMaxPrice": 0.63` on `20261116-p2-ef8dfd`.
+- **Choppy regime ML floor `40%` (`bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/orderRouter.ts`, `bot/data/model_profiles.json`):** Added `choppyMlMin` (`FILTER_CHOPPY_ML_MIN`, default `0` to preserve golden baseline; `0.40` in `20261116-p2-ef8dfd`) and enforced a matching `Math.max(0.40, cfg.limitMlThreshold ?? 0.45)` `WAIT` guard in `routeOrder()` when `regime === 'choppy'`.
+- **Tests (`bot/src/engines/__tests__/makerFillGate.test.ts`, `orderRouter.limitFloor.test.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`, `bot/src/ml/__tests__/modelProfiles.test.ts`):** Added unit coverage for `minMlConfidence`, `choppy` router blocking, `FILTER_CHOPPY_ML_MIN=0.40`, `midPhaseMaxPrice=0.63`, and profile schema validation (`1,090` vitest PASS, `typecheck`, `vite build`, and `study:build` PASS).
+
 ## 2026-11-18 — Security Audit, `ponytail` Hardening Fixes & `rtk` + `caveman` Skill Suite
 
 - **`rtk-ai/rtk` & `JuliusBrussee/caveman` skill suite (`.agents/skills/*`, `AGENTS.md`):** Added workspace skills from `rtk-ai/rtk` (`.claude/skills/*`: `code-simplifier`, `design-patterns`, `issue-triage`, `performance`, `pr-review`, `pr-triage`, `repo-recap`, `rtk-tdd`, `rtk-triage`, `security-guardian`, `ship`, `tdd-rust`, plus `rtk/SKILL.md`), synced all 22 `JuliusBrussee/caveman` skills (adding `ultracave` and `megacave` alongside updated `caveman*` / `cavecrew` / engineering skills), ran `rtk init -g --auto-patch` (`C:\rtk\rtk.exe`), and recorded persistent `rtk` + `caveman` + `ponytail` workflow rules in `AGENTS.md`.
@@ -135,7 +143,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-18 09:31 WIB_
+_Last updated: 2026-11-18 12:12 WIB_
 
 | Area | State |
 |---|---|
@@ -144,16 +152,16 @@ _Last updated: 2026-11-18 09:31 WIB_
 | ML model | **`20261116-p2-ef8dfd` + `v4-hybrid-20261116` Overlay LIVE** (`83f` v2 base + `412` depth-2 Chainlink/TWAP/L2 residual trees; `ML_HYBRID_RESIDUAL_ENABLED=true`) · Val Acc `73.68% → 74.93%`, AUC `0.8252 → 0.8355`, Brier `0.1723 → 0.1653`, ECE `0.0411 → 0.0141` (parity `3.16e-07`) |
 | Pipeline v4 / Stage 2 | **Hybrid Residual v4 LIVE + 54d Tape Lab** (`4,587,177` 1 Hz snapshots / `5,076` resolved mkts `2026-09-24 → 2026-11-16`) · Normal window OOS `75.97%` Acc / `0.1597` Brier; Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 (`mlConfMin=0.30`, `hardMlFloor=0.25`, `lateMlMin=0.35`, `limitMlThreshold=0.30`, `midPhaseMaxPrice=0`, `50c–65c` band) |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 + WR optimization (`mlConfMin=0.30`, `mlConfRelaxed=0.30`, `hardMlFloor=0.30`, `lateMlMin=0.35`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`, `midPhaseMaxPrice=0.63`, `limitMlThreshold=0.30`, `fokFallbackMinMlConf=0.32`) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | **$100.00 fresh test run (0W / 0L)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
-| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
+| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.63`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit JOIN 15s + GhostGuard + Outage Latch** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, profile `limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `GhostGuard` tx receipt checks, `90s` `425`/`post_only_mode` latch, `warmupMarketMetadata`, `queueSim` telemetry + opt-in `DRY_RUN_QUEUE_SIM`) |
+| Order router | **Limit JOIN 15s + WAIT-no-FOK + FOK-Fallback `>=32%` + GhostGuard + Outage Latch** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, profile `limitOrder: { minMlConfidence: 0.30, fokFallbackMinMlConf: 0.32, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `GhostGuard` tx receipt checks, `90s` `425`/`post_only_mode` latch, `warmupMarketMetadata`, `queueSim` telemetry) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
-| Hard ML floor | **25% Hybrid floor (profile override)** (`hardMlFloor=0.25` overrides `.env` `0.45` for `v4-hybrid-20261116`; `mlConfMin=0.30`) |
-| Mid-phase guard | **65c unified ceiling (Hybrid profile)** (`midPhaseMaxPrice=0` overrides `.env` `0.62` for calibrated Hybrid v4 entries in 5–11m MID window) |
+| Hard ML floor | **30% Hybrid floor (profile + `.env`)** (`hardMlFloor=0.30`, `mlConfRelaxed=0.30`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`; `mlConfMin=0.30`) |
+| Mid-phase guard | **63c mid-phase ceiling** (`midPhaseMaxPrice=0.63` + `midHardCeil >= midPhaseMaxPrice` in 5–11m MID window) |
 | Trending protection| **50c–65c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.65`, widened from 54c–58c 4c slit) |
 | Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
@@ -165,7 +173,7 @@ _Last updated: 2026-11-18 09:31 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 116 files / 1,087 vitest PASS (frontend, bot & scripts typecheck/build PASS; Python ML untouched) |
+| Tests | 1,090 vitest PASS (frontend, bot & scripts typecheck/build/study:build PASS; Python ML untouched) |
 | Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
 | Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

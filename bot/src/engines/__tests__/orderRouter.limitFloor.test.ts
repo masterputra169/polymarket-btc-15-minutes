@@ -66,4 +66,17 @@ describe('orderRouter ROUTER_LIMIT_ML alignment', () => {
     expect(routeOrder(sampleSignal).route).toBe('WAIT');
     expect(routeOrder({ ...sampleSignal, mlConf: 0.65 }).route).toBe('LIMIT');
   });
+
+  test('choppy regime enforces >= 40% ML floor even when ROUTER_LIMIT_ML is lowered to 0.30', async () => {
+    const { routeOrder } = await loadRouter({
+      ROUTER_LIMIT_ML: '0.30',
+      LIMIT_MAX_ELAPSED_MIN: '12',
+    });
+    const blocked = routeOrder({ ...sampleSignal, regime: 'choppy', mlConf: 0.36 });
+    expect(blocked.route).toBe('WAIT');
+    expect(blocked.reason).toBe('choppy+ml36%<40%');
+
+    const allowed = routeOrder({ ...sampleSignal, regime: 'choppy', mlConf: 0.40 });
+    expect(allowed.route).toBe('LIMIT');
+  });
 });

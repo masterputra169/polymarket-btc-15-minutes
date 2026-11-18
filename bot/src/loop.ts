@@ -2290,8 +2290,10 @@ export async function pollOnce() {
             }
           }
         }
-        } // end routeDecision === 'LIMIT'
-        // WAIT → neither limit nor FOK fires this poll
+        } else if (routeDecision.route === 'WAIT') {
+          // WAIT → neither limit nor FOK fires this poll
+          limitOrderBlocksFOK = true;
+        }
       } else if (limitActive) {
         // Monitor active limit order
         limitOrderBlocksFOK = true;
@@ -2464,6 +2466,8 @@ export async function pollOnce() {
               sideProb: pForFok,
               ask: askForFok,
               minEdge: effLimitCfg.fokFallbackMinEdge ?? 0.05,
+              mlConfidence: upgradeMlConf,
+              minMlConfidence: effLimitCfg.fokFallbackMinMlConf ?? 0.32,
             });
 
             // Notify: cancelled — with human-readable reason

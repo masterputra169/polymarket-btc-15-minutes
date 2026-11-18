@@ -507,7 +507,7 @@ export function applyTradeFilters({
   // If timeLeftMin < 11m, cap price at midPhaseMaxPrice (e.g. 58c) unless bestEdge >= midPhaseMinEdge (e.g. 8%).
   if (T.midPhaseMaxPrice > 0 && Number.isFinite(timeLeftMin) && timeLeftMin < 11.0 && timeLeftMin >= T.lateTimeLeft) {
     if (marketPrice != null && marketPrice > T.midPhaseMaxPrice) {
-      const midHardCeil = Math.min(0.62, T.baseHardCap);
+      const midHardCeil = Math.min(Math.max(0.62, T.midPhaseMaxPrice), T.baseHardCap);
       if (bestEdge == null || bestEdge < T.midPhaseMinEdge) {
         reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(T.midPhaseMaxPrice * 100).toFixed(0)}c without high edge (${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < ${(T.midPhaseMinEdge * 100).toFixed(0)}%)`);
       } else if (marketPrice > midHardCeil) {
@@ -658,6 +658,11 @@ export function applyTradeFilters({
       // Log bypass for transparency (not a blocking reason)
       // Logged at info level in the filter summary, not added to reasons[]
     }
+  }
+
+  // 11b. Choppy regime ML floor — two-sided whipsaw noise needs higher ML conviction
+  if (T.choppyMlMin > 0 && regime === 'choppy' && mlAvailable && mlConfidence != null && mlConfidence < T.choppyMlMin) {
+    reasons.push(`Choppy regime: ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(T.choppyMlMin * 100).toFixed(0)}% min`);
   }
 
   // 12. Wide spread gate — illiquid market = slippage eats edge

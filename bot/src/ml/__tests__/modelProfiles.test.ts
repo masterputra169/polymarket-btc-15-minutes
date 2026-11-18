@@ -177,10 +177,11 @@ describe('modelProfiles', () => {
           lateMlRelaxed: 0.28,
           trendingMlWith: 0.32,
           trendingMlAgainst: 0.42,
+          choppyMlMin: 0.40,
           midPhaseMaxPrice: 0,
         },
         orderRouter: { limitMlThreshold: 0.30, fokMlThreshold: 0.68 },
-        limitOrder: { minMlConfidence: 0.30, maxEntryPrice: 0.64, maxUnfilledSec: 15 },
+        limitOrder: { minMlConfidence: 0.30, fokFallbackMinMlConf: 0.32, maxEntryPrice: 0.64, maxUnfilledSec: 15 },
       },
       base,
     );
@@ -189,9 +190,11 @@ describe('modelProfiles', () => {
     expect(profile.filters?.hardMlFloor).toBe(0.25);
     expect(profile.filters?.lateMlMin).toBe(0.35);
     expect(profile.filters?.lateMlRelaxed).toBe(0.28);
+    expect(profile.filters?.choppyMlMin).toBe(0.40);
     expect(profile.filters?.midPhaseMaxPrice).toBe(0);
     expect(profile.orderRouter?.limitMlThreshold).toBe(0.30);
     expect(profile.limitOrder?.minMlConfidence).toBe(0.30);
+    expect(profile.limitOrder?.fokFallbackMinMlConf).toBe(0.32);
     expect(profile.limitOrder?.maxEntryPrice).toBe(0.64);
     expect(profile.limitOrder?.maxUnfilledSec).toBe(15);
   });
