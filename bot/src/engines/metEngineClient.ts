@@ -125,6 +125,21 @@ export function initMetEngine(cfg) {
   }
 }
 
+export const MAX_X402_PAYMENT_ATOMIC = 50_000n; // $0.05 USDC (6 decimals)
+
+export function validateX402Payment(paymentRequired: any, maxAtomic = MAX_X402_PAYMENT_ATOMIC): boolean {
+  const accepts = paymentRequired?.accepts;
+  if (!Array.isArray(accepts) || accepts.length === 0) return false;
+  for (const opt of accepts) {
+    const rawAmt = opt?.amount ?? opt?.maxAmountRequired;
+    const amtStr = rawAmt != null ? String(rawAmt).trim() : '';
+    if (!/^\d+$/.test(amtStr)) return false;
+    const atomic = BigInt(amtStr);
+    if (atomic <= 0n || atomic > maxAtomic) return false;
+  }
+  return true;
+}
+
 // ── HTTP POST with x402 payment ──
 async function metPost(conditionId) {
   if (!_cfg?.enabled) return null;
@@ -169,7 +184,12 @@ async function metPost(conditionId) {
       return null;
     }
 
-    // ── Step 3: Ensure x402 client is ready ──
+    // ── Step 3: Verify payment amount against hard per-call cap & init x402 client ──
+    if (!validateX402Payment(paymentRequired)) {
+      log.warn('MetEngine: rejected x402 challenge failing per-call payment cap');
+      return null;
+    }
+
     const ready = await _initX402Client();
     if (!ready || !_httpClient) {
       log.debug('MetEngine: x402 client not ready');

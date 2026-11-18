@@ -100,7 +100,7 @@ function tag(block, name) {
   const m = block.match(new RegExp('<' + name + '[^>]*>([\\s\\S]*?)<\\/' + name + '>', 'i'));
   return m ? clean(m[1]) : '';
 }
-function parseRss(xml, feedName) {
+export function parseRss(xml, feedName) {
   const out = [];
   for (const m of String(xml).matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
     const b = m[1];
@@ -115,7 +115,8 @@ function parseRss(xml, feedName) {
       const t = Date.parse(pub);
       if (Number.isFinite(t)) publishedAt = new Date(t).toISOString();
     }
-    const url = tag(b, 'link');
+    const rawUrl = tag(b, 'link').trim();
+    const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : '';
     const source = tag(b, 'source') || feedName;
     const text = title.toLowerCase();
     let tone = 0;

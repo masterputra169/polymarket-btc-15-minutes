@@ -87,7 +87,7 @@ export default function GlobalRiskPanel({ data }: { data?: Data | null }) {
           {data.headlines && data.headlines.length > 0 && (
             <div style={{ borderTop: '1px solid var(--dash-line)', paddingTop: 6 }}>
               {data.headlines.slice(0, 3).map((h) => (
-                <a key={h.title} href={h.url} target="_blank" rel="noreferrer" style={{
+                <a key={h.title} href={/^https?:\/\//i.test(h.url ?? '') ? h.url : undefined} target="_blank" rel="noreferrer" style={{
                   display: 'block', color: h.tone < 0 ? '#fecdd3' : 'var(--dash-muted)',
                   fontSize: 9, lineHeight: 1.35, marginBottom: 4, textDecoration: 'none',
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

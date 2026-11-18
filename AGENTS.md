@@ -6,6 +6,13 @@ This file provides guidance to Codex (claude.ai/code) when working with code in 
 
 Every change that affects behaviour, deployment, security, data, configuration, or user-visible documentation must append a dated entry to [UPDATES.md](UPDATES.md) **in the same session**, newest first, and update its Current status table when applicable. A task is not complete until that entry exists. Corrections are new entries; never rewrite history. Do not put passwords, tokens, keys, cookies, or tunnel credentials in the log.
 
+## Active Token & Code Efficiency Skills (`rtk`, `caveman`, `ponytail`)
+
+Keep these skills active across every session in this workspace:
+- **`rtk` (`.agents/skills/rtk/SKILL.md`):** Prefix verbose shell commands with `rtk` (`rtk git status`, `rtk git diff`, `rtk git log`, `rtk vitest run`, `rtk pytest`, `rtk grep`, `rtk ls`, `rtk gain`). Do not use raw verbose commands when an `rtk` wrapper applies.
+- **`caveman` (`.agents/skills/caveman/SKILL.md`):** Answer first, drop filler/ceremony, keep every technical fact, path, command, number, and error verbatim in the user's language (unless full prose is needed for security warnings, irreversible confirmations, or persisted docs/code/commits).
+- **`ponytail` (`.agents/skills/ponytail/SKILL.md`):** Minimal complete diff (`full` level default); reuse existing codebase helpers and avoid speculative abstractions or unrequested refactors.
+
 ## Commands
 
 ```bash

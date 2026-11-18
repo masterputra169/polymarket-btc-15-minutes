@@ -30,6 +30,12 @@ import { createHash } from 'crypto';
 import { gzipSync, gunzipSync } from 'zlib';
 
 export const MODEL_FILES = ['xgboost_model.json', 'lightgbm_model.json', 'norm_browser.json'] as const;
+export const MODEL_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const RESERVED_MODEL_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+export function isValidModelId(id: unknown): id is string {
+  return typeof id === 'string' && MODEL_ID_RE.test(id) && !RESERVED_MODEL_IDS.has(id);
+}
 
 export type RegistryEvent = {
   ts: string;
@@ -102,6 +108,7 @@ export function appendEvent(root: string, event: Omit<RegistryEvent, 'ts'> & { t
 }
 
 export function readManifest(root: string, id: string): Manifest | null {
+  if (!isValidModelId(id)) return null;
   const p = resolve(registryPaths(root).models, id, 'manifest.json');
   return existsSync(p) ? JSON.parse(readFileSync(p, 'utf-8')) : null;
 }
@@ -275,13 +282,19 @@ export function journalDeployment(root: string, d: {
 
 /** Decompress a registered model's three files into `targetDir`. */
 export function materialiseModel(root: string, id: string, targetDir: string): void {
+  if (!isValidModelId(id)) throw new Error(`invalid model id: ${id}`);
   const dir = resolve(registryPaths(root).models, id);
   const manifest = readManifest(root, id);
   if (!manifest) throw new Error(`model ${id} is not registered`);
   if (manifest.artifactRef) throw new Error(`model ${id} keeps only a reference — restore it from ${manifest.artifactRef}`);
   if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
   for (const f of MODEL_FILES) {
-    writeFileSync(resolve(targetDir, f), gunzipSync(readFileSync(resolve(dir, `${f}.gz`))));
+    const gzBuf = readFileSync(resolve(dir, `${f}.gz`));
+    const expectedSha = manifest.storedSha256?.[`${f}.gz`] ?? manifest.storedSha256?.[f];
+    if (expectedSha && sha256(gzBuf) !== expectedSha) {
+      throw new Error(`model ${id} artifact checksum mismatch for ${f}`);
+    }
+    writeFileSync(resolve(targetDir, f), gunzipSync(gzBuf));
   }
 }
 

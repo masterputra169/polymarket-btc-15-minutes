@@ -4,6 +4,7 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
+import { isValidModelId } from './modelRegistry.ts';
 import { BOT_CONFIG } from './config.ts';
 import { WebSocketServer } from 'ws';
 import { createLogger } from './logger.ts';
@@ -458,31 +459,35 @@ export function startStatusServer() {
             .catch(err => respond('simulateTrader', { error: err.message }));
         } else if (msg.type === 'listMlModels' && _listMlModels) {
           respond('listMlModels', { ok: true, models: _listMlModels() });
-        } else if (msg.type === 'switchMlModel' && _switchMlModel && typeof msg.modelId === 'string' && msg.modelId.trim().length > 0 && msg.modelId.length <= 128) {
+        } else if (msg.type === 'switchMlModel' && _switchMlModel && typeof msg.modelId === 'string') {
+          const modelId = msg.modelId.trim();
+          if (!isValidModelId(modelId)) { respond('switchMlModel', { ok: false, error: 'invalid_model_id' }); return; }
           if (commandThrottled('switchMlModel', 1_500)) { respond('switchMlModel', { ok: false, error: 'rate_limited' }); return; }
-          _switchMlModel(msg.modelId.trim())
+          _switchMlModel(modelId)
             .then(result => respond('switchMlModel', result))
             .catch(err => respond('switchMlModel', { ok: false, error: err.message }));
         } else if (
           msg.type === 'saveModelProfile' &&
           _saveModelProfile &&
           typeof msg.modelId === 'string' &&
-          msg.modelId.trim().length > 0 &&
-          msg.modelId.length <= 128 &&
           msg.profile != null &&
           typeof msg.profile === 'object' &&
           !Array.isArray(msg.profile)
         ) {
+          const modelId = msg.modelId.trim();
+          if (!isValidModelId(modelId)) { respond('saveModelProfile', { ok: false, error: 'invalid_model_id' }); return; }
           if (commandThrottled('saveModelProfile', 300)) { respond('saveModelProfile', { ok: false, error: 'rate_limited' }); return; }
           try {
-            respond('saveModelProfile', _saveModelProfile(msg.modelId.trim(), msg.profile));
+            respond('saveModelProfile', _saveModelProfile(modelId, msg.profile));
           } catch (err) {
             respond('saveModelProfile', { ok: false, error: err.message });
           }
-        } else if (msg.type === 'resetModelProfile' && _resetModelProfile && typeof msg.modelId === 'string' && msg.modelId.trim().length > 0 && msg.modelId.length <= 128) {
+        } else if (msg.type === 'resetModelProfile' && _resetModelProfile && typeof msg.modelId === 'string') {
+          const modelId = msg.modelId.trim();
+          if (!isValidModelId(modelId)) { respond('resetModelProfile', { ok: false, error: 'invalid_model_id' }); return; }
           if (commandThrottled('resetModelProfile', 300)) { respond('resetModelProfile', { ok: false, error: 'rate_limited' }); return; }
           try {
-            respond('resetModelProfile', _resetModelProfile(msg.modelId.trim()));
+            respond('resetModelProfile', _resetModelProfile(modelId));
           } catch (err) {
             respond('resetModelProfile', { ok: false, error: err.message });
           }

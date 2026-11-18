@@ -13,6 +13,7 @@ import { dirname } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { notify } from '../monitoring/notifier.ts';
+import { escapeHtml } from '../monitoring/alertTemplates.ts';
 import { mirrorTradeJournalRecord } from '../services/runtimeIntegrations.ts';
 import { getBankroll } from './positionTracker.ts';
 import { getJevSummary } from '../ai/jevAdvisor.ts';
@@ -295,9 +296,9 @@ async function _sendTradeAlert(record) {
     edge != null ? `📐 Edge: ${(edge * 100).toFixed(1)}%` : null,
     mlConf != null ? `🤖 ML: ${(mlConf * 100).toFixed(0)}%` : null,
     ``,
-    entry?.marketSlug ? getJevSummary(entry.marketSlug) ? `🧠 ${getJevSummary(entry.marketSlug)}` : null : null,
+    entry?.marketSlug ? getJevSummary(entry.marketSlug) ? `🧠 ${escapeHtml(getJevSummary(entry.marketSlug))}` : null : null,
     `📊 Today: <b>${todayStr}</b> trades`,
-    entry?.marketSlug ? `<a href="https://polymarket.com/event/${entry.marketSlug}">View Market</a>` : null,
+    entry?.marketSlug ? `<a href="https://polymarket.com/event/${encodeURIComponent(entry.marketSlug)}">View Market</a>` : null,
   ].filter(Boolean);
 
   await notify('info', lines.join('\n'), { key: `trade:journal:${record._ts}` });

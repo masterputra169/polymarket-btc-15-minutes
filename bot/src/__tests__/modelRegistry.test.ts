@@ -16,7 +16,7 @@ import { gunzipSync } from 'zlib';
 import { createHash } from 'crypto';
 import {
   registerModel, deployModel, readJournal, readManifest, modelStatuses, renderModelsMd,
-  makeModelId, materialiseModel, MODEL_FILES,
+  makeModelId, materialiseModel, isValidModelId, MODEL_FILES,
 } from '../modelRegistry.ts';
 
 let tmp: string;
@@ -179,5 +179,28 @@ describe('ensureRegistered', () => {
     const b = ensureRegistered(root, live, 't');
     expect(a).toBe(b);
     expect(readJournal(root).filter(e => e.event === 'registered')).toHaveLength(1);
+  });
+});
+
+describe('modelId validation & artifact integrity', () => {
+  test('isValidModelId rejects traversal, prototype keys, and empty strings', () => {
+    expect(isValidModelId('20260924-p2-abcdef')).toBe(true);
+    for (const bad of ['', '../evil', 'a/b', 'a\\b', '__proto__', 'constructor', 'prototype', 'a'.repeat(65)]) {
+      expect(isValidModelId(bad)).toBe(false);
+    }
+  });
+
+  test('readManifest returns null and materialiseModel throws on unsafe ids', () => {
+    expect(readManifest(root, '../evil')).toBeNull();
+    expect(() => materialiseModel(root, '../evil', resolve(tmp, 'out'))).toThrow(/invalid model id/);
+  });
+
+  test('materialiseModel rejects corrupted or tampered gzip artifacts when storedSha256 mismatches', async () => {
+    const { gzipSync } = await import('zlib');
+    const src = resolve(tmp, 'out');
+    writeModel(src, 'a', 2);
+    const { manifest } = registerModel({ root, sourceDir: src, source: 't', actor: 't' });
+    writeFileSync(resolve(root, 'models', manifest.id, 'xgboost_model.json.gz'), gzipSync(Buffer.from('{"trees":["tampered"]}')));
+    expect(() => materialiseModel(root, manifest.id, resolve(tmp, 'restore'))).toThrow(/checksum mismatch/);
   });
 });

@@ -1,5 +1,6 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, vi } from 'vitest';
 import { redactSecrets } from '../utils/redact.ts';
+import { createLogger } from '../logger.ts';
 
 const env = {
   POLYGON_RPC_URL: 'https://polygon-mainnet.example.com/v2/abcdef0123456789abcdef0123456789',
@@ -32,5 +33,23 @@ describe('redactSecrets', () => {
     expect(redactSecrets('bind 0.0.0.0 level info', env)).toBe('bind 0.0.0.0 level info');
     expect(redactSecrets('Position opened: UP 6 shares @ $0.605', env)).toBe('Position opened: UP 6 shares @ $0.605');
     expect(redactSecrets('', env)).toBe('');
+  });
+});
+
+describe('createLogger extra redaction', () => {
+  test('redacts secrets inside string, object, and Error extra values', () => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const log = createLogger('Test');
+      log.error('str', 'https://user:hunter2pw@db.example.com/app');
+      log.error('obj', { pk: `0x${'ab'.repeat(32)}` });
+      log.error('err', new Error('POST https://api.telegram.org/bot987654321:ZZZaaaBBBcccDDDeeeFFFgggHHHiiiJJJ00/sendMessage'));
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(String(spy.mock.calls[0][1])).not.toContain('hunter2pw');
+      expect(String(spy.mock.calls[1][1])).toContain('[REDACTED-HEX32]');
+      expect(String(spy.mock.calls[2][1])).toContain('/bot[REDACTED]/sendMessage');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

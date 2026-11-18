@@ -21,6 +21,14 @@ const PASSWORD_HASH_FILE = process.env.AUTH_PASSWORD_HASH_FILE || '/opt/polybtc1
 const SESSION_SECRET = (process.env.AUTH_SESSION_SECRET || '').trim();
 const sessions = new Map();
 const attempts = new Map();
+const MAX_MAP_ENTRIES = 5000;
+
+function boundedSet(map, key, value) {
+  if (!map.has(key) && map.size >= MAX_MAP_ENTRIES) {
+    map.delete(map.keys().next().value);
+  }
+  map.set(key, value);
+}
 
 if (!SESSION_SECRET) {
   console.error('dashboard-auth: AUTH_SESSION_SECRET is required');
@@ -99,7 +107,7 @@ function clientIp(req) {
 function rateLimited(ip) {
   const now = Date.now();
   const entry = attempts.get(ip);
-  if (!entry || now - entry.startedAt > WINDOW_MS) { attempts.set(ip, { count: 1, startedAt: now }); return false; }
+  if (!entry || now - entry.startedAt > WINDOW_MS) { boundedSet(attempts, ip, { count: 1, startedAt: now }); return false; }
   entry.count++;
   return entry.count > MAX_ATTEMPTS;
 }
@@ -139,7 +147,7 @@ const server = http.createServer(async (req, res) => {
     attempts.delete(ip);
     const exp = Date.now() + TTL * 1000;
     const token = sign({ exp, v: 1 });
-    sessions.set(token, exp);
+    boundedSet(sessions, token, exp);
     setCookie(res, token, TTL);
     return json(res, 200, { ok: true, expiresAt: exp });
   }

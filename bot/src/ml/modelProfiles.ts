@@ -15,6 +15,7 @@ import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import {
   deployModel,
+  isValidModelId,
   listManifests,
   MODEL_FILES,
   modelStatuses,
@@ -363,6 +364,7 @@ export function createModelProfileManager(deps: ManagerDeps) {
         const cleanProfiles: Record<string, ModelConfigProfile> = {};
         const baseFilters = getBaseFilters();
         for (const [id, prof] of Object.entries(raw.profiles as Record<string, unknown>)) {
+          if (!isValidModelId(id)) continue;
           const { profile } = sanitizeModelProfile(prof, baseFilters);
           if (!isProfileEmpty(profile)) cleanProfiles[id] = profile;
         }
@@ -392,7 +394,7 @@ export function createModelProfileManager(deps: ManagerDeps) {
       const list = manifests
         .filter(m => hasStoredArtifacts(deps.registryRoot, m.id, m))
         .sort((a, b) => b.id.localeCompare(a.id))
-        .map(m => summarizeManifest(m, statuses[m.id] ?? 'candidate', store.profiles[m.id]));
+        .map(m => summarizeManifest(m, statuses[m.id] ?? 'candidate', Object.hasOwn(store.profiles, m.id) ? store.profiles[m.id] : undefined));
       cachedModels = list;
       return list;
     } catch {
@@ -490,7 +492,7 @@ export function createModelProfileManager(deps: ManagerDeps) {
 
   function applyProfileForModel(modelId: string | null): void {
     currentActiveId = modelId;
-    activeProfile = modelId ? (store.profiles[modelId] ?? null) : null;
+    activeProfile = modelId && isValidModelId(modelId) && Object.hasOwn(store.profiles, modelId) ? store.profiles[modelId] : null;
     applyFilters(activeProfile?.filters ?? null);
     version++;
     rebuildState(true);
@@ -514,10 +516,10 @@ export function createModelProfileManager(deps: ManagerDeps) {
     modelId: string,
     rawProfile: unknown,
   ): { ok: boolean; modelId?: string; profile?: ModelConfigProfile | null; refused?: string[]; error?: string; mlControl?: ModelControlState } {
-    if (typeof modelId !== 'string' || !modelId.trim()) {
+    const id = typeof modelId === 'string' ? modelId.trim() : '';
+    if (!isValidModelId(id)) {
       return { ok: false, error: 'invalid_model_id' };
     }
-    const id = modelId.trim();
     const manifest = readManifest(deps.registryRoot, id);
     if (!manifest) {
       return { ok: false, error: `model_${id}_not_registered` };
@@ -543,17 +545,17 @@ export function createModelProfileManager(deps: ManagerDeps) {
     return {
       ok: true,
       modelId: id,
-      profile: store.profiles[id] ?? null,
+      profile: Object.hasOwn(store.profiles, id) ? store.profiles[id] : null,
       refused,
       mlControl: getControlState(),
     };
   }
 
   function resetProfile(modelId: string): { ok: boolean; modelId?: string; error?: string; mlControl?: ModelControlState } {
-    if (typeof modelId !== 'string' || !modelId.trim()) {
+    const id = typeof modelId === 'string' ? modelId.trim() : '';
+    if (!isValidModelId(id)) {
       return { ok: false, error: 'invalid_model_id' };
     }
-    const id = modelId.trim();
     delete store.profiles[id];
     try {
       persistStore();
@@ -589,10 +591,10 @@ export function createModelProfileManager(deps: ManagerDeps) {
     error?: string;
     mlControl?: ModelControlState;
   }> {
-    if (typeof targetModelId !== 'string' || !targetModelId.trim()) {
+    const id = typeof targetModelId === 'string' ? targetModelId.trim() : '';
+    if (!isValidModelId(id)) {
       return { ok: false, error: 'invalid_model_id' };
     }
-    const id = targetModelId.trim();
     const manifest = readManifest(deps.registryRoot, id);
     if (!manifest) return { ok: false, error: `Model ${id} is not registered` };
     if (!hasStoredArtifacts(deps.registryRoot, id, manifest)) {

@@ -21,11 +21,11 @@ python3 - "$TMP" "$STATUS" "$REPORT" <<'PY'
 import re, sys
 path, status, report = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(path).read()
-s = re.sub(r'(proxy_pass http://127\.0\.0\.1:3099/ws\?token=)[^;]+', r'\g<1>' + status, s)
-s = re.sub(r'(proxy_set_header Authorization "Bearer )[^"]+(")', r'\g<1>' + report + r'\g<2>', s)
+s = re.sub(r'(proxy_pass http://127\.0\.0\.1:3099/ws\?token=)[^;]+', lambda m: m.group(1) + status, s)
+s = re.sub(r'(proxy_set_header Authorization "Bearer )[^"]+(")', lambda m: m.group(1) + report + m.group(2), s)
 open(path, 'w').write(s)
 PY
 
 if cmp -s "$TMP" "$NGINX_FILE"; then exit 0; fi
-install -m 0644 "$TMP" "$NGINX_FILE"
+install -m 0640 "$TMP" "$NGINX_FILE"
 if nginx -t; then systemctl reload nginx; fi

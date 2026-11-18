@@ -19,12 +19,18 @@ function ts(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }
 
+function redactExtra(extra: unknown): string {
+  if (typeof extra === 'string') return redactSecrets(extra);
+  if (extra instanceof Error) return redactSecrets(extra.stack ?? extra.message);
+  try { return redactSecrets(JSON.stringify(extra)); } catch { return redactSecrets(String(extra)); }
+}
+
 function emit(level: LogLevel, tag: string, msg: unknown, extra?: unknown): void {
   if (LEVELS[level] < currentLevel) return;
   const prefix = `${ts()} [${level.toUpperCase().padEnd(5)}] [${tag}]`;
   const text = redactSecrets(typeof msg === 'string' ? msg : String(msg));
   if (extra !== undefined) {
-    console.log(`${prefix} ${text}`, extra);
+    console.log(`${prefix} ${text}`, redactExtra(extra));
   } else {
     console.log(`${prefix} ${text}`);
   }

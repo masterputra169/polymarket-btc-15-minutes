@@ -218,7 +218,7 @@ import { fetchSentiment, getSentiment, getSentimentStats, checkExtremeSentiment 
 import { getGlobalRisk } from './monitoring/globalRisk.ts';
 import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
-import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevPrimarySide, getJevSizingMultiplier, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
+import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -234,6 +234,7 @@ import { broadcast } from './statusServer.ts';
 
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
+import { escapeHtml } from './monitoring/alertTemplates.ts';
 import { beatLiveness } from './monitoring/processLiveness.ts';
 import { recordIdleHeartbeat, recordPollHeartbeat } from './monitoring/ptbHealth.ts';
 import { parseClobAmount } from './utils/clobAmount.ts';
@@ -724,7 +725,7 @@ export async function pollOnce() {
           if (cbLastLogMs === 0) {
             // First time — log error + send notification
             log.error(`CIRCUIT BREAKER: ${haltCheck.reason} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
-            notify('critical', `CIRCUIT BREAKER: ${haltCheck.reason} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
+            notify('critical', `CIRCUIT BREAKER: ${escapeHtml(haltCheck.reason)} | Cooldown: ${remainMin}min | Bankroll: $${getBankroll().toFixed(2)}`);
           } else {
             log.warn(`HALTED: ${haltCheck.reason} | Cooldown: ${remainMin}min remaining`);
           }
@@ -768,7 +769,7 @@ export async function pollOnce() {
           // Sell order couldn't be verified — release sell lock so cut-loss can retry
           log.warn(`UNCERTAIN FILL: sell order ${fillResult.orderId} unverified after ${(fillResult.timeToFill / 1000).toFixed(1)}s — releasing sell lock for retry`);
           releaseSellLock();
-          notify('warn', `Uncertain sell fill: ${fillResult.orderId} — cut-loss can retry`);
+          notify('warn', `Uncertain sell fill: ${escapeHtml(fillResult.orderId)} — cut-loss can retry`);
         } else if (fillResult.filled) {
           confirmFill();
           log.info(`Fill ${fillResult.verified ? 'verified' : 'assumed'} (${(fillResult.timeToFill / 1000).toFixed(1)}s)${fillResult.adverseSelection ? ' [ADVERSE]' : ''}`);
@@ -859,7 +860,7 @@ export async function pollOnce() {
               unwindPosition();
               writeJournalEntry({ outcome: 'UNWIND', pnl: 0, exitData: { startupReconciliation: true, reason: 'phantom_position' } });
               clearEntrySnapshot();
-              notify('warn', `Startup: unwound phantom position ${pos.side} on ${pos.marketSlug} ($${pos.cost.toFixed(2)} returned)`);
+              notify('warn', `Startup: unwound phantom position ${pos.side} on ${escapeHtml(pos.marketSlug)} ($${pos.cost.toFixed(2)} returned)`);
             }
           } catch (histErr) {
             // Trade history check failed — don't unwind (conservative)
@@ -1534,7 +1535,7 @@ export async function pollOnce() {
               resetTakeProfitState();
               resetRecovery(); // Emergency cut cancels any pending recovery
               resetLimitOrderState();
-              notify('critical', `EMERGENCY CUT: ${emergencyCheck.reason} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${emergencyPos.marketSlug}">View Market</a>`);
+              notify('critical', `EMERGENCY CUT: ${escapeHtml(emergencyCheck.reason)} | Recovered $${emRecovery.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(emergencyPos.marketSlug)}">View Market</a>`);
             }
           } finally { releaseSellLock(); }
         }
@@ -1606,7 +1607,7 @@ export async function pollOnce() {
               resetRecovery(); // Smart sell cancels any pending recovery
               resetLimitOrderState();
               if (sfPnl < 0) recordLoss();
-              notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
+              notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${escapeHtml(smartFlowSignal.direction)} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(sfPos.marketSlug)}">View Market</a>`);
             } else {
               try {
                 const sfResult = await closePosition(sfPos.tokenId, sfSellSize, sfSellPrice);
@@ -1623,7 +1624,7 @@ export async function pollOnce() {
                 resetRecovery(); // Smart sell cancels any pending recovery
                 resetLimitOrderState();
                 if (sfPnl < 0) recordLoss();
-                notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${smartFlowSignal.direction} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${sfPos.marketSlug}">View Market</a>`);
+                notify('info', `SMART SELL-FIRST: ${sfPos.side} vs flow ${escapeHtml(smartFlowSignal.direction)} | P&L $${sfPnl.toFixed(2)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(sfPos.marketSlug)}">View Market</a>`);
               } catch (err) {
                 log.warn(`Smart sell-first FAILED: ${err.stack || err.message}`);
                 smartSellTriggered = false;
@@ -1755,7 +1756,7 @@ export async function pollOnce() {
                 recordLoss();
                 tiltMarketsLeft = TILT_MARKETS + 1;
                 log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
-                notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
+                notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(pos.marketSlug)}">View Market</a>`);
               }
             } else {
               recordSellAttempt();
@@ -1778,7 +1779,7 @@ export async function pollOnce() {
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
                   log.info(`Tilt protection activated: ML conf >= ${TILT_ML_CONF_MIN * 100}% for next ${TILT_MARKETS} markets`);
-                  notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
+                  notify('warn', `CUT-LOSS: ${pos.side} P&L $${cutPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(pos.marketSlug)}">View Market</a>`);
                 }
               } catch (err) {
                 if (err.message === 'no_tokens_on_chain') {
@@ -1794,7 +1795,7 @@ export async function pollOnce() {
                   resetLimitOrderState();
                   recordLoss();
                   tiltMarketsLeft = TILT_MARKETS + 1;
-                  notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}\n<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>`);
+                  notify('critical', `PHANTOM POSITION: tokens not found on-chain. State unwound. Loss -$${pos.cost.toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(pos.marketSlug)}">View Market</a>`);
                 } else {
                   log.warn(`Cut-loss sell FAILED: ${err.stack || err.message}`);
                   resetCutConfirm();
@@ -1856,7 +1857,7 @@ export async function pollOnce() {
               resetTakeProfitState();
               resetRecovery(); // Take-profit cancels any pending recovery
               resetLimitOrderState();
-              notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
+              notify('info', `TAKE-PROFIT (dry): ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(tpPos.marketSlug)}">View Market</a>`);
             } else {
               try {
                 const tpSellResult = await closePosition(tpPos.tokenId, tpSellSize, tpResult.sellPrice);
@@ -1872,7 +1873,7 @@ export async function pollOnce() {
                 resetTakeProfitState();
                 resetRecovery(); // Take-profit cancels any pending recovery
                 resetLimitOrderState();
-                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${tpPos.marketSlug}">View Market</a>`);
+                notify('info', `TAKE-PROFIT: ${tpPos.side} +${tpResult.gainPct.toFixed(1)}% | P&L $${tpPnl.toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(tpPos.marketSlug)}">View Market</a>`);
               } catch (err) {
                 log.warn(`Take-profit sell FAILED: ${err.stack || err.message}`);
                 resetTakeProfitState();
@@ -1948,7 +1949,7 @@ export async function pollOnce() {
               confirmFill();
               captureEntrySnapshot({ ...rcvSignalBlock, side: rcvSide, tokenPrice: rcvPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: rcvCost, size: rcvSize, confidence: 'RECOVERY', phase: rcvPhase, reason: 'recovery_buy', timeLeftMin, session: getSessionName() });
               entryRegime = regimeInfo?.regime ?? null;
-              notify('info', `RECOVERY BUY (dry): ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              notify('info', `RECOVERY BUY (dry): ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(marketSlug)}">View Market</a>`);
             } else {
               const rcvResult = await placeBuyOrder({ tokenId: rcvTokenId, price: rcvPrice, size: rcvSize });
               const rcvOrderId = rcvResult?.orderId ?? null;
@@ -1960,7 +1961,7 @@ export async function pollOnce() {
               if (!BOT_CONFIG.dryRun && rcvTokenId) {
                 updateConditionalApproval(rcvTokenId).catch(e => log.warn(`Recovery approval skip: ${e.message}`));
               }
-              notify('info', `RECOVERY BUY: ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              notify('info', `RECOVERY BUY: ${rcvSide} ${rcvSize}@${rcvPrice.toFixed(3)} | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(marketSlug)}">View Market</a>`);
             }
           } catch (err) {
             log.warn(`Recovery buy FAILED: ${err.stack || err.message}`);
@@ -2275,7 +2276,7 @@ export async function pollOnce() {
                   `Size: ${limSt.size ?? '?'} shares ($${limSt.size && limSt.targetPrice ? (limSt.size * limSt.targetPrice).toFixed(2) : '?'})\n` +
                   `ML: ${mlResult.available ? (mlResult.mlConfidence * 100).toFixed(0) + '%' : 'off'} | Bankroll: $${getBankroll().toFixed(2)}\n` +
                   `Waiting for fill (max ${effLimitCfg.cancelAfterElapsedMin}min)...\n` +
-                  `<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`,
+                  `<a href="https://polymarket.com/event/${encodeURIComponent(marketSlug)}">View Market</a>`,
                   { key: 'trade:limit' }).catch(e => log.debug(`Notify limit placed: ${e.message}`));
               }
             } catch (err) {
@@ -2283,7 +2284,7 @@ export async function pollOnce() {
               notify('warn',
                 `⚠️ LIMIT ORDER FAILED\n` +
                 `Side: ${limitEval.side} | Price: ${(limitEval.targetPrice * 100).toFixed(1)}¢\n` +
-                `Error: ${err.message.slice(0, 100)}\n` +
+                `Error: ${escapeHtml(err.message.slice(0, 100))}\n` +
                 `FOK fallback active`,
                 { key: 'trade:limit:fail' }).catch(e => log.debug(`Notify limit fail: ${e.message}`));
             }
@@ -2394,7 +2395,7 @@ export async function pollOnce() {
               `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
               `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
               `Now holding → settlement\n` +
-              `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+              `<a href="https://polymarket.com/event/${encodeURIComponent(fd.marketSlug)}">View Market</a>`,
               { key: 'trade:limit:fill' }).catch(e => log.debug(`Notify limit fill: ${e.message}`));
             recordFillEvent(fd);  // Persist fill event for frontend transition display
             resetLimitOrderState();
@@ -2432,7 +2433,7 @@ export async function pollOnce() {
               `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
               `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
               `Remainder cancelled — holding partial position\n` +
-              `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+              `<a href="https://polymarket.com/event/${encodeURIComponent(fd.marketSlug)}">View Market</a>`,
               { key: 'trade:limit:partial' }).catch(e => log.debug(`Notify limit partial: ${e.message}`));
             limitOrderBlocksFOK = false;
             alreadyHasPosition = true;  // Fix: prevent FOK double-buy in same poll after partial fill
@@ -2472,12 +2473,12 @@ export async function pollOnce() {
               const cancelEmoji = isTimeCutoff ? '⏰' : '❌';
               const readableReason = cancelReason.replace(/_/g, ' ').replace(/\b\w/g, c => c);
               const fallbackLine = fokGate.allow
-                ? `→ FOK fallback allowed (${fokGate.reason})\n`
-                : `→ FOK fallback blocked (${fokGate.reason})\n`;
+                ? `→ FOK fallback allowed (${escapeHtml(fokGate.reason)})\n`
+                : `→ FOK fallback blocked (${escapeHtml(fokGate.reason)})\n`;
               notify('info',
                 `${cancelEmoji} LIMIT ORDER CANCELLED\n` +
                 `Side: ${limStatus.side ?? '?'} | Was @ ${limStatus.targetPrice ? (limStatus.targetPrice * 100).toFixed(1) + '¢' : '?'}\n` +
-                `Reason: ${readableReason}\n` +
+                `Reason: ${escapeHtml(readableReason)}\n` +
                 fallbackLine +
                 `Bankroll: $${getBankroll().toFixed(2)}`,
                 { key: 'trade:limit:cancel' }).catch(e => log.debug(`Notify limit cancel: ${e.message}`));
@@ -2515,7 +2516,7 @@ export async function pollOnce() {
                 `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
                 `Cancel failed — order was filled on-book\n` +
                 `Position auto-recorded → holding to settlement\n` +
-                `<a href="https://polymarket.com/event/${fd.marketSlug}">View Market</a>`,
+                `<a href="https://polymarket.com/event/${encodeURIComponent(fd.marketSlug)}">View Market</a>`,
                 { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify limit phantom: ${e.message}`));
               limitOrderBlocksFOK = false;
             } else if (fokGate.allow) {
@@ -2622,7 +2623,7 @@ export async function pollOnce() {
               entryRegime = regimeInfo?.regime ?? null;
               onPreMarketEntry(pmPrice, marketSlug);
               preMarketEnteredThisPoll = true;
-              notify('info', `PRE-MARKET LONG (dry): UP ${pmShares}@$${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+              notify('info', `PRE-MARKET LONG (dry): UP ${pmShares}@$${pmPrice.toFixed(3)} ($${pmOrderCost.toFixed(2)}) | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(marketSlug)}">View Market</a>`);
             } else {
               try {
                 setPendingCost(pmOrderCost);
@@ -2664,7 +2665,7 @@ export async function pollOnce() {
                 preMarketEnteredThisPoll = true;
                 // ERC-1155 approval for subsequent sells
                 updateConditionalApproval(pmTokenId).catch(e => log.debug(`PreMarket approval: ${e.message}`));
-                notify('info', `PRE-MARKET GTD: UP ${pmLimitShares}@${(limitPrice * 100).toFixed(1)}c ($${pmLimitCost.toFixed(2)}) | bestBid=${bestBid?.toFixed(3) ?? 'N/A'} | HOLD→settlement | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${marketSlug}">View Market</a>`);
+                notify('info', `PRE-MARKET GTD: UP ${pmLimitShares}@${(limitPrice * 100).toFixed(1)}c ($${pmLimitCost.toFixed(2)}) | bestBid=${bestBid?.toFixed(3) ?? 'N/A'} | HOLD→settlement | $${getBankroll().toFixed(2)}\n<a href="https://polymarket.com/event/${encodeURIComponent(marketSlug)}">View Market</a>`);
               } catch (err) {
                 setPendingCost(0);
                 log.error(`Pre-market LONG GTD order FAILED: ${err.message}`);

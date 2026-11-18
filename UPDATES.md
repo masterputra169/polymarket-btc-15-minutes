@@ -6,6 +6,19 @@
 
 ---
 
+## 2026-11-18 — Security Audit, `ponytail` Hardening Fixes & `rtk` + `caveman` Skill Suite
+
+- **`rtk-ai/rtk` & `JuliusBrussee/caveman` skill suite (`.agents/skills/*`, `AGENTS.md`):** Added workspace skills from `rtk-ai/rtk` (`.claude/skills/*`: `code-simplifier`, `design-patterns`, `issue-triage`, `performance`, `pr-review`, `pr-triage`, `repo-recap`, `rtk-tdd`, `rtk-triage`, `security-guardian`, `ship`, `tdd-rust`, plus `rtk/SKILL.md`), synced all 22 `JuliusBrussee/caveman` skills (adding `ultracave` and `megacave` alongside updated `caveman*` / `cavecrew` / engineering skills), ran `rtk init -g --auto-patch` (`C:\rtk\rtk.exe`), and recorded persistent `rtk` + `caveman` + `ponytail` workflow rules in `AGENTS.md`.
+
+- **Model ID allowlist, prototype-pollution guard & artifact SHA-256 verification (`bot/src/modelRegistry.ts`, `bot/src/statusServer.ts`, `bot/src/ml/modelProfiles.ts`):** Added `MODEL_ID_RE` + `isValidModelId()` (rejecting path traversal `../`, slashes, overlong IDs, and `__proto__`/`constructor`/`prototype`), enforced validation on `readManifest()`, `materialiseModel()`, `loadStore()`, `saveProfile()`, `resetProfile()`, `switchModel()`, and the `switchMlModel`/`saveModelProfile`/`resetModelProfile` WebSocket RPCs (`invalid_model_id`), guarded profile lookups with `Object.hasOwn()`, and verified `.gz` buffers against `manifest.storedSha256` before decompressing in `materialiseModel()`.
+- **RSS headline `http(s)` URL guard (`bot/src/monitoring/globalRisk.ts`, `src/components/GlobalRiskPanel.tsx`):** Restricted parsed `<link>` URLs in `parseRss()` and `<a href>` rendering in `GlobalRiskPanel` strictly to `https?://` schemes (dropping `javascript:` / `data:` payloads).
+- **x402 per-call payment cap (`bot/src/engines/metEngineClient.ts`):** Added `validateX402Payment()` (`MAX_X402_PAYMENT_ATOMIC = 50_000n`, `$0.05` USDC 6 decimals) rejecting missing `accepts`, non-integer amounts, `<= 0`, or overpriced `402` challenges before signing.
+- **`nginx-token-sync.sh` hardening (`scripts/nginx-token-sync.sh`):** Replaced `re.sub` backreference strings with safe `lambda` replacements and tightened nginx site permissions from `0644` to `0640`.
+- **Logger `extra` redaction (`bot/src/logger.ts`):** Applied `redactSecrets()` to `extra` arguments (`string`, `Error`, JSON-serialized objects) in `emit()`.
+- **Telegram HTML escaping & dead JEV import cleanup (`bot/src/loop.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/trading/tradeJournal.ts`, `bot/src/engines/settlement.ts`):** Reused `escapeHtml()` for dynamic error/reason/summary/direction fields and `encodeURIComponent()` for `marketSlug` links in Telegram HTML notifications; dropped unused `getJevPrimarySide` and `getJevSizingMultiplier` imports from `loop.ts`.
+- **Bounded auth gateway maps (`scripts/dashboard-auth-server.mjs`):** Added `boundedSet()` capping in-memory `sessions` and `attempts` maps at `MAX_MAP_ENTRIES = 5000` with FIFO eviction.
+- **Tests (`bot/src/__tests__/modelRegistry.test.ts`, `bot/src/__tests__/redact.test.ts`, `bot/src/__tests__/securityHardening.test.ts`):** Added targeted regression tests for invalid model IDs, tampered `.gz` checksum mismatch, logger `extra` redaction, RSS scheme filtering, and x402 payment cap enforcement; removed temporary audit artifacts (`run-1`).
+
 ## 2026-11-17 — Log Audit Cleanup (Hot-Path Log Throttle, Dry-Run Reconciler Skip, TWAP Close Settlement Quiet Verify & JEV Outcomes Persistence)
 
 - **Hot-path `50ms` log throttling (`bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`):** Rate-limited `[Filter] Filtered`, `[TradePipeline] Signal unstable, holding`, `Fast-entry`, and `Smart filter blocked` to log immediately on reason/key changes and at most once per `5s` (`10s` for `Fast-entry`) instead of `12–20×/s` (`87,192` journal lines observed in 8h) while leaving tape recording (`noteTapeStage` / `noteTapeFilters`) untouched.
@@ -122,7 +135,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-17 10:21 WIB_
+_Last updated: 2026-11-18 09:31 WIB_
 
 | Area | State |
 |---|---|
@@ -152,7 +165,7 @@ _Last updated: 2026-11-17 10:21 WIB_
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 115 files / 1,081 vitest PASS · 433 pytest PASS (98% `mltrain` cov) · `ruff`/`black` PASS |
+| Tests | 116 files / 1,087 vitest PASS (frontend, bot & scripts typecheck/build PASS; Python ML untouched) |
 | Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
 | Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

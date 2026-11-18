@@ -190,7 +190,7 @@ async function settleRegularPosition(pos, conditionId, btcPrice, ptbValue, price
         `Gap: ${gapPct}% (${priceSource}) | ${riskLabel}`,
         ``,
         `<i>journalReconciler akan verifikasi ulang dalam ~30 menit</i>`,
-        pos.marketSlug ? `<a href="https://polymarket.com/event/${pos.marketSlug}">View Market</a>` : null,
+        pos.marketSlug ? `<a href="https://polymarket.com/event/${encodeURIComponent(pos.marketSlug)}">View Market</a>` : null,
       ].filter(Boolean).join('\n'), { key: `fallback:${pos.marketSlug ?? conditionId}` }).catch(e => log.debug(`Notify fallback settle: ${e.message}`));
     }
   }

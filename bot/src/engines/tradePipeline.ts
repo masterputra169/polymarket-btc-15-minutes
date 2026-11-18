@@ -17,7 +17,7 @@ import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
 import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
-import { tradeEntryAlert } from '../monitoring/alertTemplates.ts';
+import { escapeHtml, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
 import {
   dryRunMakerWouldFill,
@@ -483,7 +483,7 @@ export async function executeDirectionalTrade({
       const meResult = await deps.querySmartMoney(currentConditionId, betSide);
       if (meResult.blocked) {
         log.info(`[MetEngine] Gate blocked: ${meResult.reason}`);
-        notify('warn', `🧠 MetEngine BLOCKED ${betSide}: ${meResult.reason}`, { key: `me:block:${currentConditionId}` }).catch(e => log.debug(`Notify ME block: ${e.message}`));
+        notify('warn', `🧠 MetEngine BLOCKED ${escapeHtml(betSide)}: ${escapeHtml(meResult.reason)}`, { key: `me:block:${currentConditionId}` }).catch(e => log.debug(`Notify ME block: ${e.message}`));
         return false;
       }
       if (meResult.boost) {
@@ -851,7 +851,7 @@ export async function executeDirectionalTrade({
       });
     } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
     if (deps.notifyTrade) {
-      const marketUrl = `https://polymarket.com/event/${marketSlug}`;
+      const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
       const jevTag = getJevSummary(marketSlug);
       deps.notifyTrade(tradeEntryAlert({
         dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
@@ -939,7 +939,7 @@ export async function executeDirectionalTrade({
           ? timeLeftMin < 1 ? `${Math.round(timeLeftMin * 60)}s` : `${timeLeftMin.toFixed(1)}m`
           : '-';
         const mlStr = mlResult.available ? `${(mlResult.mlConfidence * 100).toFixed(0)}%` : 'off';
-        const marketUrl = `https://polymarket.com/event/${marketSlug}`;
+        const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
         notify('info', [
           `🧠 MetEngine + Bot ALIGNED!`,
           `${sideArrow} ${betSide} | $${cost.toFixed(2)} (smart money boost +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`,
@@ -951,7 +951,7 @@ export async function executeDirectionalTrade({
           `<a href="${marketUrl}">View Market</a>`,
         ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(e => log.debug(`Notify ME align: ${e.message}`));
       } else {
-        const marketUrl = `https://polymarket.com/event/${marketSlug}`;
+        const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
         const jevTag = getJevSummary(marketSlug);
         deps.notifyTrade(tradeEntryAlert({
           dryRun: false, side: betSide, price: actualPrice, shares: actualSize, cost,
