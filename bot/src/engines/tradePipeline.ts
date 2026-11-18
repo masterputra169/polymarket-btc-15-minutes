@@ -1,10 +1,8 @@
 /**
  * Trade execution pipeline — handles arb and directional trade entry.
  *
- * Stateless module: no owned state. Receives all dependencies via params.
- * Side effects (order placement, position recording) performed via callbacks.
- *
- * Extracted from loop.js lines 1167-1452.
+ * Receives all callbacks via params (plus an isolated resting queue-sim state
+ * when `DRY_RUN_QUEUE_SIM=true` evaluates paper maker orders across polls).
  */
 
 import { createLogger } from '../logger.ts';
@@ -23,13 +21,21 @@ import {
   dryRunMakerWouldFill,
   makerJoinPrice,
   shouldAllowFokFallback,
+  shouldCancelTwapAdverse,
   feeAdjustedEdge,
 } from './makerFillGate.ts';
 import { routeOrder } from './orderRouter.ts';
 import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
 import { isClobOutageActive } from '../trading/clobOutageLatch.ts';
 import { isFillSizeWithinClip } from '../trading/fillTracker.ts';
-import { estimateQueueFillFeasibility } from './queueSim.ts';
+import {
+  createQueueSimOrder,
+  estimateQueueFillFeasibility,
+  stepQueueOrder,
+  type QueueSimOrder,
+  type QueueTradeTick,
+} from './queueSim.ts';
+import { CLOB_QUIET_MS } from '../streams/clobFreshness.ts';
 
 /** Pre-execution 2c runaway ask haircut (emoubarak): abort chasing if live ask spiked above signal price. */
 function isAskRunaway(
@@ -115,6 +121,299 @@ function fokBuyPrice(targetPrice, spread) {
   const slippage = Math.max(fixedSlippage, pctSlippage, spreadSlippage);
   // Round to Polymarket's 0.001 tick size, cap at 0.99
   return Math.min(Math.round((targetPrice + slippage) * 1000) / 1000, 0.99);
+}
+
+interface DryRunCommitContext {
+  betSide: 'UP' | 'DOWN' | string;
+  tokenId: string;
+  currentConditionId: string | null;
+  marketSlug: string;
+  shares: number;
+  dryFillPrice: number;
+  quotePrice: number;
+  fillModel: string;
+  isMakerFill: boolean;
+  edge: any;
+  rec: any;
+  flowTag: string;
+  smartFlowTag: string;
+  betSizing: any;
+  betEnsembleProb: number;
+  lastPrice: number | null;
+  priceToBeat: { value: number | null; source?: string | null };
+  regimeInfo: any;
+  mlResult: any;
+  timeLeftMin: number | null;
+  smartFlowSignal: any;
+  entryData: Record<string, any>;
+  deps: any;
+}
+
+function commitDryRunFill(ctx: DryRunCommitContext): true {
+  const {
+    betSide, tokenId, currentConditionId, marketSlug, shares,
+    dryFillPrice, quotePrice, fillModel, isMakerFill, edge, rec,
+    flowTag, smartFlowTag, betSizing, betEnsembleProb, lastPrice,
+    priceToBeat, regimeInfo, mlResult, timeLeftMin, smartFlowSignal,
+    entryData, deps,
+  } = ctx;
+  const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
+  const drySlippagePct = quotePrice > 0
+    ? ((dryFillPrice - quotePrice) / quotePrice) * 100
+    : 0;
+  recordSlippage(drySlippagePct);
+
+  log.info(
+    `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${dryFillPrice.toFixed(3)} = $${dryFillCost.toFixed(2)} ` +
+    `(${fillModel}; quote $${quotePrice.toFixed(3)}, slip ${drySlippagePct.toFixed(2)}%) | ` +
+    `Edge: ${((edge?.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge?.spreadPenaltyUp ?? 0) + (edge?.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
+    `Conf: ${rec?.confidence}${flowTag}${smartFlowTag} | ${betSizing?.rationale}`
+  );
+  deps.setPendingCost(0);
+  deps.recordTrade({
+    side: betSide, tokenId,
+    conditionId: currentConditionId,
+    price: dryFillPrice, size: shares,
+    marketSlug, orderId: null, actualCost: dryFillCost,
+    isMaker: isMakerFill,
+  });
+  deps.confirmFill?.();
+  deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
+  deps.recordTradeForMarket(marketSlug);
+  deps.recordTradeTimestamp?.();
+  entryData.expectedPrice = quotePrice;
+  entryData.tokenPrice = dryFillPrice;
+  entryData.cost = dryFillCost;
+  entryData.actualPrice = dryFillPrice;
+  entryData.slippagePct = drySlippagePct;
+  entryData.fillModel = fillModel;
+  entryData.isMaker = isMakerFill;
+  entryData.avgSlippage = getAvgSlippage();
+  deps.captureEntrySnapshot(entryData);
+  try {
+    deps.recordPrediction({
+      side: betSide, modelProb: betEnsembleProb,
+      marketPrice: quotePrice, btcPrice: lastPrice,
+      priceToBeat: priceToBeat?.value ?? null, marketSlug,
+      regime: regimeInfo?.regime ?? 'moderate',
+      mlConfidence: mlResult?.available ? mlResult.mlConfidence : null,
+      mlSide: mlResult?.available ? mlResult.mlSide : null,
+    });
+  } catch (feedbackErr: any) { log.debug(`Feedback error: ${feedbackErr.message}`); }
+  if (deps.notifyTrade) {
+    const jevTag = getJevSummary(marketSlug);
+    deps.notifyTrade(tradeEntryAlert({
+      dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
+      edge: edge?.bestEdge ?? null,
+      mlConfidence: mlResult?.available ? mlResult.mlConfidence : null,
+      mlSide: mlResult?.available ? mlResult.mlSide : null,
+      jevSummary: jevTag, bankroll: deps.getBankroll(),
+      phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
+      smartFlow: smartFlowSignal?.direction ?? null, marketSlug,
+    }));
+  }
+  return true;
+}
+
+interface PendingDryRunMaker {
+  order: QueueSimOrder;
+  placedQuotePrice: number;
+  shares: number;
+  tokenId: string;
+  currentConditionId: string | null;
+  marketSlug: string;
+  maxUnfilledMs: number;
+  edge: any;
+  rec: any;
+  flowTag: string;
+  smartFlowTag: string;
+  betSizing: any;
+  betEnsembleProb: number;
+  lastPrice: number | null;
+  priceToBeat: { value: number | null; source?: string | null };
+  regimeInfo: any;
+  mlResult: any;
+  timeLeftMin: number | null;
+  smartFlowSignal: any;
+  entryData: Record<string, any>;
+  deps: any;
+}
+
+let _pendingDryRunMaker: PendingDryRunMaker | null = null;
+let _dryRunMakerAttempts: { slug: string | null; count: number } = { slug: null, count: 0 };
+
+/** Reset resting dry-run queue-sim maker order and per-market attempt count. */
+export function resetDryRunMaker(): void {
+  if (_pendingDryRunMaker) {
+    try { _pendingDryRunMaker.deps.setPendingCost(0); } catch {}
+  }
+  _pendingDryRunMaker = null;
+  _dryRunMakerAttempts = { slug: null, count: 0 };
+}
+
+/** Whether a paper maker order is currently resting in the queue simulator. */
+export function hasActiveDryRunMaker(marketSlug?: string): boolean {
+  return _pendingDryRunMaker != null && (!marketSlug || _pendingDryRunMaker.marketSlug === marketSlug);
+}
+
+/**
+ * Step a resting DRY_RUN FIFO queue-sim maker order on subsequent polls.
+ * Evaluates TWAP/ML adverse pulls, consumes real CLOB trade prints via stepQueueOrder,
+ * and applies delayed live-quote FOK fallback if unfilled at maxUnfilledSec.
+ */
+export function stepDryRunMaker(params: {
+  marketSlug: string;
+  timeLeftMin: number | null;
+  lastPrice: number | null;
+  priceToBeat: { value: number | null; source?: string | null };
+  orderbookUp: any;
+  orderbookDown: any;
+  marketUp: number | null;
+  marketDown: number | null;
+  ensembleUp: number | null;
+  ensembleDown: number | null;
+  mlResult: any;
+  regimeInfo: any;
+  twapProbUp: number | null | undefined;
+  recentTrades: readonly QueueTradeTick[];
+  lastBookQuoteMs: number;
+  nowMs?: number;
+}): { active: boolean; entered: boolean; deniedFokForSlug: string | null; filledSide?: string | null } {
+  const pending = _pendingDryRunMaker;
+  if (!pending) return { active: false, entered: false, deniedFokForSlug: null };
+
+  const now = params.nowMs ?? Date.now();
+  const clearPending = () => {
+    pending.deps.setPendingCost(0);
+    _pendingDryRunMaker = null;
+  };
+
+  if (params.marketSlug !== pending.marketSlug || params.timeLeftMin == null || params.timeLeftMin < 0.5) {
+    log.info(`[DRY RUN] MAKER cleared (${params.marketSlug !== pending.marketSlug ? 'market_switch' : 'too_close_to_expiry'})`);
+    clearPending();
+    return { active: false, entered: false, deniedFokForSlug: null };
+  }
+
+  const { order } = pending;
+  const secsLeft = params.timeLeftMin * 60;
+  const adversePull = shouldCancelTwapAdverse({
+    twapProbUp: params.twapProbUp,
+    side: order.side,
+    limitPrice: order.targetPrice,
+    secsLeft,
+  });
+  const mlFlip = Boolean(
+    params.mlResult?.available &&
+    params.mlResult.mlSide &&
+    params.mlResult.mlSide !== order.side &&
+    (params.mlResult.mlConfidence ?? 0) >= 0.85
+  );
+  if (adversePull.cancel || mlFlip) {
+    const reason = adversePull.cancel
+      ? adversePull.reason
+      : `ml_flip_${params.mlResult.mlSide}_${((params.mlResult.mlConfidence ?? 0) * 100).toFixed(0)}%`;
+    log.info(`[DRY RUN] MAKER pulled (${reason}) — no FOK chase`);
+    clearPending();
+    return { active: false, entered: false, deniedFokForSlug: pending.marketSlug };
+  }
+
+  const betBook = order.side === 'UP' ? params.orderbookUp : params.orderbookDown;
+  stepQueueOrder({
+    order,
+    trades: params.recentTrades ?? [],
+    lastBookQuoteMs: params.lastBookQuoteMs ?? 0,
+    nowMs: now,
+    maxBookStaleMs: CLOB_QUIET_MS,
+    allowComplementaryBuys: true,
+    currentBestAsk: betBook?.bestAsk ?? null,
+  });
+
+  if (order.status === 'FILLED') {
+    _pendingDryRunMaker = null;
+    const fillElapsedSec = ((order.filledAtMs ?? now) - order.placedAtMs) / 1000;
+    pending.entryData.queueRemainingAtFill = order.queueAhead;
+    pending.entryData.timeToFillMs = Math.max(0, (order.filledAtMs ?? now) - order.placedAtMs);
+    log.info(
+      `[DRY RUN] MAKER queue FILLED ${order.side}: ${pending.shares} @ $${order.targetPrice.toFixed(3)} ` +
+      `in ${fillElapsedSec.toFixed(1)}s (initialAhead=${order.initialQueueAhead.toFixed(1)})`
+    );
+    commitDryRunFill({
+      ...pending,
+      betSide: order.side,
+      dryFillPrice: order.targetPrice,
+      quotePrice: pending.placedQuotePrice,
+      fillModel: 'maker_join',
+      isMakerFill: true,
+      lastPrice: params.lastPrice ?? pending.lastPrice,
+      priceToBeat: params.priceToBeat ?? pending.priceToBeat,
+      regimeInfo: params.regimeInfo ?? pending.regimeInfo,
+      mlResult: params.mlResult ?? pending.mlResult,
+      timeLeftMin: params.timeLeftMin,
+    });
+    return { active: false, entered: true, deniedFokForSlug: null, filledSide: order.side };
+  }
+
+  if (order.status === 'STALE_CANCELLED') {
+    log.info(`[DRY RUN] MAKER cancelled (stale_book >${(CLOB_QUIET_MS / 1000).toFixed(0)}s) — no FOK chase`);
+    clearPending();
+    return { active: false, entered: false, deniedFokForSlug: pending.marketSlug };
+  }
+
+  if (now - order.placedAtMs >= pending.maxUnfilledMs) {
+    _pendingDryRunMaker = null;
+    const limCfg = getEffectiveLimitOrderConfig();
+    const currentAsk = betBook?.bestAsk ?? (order.side === 'UP' ? params.marketUp : params.marketDown);
+    const currentSideProb = order.side === 'UP' ? params.ensembleUp : params.ensembleDown;
+    const currentMlConf = params.mlResult?.available ? params.mlResult.mlConfidence : null;
+    const fokGate = shouldAllowFokFallback({
+      cancelReason: 'unfilled_timeout',
+      sideProb: currentSideProb,
+      ask: currentAsk,
+      minEdge: limCfg.fokFallbackMinEdge ?? 0.05,
+      mlConfidence: currentMlConf,
+      minMlConfidence: limCfg.fokFallbackMinMlConf ?? 0.32,
+    });
+    const runCheck = isAskRunaway(order.side, pending.placedQuotePrice, params.orderbookUp, params.orderbookDown);
+    const askLiqShares = betBook?.askLiquidity;
+    const liqOk = !(Number.isFinite(askLiqShares) && askLiqShares > 0 && pending.shares > askLiqShares);
+
+    if (fokGate.allow && !runCheck.runaway && liqOk && currentAsk != null && currentAsk > 0.01 && currentAsk < 0.99) {
+      const fokPx = fokBuyPrice(currentAsk, params.orderbookUp?.spread);
+      pending.entryData.queueRemainingAtTimeout = order.queueAhead;
+      pending.entryData.timeToFillMs = now - order.placedAtMs;
+      log.info(
+        `[DRY RUN] MAKER queue timeout (${(pending.maxUnfilledMs / 1000).toFixed(0)}s, ` +
+        `aheadLeft=${order.queueAhead.toFixed(1)}) → FOK fallback (${fokGate.reason}) @ $${fokPx.toFixed(3)}`
+      );
+      commitDryRunFill({
+        ...pending,
+        betSide: order.side,
+        dryFillPrice: fokPx,
+        quotePrice: currentAsk,
+        fillModel: 'fok_after_maker_miss',
+        isMakerFill: false,
+        lastPrice: params.lastPrice ?? pending.lastPrice,
+        priceToBeat: params.priceToBeat ?? pending.priceToBeat,
+        regimeInfo: params.regimeInfo ?? pending.regimeInfo,
+        mlResult: params.mlResult ?? pending.mlResult,
+        timeLeftMin: params.timeLeftMin,
+      });
+      return { active: false, entered: true, deniedFokForSlug: null, filledSide: order.side };
+    }
+
+    const denyWhy = !fokGate.allow
+      ? fokGate.reason
+      : runCheck.runaway
+        ? `runaway_ask_${Number(runCheck.liveAsk).toFixed(3)}`
+        : !liqOk
+          ? `thin_ask_${Number(askLiqShares).toFixed(0)}`
+          : 'invalid_ask';
+    log.info(`[DRY RUN] MAKER queue timeout + FOK blocked (${denyWhy}) — skip`);
+    pending.deps.setPendingCost(0);
+    return { active: false, entered: false, deniedFokForSlug: pending.marketSlug };
+  }
+
+  return { active: true, entered: false, deniedFokForSlug: null };
 }
 
 /**
@@ -776,9 +1075,72 @@ export async function executeDirectionalTrade({
     entryData.queueBookFresh = queueShadow.bookFresh;
     entryData.queueExpectedPressure = queueShadow.expectedQueuePressure;
 
-    // Optional strict queue-ahead guard (DRY_RUN_QUEUE_SIM=true) rejects stale books (>500ms)
-    // and enforces pessimistic queue pressure while preserving the baseline fill simulator by default.
-    const strictQueueBlocked = process.env.DRY_RUN_QUEUE_SIM === 'true' && !queueShadow.bookFresh;
+    // Queue simulator mode (DRY_RUN_QUEUE_SIM=true): maker JOIN rests on the FIFO queue
+    // across polls, consumes live CLOB trade prints, rejects stale quotes, and runs timed
+    // FOK fallback on delayed live quotes instead of drawing a deterministic 60% hash.
+    const queueSimEnabled = process.env.DRY_RUN_QUEUE_SIM === 'true';
+    if (queueSimEnabled && _pendingDryRunMaker != null) {
+      deps.setPendingCost(0);
+      return false;
+    }
+
+    if (queueSimEnabled && makerSimOn && joinPx != null) {
+      if (!queueShadow.bookFresh) {
+        log.info(`[DRY RUN] MAKER skipped (stale book ${bookQuoteAgeMs ?? '?'}ms > 500ms)`);
+        deps.setPendingCost(0);
+        return false;
+      }
+      const maxAttempts = limCfg.maxAttemptsPerMarket ?? 1;
+      if (_dryRunMakerAttempts.slug === marketSlug && _dryRunMakerAttempts.count >= maxAttempts) {
+        log.info(`[DRY RUN] MAKER skipped: maxAttempts (${maxAttempts}) reached for ${marketSlug}`);
+        deps.setPendingCost(0);
+        return false;
+      }
+      const qOrder = createQueueSimOrder({
+        marketSlug,
+        side: betSide === 'DOWN' ? 'DOWN' : 'UP',
+        targetPrice: joinPx,
+        shares,
+        initialBookSizeAtBid: betBook?.bidSize ?? 0,
+        nowMs: Date.now(),
+      });
+      deps.setPendingCost(Math.round(shares * joinPx * 100) / 100);
+      if (_dryRunMakerAttempts.slug !== marketSlug) {
+        _dryRunMakerAttempts = { slug: marketSlug, count: 1 };
+      } else {
+        _dryRunMakerAttempts.count += 1;
+      }
+      _pendingDryRunMaker = {
+        order: qOrder,
+        placedQuotePrice: betMarketPrice,
+        shares,
+        tokenId,
+        currentConditionId,
+        marketSlug,
+        maxUnfilledMs: (limCfg.maxUnfilledSec ?? 45) * 1000,
+        edge,
+        rec,
+        flowTag,
+        smartFlowTag,
+        betSizing,
+        betEnsembleProb,
+        lastPrice,
+        priceToBeat,
+        regimeInfo,
+        mlResult,
+        timeLeftMin,
+        smartFlowSignal,
+        entryData,
+        deps,
+      };
+      log.info(
+        `[DRY RUN] MAKER RESTING ${betSide}: ${shares} @ $${joinPx.toFixed(3)} ` +
+        `(queueAhead=${qOrder.queueAhead.toFixed(1)}, age=${bookQuoteAgeMs ?? '?'}ms, wait<=${limCfg.maxUnfilledSec ?? 45}s)`
+      );
+      return false;
+    }
+
+    const strictQueueBlocked = queueSimEnabled && !queueShadow.bookFresh;
     const makerFilled = !strictQueueBlocked && joinPx != null && dryRunMakerWouldFill(marketSlug, limCfg.dryRunMakerFillRate ?? 0.60);
 
     let dryFillPrice;
@@ -819,8 +1181,6 @@ export async function executeDirectionalTrade({
       fillModel = 'fok_limit';
     }
 
-    const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
-
     // FOK (and FOK fallback) is all-or-nothing against resting ask liquidity and runaway asks.
     if (fillModel !== 'maker_join') {
       const runCheck = isAskRunaway(betSide, betMarketPrice, orderbookUp, orderbookDown);
@@ -843,62 +1203,31 @@ export async function executeDirectionalTrade({
       }
     }
 
-    const drySlippagePct = betMarketPrice > 0
-      ? ((dryFillPrice - betMarketPrice) / betMarketPrice) * 100
-      : 0;
-    recordSlippage(drySlippagePct);
-
-    log.info(
-      `[DRY RUN] BUY ${betSide}: ${shares} shares @ $${dryFillPrice.toFixed(3)} = $${dryFillCost.toFixed(2)} ` +
-      `(${fillModel}; quote $${betMarketPrice.toFixed(3)}, slip ${drySlippagePct.toFixed(2)}%) | ` +
-      `Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% (spread: -${(((edge.spreadPenaltyUp ?? 0) + (edge.spreadPenaltyDown ?? 0)) * 50).toFixed(1)}%) | ` +
-      `Conf: ${rec.confidence}${flowTag}${smartFlowTag} | ${betSizing.rationale}`
-    );
-    deps.setPendingCost(0);
-    deps.recordTrade({
-      side: betSide, tokenId,
-      conditionId: currentConditionId,
-      price: dryFillPrice, size: shares,
-      marketSlug, orderId: null, actualCost: dryFillCost,
-      isMaker: isMakerFill,
+    return commitDryRunFill({
+      betSide,
+      tokenId,
+      currentConditionId,
+      marketSlug,
+      shares,
+      dryFillPrice,
+      quotePrice: betMarketPrice,
+      fillModel,
+      isMakerFill,
+      edge,
+      rec,
+      flowTag,
+      smartFlowTag,
+      betSizing,
+      betEnsembleProb,
+      lastPrice,
+      priceToBeat,
+      regimeInfo,
+      mlResult,
+      timeLeftMin,
+      smartFlowSignal,
+      entryData,
+      deps,
     });
-    deps.confirmFill?.();
-    deps.setEntryRegime(regimeInfo?.regime ?? 'moderate');
-    deps.recordTradeForMarket(marketSlug);
-    deps.recordTradeTimestamp?.();
-    entryData.tokenPrice = dryFillPrice;
-    entryData.cost = dryFillCost;
-    entryData.actualPrice = dryFillPrice;
-    entryData.slippagePct = drySlippagePct;
-    entryData.fillModel = fillModel;
-    entryData.isMaker = isMakerFill;
-    entryData.avgSlippage = getAvgSlippage();
-    deps.captureEntrySnapshot(entryData);
-    // Record prediction for accuracy tracking
-    try {
-      deps.recordPrediction({
-        side: betSide, modelProb: betEnsembleProb,
-        marketPrice: betMarketPrice, btcPrice: lastPrice,
-        priceToBeat: priceToBeat.value, marketSlug,
-        regime: regimeInfo.regime,
-        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
-        mlSide: mlResult.available ? mlResult.mlSide : null,
-      });
-    } catch (feedbackErr) { log.debug(`Feedback error: ${feedbackErr.message}`); }
-    if (deps.notifyTrade) {
-      const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
-      const jevTag = getJevSummary(marketSlug);
-      deps.notifyTrade(tradeEntryAlert({
-        dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
-        edge: edge.bestEdge ?? null,
-        mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
-        mlSide: mlResult.available ? mlResult.mlSide : null,
-        jevSummary: jevTag, bankroll: deps.getBankroll(),
-        phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
-        smartFlow: smartFlowSignal?.direction ?? null, marketSlug,
-      }));
-    }
-    return true;
   }
 
   // ── Live order (FOK with slippage + 2c runaway ask guard) ──

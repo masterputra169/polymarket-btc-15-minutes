@@ -27,6 +27,7 @@ export interface QueueSimOrder {
   initialQueueAhead: number;
   placedAtMs: number;
   lastTradeCursorMs: number;
+  lastTradeSeq: number;
   status: QueueSimStatus;
   filledAtMs: number | null;
   cancelReason: string | null;
@@ -34,6 +35,7 @@ export interface QueueSimOrder {
 
 export interface QueueTradeTick {
   t: number;
+  seq?: number;
   token: 'up' | 'down';
   side: 'BUY' | 'SELL' | null;
   price: number;
@@ -70,6 +72,7 @@ export function createQueueSimOrder(params: {
     initialQueueAhead: q,
     placedAtMs: nowMs,
     lastTradeCursorMs: nowMs,
+    lastTradeSeq: 0,
     status: 'RESTING',
     filledAtMs: null,
     cancelReason: null,
@@ -86,6 +89,8 @@ export function stepQueueOrder(params: {
   lastBookQuoteMs: number;
   nowMs?: number;
   maxBookStaleMs?: number;
+  allowComplementaryBuys?: boolean;
+  currentBestAsk?: number | null;
 }): QueueSimOrder {
   const { order } = params;
   if (order.status !== 'RESTING') return order;
@@ -101,14 +106,29 @@ export function stepQueueOrder(params: {
   }
 
   const expectedToken = order.side === 'UP' ? 'up' : 'down';
+  const oppBuyThreshold = 1 - order.targetPrice;
   for (const tr of params.trades) {
-    if (tr.token !== expectedToken) continue;
-    if (tr.t <= order.placedAtMs || tr.t < order.lastTradeCursorMs) continue;
-    order.lastTradeCursorMs = tr.t;
+    if (tr.seq != null) {
+      if (tr.seq <= order.lastTradeSeq || tr.t <= order.placedAtMs) continue;
+      order.lastTradeSeq = tr.seq;
+    } else {
+      if (tr.t <= order.placedAtMs || tr.t < order.lastTradeCursorMs) continue;
+      order.lastTradeCursorMs = tr.t;
+    }
+    if (!Number.isFinite(tr.price)) continue;
 
-    // Require SELL aggressor when known; never fill on passive buys lifting the ask unless at/below bid.
-    if (tr.side !== null && tr.side !== 'SELL') continue;
-    if (!Number.isFinite(tr.price) || tr.price > order.targetPrice + 1e-9) continue;
+    // Unified Polymarket CTF book: either a direct SELL hits our bid at <= targetPrice,
+    // or a taker buys the complement token at >= (1 - targetPrice).
+    const sameTokenHit =
+      tr.token === expectedToken &&
+      (tr.side === null || tr.side === 'SELL') &&
+      tr.price <= order.targetPrice + 1e-9;
+    const compTokenHit =
+      params.allowComplementaryBuys === true &&
+      tr.token !== expectedToken &&
+      tr.side === 'BUY' &&
+      tr.price >= oppBuyThreshold - 1e-9;
+    if (!sameTokenHit && !compTokenHit) continue;
 
     const rawSize = Number.isFinite(tr.size) && tr.size > 0 ? tr.size : 0;
     if (rawSize <= 0) continue;
@@ -134,6 +154,18 @@ export function stepQueueOrder(params: {
         return order;
       }
     }
+  }
+
+  // Conservative L2 cross: best ask strictly crossed below our resting bid on a fresh book.
+  if (
+    params.currentBestAsk != null &&
+    Number.isFinite(params.currentBestAsk) &&
+    params.currentBestAsk < order.targetPrice - 1e-9
+  ) {
+    order.queueAhead = 0;
+    order.remainingShares = 0;
+    order.status = 'FILLED';
+    order.filledAtMs = nowMs;
   }
 
   return order;

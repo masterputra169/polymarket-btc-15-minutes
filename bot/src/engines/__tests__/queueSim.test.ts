@@ -97,4 +97,57 @@ describe('queueSim pessimistic FIFO maker queue', () => {
     });
     expect(est).toEqual({ queueAhead: 25, bookFresh: true, expectedQueuePressure: 2.5 });
   });
+
+  it('supports unified CTF complementary BUY prints, L2 cross, and seq deduplication across polls', () => {
+    const order = createQueueSimOrder({
+      marketSlug: 'btc-updown-15m-unified',
+      side: 'UP',
+      targetPrice: 0.58,
+      shares: 5,
+      initialBookSizeAtBid: 10,
+      nowMs: 1_000,
+    });
+
+    // Complement BUY below 1 - 0.58 = 0.42 does NOT hit our bid;
+    // complement BUY at 0.42 (seq=1) hits our UP@0.58 bid for 8 shares (leaving 2 queueAhead).
+    const cumTrades = [
+      { t: 1_100, seq: 1, token: 'down' as const, side: 'BUY' as const, price: 0.41, size: 50 },
+      { t: 1_200, seq: 2, token: 'down' as const, side: 'BUY' as const, price: 0.42, size: 8 },
+    ];
+    stepQueueOrder({
+      order,
+      trades: cumTrades,
+      lastBookQuoteMs: 1_250,
+      nowMs: 1_300,
+      allowComplementaryBuys: true,
+    });
+    expect(order.status).toBe('RESTING');
+    expect(order.queueAhead).toBe(2);
+    expect(order.remainingShares).toBe(5);
+
+    // Repeating exact same cumulative array on next poll MUST NOT double-count seq=2!
+    stepQueueOrder({
+      order,
+      trades: cumTrades,
+      lastBookQuoteMs: 1_350,
+      nowMs: 1_400,
+      allowComplementaryBuys: true,
+    });
+    expect(order.status).toBe('RESTING');
+    expect(order.queueAhead).toBe(2);
+    expect(order.remainingShares).toBe(5);
+
+    // Conservative L2 cross (bestAsk dropped strictly below 0.58 -> 0.57) fills on fresh book.
+    stepQueueOrder({
+      order,
+      trades: cumTrades,
+      lastBookQuoteMs: 1_450,
+      nowMs: 1_500,
+      allowComplementaryBuys: true,
+      currentBestAsk: 0.57,
+    });
+    expect(order.status).toBe('FILLED');
+    expect(order.queueAhead).toBe(0);
+    expect(order.remainingShares).toBe(0);
+  });
 });

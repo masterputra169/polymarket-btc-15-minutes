@@ -284,7 +284,7 @@ import { reconcileNow } from './trading/journalReconciler.ts';
 import { scheduleFallbackVerification } from './trading/fallbackVerifier.ts';
 import { triggerRedeem } from './trading/redeemer.ts';
 import { computeSignals, resetMarketUpHistory } from './engines/signalComputation.ts';
-import { executeArbitrage, executeDirectionalTrade } from './engines/tradePipeline.ts';
+import { executeArbitrage, executeDirectionalTrade, hasActiveDryRunMaker, resetDryRunMaker, stepDryRunMaker } from './engines/tradePipeline.ts';
 import {
   checkPreMarketEntry,
   getPreMarketSizing,
@@ -1151,6 +1151,7 @@ export async function pollOnce() {
       }
       resetLimitOrderState();
       resetLimitAttempts(); // New market = fresh limit order attempts
+      resetDryRunMaker();
       resetFlow();
       resetSmartFlow();
       resetExecutionTiming();
@@ -2559,6 +2560,44 @@ export async function pollOnce() {
           log.error(`Limit order monitor failed (bot kept alive): ${err.message}`);
         }
         } // end !smartRouteFOK guard
+      }
+    }
+
+    if (BOT_CONFIG.dryRun && process.env.DRY_RUN_QUEUE_SIM === 'true' && !settlementPending && hasActiveDryRunMaker()) {
+      const qStep = stepDryRunMaker({
+        marketSlug,
+        timeLeftMin,
+        lastPrice,
+        priceToBeat,
+        orderbookUp,
+        orderbookDown,
+        marketUp,
+        marketDown,
+        ensembleUp,
+        ensembleDown,
+        mlResult,
+        regimeInfo,
+        twapProbUp: physNowcast?.pFatTail ?? physNowcast?.p ?? null,
+        recentTrades: getClobRecentTrades(),
+        lastBookQuoteMs: getLastBookQuoteMs(),
+      });
+      if (qStep.active) {
+        limitOrderBlocksFOK = true;
+      } else {
+        limitOrderBlocksFOK = false;
+        if (qStep.deniedFokForSlug === marketSlug) fokFallbackDeniedForSlug = marketSlug;
+        if (qStep.entered) {
+          alreadyHasPosition = true;
+          noteTapeEntered();
+          try {
+            maybeJevAnalyze({
+              ...jevSnapshot,
+              t: Date.now(), action: 'ENTER', side: qStep.filledSide ?? betSide,
+              confidence: rec.confidence, phase: rec.phase, timeLeftMin,
+              entryRefresh: true,
+            }, { force: true });
+          } catch { /* record-only */ }
+        }
       }
     }
 

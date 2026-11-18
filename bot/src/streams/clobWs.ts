@@ -81,7 +81,8 @@ const _orderbook = {
 
 // Recent trade prints, followed tokens only. Record-only feed for order-flow features.
 const RECENT_TRADES_MAX = 500;
-const _recentTrades: Array<{ t: number; token: 'up' | 'down'; side: 'BUY' | 'SELL' | null; price: number; size: number }> = [];
+let _recentTradeSeq = 0;
+const _recentTrades: Array<{ t: number; seq: number; token: 'up' | 'down'; side: 'BUY' | 'SELL' | null; price: number; size: number }> = [];
 
 export function getUpPrice() { return _upPrice; }
 export function getDownPrice() { return _downPrice; }
@@ -218,7 +219,7 @@ function handleLastTradePrice(data) {
     const sideRaw = String(data.side ?? '').toUpperCase();
     const side = sideRaw === 'BUY' || sideRaw === 'SELL' ? sideRaw : null;
     const size = toNumber(data.size) ?? toNumber(data.amount) ?? 0;
-    _recentTrades.push({ t: Date.now(), token, side, price: p, size });
+    _recentTrades.push({ t: Date.now(), seq: ++_recentTradeSeq, token, side, price: p, size });
     if (_recentTrades.length > RECENT_TRADES_MAX) _recentTrades.shift();
   }
   if (assetId === tokenIds.up && _upPrice === null) { _upPrice = p; _lastUpdate = Date.now(); }
