@@ -6,6 +6,7 @@
  * Rate-limited to 1 message per level per 60s to prevent spam.
  */
 
+import { getDefaultResultOrder, setDefaultResultOrder } from 'node:dns';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { redactSecrets } from '../utils/redact.ts';
@@ -14,13 +15,22 @@ const log = createLogger('Notifier');
 
 const RATE_LIMIT_MS = 60_000; // 1 message per key per 60s
 const MAX_TELEGRAM_CHARS = 3900;
+const WEBHOOK_TIMEOUT_MS = 10_000;
+const WEBHOOK_MAX_ATTEMPTS = 3;
+let retryBaseDelayMs = 400;
 
 /** Timestamp of last sent message per level */
 const lastSentMs: Record<string, number> = {};
 
-/** Test helper: clear rate-limit state. */
+/** Test helper: clear rate-limit state and restore default retry backoff. */
 export function resetNotifierRateLimitsForTests(): void {
   for (const k of Object.keys(lastSentMs)) delete lastSentMs[k];
+  retryBaseDelayMs = 400;
+}
+
+/** Test helper: override retry backoff base delay (ms). */
+export function setNotifierRetryBaseMsForTests(ms: number): void {
+  retryBaseDelayMs = Math.max(0, ms);
 }
 
 /**
@@ -33,10 +43,12 @@ export function resetNotifierRateLimitsForTests(): void {
 export async function notify(level: 'critical' | 'warn' | 'info', message: string, opts: { key?: string } = {}): Promise<boolean> {
   const rateKey = opts?.key ?? level;
   const now = Date.now();
-  if (lastSentMs[rateKey] && (now - lastSentMs[rateKey]) < RATE_LIMIT_MS) {
+  const prevSentMs = lastSentMs[rateKey] ?? 0;
+  if (prevSentMs > 0 && (now - prevSentMs) < RATE_LIMIT_MS) {
     log.debug(`Notification rate-limited (${rateKey}): ${message}`);
     return false;
   }
+  // Reserve immediately to block duplicate bursts during async retries; roll back if all channels fail.
   lastSentMs[rateKey] = now;
 
   const header = level === 'critical'
@@ -55,7 +67,11 @@ export async function notify(level: 'critical' | 'warn' | 'info', message: strin
   if (sent > 0) {
     log.info(`Notification sent (${level}): ${message}`);
   } else {
-    log.debug(`Notification not sent (no channels configured): ${message}`);
+    if (lastSentMs[rateKey] === now) {
+      if (prevSentMs > 0) lastSentMs[rateKey] = prevSentMs;
+      else delete lastSentMs[rateKey];
+    }
+    log.debug(`Notification not sent (no channels configured or delivery failed): ${message}`);
   }
   return sent > 0;
 }
@@ -119,45 +135,73 @@ export function extractInlineButton(text: string): { cleanText: string; inlineKe
   return { cleanText, inlineKeyboard: { inline_keyboard: buttons } };
 }
 
+function ensureIpv4First(): void {
+  try {
+    if (getDefaultResultOrder?.() === 'verbatim') setDefaultResultOrder('ipv4first');
+  } catch { /* ignore in restricted environments */ }
+}
+
+function formatFetchError(err: any): string {
+  const cause = err?.cause;
+  const code = cause?.code ? String(cause.code) : '';
+  const cmsg = cause?.message ? String(cause.message) : '';
+  if (code) return `${err?.message || 'error'} (${code}${cmsg ? `: ${cmsg}` : ''})`;
+  if (cmsg) return `${err?.message || 'error'} (${cmsg})`;
+  return String(err?.message || err || 'unknown error');
+}
+
+async function postJsonWebhook(channel: string, url: string, payload: unknown): Promise<boolean> {
+  ensureIpv4First();
+  const bodyStr = JSON.stringify(payload);
+  for (let attempt = 1; attempt <= WEBHOOK_MAX_ATTEMPTS; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: bodyStr,
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+      });
+      if (res.ok) return true;
+
+      const body = await res.text().catch(() => '');
+      const retryable = res.status === 429 || res.status >= 500;
+      if (!retryable || attempt === WEBHOOK_MAX_ATTEMPTS) {
+        log.warn(`${channel} send failed (${res.status}, attempt ${attempt}/${WEBHOOK_MAX_ATTEMPTS}): ${body.slice(0, 200)}`);
+        return false;
+      }
+      log.warn(`${channel} send transient (${res.status}, attempt ${attempt}/${WEBHOOK_MAX_ATTEMPTS}), retrying...`);
+    } catch (err) {
+      if (attempt === WEBHOOK_MAX_ATTEMPTS) {
+        log.warn(`${channel} error (attempt ${attempt}/${WEBHOOK_MAX_ATTEMPTS}): ${formatFetchError(err)}`);
+        return false;
+      }
+      log.warn(`${channel} transient error (attempt ${attempt}/${WEBHOOK_MAX_ATTEMPTS}): ${formatFetchError(err)} — retrying`);
+    }
+    const waitMs = retryBaseDelayMs * Math.pow(2, attempt - 1);
+    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+  }
+  return false;
+}
+
 /**
  * Send message via Telegram Bot API.
  * Auto-converts <a href> links to inline keyboard buttons.
  * @returns {Promise<boolean>} true if sent successfully
  */
-async function sendTelegram(text) {
+async function sendTelegram(text: string): Promise<boolean> {
   // Read from process.env directly — BOT_CONFIG captures empty strings because
   // ES module imports are hoisted before dotenvConfig() runs in index.ts body.
   const token = process.env.TELEGRAM_BOT_TOKEN || '';
   const chatId = process.env.TELEGRAM_CHAT_ID || '';
   if (!token || !chatId) return false;
 
-  try {
-    const { cleanText, inlineKeyboard } = extractInlineButton(text);
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    const payload: Record<string, any> = { chat_id: chatId, text: cleanText, parse_mode: 'HTML' };
-    if (inlineKeyboard) payload.reply_markup = inlineKeyboard;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      log.warn(`Telegram send failed (${res.status}): ${body.slice(0, 200)}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.warn(`Telegram error: ${err.message}`);
-    return false;
-  }
+  const { cleanText, inlineKeyboard } = extractInlineButton(text);
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const payload: Record<string, any> = { chat_id: chatId, text: cleanText, parse_mode: 'HTML' };
+  if (inlineKeyboard) payload.reply_markup = inlineKeyboard;
+  return postJsonWebhook('Telegram', url, payload);
 }
 
-/**
- * Send message via Discord webhook.
- * @returns {Promise<boolean>} true if sent successfully
- */
 /** Convert Telegram HTML to readable Discord plain text. */
 function stripTelegramHtml(text: string): string {
   return text
@@ -169,25 +213,12 @@ function stripTelegramHtml(text: string): string {
     .replace(/&quot;/g, '"');
 }
 
-async function sendDiscord(text) {
+/**
+ * Send message via Discord webhook.
+ * @returns {Promise<boolean>} true if sent successfully
+ */
+async function sendDiscord(text: string): Promise<boolean> {
   const webhookUrl = BOT_CONFIG.discordWebhookUrl;
   if (!webhookUrl) return false;
-
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: stripTelegramHtml(text) }),
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      log.warn(`Discord send failed (${res.status}): ${body.slice(0, 200)}`);
-      return false;
-    }
-    return true;
-  } catch (err) {
-    log.warn(`Discord error: ${err.message}`);
-    return false;
-  }
+  return postJsonWebhook('Discord', webhookUrl, { content: stripTelegramHtml(text) });
 }

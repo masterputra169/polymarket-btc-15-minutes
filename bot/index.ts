@@ -10,8 +10,11 @@
  */
 
 import { config as dotenvConfig } from 'dotenv';
+import { setDefaultResultOrder } from 'node:dns';
 import { dirname as _dotenvDirname, resolve as _dotenvResolve } from 'path';
 import { fileURLToPath as _dotenvFtu } from 'url';
+// Force IPv4-first DNS resolution: avoids hanging/failing on hosts with dead IPv6 routes (e.g. Telegram API on VPS).
+setDefaultResultOrder('ipv4first');
 // ENV LOADING NOTE:
 // Primary: --env-file=./bot/.env in ecosystem.config.cts (Node.js native, loads before TS)
 // Backup: dotenvConfig() below (for manual `node bot/index.ts` without --env-file flag)

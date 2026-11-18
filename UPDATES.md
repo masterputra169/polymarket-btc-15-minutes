@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-18 — Telegram Notifier IPv4-First DNS, 10s Timeout & Retry Hardening
+
+- **IPv4-First DNS Resolution (`bot/index.ts`, `bot/src/monitoring/notifier.ts`):** Added `setDefaultResultOrder('ipv4first')` at bot startup and idempotently before webhook delivery so `api.telegram.org` resolves over working IPv4 (`~0.5s`) rather than hanging or failing (`fetch failed`) on VPS hosts with broken IPv6 routes (`2001:67c:4e8:f004::9` unreachable on `polyvps`, which dropped the `22:18:23` BUY alert despite `TELEGRAM_NOTIFY_TRADES=true`).
+- **Shared Webhook Helper, `10s` Timeout, `3×` Retry & Rate-Limit Rollback (`bot/src/monitoring/notifier.ts`):** Extracted shared `postJsonWebhook()` for Telegram and Discord with `10_000 ms` timeout (up from `5_000 ms`), `3` total attempts with exponential backoff (`400 ms`, `800 ms`) on network errors/`429`/`5xx`, fast-fail on permanent `4xx`, structured `err.cause` logging, and rollback of `lastSentMs[rateKey]` when delivery fails on every channel so subsequent alerts are not suppressed.
+- **Tests (`bot/src/monitoring/__tests__/notifier.buttons.test.ts`):** Added unit tests covering transient `fetch failed`/`502` recovery, rate-limit rollback after total failure, and non-retry fail-fast on `400` responses (`notifier.buttons.test.ts`, `typecheck`, `vite build`, and CI `main` PASS).
+
 ## 2026-11-18 — FIFO Queue Simulator Wiring (`DRY_RUN_QUEUE_SIM=true`), `clobWs` Seq Dedup & VPS Ops Cleanup
 
 - **Unified CTF Book Queue Simulator & Sequence Dedup (`bot/src/engines/queueSim.ts`, `bot/src/streams/clobWs.ts`):** Extended `stepQueueOrder()` with optional `allowComplementaryBuys` (Polymarket unified CTF invariant: opposite-token `BUY` prints at `>= 1 - targetPrice` consume resting bid queues identically to direct same-token `SELL` prints) and conservative L2 cross (`currentBestAsk < targetPrice`), plus added monotonic `seq` numbers to `clobWs._recentTrades` (`lastTradeSeq`) so multi-poll slices never double-count the same print.

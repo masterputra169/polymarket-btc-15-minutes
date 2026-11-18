@@ -143,4 +143,53 @@ describe('notify() sends the keyboard to Telegram', () => {
     ]);
     expect(payload.reply_markup.inline_keyboard[2][0].url).toBe('https://dash.example.com');
   });
+
+  test('retries transient fetch/5xx errors and rolls back rate-limit when all attempts fail', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed', { cause: Object.assign(new Error('connect ENETUNREACH'), { code: 'ENETUNREACH' }) }))
+      .mockResolvedValueOnce(new Response('{"ok":false}', { status: 502 }))
+      .mockResolvedValueOnce(new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const mod = await loadNotifier({
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_CHAT_ID: '12345',
+      DISCORD_WEBHOOK_URL: undefined,
+    });
+    mod.resetNotifierRateLimitsForTests();
+    mod.setNotifierRetryBaseMsForTests(0);
+
+    const recovered = await mod.notify('info', 'ENTRY UP @ 60c', { key: 'trade:entry' });
+    expect(recovered).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+
+    // Next distinct key: fail all 3 attempts -> returns false and does NOT consume cooldown for next alert
+    const failFetch = vi.fn()
+      .mockRejectedValue(new TypeError('fetch failed'));
+    vi.stubGlobal('fetch', failFetch);
+    const failed = await mod.notify('info', 'ENTRY DOWN @ 61c', { key: 'trade:entry2' });
+    expect(failed).toBe(false);
+    expect(failFetch).toHaveBeenCalledTimes(3);
+
+    const recoverNext = vi.fn(async () => new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', recoverNext);
+    const retriedAfterFail = await mod.notify('info', 'ENTRY DOWN RETRY @ 61c', { key: 'trade:entry2' });
+    expect(retriedAfterFail).toBe(true);
+    expect(recoverNext).toHaveBeenCalledTimes(1);
+  });
+
+  test('fails fast without retrying permanent 400 errors', async () => {
+    const fetchMock = vi.fn(async () => new Response('Bad Request: can\'t parse entities', { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const mod = await loadNotifier({
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_CHAT_ID: '12345',
+      DISCORD_WEBHOOK_URL: undefined,
+    });
+    mod.resetNotifierRateLimitsForTests();
+    mod.setNotifierRetryBaseMsForTests(0);
+
+    const sent = await mod.notify('warn', 'bad <b>html', { key: 'test:400' });
+    expect(sent).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
