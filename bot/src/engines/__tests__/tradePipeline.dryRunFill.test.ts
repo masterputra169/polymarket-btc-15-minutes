@@ -391,4 +391,23 @@ describe('the depth gate reads the book of the side being traded', () => {
     expect(depsBlocked.recordTrade).not.toHaveBeenCalled();
     resetClobOutageStats();
   });
+
+  test('aborts FOK on 2c runaway ask spike and logs twapPhysicsZ in snapshot', async () => {
+    const depsOk = makeDeps();
+    const ok = await executeDirectionalTrade(signal({
+      betMarketPrice: 0.60,
+      orderbookUp: { spread: 0.01, bestAsk: 0.61, askLiquidity: 9999 },
+      twapPhysicsZ: 0.42,
+    }), depsOk);
+    expect(ok).toBe(true);
+    expect(depsOk.captureEntrySnapshot.mock.calls[0][0].twapPhysicsZ).toBe(0.42);
+
+    const depsRunaway = makeDeps();
+    const aborted = await executeDirectionalTrade(signal({
+      betMarketPrice: 0.60,
+      orderbookUp: { spread: 0.01, bestAsk: 0.64, askLiquidity: 9999 }, // +4c > 2c haircut
+    }), depsRunaway);
+    expect(aborted).toBe(false);
+    expect(depsRunaway.recordTrade).not.toHaveBeenCalled();
+  });
 });

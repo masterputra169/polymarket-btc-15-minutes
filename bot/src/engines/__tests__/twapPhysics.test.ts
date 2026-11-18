@@ -60,6 +60,16 @@ describe('twapPhysics', () => {
     expect(twapPhysics({ ...base, spotTicks: [] })).toBeNull();
     expect(twapPhysics({ ...base, nowMs: END + 1 })).toBeNull();
   });
+  test('fat-tail 1.4x inflate and longer-horizon max sigma soften overconfidence without changing ML z', () => {
+    const now = END - 100_000;
+    const quiet = walk(END - 150_000, 121, i => (i % 2 ? 2 : 0));  // σ_short = $2/s
+    const wild = walk(END - 900_000, 121, i => (i % 2 ? 4 : 0));   // σ_long = $4/s
+    const r = twapPhysics({ settle: 84_020, settle30sAgo: null, ptb: 84_000, spotTicks: quiet, spotTicksLong: wild, nowMs: now, endMs: END })!;
+    expect(r.z).toBeCloseTo(20 / (2 * Math.sqrt(60.5)), 9);
+    expect(r.sigmaMax).toBeCloseTo(4, 9);
+    expect(r.zFatTail).toBeCloseTo(20 / (4 * 1.4 * Math.sqrt(60.5)), 9);
+    expect(r.pFatTail!).toBeLessThan(r.p);
+  });
 });
 
 describe('SettleHistory', () => {

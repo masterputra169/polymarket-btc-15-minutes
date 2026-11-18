@@ -181,7 +181,7 @@ describe('modelProfiles', () => {
           midPhaseMaxPrice: 0,
         },
         orderRouter: { limitMlThreshold: 0.30, fokMlThreshold: 0.68 },
-        limitOrder: { minMlConfidence: 0.30, fokFallbackMinMlConf: 0.32, maxEntryPrice: 0.64, maxUnfilledSec: 15 },
+        limitOrder: { minMlConfidence: 0.30, fokFallbackMinMlConf: 0.32, maxEntryPrice: 0.64, maxUnfilledSec: 15, maxAttemptsPerMarket: 1 },
       },
       base,
     );
@@ -195,6 +195,7 @@ describe('modelProfiles', () => {
     expect(profile.orderRouter?.limitMlThreshold).toBe(0.30);
     expect(profile.limitOrder?.minMlConfidence).toBe(0.30);
     expect(profile.limitOrder?.fokFallbackMinMlConf).toBe(0.32);
+    expect(profile.limitOrder?.maxAttemptsPerMarket).toBe(1);
     expect(profile.limitOrder?.maxEntryPrice).toBe(0.64);
     expect(profile.limitOrder?.maxUnfilledSec).toBe(15);
   });

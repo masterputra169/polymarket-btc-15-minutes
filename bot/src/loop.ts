@@ -58,7 +58,7 @@ import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
 import { refreshDeribitIv, getDeribitIvSnapshot } from './adapters/deribitIv.ts';
-import { estimateSettlePrice, BasisTracker } from './engines/settlePrice.ts';
+import { estimateSettlePrice, BasisTracker, ChainlinkNowcastTracker } from './engines/settlePrice.ts';
 import { twapPhysics, SettleHistory } from './engines/twapPhysics.ts';
 import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
 import {
@@ -434,6 +434,7 @@ const settleHistory = new SettleHistory(120_000);
 // Binance − Chainlink, tracked with a 21-sample rolling median + responsive EWMA
 // so single-poll glitches are ignored while sustained basis shifts track rapidly.
 const basisTracker = new BasisTracker(0.15, 10, 21);
+const chainlinkNowcastTracker = new ChainlinkNowcastTracker();
 
 // ── Pre-scheduled PTB capture ──
 // Polymarket snapshots Chainlink Data Streams at eventStartTime for PTB.
@@ -1358,18 +1359,23 @@ export async function pollOnce() {
     // What BTC is compared with the price to beat by: a Chainlink-based estimate of
     // the settlement TWAP (engines/settlePrice.ts). Binance ran ~$24 above Chainlink
     // on the 2026-09 tape, so Binance − PTB read every window as more bullish than it was.
-    const polyLiveFresh = getPolyLiveLastUpdate() && Date.now() - getPolyLiveLastUpdate() < 10_000
+    const polyLiveUpdateMs = getPolyLiveLastUpdate();
+    const polyLiveFresh = polyLiveUpdateMs && Date.now() - polyLiveUpdateMs < 10_000
       ? getPolyLivePrice()
       : null;
-    const clWssFresh = isChainlinkWssConnected() && getChainlinkWssLastUpdate() && Date.now() - getChainlinkWssLastUpdate() < 15_000
+    const clWssUpdateMs = getChainlinkWssLastUpdate();
+    const clWssFresh = isChainlinkWssConnected() && clWssUpdateMs && Date.now() - clWssUpdateMs < 15_000
       ? getChainlinkWssPrice()
       : null;
     const clSpot = polyLiveFresh ?? clWssFresh;
+    const clUpdateMs = polyLiveFresh != null ? (polyLiveUpdateMs ?? 0) : (clWssFresh != null ? (clWssUpdateMs ?? 0) : 0);
+    const nowcastCl = chainlinkNowcastTracker.update(clSpot, clUpdateMs, wsFresh ? lastPrice : null);
     if (wsFresh && clSpot != null) basisTracker.update(lastPrice, clSpot);
     const settle = estimateSettlePrice({
       nowMs: now, endMs: currentMarketEndMs, spot: clSpot,
-      spotTicks: currentMarketEndMs ? getSpotTicksBetween(currentMarketEndMs - 61_000, now) : [],
+      spotTicks: currentMarketEndMs ? getSpotTicksBetween(currentMarketEndMs - 63_000, now) : [],
       binance: lastPrice, basis: basisTracker.get(),
+      windowOffsetMs: 2_000,
     });
     const settlePrice = settle.price ?? lastPrice;
     if (settle.price != null) settleHistory.add(now, settle.price);
@@ -1995,18 +2001,31 @@ export async function pollOnce() {
     // Market tape decision trail (record only, never throws): what this poll decided.
     // Record-only: the TWAP arithmetic's P(UP) for the tape (engines/twapPhysics.ts).
     let phys = null;
+    let physNowcast = null;
     try {
       if (marketSlug && priceToBeat.slug === marketSlug && isExactPtbSource(priceToBeat.source)) {
         const nowP = Date.now();
+        const ticksShort = getSpotTicksBetween(nowP - 121_000, nowP);
+        const ticksLong = getSpotTicksBetween(nowP - 900_000, nowP);
+        const settle30 = settleHistory.at(nowP - 30_000);
         phys = twapPhysics({
-          settle: settle.price, settle30sAgo: settleHistory.at(nowP - 30_000),
-          ptb: priceToBeat.value, spotTicks: getSpotTicksBetween(nowP - 121_000, nowP),
+          settle: settle.price, settle30sAgo: settle30,
+          ptb: priceToBeat.value, spotTicks: ticksShort, spotTicksLong: ticksLong,
           nowMs: nowP, endMs: currentMarketEndMs,
           ivSigmaPerSec: deribitIv.sigmaPerSec,
           dvolPct: deribitIv.dvolPct,
         });
+        physNowcast = (settle.source === 'chainlink' && nowcastCl != null && nowcastCl !== settle.price)
+          ? twapPhysics({
+            settle: nowcastCl, settle30sAgo: settle30,
+            ptb: priceToBeat.value, spotTicks: ticksShort, spotTicksLong: ticksLong,
+            nowMs: nowP, endMs: currentMarketEndMs,
+            ivSigmaPerSec: deribitIv.sigmaPerSec,
+            dvolPct: deribitIv.dvolPct,
+          })
+          : phys;
       }
-    } catch { phys = null; }
+    } catch { phys = null; physNowcast = null; }
     const jevLatestRaw = getJevLatestForTape();
     // Tape context: only when the cached decision belongs to this market.
     const jevLatest = jevLatestRaw && jevLatestRaw.slug === (marketSlug || null) ? jevLatestRaw : null;
@@ -2358,6 +2377,8 @@ export async function pollOnce() {
             mlSide: mlResult.available ? mlResult.mlSide : null,
             ensembleProb: limSideProb,
             sideProb: limSideProb,
+            twapProbUp: physNowcast?.pFatTail ?? physNowcast?.p ?? null,
+            secsLeft: timeLeftMin != null ? timeLeftMin * 60 : null,
             btcPrice: settlePrice,
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
@@ -2750,6 +2771,7 @@ export async function pollOnce() {
           mcResult,
           pathEfficiency, peakUpGapRatio, peakDownGapRatio,
           leadLagImpulse, crossFeed,
+          twapPhysicsZ: phys?.z ?? sig?.v4Signals?.twapPhysicsZ ?? null,
         }, {
           updateConfirmation,
           isSignalStable,

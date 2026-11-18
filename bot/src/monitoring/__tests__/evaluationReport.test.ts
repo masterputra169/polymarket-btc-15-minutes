@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import {
-  buildEvaluation, formatEvaluation, readEvalConfig, wilson95, msUntilHourUtc, readJournalRows, passedPreSofteningRule, type EvalRow,
+  buildEvaluation, formatEvaluation, readEvalConfig, wilson95, msUntilHourUtc, readJournalRows, passedPreSofteningRule, evaluateEdgeTripwire, type EvalRow,
 } from '../evaluationReport.ts';
 import { breakevenWinRate } from '../../trading/breakevenMargin.ts';
 
@@ -155,5 +155,15 @@ describe('softening forward test', () => {
     expect(text).toContain('Softening forward test');
     expect(text).toContain('Old rule would take: 1 trades');
     expect(text).toContain('Added by softening: 2 trades');
+  });
+
+  test('evaluateEdgeTripwire trips only when n >= minTrades and verdict is below_breakeven', () => {
+    const losingRows = Array.from({ length: 100 }, (_, i) => row(i, i < 52)); // 52% WR @ 60c (BE ~61.7%)
+    const s = buildEvaluation(losingRows, SINCE, NOW, 150);
+    expect(s.verdict).toBe('below_breakeven');
+    expect(evaluateEdgeTripwire(s, 120).tripped).toBe(false);
+    const hit = evaluateEdgeTripwire(s, 100);
+    expect(hit.tripped).toBe(true);
+    expect(hit.reason).toContain('Edge tripwire breached');
   });
 });

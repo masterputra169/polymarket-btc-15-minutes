@@ -244,6 +244,28 @@ export async function readJournalRows(path: string, since: number): Promise<Eval
   return rows;
 }
 
+export function evaluateEdgeTripwire(
+  summary: EvaluationSummary,
+  minTrades = 100,
+): { tripped: boolean; reason: string | null } {
+  const n = summary.realistic.trades;
+  if (n < minTrades || summary.verdict !== 'below_breakeven') {
+    return { tripped: false, reason: null };
+  }
+  const wr = summary.realistic.winRatePct?.toFixed(1) ?? '?';
+  const be = summary.realistic.breakevenPct?.toFixed(1) ?? '?';
+  const hi = summary.interval?.hi.toFixed(1) ?? '?';
+  return {
+    tripped: true,
+    reason: `Edge tripwire breached: n=${n} trades, WR ${wr}% (95% CI upper ${hi}%) < breakeven ${be}%`,
+  };
+}
+
+let _tripwirePauseHandler: ((reason: string) => void) | null = null;
+export function setTripwirePauseHandler(fn: ((reason: string) => void) | null): void {
+  _tripwirePauseHandler = fn;
+}
+
 const CFG = readEvalConfig(process.env);
 let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -255,6 +277,14 @@ export async function sendEvaluationReport(now: number = Date.now()): Promise<vo
     const summary = buildEvaluation(rows, CFG.since, now, CFG.targetTrades);
     await notify('info', formatEvaluation(summary), { key: `eval_report:${new Date(now).toISOString().slice(0, 10)}` });
     log.info(`Evaluation report sent: ${summary.realistic.trades} trades, verdict ${summary.verdict}`);
+    const trip = evaluateEdgeTripwire(summary, BOT_CONFIG.tripwire?.minTrades ?? 100);
+    if (trip.tripped && trip.reason) {
+      log.error(`[Tripwire] ${trip.reason}`);
+      await notify('critical', `🛑 ${trip.reason}`, { key: 'eval_tripwire' });
+      if (BOT_CONFIG.tripwire?.pauseOnBreach && _tripwirePauseHandler) {
+        _tripwirePauseHandler(trip.reason);
+      }
+    }
   } catch (err) {
     log.warn(`Evaluation report failed (non-fatal): ${(err as Error)?.message ?? err}`);
   }

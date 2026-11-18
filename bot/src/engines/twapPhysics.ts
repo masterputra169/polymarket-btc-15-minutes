@@ -103,13 +103,22 @@ export interface TwapPhysics {
   sigmaIv?: number | null;
   /** P(UP) using 50/50 blend of realized spot vol and Deribit DVOL implied vol. */
   pIv?: number | null;
+  /** Fat-tail widened sigma = max(sigma_short, sigma_long) * 1.4 ($/sec, krabduke fair.rs). */
+  sigmaMax?: number | null;
+  /** Fat-tail inflated P(UP) for conservative maker quote monitoring (leaves ML `z`/`p` unchanged). */
+  pFatTail?: number | null;
+  /** Fat-tail inflated z-score. */
+  zFatTail?: number | null;
 }
+
+export const TWAP_TAIL_INFLATE = 1.4;
 
 export function twapPhysics(input: {
   settle: number | null;
   settle30sAgo: number | null;
   ptb: number | null;
   spotTicks: readonly Tick[];
+  spotTicksLong?: readonly Tick[];
   nowMs: number;
   endMs: number | null;
   ivSigmaPerSec?: number | null;
@@ -126,6 +135,13 @@ export function twapPhysics(input: {
   if (!(sd > 0)) return null;
   const z = (settle - ptb) / sd;
   const sigmaEwma = spotVolPerSecondEwma(input.spotTicks);
+  const sigmaLong = input.spotTicksLong && input.spotTicksLong.length >= 20
+    ? spotVolPerSecond(input.spotTicksLong)
+    : null;
+  const sigmaMax = sigmaLong != null && sigmaLong > sigma ? sigmaLong : sigma;
+  const sdFatTail = sigmaMax * TWAP_TAIL_INFLATE * tEffSqrt;
+  const zFatTail = sdFatTail > 0 ? (settle - ptb) / sdFatTail : z;
+  const pFatTail = normCdf(zFatTail);
   const ivSig = input.ivSigmaPerSec != null && Number.isFinite(input.ivSigmaPerSec) && input.ivSigmaPerSec > 0
     ? input.ivSigmaPerSec
     : null;
@@ -144,5 +160,8 @@ export function twapPhysics(input: {
     dvolPct: ivSig != null ? (input.dvolPct ?? null) : null,
     sigmaIv: ivSig,
     pIv,
+    sigmaMax,
+    pFatTail,
+    zFatTail,
   };
 }

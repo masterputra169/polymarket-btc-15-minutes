@@ -407,6 +407,11 @@ export function evaluateCutLoss({
     sellPrice = Math.max(0.01, rawSellPrice * 0.85);
   } else {
     sellPrice = Math.max(0.01, rawSellPrice * (1 - baseSlippage * slippageMultiplier));
+    // Anti-dump floor (emoubarak/pmlab/mm_guard.py): for non-urgent exits, never dump >10c below reference bid.
+    if (!isUrgent) {
+      const antiDumpFloor = Math.max(0.01, rawSellPrice - 0.10);
+      if (sellPrice < antiDumpFloor) sellPrice = antiDumpFloor;
+    }
   }
 
   // H1: NaN guard — reject if sellPrice is corrupted (e.g. rawSellPrice was NaN from bad orderbook)

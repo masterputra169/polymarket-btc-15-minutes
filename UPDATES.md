@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-18 — GitHub Research Hardening (`Nowcast` Lag Fix, Instant TWAP Limit Pull, `2c` Runaway Haircut, Fill-Clip Guard, One-Shot Limit & Edge Tripwire)
+
+- **Chainlink+Binance `Nowcast`, `[b-62s, b-2s)` TWAP Offset & Fat-Tail `1.4×` Fair Value (`bot/src/engines/settlePrice.ts`, `bot/src/engines/twapPhysics.ts`, `bot/src/loop.ts`):** Added `ChainlinkNowcastTracker` (`krabduke` lag compensation: `lastCl + clamp(binanceNow - binanceAtCl, ±0.5%)`), optional `windowOffsetMs: 2_000` in `estimateSettlePrice()` (`[endMs - 62s, endMs - 2s)` Polymarket strike window alignment), and additive `pFatTail` / `zFatTail` (`TWAP_TAIL_INFLATE = 1.4` over `max(σ_120s, σ_900s)`) leaving `twapPhysics.z` / `p` unchanged for `v4-hybrid-20261116` feature parity.
+- **Instant Resting-Bid Pull on TWAP Adverse Selection & One-Shot Limit Option (`bot/src/engines/makerFillGate.ts`, `bot/src/engines/limitOrderManager.ts`, `bot/src/config.ts`, `bot/src/ml/modelProfiles.ts`, `bot/data/model_profiles.json`):** Added `shouldCancelTwapAdverse()` pulling resting `GTD` bids inside the final `180s` below `minRemainingEdge` (`3pp`) or anytime fair TWAP probability drops `> 5pp` below `targetPrice` (`CANCEL_EDGE_EROSION`, blocking FOK chase); made `maxAttemptsPerMarket` configurable (`LIMIT_MAX_ATTEMPTS_PER_MARKET`, default `1` = `npcnpc09` one-shot limit per window).
+- **`2c` Runaway Ask Haircut, Live Fill-Size Clip Guard & Non-Urgent Anti-Dump Floor (`bot/src/engines/tradePipeline.ts`, `bot/src/trading/fillTracker.ts`, `bot/src/trading/cutLoss.ts`):** Added `isAskRunaway()` aborting FOK execution (`DRY_RUN` + live) whenever live `bestAsk - decisionQuote > EXECUTION_MAX_RUNAWAY` (`$0.02`, `emoubarak`); added `isFillSizeWithinClip()` (`fillSize <= orderSize * 1.05 + 0.01`, blocking taker-size misparses in both CLOB response and `checkPendingFill()`); added `-10c` non-urgent anti-dump floor in `cutLoss.ts` (`emoubarak/pmlab/mm_guard.py`).
+- **Vol-Normalized TWAP Lead Gate (`FILTER_MIN_TWAP_Z`) & Journal Telemetry (`bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`):** Forwarded and persisted `twapPhysicsZ` into `trade_journal.jsonl` entries (previously omitted) and added Gate `21` (`minTwapZ`, default `0` / bypassed at `mlConfidence >= btcDistMlBypass`) ready for OOS-gated activation once `50+` trades accumulate.
+- **Edge-Death Auto-Tripwire (`bot/src/monitoring/evaluationReport.ts`, `bot/index.ts`):** Added `evaluateEdgeTripwire()` (`verdict === 'below_breakeven'` at `n >= EVAL_TRIPWIRE_MIN_TRADES`, default `100`) triggering critical Telegram alert and optional auto-pause (`EVAL_TRIPWIRE_PAUSE=true`) via `setTripwirePauseHandler(() => pauseBot(...))`.
+- **Tests (`bot/src/engines/__tests__/settlePrice.test.ts`, `twapPhysics.test.ts`, `makerFillGate.test.ts`, `tradePipeline.dryRunFill.test.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`, `bot/src/monitoring/__tests__/evaluationReport.test.ts`, `bot/src/trading/__tests__/fillTracker.ghostGuard.test.ts`, `bot/src/ml/__tests__/modelProfiles.test.ts`):** Added targeted unit coverage (`1,098` vitest PASS, `npm run typecheck` PASS, `vite build` & `study:build` PASS).
+
 ## 2026-11-18 — Win-Rate Optimization Fixes (`WAIT` Leak Guard, FOK Fallback ML Floor `32%`, MID `63c` Cap & Choppy `40%` Floor)
 
 - **Block `routeOrder() === 'WAIT'` leak into FOK (`bot/src/loop.ts`):** When the Smart Order Router returns `WAIT`, live mode now sets `limitOrderBlocksFOK = true` so step 10b does not immediately fall through to FOK taker execution. Paired with raising `mlConfRelaxed: 0.25 -> 0.30`, `hardMlFloor: 0.25 -> 0.30`, and `lateMlRelaxed: 0.28 -> 0.32` in `bot/data/model_profiles.json` (`20261116-p2-ef8dfd`), this eliminates `0.25–0.29` low-conviction signals that leaked into `fok_limit` (`4/8` = `50.0% WR`, `-$5.04` in Live Eval).
@@ -143,7 +152,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-18 12:12 WIB_
+_Last updated: 2026-11-18 15:11 WIB_
 
 | Area | State |
 |---|---|
@@ -158,22 +167,22 @@ _Last updated: 2026-11-18 12:12 WIB_
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.63`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit JOIN 15s + WAIT-no-FOK + FOK-Fallback `>=32%` + GhostGuard + Outage Latch** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, profile `limitOrder: { minMlConfidence: 0.30, fokFallbackMinMlConf: 0.32, maxEntryPrice: 0.64, maxUnfilledSec: 15 }`, `GhostGuard` tx receipt checks, `90s` `425`/`post_only_mode` latch, `warmupMarketMetadata`, `queueSim` telemetry) |
+| Order router | **Limit JOIN 15s + Instant TWAP Pull + One-Shot Limit + 2c Haircut + Fill-Clip Guard + GhostGuard** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, `shouldCancelTwapAdverse` via `nowcast` `1.4×` fat-tail TWAP, `EXECUTION_MAX_RUNAWAY=0.02`, `isFillSizeWithinClip`, `maxAttemptsPerMarket=1`, `fokFallbackMinMlConf=0.32`, `GhostGuard` + `90s` outage latch) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **30% Hybrid floor (profile + `.env`)** (`hardMlFloor=0.30`, `mlConfRelaxed=0.30`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`; `mlConfMin=0.30`) |
 | Mid-phase guard | **63c mid-phase ceiling** (`midPhaseMaxPrice=0.63` + `midHardCeil >= midPhaseMaxPrice` in 5–11m MID window) |
 | Trending protection| **50c–65c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.65`, widened from 54c–58c 4c slit) |
-| Microstructure gates | **Gate 20a–20e active** (`FILTER_MIN_PATH_EFFICIENCY=0.08`, `FILTER_MIN_PEAK_GAP_RATIO=0.55`, `FILTER_MAX_OPPOSING_OB_IMBALANCE=0.30`, `FILTER_MAX_OPPOSING_TAKER_300S=0.22`, `FILTER_BLOCK_OPPOSING_LEAD_LAG=1`) |
-| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag** (`15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge, Deribit IV `pIv` in `twapPhysics`) + 4 ML features embedded directly (`QUANT_FI` 83f) |
+| Microstructure gates | **Gate 20a–20e + Gate 21 (`FILTER_MIN_TWAP_Z`)** (`minTwapZ=0` ready + `twapPhysicsZ` logged in journal) |
+| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag + `1.4×` Fat-Tail TWAP** (`pFatTail` over `max(σ_120s, σ_900s)`, `15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
-| Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr |
+| Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr + **Edge Tripwire** (`EVAL_TRIPWIRE_MIN_TRADES=100`, `below_breakeven` auto-pause via `EVAL_TRIPWIRE_PAUSE`) |
 | Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Tahap 2 Chainlink-Native Telemetry** drawer + **Journal Archive Viewer** |
 | Study portal | https://poly15-study.dollarkilat.xyz/ · **Tahap 2 · v4 Lab** (54d Tape + Gate 20f replay + 88f gain rank) + **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
-| Cross-feed guard | **Gate 20f active** (`FILTER_CROSS_FEED_SKEW_PCT=0.035%`), 21-sample median `BasisTracker`, `settlePrice` in `autoSettle()` + `chainlinkWss` spot fallback |
+| Cross-feed guard | **Gate 20f + Chainlink `Nowcast` + `[b-62s, b-2s)` TWAP Offset** (`ChainlinkNowcastTracker`, `windowOffsetMs=2000`, `FILTER_CROSS_FEED_SKEW_PCT=0.035%`, 21-sample median `BasisTracker`, `chainlinkWss` fallback) |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 1,090 vitest PASS (frontend, bot & scripts typecheck/build/study:build PASS; Python ML untouched) |
+| Tests | 1,098 vitest PASS (frontend, bot & scripts typecheck/build/study:build PASS; Python ML untouched) |
 | Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
 | Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |

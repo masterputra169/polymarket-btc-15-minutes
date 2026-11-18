@@ -193,7 +193,15 @@ const BOT_CONFIG = {
     partialFillAcceptRatio: envNum(process.env.LIMIT_PARTIAL_ACCEPT, 0.60, 0.30, 1.0),
     expirationBufferSec: envInt(process.env.LIMIT_EXPIRATION_BUFFER_SEC, 120, 30, 300),
     minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough
+    maxAttemptsPerMarket: envInt(process.env.LIMIT_MAX_ATTEMPTS_PER_MARKET, 1, 1, 5), // npcnpc09: one-shot limit per window default
     checkIntervalMs: envInt(process.env.LIMIT_CHECK_INTERVAL_MS, 2000, 500, 10000),
+  },
+
+  // Pre-execution 2c runaway ask haircut (emoubarak) & edge-death tripwire
+  maxRunawaySlippage: envNum(process.env.EXECUTION_MAX_RUNAWAY, 0.02, 0, 0.15),
+  tripwire: {
+    pauseOnBreach: process.env.EVAL_TRIPWIRE_PAUSE === 'true',
+    minTrades: envInt(process.env.EVAL_TRIPWIRE_MIN_TRADES, 100, 30, 500),
   },
 
   // Smart Order Router v2 — 7-rule decision tree with spread + relative momentum + regime

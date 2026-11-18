@@ -25,6 +25,7 @@ import {
   makerJoinPrice,
   shouldCancelUnfilled,
   shouldCancelEdgeErosion,
+  shouldCancelTwapAdverse,
 } from './makerFillGate.ts';
 
 const log = createLogger('LimitOrder');
@@ -197,8 +198,9 @@ export function evaluateLimitEntry({
   if (hasPosition) return no('has_position');
   if (isHalted) return no('halted');
 
-  // Anti-loop: max 1 attempt per market (after cancel → FOK fallback only)
-  if (marketSlug === marketForAttempts && attemptCount >= MAX_ATTEMPTS_PER_MARKET) {
+  // Anti-loop: configurable attempts per market (default 1 = one-shot limit per window, npcnpc09)
+  const maxAttempts = cfg.maxAttemptsPerMarket ?? 1;
+  if (marketSlug === marketForAttempts && attemptCount >= maxAttempts) {
     return no(`max_attempts_${attemptCount}`);
   }
   // Cooldown after cancel (even across market boundaries — prevent rapid fire)
@@ -476,6 +478,8 @@ export async function monitorLimitOrder({
   mlConfidence, mlSide, ensembleProb, btcPrice, priceToBeat,
   elapsedMin, marketSlug,
   sideProb = null,
+  twapProbUp = null,
+  secsLeft = null,
 }, deps): Promise<MonitorLimitOrderResult> {
   const cfg = getEffectiveLimitOrderConfig();
 
@@ -515,6 +519,21 @@ export async function monitorLimitOrder({
       `limit=${((state.targetPrice ?? 0) * 100).toFixed(1)}c < min ${(cfg.minRemainingEdge * 100).toFixed(0)}pp`
     );
     return { action: 'CANCEL_EDGE_EROSION', detail: 'edge_erosion' };
+  }
+
+  // Instant adverse-selection pull on live TWAP nowcast turning against our resting bid (krabduke)
+  const twapPull = shouldCancelTwapAdverse({
+    twapProbUp,
+    side: state.side,
+    limitPrice: state.targetPrice,
+    secsLeft,
+    minEdge: cfg.minRemainingEdge ?? 0.03,
+  });
+  if (twapPull.cancel) {
+    log.info(
+      `LIMIT ORDER TWAP adverse pull: ${twapPull.reason} @ limit=${((state.targetPrice ?? 0) * 100).toFixed(1)}c`
+    );
+    return { action: 'CANCEL_EDGE_EROSION', detail: twapPull.reason ?? 'twap_adverse' };
   }
 
   // Maker fill gate: resting too long without a fill (tape: most fills arrive in ~15–45 s).

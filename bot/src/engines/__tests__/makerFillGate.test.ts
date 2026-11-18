@@ -4,6 +4,7 @@ import {
   limitRemainingEdge,
   shouldCancelUnfilled,
   shouldCancelEdgeErosion,
+  shouldCancelTwapAdverse,
   shouldAllowFokFallback,
   makerJoinPrice,
   dryRunMakerWouldFill,
@@ -32,6 +33,22 @@ describe('limitRemainingEdge / erosion', () => {
   test('cancels when edge below floor', () => {
     expect(shouldCancelEdgeErosion(0.56, 0.55, 0.03)).toBe(true);
     expect(shouldCancelEdgeErosion(0.65, 0.55, 0.03)).toBe(false);
+  });
+
+  test('shouldCancelTwapAdverse pulls resting bid on late TWAP erosion or steep anytime drop', () => {
+    // Inside last 180s with edge < 3pp -> pull immediately
+    const latePull = shouldCancelTwapAdverse({ twapProbUp: 0.56, side: 'UP', limitPrice: 0.55, secsLeft: 120 });
+    expect(latePull.cancel).toBe(true);
+    expect(latePull.reason).toContain('twap_late_erosion');
+
+    // Early (>180s) with positive or mildly thin edge (-2pp) -> hold
+    const earlyHold = shouldCancelTwapAdverse({ twapProbUp: 0.53, side: 'UP', limitPrice: 0.55, secsLeft: 500 });
+    expect(earlyHold.cancel).toBe(false);
+
+    // Steep deficit (-6pp below bid) -> pull anytime (works symmetrically for DOWN)
+    const hardPullDown = shouldCancelTwapAdverse({ twapProbUp: 0.52, side: 'DOWN', limitPrice: 0.55, secsLeft: 600 });
+    expect(hardPullDown.cancel).toBe(true);
+    expect(hardPullDown.reason).toContain('twap_adverse');
   });
 });
 

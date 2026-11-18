@@ -107,6 +107,8 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   blockOpposingLeadLag: { env: 'FILTER_BLOCK_OPPOSING_LEAD_LAG', def: 0, min: 0, max: 1, doc: 'block entry when 3s Binance lead-lag impulse opposes signalSide (>=0.5 enables, 0 disables)' },
   // 20f. Binance vs Chainlink cross-feed alignment guard
   crossFeedSkewPct: { env: 'FILTER_CROSS_FEED_SKEW_PCT', def: 0.035, min: 0, max: 2, doc: 'block entry when Binance-vs-Chainlink skew inflates or flips signal near PTB (% of PTB; 0 disables)' },
+  // 21. Volatility-normalized TWAP lead floor (emoubarak zlead)
+  minTwapZ: { env: 'FILTER_MIN_TWAP_Z', def: 0, min: 0, max: 5, doc: 'minimum volatility-normalized TWAP lead |z| when exact PTB & sigma available (0 disables)' },
 };
 
 export type FilterThresholdKey = keyof typeof FILTER_THRESHOLD_SPECS;

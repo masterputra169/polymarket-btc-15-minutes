@@ -4,7 +4,7 @@
  * the settlement TWAP that is already written.
  */
 import { describe, test, expect } from 'vitest';
-import { estimateSettlePrice, BasisTracker, computeCrossFeedMetrics, TWAP_WINDOW_MS } from '../settlePrice.ts';
+import { estimateSettlePrice, BasisTracker, ChainlinkNowcastTracker, computeCrossFeedMetrics, TWAP_WINDOW_MS } from '../settlePrice.ts';
 
 const END = 1790352900000;
 const secs = (from: number, n: number, value: (i: number) => number) =>
@@ -126,5 +126,28 @@ describe('computeCrossFeedMetrics', () => {
     expect(m.binanceDistPct).toBeNull();
     expect(m.oracleDistPct).toBeNull();
     expect(m.crossFeedSkewPct).toBeNull();
+  });
+});
+
+
+describe('ChainlinkNowcastTracker and [b-62, b-2) window offset', () => {
+  test('compensates Chainlink relay lag via synchronous Binance delta and clamps glitches', () => {
+    const t = new ChainlinkNowcastTracker(15_000, 0.005);
+    const now = Date.now();
+    expect(t.update(79_980, now - 200, 80_000)).toBe(79_980);
+    expect(t.update(79_980, now - 200, 80_018)).toBe(79_998);
+    expect(t.update(79_980, now - 200, 82_000)).toBeCloseTo(79_980 * 1.005, 4);
+  });
+
+  test('windowOffsetMs=2000 shifts final-minute TWAP window to [b-62s, b-2s)', () => {
+    const ticks = [
+      ...secs(END - 62_000 + 1000, 60, () => 84_020),
+      { ts: END - 1000, value: 90_000 },
+      { ts: END, value: 90_000 },
+    ];
+    const r = estimateSettlePrice({
+      nowMs: END + 100, endMs: END, spot: 90_000, spotTicks: ticks, binance: null, basis: null, windowOffsetMs: 2_000,
+    });
+    expect(r.price).toBeCloseTo(84_020, 6);
   });
 });

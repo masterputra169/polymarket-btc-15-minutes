@@ -62,6 +62,55 @@ export function shouldCancelEdgeErosion(
 }
 
 /**
+ * Pull a resting bid before adverse selection hits when live TWAP fair value
+ * turns against our side:
+ *  - Inside `maxSecsLeft` (default last 180s, where TWAP math is sharp): cancel if
+ *    `twapSideProb - limitPrice < minEdge`.
+ *  - Anytime in the window: cancel immediately if `twapSideProb - limitPrice < hardDeficit`
+ *    (e.g. TWAP fair prob plunged > 5pp below our resting limit bid).
+ */
+export function shouldCancelTwapAdverse({
+  twapProbUp,
+  side,
+  limitPrice,
+  secsLeft,
+  maxSecsLeft = 180,
+  minEdge = 0.03,
+  hardDeficit = -0.05,
+}: {
+  twapProbUp: number | null | undefined;
+  side: 'UP' | 'DOWN' | string | null | undefined;
+  limitPrice: number | null | undefined;
+  secsLeft: number | null | undefined;
+  maxSecsLeft?: number;
+  minEdge?: number;
+  hardDeficit?: number;
+}): { cancel: boolean; reason: string | null; twapEdge: number | null } {
+  if (!Number.isFinite(twapProbUp) || (side !== 'UP' && side !== 'DOWN')) {
+    return { cancel: false, reason: null, twapEdge: null };
+  }
+  const sideProb = side === 'UP' ? (twapProbUp as number) : 1 - (twapProbUp as number);
+  const twapEdge = limitRemainingEdge(sideProb, limitPrice);
+  if (twapEdge == null) return { cancel: false, reason: null, twapEdge: null };
+
+  if (twapEdge < hardDeficit) {
+    return {
+      cancel: true,
+      reason: `twap_adverse_${(twapEdge * 100).toFixed(1)}pp<${(hardDeficit * 100).toFixed(0)}pp`,
+      twapEdge,
+    };
+  }
+  if (secsLeft != null && Number.isFinite(secsLeft) && secsLeft <= maxSecsLeft && twapEdge < minEdge) {
+    return {
+      cancel: true,
+      reason: `twap_late_erosion_${(twapEdge * 100).toFixed(1)}pp<${(minEdge * 100).toFixed(0)}pp`,
+      twapEdge,
+    };
+  }
+  return { cancel: false, reason: null, twapEdge };
+}
+
+/**
  * After a limit cancel, may the directional FOK path take over?
  * Signal flips / market switches / partial rejects → no.
  * Time cutoff / unfilled timeout → only if fee-adjusted edge clears the floor.

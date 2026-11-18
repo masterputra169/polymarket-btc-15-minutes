@@ -63,6 +63,20 @@ export function avgRecentTradeSize(): number | null {
 }
 
 /**
+ * Runtime fill-size sanity guard (emoubarak/pmlab/mm_guard.py):
+ * A fill for our order can never materially exceed the submitted clip size.
+ */
+export function isFillSizeWithinClip(
+  fillSize: number | null | undefined,
+  orderSize: number | null | undefined,
+  tolRatio = 1.05,
+): boolean {
+  if (typeof fillSize !== 'number' || typeof orderSize !== 'number') return true;
+  if (!Number.isFinite(fillSize) || !Number.isFinite(orderSize) || orderSize <= 0 || fillSize <= 0) return true;
+  return fillSize <= orderSize * tolRatio + 0.01;
+}
+
+/**
  * Record a newly placed order for tracking.
  * M3: Supports concurrent orders — each tracked independently by orderId.
  *
@@ -219,6 +233,14 @@ export async function checkPendingFill(): Promise<PendingFillResult[] | null> {
       if (tradeFound) {
         const tPrice = parseFloat(matchedTrade?.price ?? matchedTrade?.fill_price ?? 0) || pending.price;
         const tSize = parseFloat(matchedTrade?.size ?? matchedTrade?.amount ?? 0) || pending.size;
+        if (!isFillSizeWithinClip(tSize, pending.size)) {
+          log.error(`[GuardHalt] Order ${orderId}: reported fill size ${tSize} > submitted clip ${pending.size} — rejecting misparsed trade`);
+          const mismatchRes = { orderId, filled: false, rejected: true, verified: false, timeToFill: elapsed, adverseSelection: false };
+          recordFill(mismatchRes);
+          pendingOrders.delete(orderId);
+          results.push(mismatchRes);
+          continue;
+        }
         const predictive = scorePredictiveGhostFill({
           tradePrice: tPrice,
           midPrice: pending.midPrice ?? pending.price,

@@ -28,7 +28,28 @@ import {
 import { routeOrder } from './orderRouter.ts';
 import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
 import { isClobOutageActive } from '../trading/clobOutageLatch.ts';
+import { isFillSizeWithinClip } from '../trading/fillTracker.ts';
 import { estimateQueueFillFeasibility } from './queueSim.ts';
+
+/** Pre-execution 2c runaway ask haircut (emoubarak): abort chasing if live ask spiked above signal price. */
+function isAskRunaway(
+  side: string,
+  decisionPrice: number,
+  orderbookUp: { bestAsk?: number | null } | null | undefined,
+  orderbookDown: { bestAsk?: number | null } | null | undefined,
+): { runaway: boolean; liveAsk: number | null; maxAllowed: number } {
+  const maxRunaway = (BOT_CONFIG as { maxRunawaySlippage?: number })?.maxRunawaySlippage ?? 0.02;
+  const book = side === 'UP' ? orderbookUp : orderbookDown;
+  const liveAsk = book?.bestAsk;
+  if (!(maxRunaway > 0) || liveAsk == null || !Number.isFinite(liveAsk) || !(decisionPrice > 0)) {
+    return { runaway: false, liveAsk: liveAsk ?? null, maxAllowed: maxRunaway };
+  }
+  return {
+    runaway: liveAsk - decisionPrice > maxRunaway + 1e-9,
+    liveAsk,
+    maxAllowed: maxRunaway,
+  };
+}
 
 const log = createLogger('TradePipeline');
 
@@ -297,6 +318,7 @@ export async function executeDirectionalTrade({
   peakDownGapRatio = null,
   leadLagImpulse = null,
   crossFeed = null,
+  twapPhysicsZ = null,
 }, deps) {
   // ── ML availability gate ──
   // Every ML gate in applyTradeFilters is skipped when the model is not loaded (mlConfidence
@@ -413,6 +435,7 @@ export async function executeDirectionalTrade({
     leadLagDirection: leadLagImpulse?.active ? leadLagImpulse.direction : null,
     binanceDistPct: crossFeed?.binanceDistPct ?? null,
     oracleDistPct: crossFeed?.oracleDistPct ?? null,
+    twapPhysicsZ,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);
@@ -667,6 +690,7 @@ export async function executeDirectionalTrade({
     liveBasisUsd: crossFeed?.liveBasisUsd ?? null,
     crossFeedSkewUsd: crossFeed?.crossFeedSkewUsd ?? null,
     binanceWindowOpen: crossFeed?.binanceWindowOpen ?? null,
+    twapPhysicsZ: twapPhysicsZ ?? null,
     conditionId: currentConditionId, // lets the fallback verifier ask the CLOB oracle later
     confidence: rec.confidence, phase: rec.phase, reason: rec.reason,
     edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
@@ -797,8 +821,17 @@ export async function executeDirectionalTrade({
 
     const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
 
-    // FOK (and FOK fallback) is all-or-nothing against resting ask liquidity.
+    // FOK (and FOK fallback) is all-or-nothing against resting ask liquidity and runaway asks.
     if (fillModel !== 'maker_join') {
+      const runCheck = isAskRunaway(betSide, betMarketPrice, orderbookUp, orderbookDown);
+      if (runCheck.runaway) {
+        log.info(
+          `[DRY RUN] FOK aborted (2c haircut): live ask $${Number(runCheck.liveAsk).toFixed(3)} > ` +
+          `quote $${betMarketPrice.toFixed(3)} + $${runCheck.maxAllowed.toFixed(2)}`
+        );
+        deps.setPendingCost(0);
+        return false;
+      }
       const askLiqShares = betBook?.askLiquidity;
       if (Number.isFinite(askLiqShares) && askLiqShares > 0 && shares > askLiqShares) {
         log.info(
@@ -868,7 +901,17 @@ export async function executeDirectionalTrade({
     return true;
   }
 
-  // ── Live order (FOK with slippage to prevent rejection on tiny price moves) ──
+  // ── Live order (FOK with slippage + 2c runaway ask guard) ──
+  const liveRunCheck = isAskRunaway(betSide, betMarketPrice, orderbookUp, orderbookDown);
+  if (liveRunCheck.runaway) {
+    log.info(
+      `[Execution] Live FOK aborted (2c haircut): live ask $${Number(liveRunCheck.liveAsk).toFixed(3)} > ` +
+      `quote $${betMarketPrice.toFixed(3)} + $${liveRunCheck.maxAllowed.toFixed(2)}`
+    );
+    deps.setPendingCost(0);
+    return false;
+  }
+
   try {
     const orderResult = await deps.placeBuyOrder({
       tokenId,
@@ -881,13 +924,17 @@ export async function executeDirectionalTrade({
     // mark fill as unconfirmed so fill tracker will verify via getOpenOrders/trade history.
     const fillCost = parseClobAmount(orderResult?.makingAmount, null);
     const fillShares = parseClobAmount(orderResult?.takingAmount, null);
-    const hasFillData = (fillCost != null && fillCost > 0) || (fillShares != null && fillShares > 0);
+    const clipOk = fillShares == null || fillShares <= 0 || isFillSizeWithinClip(fillShares, shares);
+    if (!clipOk) {
+      log.error(`[GuardHalt] Order ${orderId ?? 'unknown'}: CLOB takingAmount ${fillShares} > submitted clip ${shares} — ignoring bloated fill size and deferring to fill tracker`);
+    }
+    const hasFillData = clipOk && ((fillCost != null && fillCost > 0) || (fillShares != null && fillShares > 0));
     if (!hasFillData) {
       log.warn(`Order ${orderId ?? 'unknown'}: no fill data in CLOB response — position will remain unconfirmed until fill tracker verifies (cost=$${(shares * betMarketPrice).toFixed(2)}, shares=${shares})`);
     }
-    const actualSize = (fillShares != null && fillShares > 0) ? fillShares : shares;
-    const actualPrice = (fillCost != null && fillCost > 0 && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
-    const actualCost = (fillCost != null && fillCost > 0) ? fillCost : null;
+    const actualSize = (clipOk && fillShares != null && fillShares > 0) ? fillShares : shares;
+    const actualPrice = (clipOk && fillCost != null && fillCost > 0 && actualSize > 0) ? fillCost / actualSize : betMarketPrice;
+    const actualCost = (clipOk && fillCost != null && fillCost > 0) ? fillCost : null;
 
     // Execution quality tracking
     const slippagePct = betMarketPrice > 0
@@ -898,7 +945,7 @@ export async function executeDirectionalTrade({
     deps.setPendingCost(0);
     // H2/H9 FIX: Track order BEFORE recording trade (same pattern as arb fix above)
     // H9 FIX: Use parseClobAmount > 0 for fill confirmation (not just truthy)
-    const fillConfirmed = parseClobAmount(orderResult?.makingAmount, 0) > 0 || parseClobAmount(orderResult?.takingAmount, 0) > 0;
+    const fillConfirmed = clipOk && (parseClobAmount(orderResult?.makingAmount, 0) > 0 || parseClobAmount(orderResult?.takingAmount, 0) > 0);
     if (orderId) {
       deps.trackOrderPlacement(orderId, { tokenId, price: actualPrice, size: actualSize, side: betSide, confirmed: fillConfirmed, midPrice: betMarketPrice });
     }

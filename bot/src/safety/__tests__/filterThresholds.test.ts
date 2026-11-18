@@ -224,5 +224,17 @@ describe('tradeFilters honours the thresholds', () => {
     const midBlockedHighEdge = mod.applyTradeFilters({ ...input, marketPrice: 0.64, timeLeftMin: 7, bestEdge: 0.12 });
     expect(midBlockedHighEdge.reasons).toContain('MID phase price 64c > 63c ceiling');
   });
+
+  test('FILTER_MIN_TWAP_Z enforces normalized lead floor unless ML >= btcDistMlBypass', async () => {
+    const mod = await load({ FILTER_MIN_TWAP_Z: '0.20' });
+    const weak = mod.applyTradeFilters({ ...input, mlConfidence: 0.45, twapPhysicsZ: 0.12 });
+    expect(weak.reasons).toContain('TWAP lead too weak: |z|=0.12 < 0.20');
+
+    const okLead = mod.applyTradeFilters({ ...input, mlConfidence: 0.45, twapPhysicsZ: -0.25 });
+    expect(okLead.reasons.filter(r => r.startsWith('TWAP lead too weak:'))).toEqual([]);
+
+    const mlBypass = mod.applyTradeFilters({ ...input, mlConfidence: 0.85, twapPhysicsZ: 0.05 });
+    expect(mlBypass.reasons.filter(r => r.startsWith('TWAP lead too weak:'))).toEqual([]);
+  });
 });
 

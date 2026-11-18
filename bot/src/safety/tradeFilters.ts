@@ -315,6 +315,7 @@ export function applyTradeFilters({
   leadLagDirection = null,   // active 3s Binance lead-lag impulse direction ('UP'|'DOWN'|null)
   binanceDistPct = null,     // (Binance_now − Binance_open) / Binance_open * 100
   oracleDistPct = null,      // (Chainlink_settle − exact_PTB) / exact_PTB * 100
+  twapPhysicsZ = null,       // normalized Chainlink TWAP lead (S − PTB) / (σ·√T_eff)
 }: Record<string, any>) {
   const reasons = [];
 
@@ -840,6 +841,14 @@ export function applyTradeFilters({
           `Cross-feed skew: Oracle only +${signedOracle.toFixed(3)}% while Binance +${signedBinance.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${T.crossFeedSkewPct.toFixed(3)}%)`,
         );
       }
+    }
+  }
+
+  // 21. Volatility-normalized TWAP lead floor (emoubarak zlead)
+  if (T.minTwapZ > 0 && twapPhysicsZ != null && Number.isFinite(twapPhysicsZ)) {
+    const mlBypass = mlConfidence != null && mlConfidence >= T.btcDistMlBypass;
+    if (!mlBypass && Math.abs(twapPhysicsZ) < T.minTwapZ) {
+      reasons.push(`TWAP lead too weak: |z|=${Math.abs(twapPhysicsZ).toFixed(2)} < ${T.minTwapZ.toFixed(2)}`);
     }
   }
 

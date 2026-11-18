@@ -70,7 +70,7 @@ import { startReconciler, stopReconciler } from './src/trading/journalReconciler
 import { startRedeemer, stopRedeemer } from './src/trading/redeemer.ts';
 import { startMonitor, stopMonitor } from './src/monitoring/perfMonitor.ts';
 import { scheduleDailySummary, stopDailySummary, loadEntrySnapshotFromDisk } from './src/trading/tradeJournal.ts';
-import { scheduleEvaluationReport, stopEvaluationReport } from './src/monitoring/evaluationReport.ts';
+import { scheduleEvaluationReport, stopEvaluationReport, setTripwirePauseHandler } from './src/monitoring/evaluationReport.ts';
 import { verifyPendingFallbacks } from './src/trading/fallbackVerifier.ts';
 
 // AI Agent modules
@@ -298,6 +298,7 @@ async function main() {
   // 4c. Schedule daily trade summary (Telegram alert at midnight ET)
   scheduleDailySummary();
   // Daily evaluation-window report (win rate vs breakeven since EVAL_WINDOW_START).
+  setTripwirePauseHandler((reason) => pauseBot(reason));
   scheduleEvaluationReport();
 
   // 4d. Initialize AI agent (OpenRouter + post-trade analysis)

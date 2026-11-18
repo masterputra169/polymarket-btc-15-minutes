@@ -35,6 +35,8 @@ export interface SettleEstimateInput {
   binance: number | null;
   /** Tracked Binance − Chainlink basis, or null if never observed. */
   basis: number | null;
+  /** Shift final TWAP window earlier in ms (e.g. 2000 for [b-62s, b-2s] per Polymarket strike audit). */
+  windowOffsetMs?: number;
 }
 
 export interface SettleEstimate {
@@ -52,11 +54,13 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
     }
     return { price: null, source: 'none' };
   }
-  if (i.endMs == null || i.nowMs <= i.endMs - TWAP_WINDOW_MS || i.nowMs >= i.endMs + 5_000) {
+  const offsetMs = Number.isFinite(i.windowOffsetMs) && (i.windowOffsetMs as number) > 0 ? (i.windowOffsetMs as number) : 0;
+  const twapEndMs = i.endMs != null ? i.endMs - offsetMs : null;
+  if (twapEndMs == null || i.nowMs <= twapEndMs - TWAP_WINDOW_MS || i.nowMs >= (i.endMs as number) + 5_000) {
     return { price: i.spot, source: 'chainlink' };
   }
-  const windowStart = i.endMs - TWAP_WINDOW_MS;
-  const upto = Math.min(i.nowMs, i.endMs);
+  const windowStart = twapEndMs - TWAP_WINDOW_MS;
+  const upto = Math.min(i.nowMs, twapEndMs);
   // One sample per whole second of the TWAP window; a second with no tick holds
   // the previous one (the last tick before the window seeds it).
   const rawTicks = [...i.spotTicks].filter(t => t.ts <= upto && Number.isFinite(t.value) && t.value > 0).sort((a, b) => a.ts - b.ts);
@@ -66,7 +70,7 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
   let j = 0;
   let sum = 0;
   let seen = 0;
-  for (let s = windowStart + 1_000; s <= i.endMs; s += 1_000) {
+  for (let s = windowStart + 1_000; s <= twapEndMs; s += 1_000) {
     if (s > upto) break;
     while (j < ticks.length && ticks[j].ts <= s) held = ticks[j++].value;
     sum += held ?? i.spot;
@@ -74,6 +78,44 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
   }
   const remaining = TWAP_WINDOW_MS / 1_000 - seen;
   return { price: (sum + i.spot * remaining) / (TWAP_WINDOW_MS / 1_000), source: 'chainlink_final_minute' };
+}
+
+/**
+ * Compensate ~1-1.5s Chainlink relay lag using synchronous Binance spot move
+ * since the last observed Chainlink update (krabduke nowcast). Bounded to
+ * ±maxDeltaPct so exchange glitches cannot distort fair value.
+ */
+export class ChainlinkNowcastTracker {
+  private lastClSpot: number | null = null;
+  private lastClUpdateMs = 0;
+  private binanceAtCl: number | null = null;
+  private readonly maxLagMs: number;
+  private readonly maxDeltaPct: number;
+
+  constructor(maxLagMs = 15_000, maxDeltaPct = 0.005) {
+    this.maxLagMs = maxLagMs;
+    this.maxDeltaPct = maxDeltaPct;
+  }
+
+  update(clSpot: number | null, clUpdateMs: number, binanceNow: number | null): number | null {
+    if (clSpot == null || !(clSpot > 0)) return null;
+    if (clSpot !== this.lastClSpot || (clUpdateMs > 0 && clUpdateMs !== this.lastClUpdateMs)) {
+      this.lastClSpot = clSpot;
+      this.lastClUpdateMs = clUpdateMs > 0 ? clUpdateMs : Date.now();
+      this.binanceAtCl = (binanceNow != null && binanceNow > 0) ? binanceNow : null;
+    }
+    if (
+      binanceNow == null ||
+      !(binanceNow > 0) ||
+      this.binanceAtCl == null ||
+      (this.lastClUpdateMs > 0 && Date.now() - this.lastClUpdateMs > this.maxLagMs)
+    ) {
+      return clSpot;
+    }
+    const maxDelta = clSpot * this.maxDeltaPct;
+    const delta = Math.max(-maxDelta, Math.min(maxDelta, binanceNow - this.binanceAtCl));
+    return clSpot + delta;
+  }
 }
 
 export interface CrossFeedMetricsInput {

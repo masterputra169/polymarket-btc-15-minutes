@@ -18,7 +18,7 @@ vi.mock('../clobClient.ts', () => ({
   cancelAllOrders: (...args: any[]) => mocks.cancelAllOrders(...args),
 }));
 
-import { checkPendingFill, clearPendingOrders, getFillTrackerStatus, trackOrderPlacement } from '../fillTracker.ts';
+import { checkPendingFill, clearPendingOrders, getFillTrackerStatus, isFillSizeWithinClip, trackOrderPlacement } from '../fillTracker.ts';
 import { resetGhostGuardStats } from '../ghostGuard.ts';
 
 describe('fillTracker + GhostGuard on-chain receipt verification', () => {
@@ -121,5 +121,11 @@ describe('fillTracker + GhostGuard on-chain receipt verification', () => {
       txHash,
     });
     expect(mocks.cancelAllOrders).not.toHaveBeenCalled();
+  });
+
+  it('flags fills whose size exceeds submitted clip (taker size misparse guard)', () => {
+    expect(isFillSizeWithinClip(5, 5)).toBe(true);
+    expect(isFillSizeWithinClip(5.2, 5)).toBe(true);
+    expect(isFillSizeWithinClip(114, 5)).toBe(false);
   });
 });
