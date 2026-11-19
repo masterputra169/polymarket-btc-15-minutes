@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-19 — Early TWAP Pull Calibration & Hot-Loop Log Spam Cleanup
+
+- **Early-Phase `shouldCancelTwapAdverse` Calibration (`bot/src/engines/makerFillGate.ts`, `bot/src/engines/__tests__/makerFillGate.test.ts`):** Added `hardMaxSecsLeft = 300` and `earlyHardDeficit = -0.15` (`-15pp`) while keeping `-5pp` inside the final 300 s and `< 3pp` erosion inside the final 180 s, preventing `1.4× σ √T` Brownian fair-value compression from pulling healthy `EARLY` resting bids (fixed the `07:31:32 WIB` false pull at `T=13.6m`, `pFatTail=58.1%` vs `64c` on winning `UP` market `1795048200`).
+- **Eliminate Hot-Loop Log Spam (`bot/src/loop.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`, `bot/tests/tradeFilters.test.ts`):** Replaced `pollCounter % 3` `[Loop] CutLoss: disabled` (`~2,145×/hr`) with a 10 s wall-clock throttle that skips when `cutResult.reason === 'disabled'`; exported `normalizeFilterLogKey()` stripping numeric jitter so 5 s filter throttling holds across 100 ms ticks; removed duplicate `Smart filter blocked:` echo in `tradePipeline.ts` and normalized numeric jitter on `Fast-entry` throttle keys.
+- **Verification:** `npm run typecheck`, targeted `vitest` (`makerFillGate`, `tradePipeline.*`, `tradeFilters`), `vite build`, `study:build`, and CI `main` PASS.
+
 ## 2026-11-18 — Telegram Notifier IPv4-First DNS, 10s Timeout & Retry Hardening
 
 - **IPv4-First DNS Resolution (`bot/index.ts`, `bot/src/monitoring/notifier.ts`):** Added `setDefaultResultOrder('ipv4first')` at bot startup and idempotently before webhook delivery so `api.telegram.org` resolves over working IPv4 (`~0.5s`) rather than hanging or failing (`fetch failed`) on VPS hosts with broken IPv6 routes (`2001:67c:4e8:f004::9` unreachable on `polyvps`, which dropped the `22:18:23` BUY alert despite `TELEGRAM_NOTIFY_TRADES=true`).

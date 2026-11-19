@@ -35,20 +35,25 @@ describe('limitRemainingEdge / erosion', () => {
     expect(shouldCancelEdgeErosion(0.65, 0.55, 0.03)).toBe(false);
   });
 
-  test('shouldCancelTwapAdverse pulls resting bid on late TWAP erosion or steep anytime drop', () => {
+  test('shouldCancelTwapAdverse pulls on late erosion/mid drop while tolerating mild EARLY Brownian variance', () => {
     // Inside last 180s with edge < 3pp -> pull immediately
     const latePull = shouldCancelTwapAdverse({ twapProbUp: 0.56, side: 'UP', limitPrice: 0.55, secsLeft: 120 });
     expect(latePull.cancel).toBe(true);
     expect(latePull.reason).toContain('twap_late_erosion');
 
-    // Early (>180s) with positive or mildly thin edge (-2pp) -> hold
-    const earlyHold = shouldCancelTwapAdverse({ twapProbUp: 0.53, side: 'UP', limitPrice: 0.55, secsLeft: 500 });
-    expect(earlyHold.cancel).toBe(false);
+    // Inside last 300s with -7pp (< -5pp hardDeficit) -> pull immediately (DOWN side)
+    const midPullDown = shouldCancelTwapAdverse({ twapProbUp: 0.52, side: 'DOWN', limitPrice: 0.55, secsLeft: 250 });
+    expect(midPullDown.cancel).toBe(true);
+    expect(midPullDown.reason).toBe('twap_adverse_-7.0pp<-5pp');
 
-    // Steep deficit (-6pp below bid) -> pull anytime (works symmetrically for DOWN)
-    const hardPullDown = shouldCancelTwapAdverse({ twapProbUp: 0.52, side: 'DOWN', limitPrice: 0.55, secsLeft: 600 });
-    expect(hardPullDown.cancel).toBe(true);
-    expect(hardPullDown.reason).toContain('twap_adverse');
+    // 07:31 regression: EARLY (816s left) pFatTail=58.1% vs 64c (-5.9pp) -> holds above -15pp early floor
+    const early0731Hold = shouldCancelTwapAdverse({ twapProbUp: 0.581, side: 'UP', limitPrice: 0.64, secsLeft: 816 });
+    expect(early0731Hold.cancel).toBe(false);
+
+    // EARLY collapse (-18pp < -15pp earlyHardDeficit) -> still pulls immediately
+    const earlyCollapse = shouldCancelTwapAdverse({ twapProbUp: 0.63, side: 'DOWN', limitPrice: 0.55, secsLeft: 600 });
+    expect(earlyCollapse.cancel).toBe(true);
+    expect(earlyCollapse.reason).toBe('twap_adverse_-18.0pp<-15pp');
   });
 });
 

@@ -66,8 +66,11 @@ export function shouldCancelEdgeErosion(
  * turns against our side:
  *  - Inside `maxSecsLeft` (default last 180s, where TWAP math is sharp): cancel if
  *    `twapSideProb - limitPrice < minEdge`.
- *  - Anytime in the window: cancel immediately if `twapSideProb - limitPrice < hardDeficit`
- *    (e.g. TWAP fair prob plunged > 5pp below our resting limit bid).
+ *  - Inside `hardMaxSecsLeft` (default last 300s): cancel immediately if
+ *    `twapSideProb - limitPrice < hardDeficit` (-5pp).
+ *  - Earlier (`secsLeft > hardMaxSecsLeft`): only pull on extreme collapse
+ *    `earlyHardDeficit` (-15pp), so Brownian `1.4× σ √T` compression in EARLY
+ *    windows does not pull healthy bids (e.g. `07:31` at 13.6m, 58.1% vs 64c).
  */
 export function shouldCancelTwapAdverse({
   twapProbUp,
@@ -77,6 +80,8 @@ export function shouldCancelTwapAdverse({
   maxSecsLeft = 180,
   minEdge = 0.03,
   hardDeficit = -0.05,
+  hardMaxSecsLeft = 300,
+  earlyHardDeficit = -0.15,
 }: {
   twapProbUp: number | null | undefined;
   side: 'UP' | 'DOWN' | string | null | undefined;
@@ -85,6 +90,8 @@ export function shouldCancelTwapAdverse({
   maxSecsLeft?: number;
   minEdge?: number;
   hardDeficit?: number;
+  hardMaxSecsLeft?: number;
+  earlyHardDeficit?: number;
 }): { cancel: boolean; reason: string | null; twapEdge: number | null } {
   if (!Number.isFinite(twapProbUp) || (side !== 'UP' && side !== 'DOWN')) {
     return { cancel: false, reason: null, twapEdge: null };
@@ -93,10 +100,12 @@ export function shouldCancelTwapAdverse({
   const twapEdge = limitRemainingEdge(sideProb, limitPrice);
   if (twapEdge == null) return { cancel: false, reason: null, twapEdge: null };
 
-  if (twapEdge < hardDeficit) {
+  const isEarly = secsLeft != null && Number.isFinite(secsLeft) && secsLeft > hardMaxSecsLeft;
+  const activeHardDeficit = isEarly ? earlyHardDeficit : hardDeficit;
+  if (twapEdge < activeHardDeficit) {
     return {
       cancel: true,
-      reason: `twap_adverse_${(twapEdge * 100).toFixed(1)}pp<${(hardDeficit * 100).toFixed(0)}pp`,
+      reason: `twap_adverse_${(twapEdge * 100).toFixed(1)}pp<${(activeHardDeficit * 100).toFixed(0)}pp`,
       twapEdge,
     };
   }

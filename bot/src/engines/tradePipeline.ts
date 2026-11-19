@@ -64,8 +64,6 @@ let _lastUnstableLogAt = 0;
 let _lastUnstableKey = '';
 let _lastFastEntryLogAt = 0;
 let _lastFastEntryKey = '';
-let _lastFilterBlockLogAt = 0;
-let _lastFilterBlockKey = '';
 
 function logThrottled(
   msg: string,
@@ -688,7 +686,7 @@ export async function executeDirectionalTrade({
           : `high edge ${((edge.bestEdge ?? 0) * 100).toFixed(0)}% ≥ 15%`;
     [_lastFastEntryLogAt, _lastFastEntryKey] = logThrottled(
       `Fast-entry: ${fastReason} → confirm ${requiredPolls}/${SIGNAL_CONFIRM_POLLS} polls`,
-      `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${fastReason.replace(/\([^)]*\)/, '')}`,
+      `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${fastReason.replace(/[+-]?\d+(?:\.\d+)?/g, '#')}`,
       _lastFastEntryLogAt,
       _lastFastEntryKey,
       10_000,
@@ -780,13 +778,6 @@ export async function executeDirectionalTrade({
   }
 
   if (!filterResult.pass) {
-    const msgKey = filterResult.reasons.join(' | ');
-    [_lastFilterBlockLogAt, _lastFilterBlockKey] = logThrottled(
-      `Smart filter blocked: ${msgKey}`,
-      msgKey,
-      _lastFilterBlockLogAt,
-      _lastFilterBlockKey,
-    );
     return false;
   }
 

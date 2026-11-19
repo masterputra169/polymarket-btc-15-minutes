@@ -4,7 +4,7 @@
  * Tests verify gates that protect bot from bad trades.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { applyTradeFilters, recordSpread, recordLoss } from '../src/safety/tradeFilters.ts';
+import { applyTradeFilters, normalizeFilterLogKey, recordSpread, recordLoss } from '../src/safety/tradeFilters.ts';
 
 function baseInput(overrides = {}) {
   return {
@@ -140,5 +140,13 @@ describe('recordLoss / recordSpread (state mgmt)', () => {
 
   it('recordSpread handles NaN gracefully', () => {
     expect(() => recordSpread(NaN)).not.toThrow();
+  });
+
+  it('normalizeFilterLogKey collapses live numeric jitter while preserving gate identity', () => {
+    const k1 = normalizeFilterLogKey(['ML conf 12% < 30% absolute floor', 'Chop regime: path efficiency 4.5% < 8% min']);
+    const k2 = normalizeFilterLogKey(['ML conf 14% < 30% absolute floor', 'Chop regime: path efficiency 2.8% < 8% min']);
+    const k3 = normalizeFilterLogKey(['ML conf 14% < 30% absolute floor', 'Opposing L2 orderbook imbalance -42% against UP (> 30% limit)']);
+    expect(k1).toBe(k2);
+    expect(k1).not.toBe(k3);
   });
 });

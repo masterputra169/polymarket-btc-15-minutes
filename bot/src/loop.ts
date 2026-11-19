@@ -509,6 +509,7 @@ export function resetEntryRegime() { entryRegime = null; }
 
 // ── Limit order filter log throttle ──
 let limitOrderFilterLogAt = 0;
+let lastCutLossLogMs = 0;
 /** After a maker cancel that must not chase with FOK, block FOK for this slug until the next market. */
 let fokFallbackDeniedForSlug: string | null = null;
 
@@ -1705,9 +1706,9 @@ export async function pollOnce() {
         atrRatio: atr?.atrRatio ?? null,
       });
 
-      // Log cut-loss gate status every 5th poll
-      // Fix A: Naikkan ke info level + interval lebih sering (setiap 3 poll ~6s) agar diagnostics visible di production
-      if (pollCounter % 3 === 0) {
+      // Log active cut-loss diagnostics at most every 10s (skip when cut-loss is disabled).
+      if (cutResult.reason !== 'disabled' && Date.now() - lastCutLossLogMs >= 10_000) {
+        lastCutLossLogMs = Date.now();
         const ep = pos.price;
         const dropPct = ep > 0 && tokenPrice != null
           ? (((ep - tokenPrice) / ep) * 100).toFixed(1) : '?';

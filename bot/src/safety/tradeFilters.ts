@@ -48,6 +48,11 @@ const FILTER_LOG_THROTTLE_MS = 5_000;
 let lastFilteredLogMs = 0;
 let lastFilteredKey = '';
 
+/** Collapse live numeric fluctuations into a stable key so 5s log throttling holds across ticks. */
+export function normalizeFilterLogKey(reasons: string[]): string {
+  return reasons.map(r => r.replace(/[+-]?\d+(?:\.\d+)?/g, '#')).join(' | ');
+}
+
 // Every number the gates below compare against (filterThresholds.ts): the
 // former literals as defaults, FILTER_* env overrides read once at load.
 const THRESHOLDS = readFilterThresholds(process.env);
@@ -856,12 +861,12 @@ export function applyTradeFilters({
 
   const pass = reasons.length === 0;
   if (!pass) {
-    const key = reasons.join(' | ');
+    const throttleKey = normalizeFilterLogKey(reasons);
     const nowMs = Date.now();
-    if (key !== lastFilteredKey || nowMs - lastFilteredLogMs >= FILTER_LOG_THROTTLE_MS) {
-      lastFilteredKey = key;
+    if (throttleKey !== lastFilteredKey || nowMs - lastFilteredLogMs >= FILTER_LOG_THROTTLE_MS) {
+      lastFilteredKey = throttleKey;
       lastFilteredLogMs = nowMs;
-      log.info(`Filtered: ${key}`);
+      log.info(`Filtered: ${reasons.join(' | ')}`);
     }
   }
 
