@@ -33,6 +33,9 @@ import {
   getPrice as getBinancePrice,
   isConnected as isBinanceConnected,
   getLastMsgTime as getBinanceLastMsgTime,
+  getKlines1m as getBinanceKlines1m,
+  seedKlines1m as seedBinanceKlines1m,
+  needsKlinesResync as needsBinanceKlinesResync,
 } from './streams/binanceWs.ts';
 import {
   getUpPrice as getClobUpPrice,
@@ -89,6 +92,7 @@ import {
 // ML (loaded from disk)
 import { getMLPrediction, isMLReady, getCalibratedPhaseThresholds, getFeaturePipeline, getModelId } from './adapters/mlLoader.ts';
 import { resetHysteresis } from '../../src/engines/ml/state.ts';
+import { aggregate5m, CANDLES_5M } from '../../src/engines/ml/trainingRow.ts';
 import {
   getEffectivePhaseThresholds,
   getEffectiveKellyProbShrink,
@@ -256,10 +260,8 @@ import {
 } from './engines/signalStability.ts';
 import {
   getRefreshNeeds,
-  updateKlines5m,
   updateChainlink,
   updatePolySnapshot,
-  getKlines5mCache,
   getChainlinkCache,
   getPolySnapshotCache,
   resetCaches,
@@ -309,11 +311,9 @@ type ScheduledPrice = {
 };
 
 type FetchMap = {
-  klines1m: number;
-  klines5m?: number;
+  klines1m?: number;
   lastPrice?: number;
   poly?: number;
-  chainlink?: number;
 };
 
 // ── Pause/Resume control ──
@@ -546,11 +546,19 @@ let startupUsdcChecked = false;
 let startupOrdersReconciled = false;
 let startupTradeCountsLoaded = false;
 let lastAutoForceSyncMs = 0; // Auto force-sync every 40 min
+let klines1mRefreshInFlight = false;
+let lastKlines1mAttemptMs = 0;
+let polyRefreshInFlight = false;
+let polyRefreshGen = 0;
+let lastPolyBgErrorMs = 0;
+let chainlinkRefreshInFlight = false;
+let lastChainlinkAttemptMs = 0;
 
 // ── MetEngine init (runs once at module load) ──
 initMetEngine(BOT_CONFIG.metEngine);
 
 function resetMarketCache() {
+  polyRefreshGen++;
   resetCaches();
   resetSignalState();
   resetMarketUpHistory();
@@ -560,6 +568,28 @@ function resetMarketCache() {
   currentConditionId = null;
   priceToBeat = { slug: null, value: null, source: null, updatedAt: 0 };
   tokenIdsNotified = false;
+}
+
+function applyPolySnapshot(polyFetched: any, fetchedAt: number): void {
+  if (!polyFetched) return;
+  if (polyFetched.ok) {
+    updatePolySnapshot(polyFetched, fetchedAt);
+    if (polyFetched.market?.endDate) {
+      const endMs = new Date(polyFetched.market.endDate).getTime();
+      if (Number.isFinite(endMs)) {
+        // Schedule PTB capture at endDate (= next market's eventStartTime)
+        if (endMs !== currentMarketEndMs) schedulePtbCapture(endMs);
+        currentMarketEndMs = endMs;
+      }
+    }
+    const mktCondId = polyFetched.market?.conditionId ?? polyFetched.market?.condition_id;
+    if (mktCondId) {
+      currentConditionId = mktCondId;
+      if (isClientReady()) void warmupMarketMetadata(mktCondId);
+    }
+  } else {
+    log.debug(`Polymarket fetch failed: ${polyFetched.reason} — will retry next poll`);
+  }
 }
 
 // ── Shared settlement actions (DRY — used by expiry, switch, stale) ──
@@ -926,15 +956,32 @@ export async function pollOnce() {
       entryRegime = null;
     }
 
-    // ── 3. Tiered data fetch ──
-    const { needsFreshPoly, needsFresh5m, needsChainlink } = getRefreshNeeds(now, marketExpired);
+    // ── 3. Tiered data fetch (zero-await steady state via WS + single-flight bg refresh) ──
+    const { needsFreshPoly, needsChainlink } = getRefreshNeeds(now, marketExpired);
+    const cachedKlines1m = getBinanceKlines1m();
+    const cachedPoly = getPolySnapshotCache();
 
-    const fetches: Promise<any>[] = [fetchKlines({ interval: '1m', limit: 240 })];
-    const fetchMap: FetchMap = { klines1m: 0 };
+    const fetches: Promise<any>[] = [];
+    const fetchMap: FetchMap = {};
 
-    if (needsFresh5m) {
-      fetchMap.klines5m = fetches.length;
-      fetches.push(fetchKlines({ interval: '5m', limit: 48 }));
+    // 1m klines: block only on cold startup; afterwards update live via WS kline_1m
+    // and trigger non-blocking REST backfill only on reconnect/gap/stale stream.
+    if (!cachedKlines1m) {
+      fetchMap.klines1m = fetches.length;
+      fetches.push(fetchKlines({ interval: '1m', limit: 240 }));
+    } else if (
+      needsBinanceKlinesResync(now) &&
+      !klines1mRefreshInFlight &&
+      now - lastKlines1mAttemptMs >= 5_000
+    ) {
+      klines1mRefreshInFlight = true;
+      lastKlines1mAttemptMs = now;
+      fetchKlines({ interval: '1m', limit: 240 })
+        .then((bars) => {
+          if (Array.isArray(bars) && bars.length > 0) seedBinanceKlines1m(bars, Date.now());
+        })
+        .catch((err) => log.warn(`Fetch klines1m (bg) failed: ${err?.message || err}`))
+        .finally(() => { klines1mRefreshInFlight = false; });
     }
 
     // Audit fix H: Validate Binance WS price is fresh (< 5s old).
@@ -943,40 +990,77 @@ export async function pollOnce() {
     // M16: Matches WS_BINANCE.heartbeatCheckMs (5s) — both use 5s as staleness boundary.
     const BINANCE_STALE_MS = 5_000;
     const wsPrice = getBinancePrice();
-    const wsFresh = wsPrice && isBinanceConnected() && (Date.now() - getBinanceLastMsgTime() < BINANCE_STALE_MS);
+    const wsFresh = Boolean(wsPrice != null && isBinanceConnected() && (Date.now() - getBinanceLastMsgTime() < BINANCE_STALE_MS));
     if (!wsFresh) {
       fetchMap.lastPrice = fetches.length;
       fetches.push(fetchLastPrice());
     }
 
-    if (needsFreshPoly) {
+    // Polymarket discovery: block only on cold boot or explicit market expiry;
+    // periodic 30s refreshes run in background so the hot poll loop never freezes for ~700ms.
+    if (needsFreshPoly && (!cachedPoly || marketExpired)) {
       fetchMap.poly = fetches.length;
       fetches.push(fetchPolymarketSnapshot());
+    } else if (needsFreshPoly && !polyRefreshInFlight && now - lastPolyBgErrorMs >= 3_000) {
+      const gen = polyRefreshGen;
+      polyRefreshInFlight = true;
+      fetchPolymarketSnapshot()
+        .then((res) => {
+          if (gen !== polyRefreshGen) return;
+          if (res?.ok) {
+            applyPolySnapshot(res, Date.now());
+          } else {
+            lastPolyBgErrorMs = Date.now();
+            log.debug(`Polymarket bg fetch failed: ${res?.reason ?? 'unknown'} — will retry`);
+          }
+        })
+        .catch((err) => {
+          lastPolyBgErrorMs = Date.now();
+          log.warn(`Fetch poly (bg) failed: ${err?.message || err}`);
+        })
+        .finally(() => { polyRefreshInFlight = false; });
     }
 
-    if (needsChainlink) {
-      fetchMap.chainlink = fetches.length;
-      fetches.push(fetchChainlinkBtcUsd().catch(() => getChainlinkCache()));
+    // Chainlink RPC fallback cache: always non-blocking (polyLiveWs / chainlinkWss are primary).
+    if (needsChainlink && !chainlinkRefreshInFlight && now - lastChainlinkAttemptMs >= 5_000) {
+      chainlinkRefreshInFlight = true;
+      lastChainlinkAttemptMs = now;
+      fetchChainlinkBtcUsd()
+        .then((res) => {
+          if (res) updateChainlink(res, Date.now());
+        })
+        .catch((err) => log.debug(`Fetch chainlink (bg) failed: ${err?.message || err}`))
+        .finally(() => { chainlinkRefreshInFlight = false; });
     }
 
-    const settled = await Promise.allSettled(fetches.map(p =>
-      p instanceof Promise ? p : Promise.resolve(p)
-    ));
-    const results = settled.map(r => r.status === 'fulfilled' ? r.value : null);
+    let results: any[] = [];
+    if (fetches.length > 0) {
+      const settled = await Promise.allSettled(fetches.map(p =>
+        p instanceof Promise ? p : Promise.resolve(p)
+      ));
+      results = settled.map(r => r.status === 'fulfilled' ? r.value : null);
 
-    for (const [key, idx] of Object.entries(fetchMap)) {
-      if (settled[idx].status === 'rejected') {
-        log.warn(`Fetch ${key} failed: ${settled[idx].reason?.message || settled[idx].reason}`);
+      for (const [key, idx] of Object.entries(fetchMap)) {
+        if (idx !== undefined && settled[idx]?.status === 'rejected') {
+          const rej = settled[idx] as PromiseRejectedResult;
+          log.warn(`Fetch ${key} failed: ${rej.reason?.message || rej.reason}`);
+        }
       }
     }
 
     // Unpack results
-    const klines1m = results[fetchMap.klines1m];
+    const fetched1m = fetchMap.klines1m !== undefined ? results[fetchMap.klines1m] : null;
+    if (Array.isArray(fetched1m) && fetched1m.length > 0) {
+      seedBinanceKlines1m(fetched1m, now);
+    }
+    const klines1m = (Array.isArray(fetched1m) && fetched1m.length > 0) ? fetched1m : cachedKlines1m;
     if (!klines1m || !Array.isArray(klines1m) || klines1m.length === 0) {
       log.warn('1m klines fetch failed — skipping poll');
       return;
     }
-    const klines5m = fetchMap.klines5m !== undefined ? results[fetchMap.klines5m] : getKlines5mCache();
+
+    // Build 5m klines in RAM from the 240×1m buffer (matches signalComputation / trainingRow)
+    const klines5m = aggregate5m(klines1m).slice(-CANDLES_5M);
     const lastPrice = (wsFresh ? wsPrice : null) || (fetchMap.lastPrice !== undefined ? results[fetchMap.lastPrice] : klines1m[klines1m.length - 1]?.close);
 
     if (lastPrice == null || !Number.isFinite(lastPrice)) {
@@ -984,36 +1068,13 @@ export async function pollOnce() {
       return;
     }
 
-    if (!klines5m) {
+    if (!klines5m || klines5m.length === 0) {
       log.warn('No 5m klines available yet');
       return;
     }
 
-    // Update caches
-    if (fetchMap.klines5m !== undefined) updateKlines5m(results[fetchMap.klines5m], now);
-    if (fetchMap.chainlink !== undefined) updateChainlink(results[fetchMap.chainlink], now);
-
     const polyFetched = fetchMap.poly !== undefined ? results[fetchMap.poly] : null;
-    if (polyFetched) {
-      if (polyFetched.ok) {
-        updatePolySnapshot(polyFetched, now);
-        if (polyFetched.market?.endDate) {
-          const endMs = new Date(polyFetched.market.endDate).getTime();
-          if (Number.isFinite(endMs)) {
-            // Schedule PTB capture at endDate (= next market's eventStartTime)
-            if (endMs !== currentMarketEndMs) schedulePtbCapture(endMs);
-            currentMarketEndMs = endMs;
-          }
-        }
-        const mktCondId = polyFetched.market?.conditionId ?? polyFetched.market?.condition_id;
-        if (mktCondId) {
-          currentConditionId = mktCondId;
-          if (isClientReady()) void warmupMarketMetadata(mktCondId);
-        }
-      } else {
-        log.debug(`Polymarket fetch failed: ${polyFetched.reason} — will retry next poll`);
-      }
-    }
+    if (polyFetched) applyPolySnapshot(polyFetched, now);
     const poly = polyFetched?.ok ? polyFetched : getPolySnapshotCache();
 
     // Funding rate — always null (blocked in user's region)

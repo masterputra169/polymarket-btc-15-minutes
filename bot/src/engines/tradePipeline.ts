@@ -665,7 +665,7 @@ export async function executeDirectionalTrade({
 
   if (!deps.isSignalStable(requiredPolls)) {
     const reasons = deps.getInstabilityReasons(requiredPolls);
-    const unstableKey = `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${reasons.map(r => r.replace(/confirm \d+\/\d+/, 'confirm')).join('|')}`;
+    const unstableKey = `${marketSlug ?? ''}|${rec.side ?? ''}|${requiredPolls}|${reasons.map(r => r.replace(/^confirm\b.*/, 'confirm')).join('|')}`;
     [_lastUnstableLogAt, _lastUnstableKey] = logThrottled(
       `Signal unstable, holding: ${reasons.join(' | ')}`,
       unstableKey,
