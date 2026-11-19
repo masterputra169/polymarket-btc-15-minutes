@@ -138,6 +138,7 @@ interface DryRunCommitContext {
   betSizing: any;
   betEnsembleProb: number;
   lastPrice: number | null;
+  settlePrice?: number | null;
   priceToBeat: { value: number | null; source?: string | null };
   regimeInfo: any;
   mlResult: any;
@@ -152,7 +153,7 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
     betSide, tokenId, currentConditionId, marketSlug, shares,
     dryFillPrice, quotePrice, fillModel, isMakerFill, edge, rec,
     flowTag, smartFlowTag, betSizing, betEnsembleProb, lastPrice,
-    priceToBeat, regimeInfo, mlResult, timeLeftMin, smartFlowSignal,
+    settlePrice = null, priceToBeat, regimeInfo, mlResult, timeLeftMin, smartFlowSignal,
     entryData, deps,
   } = ctx;
   const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
@@ -202,6 +203,8 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
     const jevTag = getJevSummary(marketSlug);
     deps.notifyTrade(tradeEntryAlert({
       dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
+      btcPrice: settlePrice ?? lastPrice,
+      priceToBeat: priceToBeat?.value ?? null,
       edge: edge?.bestEdge ?? null,
       mlConfidence: mlResult?.available ? mlResult.mlConfidence : null,
       mlSide: mlResult?.available ? mlResult.mlSide : null,
@@ -228,6 +231,7 @@ interface PendingDryRunMaker {
   betSizing: any;
   betEnsembleProb: number;
   lastPrice: number | null;
+  settlePrice?: number | null;
   priceToBeat: { value: number | null; source?: string | null };
   regimeInfo: any;
   mlResult: any;
@@ -263,6 +267,7 @@ export function stepDryRunMaker(params: {
   marketSlug: string;
   timeLeftMin: number | null;
   lastPrice: number | null;
+  settlePrice?: number | null;
   priceToBeat: { value: number | null; source?: string | null };
   orderbookUp: any;
   orderbookDown: any;
@@ -343,6 +348,7 @@ export function stepDryRunMaker(params: {
       fillModel: 'maker_join',
       isMakerFill: true,
       lastPrice: params.lastPrice ?? pending.lastPrice,
+      settlePrice: params.settlePrice ?? pending.settlePrice ?? null,
       priceToBeat: params.priceToBeat ?? pending.priceToBeat,
       regimeInfo: params.regimeInfo ?? pending.regimeInfo,
       mlResult: params.mlResult ?? pending.mlResult,
@@ -373,7 +379,8 @@ export function stepDryRunMaker(params: {
     });
     const runCheck = isAskRunaway(order.side, pending.placedQuotePrice, params.orderbookUp, params.orderbookDown);
     const askLiqShares = betBook?.askLiquidity;
-    const liqOk = !(Number.isFinite(askLiqShares) && askLiqShares > 0 && pending.shares > askLiqShares);
+    const askEmpty = betBook?.bestAsk === null;
+    const liqOk = !askEmpty && !(Number.isFinite(askLiqShares) && askLiqShares >= 0 && pending.shares > askLiqShares);
 
     if (fokGate.allow && !runCheck.runaway && liqOk && currentAsk != null && currentAsk > 0.01 && currentAsk < 0.99) {
       const fokPx = fokBuyPrice(currentAsk, betBook?.spread ?? params.orderbookUp?.spread);
@@ -391,6 +398,7 @@ export function stepDryRunMaker(params: {
         fillModel: 'fok_after_maker_miss',
         isMakerFill: false,
         lastPrice: params.lastPrice ?? pending.lastPrice,
+        settlePrice: params.settlePrice ?? pending.settlePrice ?? null,
         priceToBeat: params.priceToBeat ?? pending.priceToBeat,
         regimeInfo: params.regimeInfo ?? pending.regimeInfo,
         mlResult: params.mlResult ?? pending.mlResult,
@@ -404,7 +412,7 @@ export function stepDryRunMaker(params: {
       : runCheck.runaway
         ? `runaway_ask_${Number(runCheck.liveAsk).toFixed(3)}`
         : !liqOk
-          ? `thin_ask_${Number(askLiqShares).toFixed(0)}`
+          ? (askEmpty ? 'empty_ask' : `thin_ask_${Number(askLiqShares).toFixed(0)}`)
           : 'invalid_ask';
     log.info(`[DRY RUN] MAKER queue timeout + FOK blocked (${denyWhy}) — skip`);
     pending.deps.setPendingCost(0);
@@ -1118,6 +1126,7 @@ export async function executeDirectionalTrade({
         betSizing,
         betEnsembleProb,
         lastPrice,
+        settlePrice,
         priceToBeat,
         regimeInfo,
         mlResult,
@@ -1185,11 +1194,13 @@ export async function executeDirectionalTrade({
         deps.setPendingCost(0);
         return false;
       }
+      const askEmpty = betBook?.bestAsk === null;
       const askLiqShares = betBook?.askLiquidity;
-      if (Number.isFinite(askLiqShares) && askLiqShares > 0 && shares > askLiqShares) {
+      const thinAsk = Number.isFinite(askLiqShares) && askLiqShares >= 0 && shares > askLiqShares;
+      if (askEmpty || thinAsk) {
         log.info(
           `[DRY RUN] FOK rejected: ${shares} ${betSide} shares @ $${dryFillPrice.toFixed(3)} ` +
-          `> ${Number(askLiqShares).toFixed(0)} shares resting on the ask — a live FOK would not fill`
+          `${askEmpty ? '(empty ask — no sellers on book)' : `> ${Number(askLiqShares).toFixed(0)} shares resting on the ask`} — a live FOK would not fill`
         );
         deps.setPendingCost(0);
         return false;
@@ -1213,6 +1224,7 @@ export async function executeDirectionalTrade({
       betSizing,
       betEnsembleProb,
       lastPrice,
+      settlePrice,
       priceToBeat,
       regimeInfo,
       mlResult,
@@ -1326,6 +1338,8 @@ export async function executeDirectionalTrade({
         const jevTag = getJevSummary(marketSlug);
         deps.notifyTrade(tradeEntryAlert({
           dryRun: false, side: betSide, price: actualPrice, shares: actualSize, cost,
+          btcPrice: settlePrice ?? lastPrice,
+          priceToBeat: priceToBeat?.value ?? null,
           edge: edge.bestEdge ?? null,
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,

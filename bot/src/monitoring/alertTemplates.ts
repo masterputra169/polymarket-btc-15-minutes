@@ -30,12 +30,40 @@ function duration(min: number | null | undefined): string {
   return min.toFixed(1) + 'm';
 }
 
+export function fmtBtcUsd(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '-';
+  const abs = Math.abs(n).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  return (n < 0 ? '-$' : '$') + abs;
+}
+
+export function fmtSignedBtcDelta(delta: number | null | undefined): string {
+  if (delta == null || !Number.isFinite(delta)) return '-';
+  const sign = delta >= 0 ? '+' : '-';
+  return sign + fmtBtcUsd(Math.abs(delta));
+}
+
+export function formatEntryBtcLine(
+  btcPrice: number | null | undefined,
+  priceToBeat?: number | null | undefined,
+): string | null {
+  if (btcPrice == null || !Number.isFinite(btcPrice) || btcPrice <= 0) return null;
+  if (priceToBeat != null && Number.isFinite(priceToBeat) && priceToBeat > 0) {
+    return '₿ BTC <b>' + fmtBtcUsd(btcPrice) + '</b> (PTB ' + fmtBtcUsd(priceToBeat) + ', ' + fmtSignedBtcDelta(btcPrice - priceToBeat) + ')';
+  }
+  return '₿ BTC <b>' + fmtBtcUsd(btcPrice) + '</b>';
+}
+
 export interface TradeEntryAlert {
   dryRun: boolean;
   side: string;
   price: number;
   shares: number;
   cost: number;
+  btcPrice?: number | null;
+  priceToBeat?: number | null;
   edge: number | null;
   mlConfidence: number | null;
   mlSide: string | null;
@@ -52,10 +80,12 @@ export interface TradeEntryAlert {
 export function tradeEntryAlert(p: TradeEntryAlert): string {
   const arrow = p.side === 'UP' ? '↑' : p.side === 'DOWN' ? '↓' : '↔';
   const title = p.dryRun ? '🧪 <b>DRY ENTRY</b>' : '⚡ <b>ENTRY</b>';
+  const btcLine = formatEntryBtcLine(p.btcPrice, p.priceToBeat);
   const lines = [
     title + '  ' + arrow + ' <b>' + escapeHtml(p.side) + '</b>  @ <code>' + (p.price * 100).toFixed(1) + 'c</code>',
     '',
     '💵 <b>' + Number(p.shares).toFixed(0) + ' shares</b> · ' + fmtUsd(p.cost),
+    btcLine,
     p.edge != null ? '📐 Edge <b>' + (p.edge * 100).toFixed(1) + '%</b>' : null,
     p.mlConfidence != null
       ? '🤖 ML <b>' + fmtPct(p.mlConfidence) + '</b>' + (p.mlSide ? ' (' + escapeHtml(p.mlSide) + ')' : '')

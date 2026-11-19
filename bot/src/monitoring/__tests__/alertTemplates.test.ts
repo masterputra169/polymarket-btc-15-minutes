@@ -23,6 +23,26 @@ describe('alert templates', () => {
     expect(text).toContain('MID');
     expect(text).toContain('View Market');
     expect(text).not.toContain('<script>');
+    expect(text).not.toContain('₿ BTC');
+  });
+
+  it('includes BTC price, PTB, and signed delta when provided', () => {
+    const withPtb = tradeEntryAlert({
+      dryRun: true, side: 'UP', price: 0.60, shares: 5, cost: 3.00,
+      btcPrice: 63_873.00, priceToBeat: 63_672.88,
+      edge: 0.291, mlConfidence: 0.86, mlSide: 'UP',
+      jevSummary: null, bankroll: 105.93, marketSlug: 'btc-updown-15m-1',
+    });
+    expect(withPtb).toContain('₿ BTC <b>$63,873.00</b> (PTB $63,672.88, +$200.12)');
+
+    const withoutPtb = tradeEntryAlert({
+      dryRun: false, side: 'DOWN', price: 0.62, shares: 5, cost: 3.10,
+      btcPrice: 63_500.50, priceToBeat: null,
+      edge: 0.08, mlConfidence: 0.70, mlSide: 'DOWN',
+      jevSummary: null, bankroll: 100, marketSlug: null,
+    });
+    expect(withoutPtb).toContain('₿ BTC <b>$63,500.50</b>');
+    expect(withoutPtb).not.toContain('PTB ');
   });
 
   it('formats a live entry without dry prefix', () => {

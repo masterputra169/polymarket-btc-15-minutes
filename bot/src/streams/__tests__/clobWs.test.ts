@@ -482,4 +482,26 @@ describe('orderbook liquidity', () => {
     expect(ob.bidLiquidity).toBe(15);  // 5+4+3+2+1, not 15,000 at 1-5c
     expect(ob.askLiquidity).toBe(150); // 50+40+30+20+10, not 15,000 at 95-99c
   });
+
+  test('one-sided extreme 99c/1c books stay bookValid and update live prices instead of falling back stale', () => {
+    const sock = bringUp();
+    sock.deliver({
+      event_type: 'book',
+      asset_id: UP,
+      bids: [{ price: '0.99', size: '1000' }],
+      asks: [],
+    });
+    sock.deliver({
+      event_type: 'book',
+      asset_id: DOWN,
+      bids: [],
+      asks: [{ price: '0.01', size: '1000' }],
+    });
+
+    expect(clob.getFeedHealth().bookValid).toBe(true);
+    expect(clob.getUpPrice()).toBe(0.99);
+    expect(clob.getDownPrice()).toBe(0.01);
+    expect(clob.getOrderbook().up).toMatchObject({ bestBid: 0.99, bestAsk: null, askLiquidity: 0 });
+    expect(clob.getOrderbook().down).toMatchObject({ bestBid: null, bestAsk: 0.01, bidLiquidity: 0 });
+  });
 });

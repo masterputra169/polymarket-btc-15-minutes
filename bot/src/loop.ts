@@ -246,7 +246,7 @@ import { broadcast } from './statusServer.ts';
 
 // External notifications (Telegram/Discord)
 import { notify } from './monitoring/notifier.ts';
-import { escapeHtml } from './monitoring/alertTemplates.ts';
+import { escapeHtml, formatEntryBtcLine } from './monitoring/alertTemplates.ts';
 import { beatLiveness } from './monitoring/processLiveness.ts';
 import { recordIdleHeartbeat, recordPollHeartbeat } from './monitoring/ptbHealth.ts';
 import { parseClobAmount } from './utils/clobAmount.ts';
@@ -2439,9 +2439,11 @@ export async function pollOnce() {
                   isMaker: true, fillModel: 'maker_join',
                   timeLeftMin, session: getSessionName(),
                 });
+                const btcLine = formatEntryBtcLine(settlePrice ?? lastPrice, priceToBeat.value);
                 notify('warn',
                   `🔴 PHANTOM FILL during upgrade\n` +
                   `Limit was already filled: ${fd.side} ${fd.size}@${(fd.price * 100).toFixed(1)}¢\n` +
+                  (btcLine ? `${btcLine}\n` : '') +
                   `Position recorded — skipping FOK`,
                   { key: 'trade:limit:phantom' }).catch(e => log.debug(`Notify phantom: ${e.message}`));
                 // DON'T set smartRouteFOK — limit already filled, don't double-buy
@@ -2504,9 +2506,11 @@ export async function pollOnce() {
             if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
               updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Limit fill approval: ${e.message}`));
             }
+            const btcLine = formatEntryBtcLine(settlePrice ?? lastPrice, priceToBeat.value);
             notify('info',
               `✅ LIMIT ORDER FILLED\n` +
               `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+              (btcLine ? `${btcLine}\n` : '') +
               `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
               `Now holding → settlement\n` +
               `<a href="https://polymarket.com/event/${encodeURIComponent(fd.marketSlug)}">View Market</a>`,
@@ -2543,9 +2547,11 @@ export async function pollOnce() {
             if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
               updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Limit partial approval: ${e.message}`));
             }
+            const btcLine = formatEntryBtcLine(settlePrice ?? lastPrice, priceToBeat.value);
             notify('info',
               `⚡ LIMIT PARTIAL FILL\n` +
               `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+              (btcLine ? `${btcLine}\n` : '') +
               `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
               `Remainder cancelled — holding partial position\n` +
               `<a href="https://polymarket.com/event/${encodeURIComponent(fd.marketSlug)}">View Market</a>`,
@@ -2628,9 +2634,11 @@ export async function pollOnce() {
               if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
                 updateConditionalApproval(fd.tokenId).catch(e => log.debug(`Phantom fill approval: ${e.message}`));
               }
+              const btcLine = formatEntryBtcLine(settlePrice ?? lastPrice, priceToBeat.value);
               notify('warn',
                 `🔴 PHANTOM FILL DETECTED\n` +
                 `Side: ${fd.side} | ${fd.size} shares @ ${(fd.price * 100).toFixed(1)}¢\n` +
+                (btcLine ? `${btcLine}\n` : '') +
                 `Cost: $${(fd.price * fd.size).toFixed(2)} | Bankroll: $${getBankroll().toFixed(2)}\n` +
                 `Cancel failed — order was filled on-book\n` +
                 `Position auto-recorded → holding to settlement\n` +
@@ -2660,6 +2668,7 @@ export async function pollOnce() {
         marketSlug,
         timeLeftMin,
         lastPrice,
+        settlePrice,
         priceToBeat,
         orderbookUp,
         orderbookDown,

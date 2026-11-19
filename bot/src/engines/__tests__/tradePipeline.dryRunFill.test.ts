@@ -410,4 +410,15 @@ describe('the depth gate reads the book of the side being traded', () => {
     expect(aborted).toBe(false);
     expect(depsRunaway.recordTrade).not.toHaveBeenCalled();
   });
+
+  test('rejects dry-run FOK when asks are empty or explicit askLiquidity is 0 (one-sided 99c book)', async () => {
+    const deps = makeDeps();
+    const rejected = await executeDirectionalTrade(signal({
+      betMarketPrice: 0.595,
+      orderbookUp: { spread: null, bestBid: 0.99, bestAsk: null, askLiquidity: 0 },
+    }), deps);
+    expect(rejected).toBe(false);
+    expect(deps.recordTrade).not.toHaveBeenCalled();
+    expect(deps.setPendingCost).toHaveBeenLastCalledWith(0);
+  });
 });

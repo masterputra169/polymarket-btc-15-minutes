@@ -97,6 +97,9 @@ export function isClobConnected() { return _connected; }
 /** A side is only usable once we hold both of its quotes. */
 function twoSided(side) { return side.bestBid !== null && side.bestAsk !== null; }
 
+/** Either side holds at least one active quote (bid or ask) for extreme 99c/1c books. */
+function hasQuote(side) { return side.bestBid !== null || side.bestAsk !== null; }
+
 /**
  * What the freshness decision needs, as four independent facts.
  * `lastFrameMs` moves on ANY inbound frame (PONG included) and proves the link;
@@ -107,7 +110,7 @@ export function getFeedHealth() {
   return {
     now: Date.now(),
     connected: _connected,
-    bookValid: twoSided(_orderbook.up) || twoSided(_orderbook.down),
+    bookValid: hasQuote(_orderbook.up) || hasQuote(_orderbook.down),
     lastFrameMs: lastMsgMs,
     lastQuoteMs: lastDataMsgMs,
   };
@@ -163,13 +166,14 @@ function handleBookEvent(data) {
   const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
   // Best levels first: the market channel lists both sides worst-first (see depthNearTop).
   const bookData = { bestBid, bestAsk, spread, bidLiquidity: depthNearTop(bids, 'bid'), askLiquidity: depthNearTop(asks, 'ask'), bidSize: bidLevel?.size ?? 0, askSize: askLevel?.size ?? 0 };
+  const nextPx = (bestBid !== null && bestAsk !== null) ? (bestBid + bestAsk) / 2 : (bestBid ?? bestAsk);
 
   if (assetId === tokenIds.up) {
     Object.assign(_orderbook.up, bookData);
-    if (bestBid !== null && bestAsk !== null) _upPrice = (bestBid + bestAsk) / 2;
+    if (nextPx !== null) _upPrice = nextPx;
   } else if (assetId === tokenIds.down) {
     Object.assign(_orderbook.down, bookData);
-    if (bestBid !== null && bestAsk !== null) _downPrice = (bestBid + bestAsk) / 2;
+    if (nextPx !== null) _downPrice = nextPx;
   }
   _lastUpdate = Date.now();
 }

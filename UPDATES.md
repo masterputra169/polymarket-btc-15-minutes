@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-19 — Telegram Entry BTC Price Alert & Fix One-Sided Extreme-Book Stale Fallback
+
+- **BTC Entry Price + PTB/Delta in Telegram Alerts (`bot/src/monitoring/alertTemplates.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/monitoring/__tests__/alertTemplates.test.ts`):** Added `formatEntryBtcLine()` (`₿ BTC <b>$XX,XXX.XX</b> (PTB $XX,XXX.XX, +/-$XXX.XX)`) using Chainlink settlement-aligned `settlePrice ?? lastPrice` and `priceToBeat` across `tradeEntryAlert` (dry-run & live FOK + queued `stepDryRunMaker` fills) and all live GTD limit-order fill/partial/phantom Telegram alerts.
+- **Keep One-Sided `99c`/`1c` Books Live in `clobWs.ts` (`bot/src/streams/clobWs.ts`, `bot/src/streams/__tests__/clobWs.test.ts`):** Replaced `twoSided` check in `getFeedHealth().bookValid` with `hasQuote()` (`bestBid !== null || bestAsk !== null`) and updated `handleBookEvent()` to fall back to `bestBid ?? bestAsk` when one side is empty. Previously when Polymarket `UP` hit `99c` with empty asks, `bookValid` dropped to `false` and `signalComputation.ts` fell back to stale 30s Gamma REST `poly.prices` (`59.5c` during Trade `#42` at `20:53:15 WIB`).
+- **Reject Empty-Ask / Zero-Liquidity Dry-Run FOK (`bot/src/engines/tradePipeline.ts`, `bot/src/engines/__tests__/tradePipeline.dryRunFill.test.ts`):** Changed `stepDryRunMaker` and dry-run FOK liquidity guards from `askLiqShares > 0` to `bestAsk === null || (askLiqShares >= 0 && shares > askLiqShares)` so explicit `0`-depth / empty-ask books are rejected instead of bypassing depth checks.
+
 ## 2026-11-19 — Volume-Increase Profile Tuning (`68c` Cap, `25s` Maker Window, `2` Attempts)
 
 - **Reversible Runtime Profile Override (`20261116-p2-ef8dfd`, live-applied via `saveModelProfile` WS RPC on `polyvps` with `0` bot restarts):** Kept `bot/.env` untouched (`65c` baseline) and loosened only the top solo blockers while leaving `ML >= 30%`, `BLOCKED_SESSIONS=Europe`, and `13.5m` early guard intact: `softEntryCap`/`baseHardCap`/`trendingHardCap`/`trendingMaxPrice` `0.65 → 0.68`, `ultraMlCap` `0.68 → 0.70`, `midPhaseMaxPrice` `0.63 → 0.65`, `limitOrder.maxEntryPrice` `0.64 → 0.67`, `maxUnfilledSec` `15s → 25s`, and `maxAttemptsPerMarket` `1 → 2`.
