@@ -195,6 +195,7 @@ const BOT_CONFIG = {
     minEvalPolls: envInt(process.env.LIMIT_MIN_EVAL_POLLS, 1, 1, 10),             // 3→1 — faster placement, ML is stable enough
     maxAttemptsPerMarket: envInt(process.env.LIMIT_MAX_ATTEMPTS_PER_MARKET, 1, 1, 5), // npcnpc09: one-shot limit per window default
     checkIntervalMs: envInt(process.env.LIMIT_CHECK_INTERVAL_MS, 2000, 500, 10000),
+    postOnly: process.env.LIMIT_POST_ONLY !== 'false',
   },
 
   // Pre-execution 2c runaway ask haircut (emoubarak) & edge-death tripwire

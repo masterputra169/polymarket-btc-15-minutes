@@ -81,14 +81,16 @@ export function estimateSettlePrice(i: SettleEstimateInput): SettleEstimate {
 }
 
 /**
- * Compensate ~1-1.5s Chainlink relay lag using synchronous Binance spot move
- * since the last observed Chainlink update (krabduke nowcast). Bounded to
- * ±maxDeltaPct so exchange glitches cannot distort fair value.
+ * Compensate ~1-1.5s Chainlink relay lag using synchronous multi-venue delta
+ * (equal-weighted Coinbase USD + Binance USDT when both exist, else whichever is
+ * fresh; krabduke nowcast). Bounded to ±maxDeltaPct so exchange glitches cannot
+ * distort fair value.
  */
 export class ChainlinkNowcastTracker {
   private lastClSpot: number | null = null;
   private lastClUpdateMs = 0;
   private binanceAtCl: number | null = null;
+  private coinbaseAtCl: number | null = null;
   private readonly maxLagMs: number;
   private readonly maxDeltaPct: number;
 
@@ -97,23 +99,34 @@ export class ChainlinkNowcastTracker {
     this.maxDeltaPct = maxDeltaPct;
   }
 
-  update(clSpot: number | null, clUpdateMs: number, binanceNow: number | null): number | null {
+  update(
+    clSpot: number | null,
+    clUpdateMs: number,
+    binanceNow: number | null,
+    coinbaseNow: number | null = null,
+  ): number | null {
     if (clSpot == null || !(clSpot > 0)) return null;
     if (clSpot !== this.lastClSpot || (clUpdateMs > 0 && clUpdateMs !== this.lastClUpdateMs)) {
       this.lastClSpot = clSpot;
       this.lastClUpdateMs = clUpdateMs > 0 ? clUpdateMs : Date.now();
       this.binanceAtCl = (binanceNow != null && binanceNow > 0) ? binanceNow : null;
+      this.coinbaseAtCl = (coinbaseNow != null && coinbaseNow > 0) ? coinbaseNow : null;
     }
-    if (
-      binanceNow == null ||
-      !(binanceNow > 0) ||
-      this.binanceAtCl == null ||
-      (this.lastClUpdateMs > 0 && Date.now() - this.lastClUpdateMs > this.maxLagMs)
-    ) {
+    if (this.lastClUpdateMs > 0 && Date.now() - this.lastClUpdateMs > this.maxLagMs) {
       return clSpot;
     }
+    const binDelta = (binanceNow != null && binanceNow > 0 && this.binanceAtCl != null)
+      ? binanceNow - this.binanceAtCl : null;
+    const cbDelta = (coinbaseNow != null && coinbaseNow > 0 && this.coinbaseAtCl != null)
+      ? coinbaseNow - this.coinbaseAtCl : null;
+
+    const rawDelta = (binDelta != null && cbDelta != null)
+      ? 0.5 * cbDelta + 0.5 * binDelta
+      : (cbDelta ?? binDelta);
+    if (rawDelta == null) return clSpot;
+
     const maxDelta = clSpot * this.maxDeltaPct;
-    const delta = Math.max(-maxDelta, Math.min(maxDelta, binanceNow - this.binanceAtCl));
+    const delta = Math.max(-maxDelta, Math.min(maxDelta, rawDelta));
     return clSpot + delta;
   }
 }

@@ -68,6 +68,31 @@ export function normCdf(x: number): number {
   return x >= 0 ? 0.5 * (1 + erf) : 0.5 * (1 - erf);
 }
 
+export const TWAP_STUDENT_DF = 3;
+
+/** Exact closed-form Student-t CDF for heavy-tailed df in {3, 4, 5}, fallback to normCdf. */
+export function studentTCdf(x: number, df = TWAP_STUDENT_DF): number {
+  if (Number.isNaN(x)) return 0.5;
+  if (x === Infinity) return 1;
+  if (x === -Infinity) return 0;
+
+  let cdf: number;
+  if (df === 3) {
+    const s3 = Math.sqrt(3);
+    cdf = 0.5 + (Math.atan(x / s3) + (x * s3) / (3 + x * x)) / Math.PI;
+  } else if (df === 4) {
+    const u = 4 + x * x;
+    cdf = 0.5 + 0.5 * (x / Math.sqrt(u)) * (1 + 2 / u);
+  } else if (df === 5) {
+    const u = 5 + x * x;
+    const s5 = Math.sqrt(5);
+    cdf = 0.5 + (Math.atan(x / s5) + ((x * s5) / u) * (1 + 10 / (3 * u))) / Math.PI;
+  } else {
+    cdf = normCdf(x);
+  }
+  return Math.max(0, Math.min(1, cdf));
+}
+
 /** The settlement estimate over the last minutes, to read its value 30 s ago. */
 export class SettleHistory {
   private readonly pts: { t: number; v: number }[] = [];
@@ -109,6 +134,8 @@ export interface TwapPhysics {
   pFatTail?: number | null;
   /** Fat-tail inflated z-score. */
   zFatTail?: number | null;
+  /** Heavy-tailed Student-t (df=3) P(UP) telemetry at raw z (record-only). */
+  pStudentT?: number | null;
 }
 
 export const TWAP_TAIL_INFLATE = 1.4;
@@ -163,5 +190,6 @@ export function twapPhysics(input: {
     sigmaMax,
     pFatTail,
     zFatTail,
+    pStudentT: studentTCdf(z, TWAP_STUDENT_DF),
   };
 }

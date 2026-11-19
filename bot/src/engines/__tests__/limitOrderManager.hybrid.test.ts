@@ -31,6 +31,7 @@ vi.mock('../../logger.ts', () => ({
 
 vi.mock('../../ml/modelProfiles.ts', () => ({
   getEffectiveLimitOrderConfig: () => mockGetEffectiveLimitOrderConfig(),
+  getEffectiveMaxBetAmountUsd: () => 5,
 }));
 
 vi.mock('../executionTiming.ts', () => ({
@@ -54,6 +55,7 @@ vi.mock('../../services/runtimeIntegrations.ts', () => ({
 import {
   computeTargetPrice,
   evaluateLimitEntry,
+  placeLimitOrder,
   resetLimitOrderState,
 } from '../limitOrderManager.ts';
 
@@ -70,6 +72,8 @@ const DEFAULT_CFG = {
   priceDiscountPct: 0.12,
   minElapsedMin: 1,
   maxElapsedMin: 12,
+  expirationBufferSec: 120,
+  postOnly: true,
 };
 
 function makeSignal(overrides: Record<string, unknown> = {}) {
@@ -126,5 +130,62 @@ describe('limitOrderManager Hybrid JOIN & edge math', () => {
     }));
     expect(failRes.shouldPlace).toBe(false);
     expect(failRes.reason).toBe('limit_edge_2.0%<3%');
+  });
+
+  it('placeLimitOrder passes postOnly: true by default and catches post-only book-cross rejections cleanly', async () => {
+    const placeMock = vi.fn(async () => ({ orderId: 'ord-po-1' }));
+    const setPending = vi.fn();
+
+    const ok = await placeLimitOrder({
+      side: 'UP',
+      targetPrice: 0.56,
+      tokenId: 'tok-up',
+      marketSlug: 'btc-updown-15m-test-po-1',
+      conditionId: '0xcond',
+      marketEndMs: Date.now() + 10 * 60_000,
+      bankroll: 100,
+      mlConfidence: 0.75,
+      sessionQuality: 1.0,
+    }, { placeLimitBuyOrder: placeMock, setPendingCost: setPending });
+
+    expect(ok.placed).toBe(true);
+    expect(placeMock).toHaveBeenCalledWith(expect.objectContaining({ postOnly: true }));
+
+    // Explicit postOnly: false override respected
+    resetLimitOrderState();
+    mockGetEffectiveLimitOrderConfig.mockReturnValue({ ...DEFAULT_CFG, postOnly: false });
+    await placeLimitOrder({
+      side: 'UP',
+      targetPrice: 0.56,
+      tokenId: 'tok-up',
+      marketSlug: 'btc-updown-15m-test-po-2',
+      conditionId: '0xcond',
+      marketEndMs: Date.now() + 10 * 60_000,
+      bankroll: 100,
+      mlConfidence: 0.75,
+      sessionQuality: 1.0,
+    }, { placeLimitBuyOrder: placeMock, setPendingCost: setPending });
+    expect(placeMock).toHaveBeenLastCalledWith(expect.objectContaining({ postOnly: false }));
+
+    // postOnly book-cross rejection releases pending cost and returns post_only_rejected
+    resetLimitOrderState();
+    mockGetEffectiveLimitOrderConfig.mockReturnValue({ ...DEFAULT_CFG, postOnly: true });
+    const crossMock = vi.fn(async () => {
+      throw new Error('invalid post only order: crosses book');
+    });
+    const rej = await placeLimitOrder({
+      side: 'UP',
+      targetPrice: 0.56,
+      tokenId: 'tok-up',
+      marketSlug: 'btc-updown-15m-test-po-3',
+      conditionId: '0xcond',
+      marketEndMs: Date.now() + 10 * 60_000,
+      bankroll: 100,
+      mlConfidence: 0.75,
+      sessionQuality: 1.0,
+    }, { placeLimitBuyOrder: crossMock, setPendingCost: setPending });
+
+    expect(rej).toEqual({ placed: false, orderId: null, reason: 'post_only_rejected' });
+    expect(setPending).toHaveBeenLastCalledWith(0);
   });
 });

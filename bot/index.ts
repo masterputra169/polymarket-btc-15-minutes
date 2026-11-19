@@ -53,6 +53,8 @@ import { initClobClient, verifyClobV2Readiness, cancelAllOrders, getOpenOrders, 
 import { GTD_MIN_LEAD_SEC, worstCaseLimitLeadSec } from './src/trading/orderConstraints.ts';
 import { initDataStreams, shutdownDataStreams, isDataStreamsConfigured } from './src/adapters/chainlinkDataStreams.ts';
 import { connect as connectBinanceWs, disconnect as disconnectBinanceWs, getPrice as getBinanceWsPrice } from './src/streams/binanceWs.ts';
+import { connect as connectCoinbaseWs, disconnect as disconnectCoinbaseWs } from './src/streams/coinbaseWs.ts';
+import { connectClobUserWs, disconnectClobUserWs } from './src/streams/clobUserWs.ts';
 import { connect as connectClobWs, disconnect as disconnectClobWs } from './src/streams/clobWs.ts';
 import { connect as connectPolyLiveWs, disconnect as disconnectPolyLiveWs, getPrice as getPolyLiveWsPrice } from './src/streams/polymarketLiveWs.ts';
 import { startTwapFeed, stopTwapFeed, getLatestTwap, getTwapFeedHealth } from './src/streams/chainlinkTwap.ts';
@@ -332,7 +334,9 @@ async function main() {
   // 5. Start WebSocket streams (real-time data)
   log.info('Connecting WebSocket streams...');
   connectBinanceWs();
+  connectCoinbaseWs();
   connectClobWs();
+  connectClobUserWs();
   connectPolyLiveWs();
   // Chainlink 60 s TWAP — what the markets settle on; source of the exact price to beat.
   startTwapFeed();
@@ -467,7 +471,9 @@ async function main() {
 
     // Disconnect WebSockets
     disconnectBinanceWs();
+    disconnectCoinbaseWs();
     disconnectClobWs();
+    disconnectClobUserWs();
     disconnectPolyLiveWs();
     stopTwapFeed();
     disconnectChainlinkWss();

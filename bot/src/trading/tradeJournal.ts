@@ -17,6 +17,7 @@ import { escapeHtml } from '../monitoring/alertTemplates.ts';
 import { mirrorTradeJournalRecord } from '../services/runtimeIntegrations.ts';
 import { getBankroll } from './positionTracker.ts';
 import { getJevSummary } from '../ai/jevAdvisor.ts';
+import { startMarkoutTracking, finalizeMarkout, clearActiveMarkout } from '../monitoring/markoutTracker.ts';
 
 const log = createLogger('Journal');
 
@@ -138,6 +139,16 @@ export function loadEntrySnapshotFromDisk() {
     const snap = JSON.parse(raw);
     if (snap && snap.side && snap.marketSlug) {
       entrySnapshot = snap;
+      if ((snap.side === 'UP' || snap.side === 'DOWN') && Number.isFinite(snap.tokenPrice) && snap.tokenPrice > 0 && snap.tokenPrice < 1) {
+        startMarkoutTracking({
+          marketSlug: snap.marketSlug,
+          side: snap.side,
+          fillPrice: snap.tokenPrice,
+          fillModel: snap.fillModel ?? null,
+          isMaker: Boolean(snap.isMaker),
+          filledAt: snap.enteredAt ?? Date.now(),
+        });
+      }
       log.info(`[RC1] Entry snapshot restored from disk: ${snap.side} on ${snap.marketSlug} (entered ${new Date(snap.enteredAt).toISOString()})`);
       return true;
     }
@@ -163,6 +174,16 @@ export function captureEntrySnapshot(data) {
     enteredAt: Date.now(),
   };
   // RC1 Fix: persist to disk — survives bot restarts
+  if (data?.marketSlug && (data.side === 'UP' || data.side === 'DOWN') && Number.isFinite(data.tokenPrice) && data.tokenPrice > 0 && data.tokenPrice < 1) {
+    startMarkoutTracking({
+      marketSlug: data.marketSlug,
+      side: data.side,
+      fillPrice: data.tokenPrice,
+      fillModel: data.fillModel ?? null,
+      isMaker: Boolean(data.isMaker),
+      filledAt: entrySnapshot.enteredAt,
+    });
+  }
   try {
     const dir = dirname(BOT_CONFIG.entrySnapshotFile);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -204,6 +225,8 @@ export function writeJournalEntry({ outcome, pnl, exitData }) {
   };
 
   const analysis = computeAnalysis(entrySnapshot, exit, outcome, pnl);
+  const markout = finalizeMarkout(entrySnapshot.marketSlug);
+  if (markout) analysis.markout = markout;
 
   const record = {
     entry: entrySnapshot,
@@ -317,6 +340,7 @@ export function getEntrySnapshot() {
 
 export function clearEntrySnapshot() {
   entrySnapshot = null;
+  clearActiveMarkout();
   // RC1 Fix: delete disk file too
   try {
     if (BOT_CONFIG.entrySnapshotFile && existsSync(BOT_CONFIG.entrySnapshotFile)) {

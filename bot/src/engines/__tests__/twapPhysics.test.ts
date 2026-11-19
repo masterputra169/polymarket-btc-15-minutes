@@ -3,7 +3,7 @@
  * per-second volatility, and P(UP) = Φ(z).
  */
 import { describe, test, expect } from 'vitest';
-import { twapVarianceSeconds, spotVolPerSecond, spotVolPerSecondEwma, normCdf, twapPhysics, SettleHistory } from '../twapPhysics.ts';
+import { twapVarianceSeconds, spotVolPerSecond, spotVolPerSecondEwma, normCdf, studentTCdf, TWAP_STUDENT_DF, twapPhysics, SettleHistory } from '../twapPhysics.ts';
 import { DecisionTrail } from '../../tape/decisionTrail.ts';
 
 const END = 1_790_400_000_000;
@@ -69,6 +69,23 @@ describe('twapPhysics', () => {
     expect(r.sigmaMax).toBeCloseTo(4, 9);
     expect(r.zFatTail).toBeCloseTo(20 / (4 * 1.4 * Math.sqrt(60.5)), 9);
     expect(r.pFatTail!).toBeLessThan(r.p);
+    expect(r.pStudentT).toBeCloseTo(studentTCdf(r.z, TWAP_STUDENT_DF), 12);
+  });
+});
+
+describe('studentTCdf heavy-tail pricing telemetry', () => {
+  test('is symmetric, exact for df=3/4/5, and gives heavier tails than Gaussian', () => {
+    for (const df of [3, 4, 5]) {
+      expect(studentTCdf(0, df)).toBeCloseTo(0.5, 12);
+      expect(studentTCdf(2, df) + studentTCdf(-2, df)).toBeCloseTo(1, 12);
+      expect(studentTCdf(3, df)).toBeLessThan(normCdf(3));
+      expect(studentTCdf(-3, df)).toBeGreaterThan(normCdf(-3));
+    }
+    // Check df=3 analytical point at x = sqrt(3): atan(1)=pi/4, sqrt(3)*sqrt(3)/6=1/2 -> 0.5 + (pi/4 + 0.5)/pi = 0.75 + 1/(2*pi)
+    expect(studentTCdf(Math.sqrt(3), 3)).toBeCloseTo(0.75 + 1 / (2 * Math.PI), 12);
+    expect(studentTCdf(Number.POSITIVE_INFINITY, 3)).toBe(1);
+    expect(studentTCdf(Number.NEGATIVE_INFINITY, 3)).toBe(0);
+    expect(studentTCdf(Number.NaN, 3)).toBe(0.5);
   });
 });
 

@@ -38,6 +38,13 @@ import {
   needsKlinesResync as needsBinanceKlinesResync,
 } from './streams/binanceWs.ts';
 import {
+  getPrice as getCoinbasePrice,
+  isConnected as isCoinbaseConnected,
+  getLastMsgTime as getCoinbaseLastMsgTime,
+} from './streams/coinbaseWs.ts';
+import { getUserOrderEvent } from './streams/clobUserWs.ts';
+import { sampleMarkout, getMarkoutStats } from './monitoring/markoutTracker.ts';
+import {
   getUpPrice as getClobUpPrice,
   getDownPrice as getClobDownPrice,
   getOrderbook as getClobOrderbook,
@@ -1432,7 +1439,14 @@ export async function pollOnce() {
       : null;
     const clSpot = polyLiveFresh ?? clWssFresh;
     const clUpdateMs = polyLiveFresh != null ? (polyLiveUpdateMs ?? 0) : (clWssFresh != null ? (clWssUpdateMs ?? 0) : 0);
-    const nowcastCl = chainlinkNowcastTracker.update(clSpot, clUpdateMs, wsFresh ? lastPrice : null);
+    const cbPrice = getCoinbasePrice();
+    const cbFresh = Boolean(cbPrice != null && isCoinbaseConnected() && (Date.now() - getCoinbaseLastMsgTime() < 10_000));
+    const nowcastCl = chainlinkNowcastTracker.update(
+      clSpot,
+      clUpdateMs,
+      wsFresh ? lastPrice : null,
+      cbFresh ? cbPrice : null,
+    );
     if (wsFresh && clSpot != null) basisTracker.update(lastPrice, clSpot);
     const settle = estimateSettlePrice({
       nowMs: now, endMs: currentMarketEndMs, spot: clSpot,
@@ -1748,6 +1762,9 @@ export async function pollOnce() {
     if (pos && !pos.settled) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
       updatePositionMarketPrice(tokenPrice); // Fix M: keep mark-to-market drawdown current
+      if (pos.side === 'UP' || pos.side === 'DOWN') {
+        sampleMarkout({ marketSlug: pos.marketSlug, side: pos.side, currentTokenPrice: tokenPrice, now });
+      }
     }
     if (pos && !pos.settled && pos.side !== 'ARB' && !smartSellTriggered && !isPreMarketPos) {
       const tokenPrice = pos.side === 'UP' ? marketUp : marketDown;
@@ -2446,7 +2463,7 @@ export async function pollOnce() {
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
             marketSlug,
-          }, { getOrderById, getOrderStatus, cancelOrder, setPendingCost });
+          }, { getOrderById, getOrderStatus, getUserOrderEvent, cancelOrder, setPendingCost });
 
           if (monResult.action === 'FILLED' && monResult.fillData) {
             // Order filled — record position
@@ -3142,8 +3159,11 @@ export async function pollOnce() {
       // Connection statuses
       binanceConnected: isBinanceConnected(),
       binancePrice: lastPrice,
+      coinbaseConnected: isCoinbaseConnected(),
+      coinbasePrice: getCoinbasePrice(),
       polyLiveConnected, chainlinkWssConnected,
       chainlinkSource: chainlinkResolved.source,
+      markout: getMarkoutStats(),
 
       // Real USDC balance
       usdcBalance: usdcBalData ? {

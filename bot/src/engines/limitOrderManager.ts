@@ -405,11 +405,13 @@ export async function placeLimitOrder({
   deps.setPendingCost(orderCost);
 
   try {
+    const postOnly = cfg.postOnly !== false;
     const result = await deps.placeLimitBuyOrder({
       tokenId,
       price: targetPrice,
       size,
       expiration: expirationTs,
+      postOnly,
     });
 
     const orderId = result?.orderId ?? null;
@@ -445,13 +447,23 @@ export async function placeLimitOrder({
     return { placed: true, orderId, reason: 'placed' };
   } catch (err) {
     deps.setPendingCost(0); // Release reservation on failure
-    log.error(`LIMIT ORDER FAILED: ${err.message}`);
+    const errMsg = String(err?.message ?? err ?? '');
+    const isPostOnlyReject = /post.?only|crosses?\s+book/i.test(errMsg);
+    if (isPostOnlyReject) {
+      log.warn(`LIMIT ORDER postOnly rejected (would cross book — protected from taker fee): ${errMsg}`);
+    } else {
+      log.error(`LIMIT ORDER FAILED: ${errMsg}`);
+    }
     // Count as attempt to prevent retry spam (anti-loop)
     attemptCount++;
     lastCancelAt = Date.now();
     marketForAttempts = marketSlug;
     resetLimitOrderState();
-    return { placed: false, orderId: null, reason: `error: ${err.message}` };
+    return {
+      placed: false,
+      orderId: null,
+      reason: isPostOnlyReject ? 'post_only_rejected' : `error: ${errMsg}`,
+    };
   }
 }
 
@@ -547,6 +559,58 @@ export async function monitorLimitOrder({
   if (elapsedMin != null && elapsedMin >= cfg.cancelAfterElapsedMin) {
     log.info(`LIMIT ORDER time cutoff: ${elapsedMin.toFixed(1)}m >= ${cfg.cancelAfterElapsedMin}m`);
     return { action: 'CANCEL_TIME_CUTOFF', detail: `elapsed_${elapsedMin.toFixed(1)}m` };
+  }
+
+  // Real-time authenticated User WS event bypasses 8s REST grace/polling wait
+  const wsEv = deps.getUserOrderEvent?.(state.orderId);
+  if (wsEv?.status === 'MATCHED') {
+    log.info(
+      `LIMIT ORDER FILLED (UserWS): ${state.side} ${wsEv.sizeMatched > 0 ? Math.round(wsEv.sizeMatched) : state.size}` +
+      `@${((wsEv.price ?? state.targetPrice) * 100).toFixed(1)}c | orderId=${state.orderId}`
+    );
+    return {
+      action: 'FILLED',
+      detail: 'ws_user_matched',
+      fillData: {
+        side: state.side,
+        tokenId: state.tokenId,
+        price: wsEv.price ?? state.targetPrice,
+        size: wsEv.sizeMatched > 0 ? Math.round(wsEv.sizeMatched) : state.size,
+        conditionId: state.conditionId,
+        marketSlug: state.marketSlug,
+        orderId: state.orderId,
+        signalSnapshot: state.signalSnapshot ?? null,
+      },
+    };
+  }
+  if (wsEv?.status === 'CANCELLED') {
+    log.info(`LIMIT ORDER cancelled/expired (UserWS) | orderId=${state.orderId}`);
+    deps.setPendingCost(0);
+    resetLimitOrderState();
+    return { action: 'CANCEL_EXPIRED', detail: 'ws_user_cancelled' };
+  }
+  if (
+    wsEv?.status === 'PARTIAL' &&
+    wsEv.originalSize != null &&
+    wsEv.originalSize > 0 &&
+    (wsEv.sizeMatched / wsEv.originalSize) >= (cfg.partialFillAcceptRatio ?? 0.60)
+  ) {
+    const partialPct = ((wsEv.sizeMatched / wsEv.originalSize) * 100).toFixed(0);
+    log.info(`LIMIT ORDER PARTIAL ACCEPT (UserWS): ${partialPct}% (${wsEv.sizeMatched}/${wsEv.originalSize}) | orderId=${state.orderId}`);
+    return {
+      action: 'PARTIAL_ACCEPT',
+      detail: 'ws_user_partial',
+      fillData: {
+        side: state.side,
+        tokenId: state.tokenId,
+        price: wsEv.price ?? state.targetPrice,
+        size: Math.round(wsEv.sizeMatched),
+        conditionId: state.conditionId,
+        marketSlug: state.marketSlug,
+        orderId: state.orderId,
+        signalSnapshot: state.signalSnapshot ?? null,
+      },
+    };
   }
 
   // Grace period — don't check fills too soon after placement (CLOB API indexing lag)
