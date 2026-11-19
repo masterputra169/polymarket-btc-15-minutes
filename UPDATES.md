@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-19 — Phase-2 Quant Refinement Roadmap Added to Next Update Backlog
+
+- **Scope & Timing Guard:** Engine and GitHub reference adoption (~95% of infrastructure) are frozen while `DRY_RUN` completes the clean `100–300`-trade sample (`40/300`, `27W–13L`, `$107.18`). Five data-driven Phase-2 upgrades are queued for empirical validation:
+  1. **Anti-Reversal V-Shaped Entry Guards (`n >= 80–100`):** Validate & gate **Gate 21 (`|twapPhysicsZ| >= 0.35` in `EARLY` phase)** and a **conditional `60c` cap when `bbSqueeze === true && mlConf < 0.40`** using live journal + `decisionTrailStudy.mts` replay.
+  2. **Regime-Aware Ensemble Alpha Calibration (`ML` vs `Rule`):** Tune ensemble weighting specifically inside `bbSqueeze` / band extremes (`mlConf < 0.40`) so extreme `Rule` scores cannot pull weak ML convictions into chase entries.
+  3. **Post-Fill Markout & Toxicity Mining (`markoutTracker`):** After `100+` post-deploy fills accumulate `+5s/+15s/+30s/+60s` deltas and EWMA toxicity scores in `trade_journal.jsonl`, audit which L2 book states precede adverse-selection sweeps and filter toxic fills.
+  4. **Periodic Pipeline v4 Retrain (`75–90d+` R2 Market Tape):** Refresh `20261116-p2-ef8dfd` + `v4-hybrid-20261116` residual trees once R2 tape coverage grows to `75–90+` days.
+  5. **Micro-Size 5-Share `LIVE` Fill & `/ws/user` Validation:** Only after the `100–300`-trade eval holds `+3pp` to `+5pp` margin over CLOB V2 breakeven (`p + 0.07·p·(1-p)`), verify real-money `postOnly` GTD fill rates and `/ws/user` execution on `5`-share clips.
+
 ## 2026-11-19 — Supersampled HD Canvas (`2×–4×`), Zoom-Aware Scaling & Vector DOM Tooltip (`priceChart`)
 
 - **Zoom-Aware Supersampled Backing Store (`src/components/priceChartMath.ts`, `src/components/PriceChartPanel.tsx`, `src/components/__tests__/priceChartMath.test.ts`):** Added `computeCanvasBackingSize()` (`Math.min(4, Math.max(2, dpr * visualViewport.scale))` within a `16 MP` pixel budget), synced backing resolution live across `ResizeObserver`, `window.visualViewport` resize (browser `Ctrl+`/pinch zoom), and `renderFrame` using exact `ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0)`, half-pixel-snapped 1px gridlines/PTB/crosshair (`Math.round(v) + 0.5`), and tighter curve stroke (`lineWidth = 1.9`, `shadowBlur = 2.5`).
@@ -219,7 +228,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-19 14:00 WIB_
+_Last updated: 2026-11-19 14:40 WIB_
 
 | Area | State |
 |---|---|
@@ -230,8 +239,8 @@ _Last updated: 2026-11-19 14:00 WIB_
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
 | Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 + WR optimization (`mlConfMin=0.30`, `mlConfRelaxed=0.30`, `hardMlFloor=0.30`, `lateMlMin=0.35`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`, `midPhaseMaxPrice=0.63`, `limitMlThreshold=0.30`, `fokFallbackMinMlConf=0.32`) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | **$110.38 (`+$10.38` net, `27W / 12L` = `69.2% WR`, peak `$113.53` on `$100` fresh test)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
-| Next update backlog | Gated at **`n >= 80–100`** eval trades: (1) Gate 21 `|twapPhysicsZ| >= 0.35` early-phase cushion, (2) `<= 60c` entry cap when `bbSqueeze && mlConf < 0.40`; keep `BLOCKED_SESSIONS=Europe` until solo counterfactual `n >= 30` & `WR >= BE + 3pp`; do NOT block `mean_reverting` or `mlEdge < 3%` |
+| Paper bankroll | **$107.18 (`+$7.18` net, `27W / 13L` = `67.5% WR`, peak `$113.53` on `$100` fresh test)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
+| Next update backlog | **Phase-2 Quant Roadmap (gated at `n >= 80–300`):** (1) Anti-reversal V-shaped guards (Gate 21 `abs(twapPhysicsZ) >= 0.35` + `<= 60c` on `bbSqueeze && mlConf < 0.40`), (2) regime-aware `ML` vs `Rule` ensemble alpha in `bbSqueeze`, (3) `markoutTracker` `+5s..+60s` toxicity mining (`100+` fills), (4) Pipeline v4 retrain at `75–90d+` R2 tape, (5) `5`-share `LIVE` GTD `postOnly` + `/ws/user` fill check at `+3–5pp` BE margin; keep `BLOCKED_SESSIONS=Europe` until solo `n >= 30` & `WR >= BE + 3pp` |
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.63`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
