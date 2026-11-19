@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-19 — Refresh `README.md` to Latest Architecture (`fccf2be`)
+
+- **Documentation (`README.md`):** Updated all sections from the `2026-10-21` snapshot to the `2026-11-19` state (`fccf2be`): zero-await `3–4 ms/poll` loop (`50 ms` / 20 Hz), 6 real-time WebSocket feeds (Binance combined `bookTicker`+`kline_1m`, Coinbase `BTC-USD`, CLOB market & authenticated `ws/user`, PolyBolt TWAP & spot, Chainlink WSS), `ML 20261116-p2-ef8dfd` + `v4-hybrid-20261116`, entry filter gates `0–21`, `DRY_RUN_QUEUE_SIM=true`, `LIMIT_POST_ONLY=true`, `markoutTracker` telemetry, JEV v3 shadow (`laplace10-lerp`), accurate CLOB V2 taker-fee breakeven math (`p + 0.07·p·(1-p)`), Hold-to-Expiry policy (`CUT_LOSS_ENABLED=false`), CI test count (`122 files / 1,122 tests PASS`), updated repo layout, and changelog through `2026-11-19`.
+
 ## 2026-11-19 — Markout Telemetry, Live `postOnly` Enforcement, CLOB User WS, Coinbase Nowcast & Student-t Pricing
 
 - **Post-Fill Markout & Toxicity Telemetry (`bot/src/monitoring/markoutTracker.ts`, `bot/src/trading/tradeJournal.ts`, `bot/src/loop.ts`, `bot/src/monitoring/__tests__/markoutTracker.test.ts`):** Added record-only tracking of post-fill token delta at `+5s`, `+15s`, `+30s`, and `+60s`, adverse/favorable peak excursion, and rolling EWMA toxicity (`alpha=0.25`); persisted `analysis.markout` into every `trade_journal.jsonl` entry and exposed `markout` in dashboard broadcasts. Zero effect on entry/exit decisions.
