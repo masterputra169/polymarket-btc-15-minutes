@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-11-19 — Next Update Backlog: V-Shaped Reversal Entry Guards (Gated at `n >= 80–100`)
+
+- **Gate & Evaluation Discipline:** Do **not** alter live `.env` thresholds while the fresh eval window is small (`39/300` trades, `27W–12L`, `69.2% WR`, `+$10.38`); defer filter changes until `n >= 80–100` resolved eval trades + `decisionTrailStudy.mts` counterfactual confirmation.
+- **Candidate 1 — Gate 21 (`FILTER_MIN_TWAP_Z`, currently `0`) Early-Phase Cushion (`|twapPhysicsZ| >= 0.35`):** Across `v4`-logged eval trades, `|twapPhysicsZ| >= 0.35` stands at `6W/2L` (`75.0% WR`, `+$4.50`), whereas the `13:48 WIB` reversal (`btc-updown-15m-1795070700`, `DOWN @ 64c`) entered at `-0.29σ` (`-$14.88` from PTB with `11.3 min` left) and swept into a `+$83` V-shaped bounce.
+- **Candidate 2 — Conditional `60c` Entry Cap When `bbSqueeze === true && mlConf < 0.40`:** Over the 39 eval trades, `bbSqueeze === false` produced `16W/6L` (`72.7% WR`, `+$9.87`) vs `bbSqueeze === true` `11W/6L` (`64.7% WR`, `+$0.51`), and `11/12` losses occurred at `mlConf < 40%` (`65.6% WR` vs `85.7% WR` at `mlConf >= 40%`). Capping weak-ML squeeze entries to `<= 60c` improves V-shaped risk/reward without cutting strong signals.
+- **Empirical Do-Not-Do Guardrails:** Do **not** block `mean_reverting` (`5W/0L`, `100.0% WR`, `+$8.79`), do **not** require `mlEdge >= 3%` (`< 3%` is `20W/8L`, `+$10.57`), and keep `BLOCKED_SESSIONS=Europe` (solo `session_block` counterfactual `50.0% WR` vs `62.4%` breakeven on 469 resolved tape markets) until `n >= 30` solo-blocked markets hit `WR >= breakeven + 3pp`.
+
 ## 2026-11-19 — Fix `poly15-study` Equity Curve Baseline & Peak After Daily Rollover
 
 - **Eval Equity Baseline & Peak Fix (`scripts/build-study-site.mjs`, `bot/src/__tests__/studySiteBuilder.test.ts`):** Removed the `state.startOfDayBankroll && totalTrades <= 50` shortcut in `buildEvalAndHealthBundle()` that misread the daily-reset `startOfDayBankroll` (`$110.38`) as the starting capital of the 39-trade window (shifting the curve to `$110.38 -> $120.76` and showing `Net $0.00`). Now computes `realizedBankroll = state.bankroll + openPosCost`, subtracts settled journal `tradeSum` to recover true starting capital (`$100.00`), aligns `eval.bankroll` with `realizedBankroll`, and sets `peakBankroll` from the actual equity curve peak (`$113.53`) whenever trades exist. Added regression test covering multi-day rollover and unsettled open positions.
@@ -207,7 +214,7 @@
 
 ## Current status
 
-_Last updated: 2026-11-18 15:11 WIB_
+_Last updated: 2026-11-19 14:00 WIB_
 
 | Area | State |
 |---|---|
@@ -218,7 +225,8 @@ _Last updated: 2026-11-18 15:11 WIB_
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
 | Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 + WR optimization (`mlConfMin=0.30`, `mlConfRelaxed=0.30`, `hardMlFloor=0.30`, `lateMlMin=0.35`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`, `midPhaseMaxPrice=0.63`, `limitMlThreshold=0.30`, `fokFallbackMinMlConf=0.32`) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | **$100.00 fresh test run (0W / 0L)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
+| Paper bankroll | **$110.38 (`+$10.38` net, `27W / 12L` = `69.2% WR`, peak `$113.53` on `$100` fresh test)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
+| Next update backlog | Gated at **`n >= 80–100`** eval trades: (1) Gate 21 `|twapPhysicsZ| >= 0.35` early-phase cushion, (2) `<= 60c` entry cap when `bbSqueeze && mlConf < 0.40`; keep `BLOCKED_SESSIONS=Europe` until solo counterfactual `n >= 30` & `WR >= BE + 3pp`; do NOT block `mean_reverting` or `mlEdge < 3%` |
 | Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.63`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
@@ -231,13 +239,13 @@ _Last updated: 2026-11-18 15:11 WIB_
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag + `1.4×` Fat-Tail TWAP** (`pFatTail` over `max(σ_120s, σ_900s)`, `15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
 | Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr + **Edge Tripwire** (`EVAL_TRIPWIRE_MIN_TRADES=100`, `below_breakeven` auto-pause via `EVAL_TRIPWIRE_PAUSE`) |
-| Dashboard | https://poly15.dollarkilat.xyz/ · 16 widgets · **Quant Terminal v5** UI + **Tahap 2 Chainlink-Native Telemetry** drawer + **Journal Archive Viewer** |
+| Dashboard | https://poly15.dollarkilat.xyz/ · 17 widgets (incl. 60fps **`BTC 15m Chart`** `priceChart`) · **Quant Terminal v5** UI + **Tahap 2 Chainlink-Native Telemetry** drawer + **Journal Archive Viewer** |
 | Study portal | https://poly15-study.dollarkilat.xyz/ · **Tahap 2 · v4 Lab** (54d Tape + Gate 20f replay + 88f gain rank) + **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
 | Cross-feed guard | **Gate 20f + Chainlink `Nowcast` + `[b-62s, b-2s)` TWAP Offset** (`ChainlinkNowcastTracker`, `windowOffsetMs=2000`, `FILTER_CROSS_FEED_SKEW_PCT=0.035%`, 21-sample median `BasisTracker`, `chainlinkWss` fallback) |
 | Auth | session login; daily password rotation at 07:00 WIB via Telegram |
 | Live/dry switch | available; **live active** |
 | Drift | no drift ($0.00) verified on-chain |
-| Tests | 1,098 vitest PASS (frontend, bot & scripts typecheck/build/study:build PASS; Python ML untouched) |
+| Tests | **1,132 vitest PASS** (`124` files; frontend, bot & scripts typecheck/build/study:build PASS; Python ML CI PASS) |
 | Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
 | Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
 | Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
