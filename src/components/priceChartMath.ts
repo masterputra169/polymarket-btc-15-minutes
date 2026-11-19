@@ -342,3 +342,46 @@ export function shouldHideAxisTick(
   }
   return false;
 }
+
+export interface CanvasBackingSize {
+  bw: number;
+  bh: number;
+  scaleX: number;
+  scaleY: number;
+  targetScale: number;
+}
+
+/**
+ * Computes supersampled high-DPI canvas backing dimensions (`2x` floor on 1x
+ * monitors, dynamically scaling up to `4x` on fractional Windows DPR, Retina,
+ * browser zoom, and `visualViewport` pinch-zoom within a GPU pixel cap).
+ */
+export function computeCanvasBackingSize(
+  cssW: number,
+  cssH: number,
+  dpr: number,
+  viewportScale = 1,
+  maxPixels = 16_000_000,
+): CanvasBackingSize {
+  if (!Number.isFinite(cssW) || !Number.isFinite(cssH) || cssW <= 0 || cssH <= 0) {
+    return { bw: 0, bh: 0, scaleX: 1, scaleY: 1, targetScale: 1 };
+  }
+  const safeDpr = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const safeVp = Number.isFinite(viewportScale) && viewportScale > 0 ? viewportScale : 1;
+  let targetScale = Math.min(4, Math.max(2, safeDpr * safeVp));
+
+  const area = cssW * cssH;
+  if (area * targetScale * targetScale > maxPixels) {
+    targetScale = Math.max(1, Math.sqrt(maxPixels / area));
+  }
+
+  const bw = Math.max(1, Math.round(cssW * targetScale));
+  const bh = Math.max(1, Math.round(cssH * targetScale));
+  return {
+    bw,
+    bh,
+    scaleX: bw / cssW,
+    scaleY: bh / cssH,
+    targetScale,
+  };
+}

@@ -746,6 +746,32 @@ body.is-widget-dragging { user-select: none; cursor: grabbing; }
   cursor: crosshair;
   touch-action: none;
 }
+.pchart__tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 4;
+  pointer-events: none;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: rgba(7, 13, 24, 0.94);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.48);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  opacity: 0;
+  will-change: transform, opacity;
+  transition: opacity 90ms ease;
+}
+.pchart__tooltip-line:empty {
+  display: none;
+}
 
 @media (max-width: 620px) {
   .pchart__price strong { font-size: 17px; }

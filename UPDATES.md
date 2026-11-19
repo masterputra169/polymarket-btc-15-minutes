@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-19 — Supersampled HD Canvas (`2×–4×`), Zoom-Aware Scaling & Vector DOM Tooltip (`priceChart`)
+
+- **Zoom-Aware Supersampled Backing Store (`src/components/priceChartMath.ts`, `src/components/PriceChartPanel.tsx`, `src/components/__tests__/priceChartMath.test.ts`):** Added `computeCanvasBackingSize()` (`Math.min(4, Math.max(2, dpr * visualViewport.scale))` within a `16 MP` pixel budget), synced backing resolution live across `ResizeObserver`, `window.visualViewport` resize (browser `Ctrl+`/pinch zoom), and `renderFrame` using exact `ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0)`, half-pixel-snapped 1px gridlines/PTB/crosshair (`Math.round(v) + 0.5`), and tighter curve stroke (`lineWidth = 1.9`, `shadowBlur = 2.5`).
+- **Crisp Zero-Re-Render Vector DOM Tooltip (`src/components/PriceChartPanel.tsx`, `src/styles/dashboard.css`):** Replaced canvas-rasterized hover text with a 4-line `.pchart__tooltip` DOM overlay positioned via GPU `translate3d()` directly inside the render loop — crisp ClearType typography at any zoom level with zero React state updates during pointer movement.
+
 ## 2026-11-19 — Next Update Backlog: V-Shaped Reversal Entry Guards (Gated at `n >= 80–100`)
 
 - **Gate & Evaluation Discipline:** Do **not** alter live `.env` thresholds while the fresh eval window is small (`39/300` trades, `27W–12L`, `69.2% WR`, `+$10.38`); defer filter changes until `n >= 80–100` resolved eval trades + `decisionTrailStudy.mts` counterfactual confirmation.

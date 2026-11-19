@@ -3,6 +3,7 @@ import { serverNow } from '../hooks/serverClock.ts';
 import { formatNumber, fmtTimeLeft } from '../utils.ts';
 import {
   buildTimeTicks,
+  computeCanvasBackingSize,
   computeMonotoneSegments,
   computeYDomain,
   decodeSnapshotPoints,
@@ -155,8 +156,9 @@ function drawAxisPill(
   border: string,
   textColor: string,
 ): void {
-  const y = centerY - height / 2;
-  drawRoundedRect(ctx, x, y, width, height, 5);
+  const px = Math.round(x);
+  const py = Math.round(centerY - height / 2);
+  drawRoundedRect(ctx, px + 0.5, py + 0.5, width - 1, height - 1, 5);
   ctx.fillStyle = bg;
   ctx.fill();
   ctx.lineWidth = 1;
@@ -167,7 +169,50 @@ function drawAxisPill(
   ctx.font = '700 9.5px "JetBrains Mono", monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(label, x + width / 2, centerY + 0.5);
+  ctx.fillText(label, px + width / 2, py + height / 2 + 0.5);
+}
+
+interface CanvasSizeState {
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+  lastDpr: number;
+  lastVpScale: number;
+}
+
+function syncCanvasBacking(
+  stage: HTMLDivElement,
+  canvas: HTMLCanvasElement,
+  sizeState: CanvasSizeState,
+  w?: number,
+  h?: number,
+): CanvasSizeState {
+  const cw = Math.max(0, Math.floor(w ?? stage.clientWidth));
+  const ch = Math.max(0, Math.floor(h ?? stage.clientHeight));
+  const dpr = window.devicePixelRatio || 1;
+  const vpScale = window.visualViewport?.scale ?? 1;
+  if (
+    cw === sizeState.width &&
+    ch === sizeState.height &&
+    dpr === sizeState.lastDpr &&
+    vpScale === sizeState.lastVpScale
+  ) {
+    return sizeState;
+  }
+  const backing = computeCanvasBackingSize(cw, ch, dpr, vpScale);
+  if (canvas.width !== backing.bw) canvas.width = backing.bw;
+  if (canvas.height !== backing.bh) canvas.height = backing.bh;
+  canvas.style.width = `${cw}px`;
+  canvas.style.height = `${ch}px`;
+  return {
+    width: cw,
+    height: ch,
+    scaleX: backing.scaleX,
+    scaleY: backing.scaleY,
+    lastDpr: dpr,
+    lastVpScale: vpScale,
+  };
 }
 
 interface RenderRuntimeState {
@@ -189,7 +234,15 @@ function PriceChartPanel({ data }: { data: PriceChartPanelData | null }) {
 
   const stageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const sizeRef = useRef<{ width: number; height: number; dpr: number }>({ width: 0, height: 0, dpr: 1 });
+  const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const tooltipLinesRef = useRef<(HTMLDivElement | null)[]>([]);
+  const tooltipCacheRef = useRef<{ visible: boolean; tx: number; ty: number; sig: string }>({
+    visible: false,
+    tx: 0,
+    ty: 0,
+    sig: '',
+  });
+  const sizeRef = useRef<CanvasSizeState>({ width: 0, height: 0, scaleX: 1, scaleY: 1, lastDpr: 1, lastVpScale: 1 });
   const paletteRef = useRef<ChartPalette>(DEFAULT_PALETTE);
   const lastPaletteReadRef = useRef<number>(0);
 
@@ -297,35 +350,32 @@ function PriceChartPanel({ data }: { data: PriceChartPanelData | null }) {
     slug: activeSlug,
   };
 
-  // High-DPI ResizeObserver
+  // High-DPI ResizeObserver + pinch/browser zoom backing-store sync
   useEffect(() => {
     const stage = stageRef.current;
     const canvas = canvasRef.current;
     if (!stage || !canvas) return;
 
-    const applySize = (w: number, h: number) => {
-      const cw = Math.max(0, Math.floor(w));
-      const ch = Math.max(0, Math.floor(h));
-      const dpr = Math.min(2.5, Math.max(1, window.devicePixelRatio || 1));
-      sizeRef.current = { width: cw, height: ch, dpr };
-      const bw = Math.round(cw * dpr);
-      const bh = Math.round(ch * dpr);
-      if (canvas.width !== bw) canvas.width = bw;
-      if (canvas.height !== bh) canvas.height = bh;
-      canvas.style.width = `${cw}px`;
-      canvas.style.height = `${ch}px`;
+    const applySize = (w?: number, h?: number) => {
+      sizeRef.current = syncCanvasBacking(stage, canvas, sizeRef.current, w, h);
     };
 
-    const rect = stage.getBoundingClientRect();
-    applySize(rect.width, rect.height);
+    applySize();
     paletteRef.current = readThemePalette(stage);
 
+    const onViewportChange = () => applySize();
     const ro = new ResizeObserver((entries) => {
       const box = entries[0]?.contentRect;
       if (box) applySize(box.width, box.height);
     });
     ro.observe(stage);
-    return () => ro.disconnect();
+    window.addEventListener('resize', onViewportChange);
+    window.visualViewport?.addEventListener('resize', onViewportChange);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', onViewportChange);
+      window.visualViewport?.removeEventListener('resize', onViewportChange);
+    };
   }, []);
 
   // Persistent 60fps requestAnimationFrame render loop (pauses cleanly when tab hidden)
@@ -340,8 +390,13 @@ function PriceChartPanel({ data }: { data: PriceChartPanelData | null }) {
         return;
       }
 
+      const stage = stageRef.current;
       const canvas = canvasRef.current;
-      const { width, height, dpr } = sizeRef.current;
+      if (stage && canvas) {
+        sizeRef.current = syncCanvasBacking(stage, canvas, sizeRef.current);
+      }
+
+      const { width, height, scaleX, scaleY } = sizeRef.current;
       const st = runtimeRef.current;
       if (canvas && width > 40 && height > 40) {
         const ctx = canvas.getContext('2d');
@@ -350,7 +405,19 @@ function PriceChartPanel({ data }: { data: PriceChartPanelData | null }) {
             paletteRef.current = readThemePalette(stageRef.current);
             lastPaletteReadRef.current = frameNowMs;
           }
-          drawChartCanvas(ctx, width, height, dpr, frameNowMs, st, animRef.current, hoverRef.current, paletteRef.current);
+          const tip = drawChartCanvas(
+            ctx,
+            width,
+            height,
+            scaleX,
+            scaleY,
+            frameNowMs,
+            st,
+            animRef.current,
+            hoverRef.current,
+            paletteRef.current,
+          );
+          syncDomTooltip(tooltipRef.current, tooltipLinesRef.current, tooltipCacheRef.current, tip);
         }
       }
 
@@ -497,16 +564,89 @@ function PriceChartPanel({ data }: { data: PriceChartPanelData | null }) {
           onPointerLeave={handlePointerLeave}
           onPointerCancel={handlePointerLeave}
         />
+        <div ref={tooltipRef} className="pchart__tooltip" aria-hidden="true">
+          <div ref={(el) => { tooltipLinesRef.current[0] = el; }} className="pchart__tooltip-line" />
+          <div ref={(el) => { tooltipLinesRef.current[1] = el; }} className="pchart__tooltip-line" />
+          <div ref={(el) => { tooltipLinesRef.current[2] = el; }} className="pchart__tooltip-line" />
+          <div ref={(el) => { tooltipLinesRef.current[3] = el; }} className="pchart__tooltip-line" />
+        </div>
       </div>
     </div>
   );
 }
 
+interface TooltipOverlaySpec {
+  hx: number;
+  hy: number;
+  padL: number;
+  padT: number;
+  plotRight: number;
+  plotBottom: number;
+  lines: { text: string; color: string }[];
+}
+
+function syncDomTooltip(
+  el: HTMLDivElement | null,
+  lineEls: (HTMLDivElement | null)[],
+  cache: { visible: boolean; tx: number; ty: number; sig: string },
+  spec: TooltipOverlaySpec | null,
+): void {
+  if (!el) return;
+  if (!spec || spec.lines.length === 0) {
+    if (cache.visible) {
+      cache.visible = false;
+      el.style.opacity = '0';
+    }
+    return;
+  }
+
+  let sig = '';
+  for (let i = 0; i < 4; i++) {
+    const line = spec.lines[i];
+    sig += line ? `${line.text}|${line.color};` : ';';
+  }
+  if (sig !== cache.sig) {
+    cache.sig = sig;
+    for (let i = 0; i < 4; i++) {
+      const node = lineEls[i];
+      if (!node) continue;
+      const line = spec.lines[i];
+      if (line) {
+        node.textContent = line.text;
+        node.style.color = line.color;
+      } else {
+        node.textContent = '';
+      }
+    }
+  }
+
+  const tipW = el.offsetWidth || 175;
+  const tipH = el.offsetHeight || 68;
+  const placeLeft = spec.hx + 12 + tipW > spec.plotRight;
+  const rawX = placeLeft ? spec.hx - tipW - 12 : spec.hx + 12;
+  const rawY = spec.hy - tipH / 2;
+  const tx = Math.round(Math.max(spec.padL + 4, Math.min(spec.plotRight - tipW - 4, rawX)));
+  const ty = Math.round(Math.max(spec.padT + 4, Math.min(spec.plotBottom - tipH - 4, rawY)));
+
+  if (!cache.visible) {
+    cache.visible = true;
+    el.style.opacity = '1';
+  }
+  if (tx !== cache.tx || ty !== cache.ty) {
+    cache.tx = tx;
+    cache.ty = ty;
+    el.style.transform = `translate3d(${tx}px, ${ty}px, 0)`;
+  }
+}
+
+const snapHalf = (v: number) => Math.round(v) + 0.5;
+
 function drawChartCanvas(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  dpr: number,
+  scaleX: number,
+  scaleY: number,
   frameNowMs: number,
   st: RenderRuntimeState,
   anim: {
@@ -519,7 +659,7 @@ function drawChartCanvas(
   },
   hover: { active: boolean; x: number; y: number },
   palette: ChartPalette,
-): void {
+): TooltipOverlaySpec | null {
   const dtRaw = anim.lastFrameMs > 0 ? (frameNowMs - anim.lastFrameMs) / 1000 : 1 / 60;
   const dt = Math.min(0.1, Math.max(0.001, dtRaw));
   anim.lastFrameMs = frameNowMs;
@@ -533,7 +673,7 @@ function drawChartCanvas(
   }
 
   ctx.save();
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(scaleX, 0, 0, scaleY, 0, 0);
   ctx.clearRect(0, 0, width, height);
 
   const serverMs = serverNow();
@@ -654,7 +794,7 @@ function drawChartCanvas(
     ctx.textBaseline = 'middle';
     ctx.fillText('Waiting for Chainlink BTC ticks...', padL + plotW / 2, padT + plotH / 2);
     ctx.restore();
-    return;
+    return null;
   }
 
   // Precompute curve XY & right-axis pill Y slots before grid text so axis ticks yield cleanly
@@ -681,8 +821,8 @@ function drawChartCanvas(
     ctx.strokeStyle = 'rgba(251, 191, 36, 0.30)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(twapStartX, padT);
-    ctx.lineTo(twapStartX, plotBottom);
+    ctx.moveTo(snapHalf(twapStartX), padT);
+    ctx.lineTo(snapHalf(twapStartX), plotBottom);
     ctx.stroke();
     ctx.restore();
 
@@ -707,13 +847,13 @@ function drawChartCanvas(
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.09)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padL, gy);
-    ctx.lineTo(plotRight, gy);
+    ctx.moveTo(padL, snapHalf(gy));
+    ctx.lineTo(plotRight, snapHalf(gy));
     ctx.stroke();
 
     if (!shouldHideAxisTick(gy, [safePtbY, livePillY], 16)) {
       ctx.fillStyle = palette.dim;
-      ctx.fillText(fmtUsd(tv, 0), plotRight + 6, gy);
+      ctx.fillText(fmtUsd(tv, 0), plotRight + 6, Math.round(gy));
     }
   }
 
@@ -721,8 +861,8 @@ function drawChartCanvas(
   ctx.strokeStyle = 'rgba(148, 163, 184, 0.16)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(padL, plotBottom);
-  ctx.lineTo(plotRight, plotBottom);
+  ctx.moveTo(padL, snapHalf(plotBottom));
+  ctx.lineTo(plotRight, snapHalf(plotBottom));
   ctx.stroke();
 
   const elapsedX = Math.max(padL, Math.min(plotRight, tsToX(serverMs)));
@@ -771,11 +911,11 @@ function drawChartCanvas(
 
         traceCurve(ctx, primaryXY);
         ctx.strokeStyle = palette.green;
-        ctx.lineWidth = 2.2;
+        ctx.lineWidth = 1.9;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.shadowColor = 'rgba(52, 211, 153, 0.35)';
-        ctx.shadowBlur = 7;
+        ctx.shadowColor = 'rgba(52, 211, 153, 0.22)';
+        ctx.shadowBlur = 2.5;
         ctx.stroke();
         ctx.restore();
       }
@@ -796,11 +936,11 @@ function drawChartCanvas(
 
         traceCurve(ctx, primaryXY);
         ctx.strokeStyle = palette.red;
-        ctx.lineWidth = 2.2;
+        ctx.lineWidth = 1.9;
         ctx.lineJoin = 'round';
         ctx.lineCap = 'round';
-        ctx.shadowColor = 'rgba(251, 113, 133, 0.35)';
-        ctx.shadowBlur = 7;
+        ctx.shadowColor = 'rgba(251, 113, 133, 0.22)';
+        ctx.shadowBlur = 2.5;
         ctx.stroke();
         ctx.restore();
       }
@@ -850,10 +990,10 @@ function drawChartCanvas(
     ctx.save();
     ctx.setLineDash([4, 4]);
     ctx.strokeStyle = st.ptbExact ? 'rgba(237, 244, 255, 0.56)' : 'rgba(251, 191, 36, 0.55)';
-    ctx.lineWidth = 1.15;
+    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(padL, ptbY);
-    ctx.lineTo(plotRight, ptbY);
+    ctx.moveTo(padL, snapHalf(ptbY));
+    ctx.lineTo(plotRight, snapHalf(ptbY));
     ctx.stroke();
     ctx.restore();
 
@@ -861,9 +1001,9 @@ function drawChartCanvas(
     const tagText = st.ptbExact ? 'PRICE TO BEAT' : 'PTB (EST)';
     ctx.save();
     ctx.font = '700 8px "JetBrains Mono", monospace';
-    const tagW = ctx.measureText(tagText).width + 10;
-    const tagY = ptbY > padT + 18 ? ptbY - 15 : ptbY + 3;
-    drawRoundedRect(ctx, padL + 4, tagY, tagW, 13, 4);
+    const tagW = Math.ceil(ctx.measureText(tagText).width) + 10;
+    const tagY = Math.round(ptbY > padT + 18 ? ptbY - 15 : ptbY + 3);
+    drawRoundedRect(ctx, padL + 4.5, tagY + 0.5, tagW, 13, 4);
     ctx.fillStyle = '#0a1322';
     ctx.fill();
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
@@ -984,7 +1124,8 @@ function drawChartCanvas(
     );
   }
 
-  // 9. Zero-lag interactive crosshair & floating glassmorphic tooltip
+  // 9. Zero-lag interactive crosshair + crisp vector DOM tooltip spec
+  let tooltipSpec: TooltipOverlaySpec | null = null;
   if (
     hover.active &&
     rawSeries.length > 0 &&
@@ -1007,34 +1148,33 @@ function drawChartCanvas(
         ctx.strokeStyle = 'rgba(237, 244, 255, 0.35)';
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(hx, padT);
-        ctx.lineTo(hx, plotBottom);
+        ctx.moveTo(snapHalf(hx), padT);
+        ctx.lineTo(snapHalf(hx), plotBottom);
         ctx.stroke();
 
         ctx.beginPath();
-        ctx.moveTo(padL, hy);
-        ctx.lineTo(plotRight, hy);
+        ctx.moveTo(padL, snapHalf(hy));
+        ctx.lineTo(plotRight, snapHalf(hy));
         ctx.stroke();
         ctx.restore();
 
         // Point highlight rings
         ctx.beginPath();
-        ctx.arc(hx, hy, 4.5, 0, Math.PI * 2);
+        ctx.arc(hx, hy, 4.2, 0, Math.PI * 2);
         ctx.fillStyle = palette.text;
         ctx.fill();
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 1.8;
         ctx.strokeStyle = palette.panel;
         ctx.stroke();
 
         if (st.mode === 'both' && pt.twap != null) {
           const ty = Math.max(padT, Math.min(plotBottom, valToY(pt.twap)));
           ctx.beginPath();
-          ctx.arc(hx, ty, 3.2, 0, Math.PI * 2);
+          ctx.arc(hx, ty, 3, 0, Math.PI * 2);
           ctx.fillStyle = palette.amber;
           ctx.fill();
         }
 
-        // Build tooltip lines
         const remSec = Math.max(0, Math.round((winEndMs - pt.tsMs) / 1000));
         const remStr = `${String(Math.floor(remSec / 60)).padStart(2, '0')}:${String(remSec % 60).padStart(2, '0')}`;
         const lines: { text: string; color: string }[] = [
@@ -1052,36 +1192,13 @@ function drawChartCanvas(
           });
         }
 
-        ctx.font = '600 9.5px "JetBrains Mono", monospace';
-        let maxLineW = 0;
-        for (let i = 0; i < lines.length; i++) {
-          const w = ctx.measureText(lines[i].text).width;
-          if (w > maxLineW) maxLineW = w;
-        }
-        const tipW = Math.ceil(maxLineW) + 18;
-        const tipH = lines.length * 14 + 12;
-        const placeLeft = hx + 12 + tipW > plotRight;
-        const boxX = Math.max(padL + 4, Math.min(plotRight - tipW - 4, placeLeft ? hx - tipW - 12 : hx + 12));
-        const boxY = Math.max(padT + 4, Math.min(plotBottom - tipH - 4, hy - tipH / 2));
-
-        drawRoundedRect(ctx, boxX, boxY, tipW, tipH, 7);
-        ctx.fillStyle = 'rgba(7, 13, 24, 0.94)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(148, 163, 184, 0.30)';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        for (let i = 0; i < lines.length; i++) {
-          ctx.fillStyle = lines[i].color;
-          ctx.fillText(lines[i].text, boxX + 9, boxY + 7 + i * 14);
-        }
+        tooltipSpec = { hx, hy, padL, padT, plotRight, plotBottom, lines };
       }
     }
   }
 
   ctx.restore();
+  return tooltipSpec;
 }
 
 export default memo(PriceChartPanel, (prev, next) => {

@@ -8,6 +8,7 @@ import {
   mergeChartSeries,
   resolvePillY,
   shouldHideAxisTick,
+  computeCanvasBackingSize,
 } from '../priceChartMath.ts';
 
 function evalCubic(p0: number, c1: number, c2: number, p1: number, t: number): number {
@@ -117,5 +118,23 @@ describe('priceChartMath', () => {
     expect(shouldHideAxisTick(165, [100, 180], 16)).toBe(true);
     expect(shouldHideAxisTick(140, [100, 180], 16)).toBe(false);
     expect(shouldHideAxisTick(100, [null, undefined], 16)).toBe(false);
+  });
+
+  it('computes 2x–4x supersampled canvas backing dimensions within GPU pixel cap', () => {
+    const std = computeCanvasBackingSize(800, 200, 1, 1);
+    expect(std.targetScale).toBe(2);
+    expect(std.bw).toBe(1600);
+    expect(std.bh).toBe(400);
+
+    const pinch = computeCanvasBackingSize(800, 200, 1.5, 2);
+    expect(pinch.targetScale).toBe(3);
+    expect(pinch.bw).toBe(2400);
+    expect(pinch.bh).toBe(600);
+
+    const cappedScale = computeCanvasBackingSize(800, 200, 3, 2);
+    expect(cappedScale.targetScale).toBe(4);
+
+    const huge = computeCanvasBackingSize(3840, 2160, 2, 2);
+    expect(huge.bw * huge.bh).toBeLessThanOrEqual(16_010_000);
   });
 });
