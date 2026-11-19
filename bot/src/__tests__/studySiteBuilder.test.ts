@@ -143,4 +143,63 @@ describe('parseUpdatesMd & buildStudySite', () => {
       fs.rmSync(tmpOut, { recursive: true, force: true });
     }
   });
+
+  test('derives eval startBankroll and peakBankroll accurately across daily rollover and open positions', { timeout: 20_000 }, () => {
+    const repoRoot = path.resolve(process.cwd());
+    const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'poly15-study-rollover-'));
+    const tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'poly15-study-rollover-data-'));
+    try {
+      const journalRows = [
+        { pnl: 13.53, outcome: 'WIN', slug: 'btc-updown-15m-1794795300', exitedAt: 1794796200000 },
+        { pnl: -3.15, outcome: 'LOSS', slug: 'btc-updown-15m-1794800700', exitedAt: 1795032900000 },
+      ];
+      fs.writeFileSync(
+        path.join(tmpData, 'trade_journal.jsonl'),
+        journalRows.map((r) => JSON.stringify({
+          _ts: r.exitedAt,
+          entry: { side: 'UP', marketSlug: r.slug, tokenPrice: 0.55, enteredAt: r.exitedAt - 600_000 },
+          exit: { outcome: r.outcome === 'WIN' ? 'UP' : 'DOWN', exitedAt: r.exitedAt },
+          analysis: { outcome: r.outcome, pnl: r.pnl },
+        })).join('\n') + '\n',
+      );
+
+      // Case 1: Daily rollover reset startOfDayBankroll to 110.38 and stale state.peakBankroll
+      fs.writeFileSync(path.join(tmpData, 'state.json'), JSON.stringify({
+        bankroll: 110.38,
+        startOfDayBankroll: 110.38,
+        peakBankroll: 111.68,
+        totalTrades: 2,
+        wins: 1,
+        losses: 1,
+        currentPosition: null,
+      }));
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
+      const siteFlat = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8'));
+      expect(siteFlat.eval.startBankroll).toBe(100);
+      expect(siteFlat.eval.bankroll).toBe(110.38);
+      expect(siteFlat.eval.netPnl).toBe(10.38);
+      expect(siteFlat.eval.peakBankroll).toBe(113.53);
+      expect(siteFlat.eval.equityCurve[0].bankroll).toBe(100);
+      expect(siteFlat.eval.equityCurve.at(-1).bankroll).toBe(110.38);
+
+      // Case 2: Open position has cost 3.15 deducted from state.bankroll while unsettled
+      fs.writeFileSync(path.join(tmpData, 'state.json'), JSON.stringify({
+        bankroll: 107.23,
+        startOfDayBankroll: 110.38,
+        peakBankroll: 111.68,
+        totalTrades: 3,
+        wins: 1,
+        losses: 1,
+        currentPosition: { settled: false, cost: 3.15 },
+      }));
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
+      const siteOpen = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8'));
+      expect(siteOpen.eval.startBankroll).toBe(100);
+      expect(siteOpen.eval.bankroll).toBe(110.38);
+      expect(siteOpen.eval.equityCurve.at(-1).bankroll).toBe(110.38);
+    } finally {
+      fs.rmSync(tmpData, { recursive: true, force: true });
+      fs.rmSync(tmpOut, { recursive: true, force: true });
+    }
+  });
 });

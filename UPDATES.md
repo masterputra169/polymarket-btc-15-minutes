@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-19 — Fix `poly15-study` Equity Curve Baseline & Peak After Daily Rollover
+
+- **Eval Equity Baseline & Peak Fix (`scripts/build-study-site.mjs`, `bot/src/__tests__/studySiteBuilder.test.ts`):** Removed the `state.startOfDayBankroll && totalTrades <= 50` shortcut in `buildEvalAndHealthBundle()` that misread the daily-reset `startOfDayBankroll` (`$110.38`) as the starting capital of the 39-trade window (shifting the curve to `$110.38 -> $120.76` and showing `Net $0.00`). Now computes `realizedBankroll = state.bankroll + openPosCost`, subtracts settled journal `tradeSum` to recover true starting capital (`$100.00`), aligns `eval.bankroll` with `realizedBankroll`, and sets `peakBankroll` from the actual equity curve peak (`$113.53`) whenever trades exist. Added regression test covering multi-day rollover and unsettled open positions.
+
 ## 2026-11-19 — Suppress Right-Axis Tick Text Behind Live & PTB Price Pills (`priceChart`)
 
 - **Right Y-Axis Pill Clearance (`src/components/priceChartMath.ts`, `src/components/PriceChartPanel.tsx`, `src/components/__tests__/priceChartMath.test.ts`):** Added `shouldHideAxisTick(tickY, [safePtbY, livePillY], 16)` so rounded grid dollar labels (`$63,400`, `$63,300`) are suppressed wherever they fall within `16 px` of either right-axis badge, widened `padR` (`70`/`80 px`) for clean pill margins, and switched pill backgrounds from translucent alpha (`0.22`) to fully opaque dark fills (`#0b2922`, `#2d101b`, `#0a2231`, `#112038`).

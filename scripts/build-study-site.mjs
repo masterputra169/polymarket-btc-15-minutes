@@ -543,12 +543,22 @@ function buildEvalAndHealthBundle(repoRoot, dataDir) {
   let sumPrices = 0;
   let priceCount = 0;
   let sumBreakeven = 0;
-  let running = state?.startOfDayBankroll && state.totalTrades <= 50 ? state.startOfDayBankroll : null;
-  if (running == null && typeof state?.bankroll === 'number') {
-    const tradeSum = trades.reduce((acc, t) => acc + (t.pnl ?? 0), 0);
-    running = Math.round((state.bankroll - tradeSum) * 100) / 100;
-  }
-  if (running == null) running = 100;
+  // state.bankroll excludes cost already deducted on an unsettled open position, while
+  // state.startOfDayBankroll resets every UTC day — so derive the true starting baseline
+  // by subtracting settled journal PnL from realized bankroll.
+  const openPosCost = (
+    state?.currentPosition &&
+    !state.currentPosition.settled &&
+    typeof state.currentPosition.cost === 'number' &&
+    Number.isFinite(state.currentPosition.cost)
+  ) ? state.currentPosition.cost : 0;
+  const realizedBankroll = typeof state?.bankroll === 'number' && Number.isFinite(state.bankroll)
+    ? Math.round((state.bankroll + openPosCost) * 100) / 100
+    : null;
+  const tradeSum = Math.round(trades.reduce((acc, t) => acc + (t.pnl ?? 0), 0) * 100) / 100;
+  let running = realizedBankroll != null
+    ? Math.round((realizedBankroll - tradeSum) * 100) / 100
+    : 100;
 
   let peak = running;
   let maxDd = 0;
@@ -662,9 +672,9 @@ function buildEvalAndHealthBundle(repoRoot, dataDir) {
     evalWindowStart: envFlags.evalWindowStart,
     evalTargetTrades: envFlags.evalTargetTrades,
     hasLiveData: Boolean(state || trades.length > 0),
-    bankroll: state?.bankroll ?? running,
+    bankroll: realizedBankroll ?? running,
     startBankroll: equityCurve[0].bankroll,
-    peakBankroll: state?.peakBankroll ?? peak,
+    peakBankroll: trades.length > 0 ? peak : (state?.peakBankroll ?? peak),
     hasOpenPosition: Boolean(state?.currentPosition && !state.currentPosition.settled),
     totalTrades: state?.totalTrades ?? trades.length,
     wins: state?.wins ?? totalWins,
