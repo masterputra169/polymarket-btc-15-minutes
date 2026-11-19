@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-19 — Volume-Increase Profile Tuning (`68c` Cap, `25s` Maker Window, `2` Attempts)
+
+- **Reversible Runtime Profile Override (`20261116-p2-ef8dfd`, live-applied via `saveModelProfile` WS RPC on `polyvps` with `0` bot restarts):** Kept `bot/.env` untouched (`65c` baseline) and loosened only the top solo blockers while leaving `ML >= 30%`, `BLOCKED_SESSIONS=Europe`, and `13.5m` early guard intact: `softEntryCap`/`baseHardCap`/`trendingHardCap`/`trendingMaxPrice` `0.65 → 0.68`, `ultraMlCap` `0.68 → 0.70`, `midPhaseMaxPrice` `0.63 → 0.65`, `limitOrder.maxEntryPrice` `0.64 → 0.67`, `maxUnfilledSec` `15s → 25s`, and `maxAttemptsPerMarket` `1 → 2`.
+- **Exact Rollback Backup:** Pre-change snapshot preserved at `bot/data/model_profiles.json.bak-20261119-65c` (both on `polyvps` and locally) for 1-command restoration.
+
 ## 2026-11-19 — Trail of Bits Security & Execution Audit Fixes
 
 - **Deduplicate `/ws/user` Partial Fills (`bot/src/streams/clobUserWs.ts`, `bot/src/streams/__tests__/clobUserWs.test.ts`):** Separated cumulative `order UPDATE` matching (`orderCumulativeMatched`) from trade-ID deduplicated fills (`orderTradeFills`, keyed by `id`/`trade_id`/`transaction_hash`), preventing `MATCHED -> MINED -> CONFIRMED` + `order UPDATE` frames from double/triple-counting partial shares into premature `PARTIAL_ACCEPT` / `FILLED` states.
@@ -253,14 +258,14 @@ _Last updated: 2026-11-19 14:40 WIB_
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
 | Paper bankroll | **$107.18 (`+$7.18` net, `27W / 13L` = `67.5% WR`, peak `$113.53` on `$100` fresh test)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
 | Next update backlog | **Phase-2 Quant Roadmap (gated at `n >= 80–300`):** (1) Anti-reversal V-shaped guards (Gate 21 `abs(twapPhysicsZ) >= 0.35` + `<= 60c` on `bbSqueeze && mlConf < 0.40`), (2) regime-aware `ML` vs `Rule` ensemble alpha in `bbSqueeze`, (3) `markoutTracker` `+5s..+60s` toxicity mining (`100+` fills), (4) Pipeline v4 retrain at `75–90d+` R2 tape, (5) `5`-share `LIVE` GTD `postOnly` + `/ws/user` fill check at `+3–5pp` BE margin; keep `BLOCKED_SESSIONS=Europe` until solo `n >= 30` & `WR >= BE + 3pp` |
-| Entry price cap | **65c widened cap (`50c–65c` band)** for `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.65`, `baseHardCap=0.65`, `trendingHardCap=0.65`, `ultraMlCap=0.68`, `midPhaseMaxPrice=0.63`, `DRY_RUN_HARD_ENTRY_CAP=0.65`) |
+| Entry price cap | **68c reversible profile override (`50c–68c` band)** on `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.68`, `baseHardCap=0.68`, `trendingHardCap=0.68`, `ultraMlCap=0.70`, `midPhaseMaxPrice=0.65`, `limit maxEntry=0.67`; `.env` stays `65c` baseline; backup `model_profiles.json.bak-20261119-65c`) |
 | Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
 | Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit JOIN 15s + Instant TWAP Pull + One-Shot Limit + 2c Haircut + Fill-Clip Guard + GhostGuard** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, `shouldCancelTwapAdverse` via `nowcast` `1.4×` fat-tail TWAP, `EXECUTION_MAX_RUNAWAY=0.02`, `isFillSizeWithinClip`, `maxAttemptsPerMarket=1`, `fokFallbackMinMlConf=0.32`, `GhostGuard` + `90s` outage latch) |
+| Order router | **Limit JOIN 25s + Instant TWAP Pull + 2-Attempt Limit + 2c Haircut + Fill-Clip Guard + GhostGuard** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, `shouldCancelTwapAdverse` via `nowcast` `1.4×` fat-tail TWAP, `EXECUTION_MAX_RUNAWAY=0.02`, `isFillSizeWithinClip`, `maxAttemptsPerMarket=2`, `maxUnfilledSec=25`, `fokFallbackMinMlConf=0.32`, `GhostGuard` + `90s` outage latch) |
 | Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
 | Hard ML floor | **30% Hybrid floor (profile + `.env`)** (`hardMlFloor=0.30`, `mlConfRelaxed=0.30`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`; `mlConfMin=0.30`) |
-| Mid-phase guard | **63c mid-phase ceiling** (`midPhaseMaxPrice=0.63` + `midHardCeil >= midPhaseMaxPrice` in 5–11m MID window) |
-| Trending protection| **50c–65c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.65`, widened from 54c–58c 4c slit) |
+| Mid-phase guard | **65c mid-phase ceiling** (`midPhaseMaxPrice=0.65` profile override vs `0.63` `.env` + `midHardCeil >= midPhaseMaxPrice` in 5–11m MID window) |
+| Trending protection| **50c–68c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.68` profile override vs `0.65` `.env`) |
 | Microstructure gates | **Gate 20a–20e + Gate 21 (`FILTER_MIN_TWAP_Z`)** (`minTwapZ=0` ready + `twapPhysicsZ` logged in journal) |
 | Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag + `1.4×` Fat-Tail TWAP** (`pFatTail` over `max(σ_120s, σ_900s)`, `15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge) |
 | High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
