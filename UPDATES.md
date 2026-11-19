@@ -6,6 +6,18 @@
 
 ---
 
+## 2026-11-19 — Trail of Bits Security & Execution Audit Fixes
+
+- **Deduplicate `/ws/user` Partial Fills (`bot/src/streams/clobUserWs.ts`, `bot/src/streams/__tests__/clobUserWs.test.ts`):** Separated cumulative `order UPDATE` matching (`orderCumulativeMatched`) from trade-ID deduplicated fills (`orderTradeFills`, keyed by `id`/`trade_id`/`transaction_hash`), preventing `MATCHED -> MINED -> CONFIRMED` + `order UPDATE` frames from double/triple-counting partial shares into premature `PARTIAL_ACCEPT` / `FILLED` states.
+- **Fail-Closed CLOB Order Monitoring & Cancel Recovery (`bot/src/trading/clobClient.ts`, `bot/src/engines/limitOrderManager.ts`, `bot/src/engines/__tests__/limitOrderJournal.test.ts`, `bot/src/trading/__tests__/clobClient.v2.test.ts`):** Stopped `getOrderById()` from swallowing `getOpenOrders()` errors as `null`, forced `monitorLimitOrder()` to return `HOLD` when Layer-2 `getOrderStatus()` returns empty/null or rejects (eliminating transient-outage phantom `FILLED` bookings), and added Layer-2 `getOrderStatus` phantom-fill fallback inside `cancelLimitOrder()`'s open-orders error catch block.
+- **Per-Side Orderbook Spread Wiring (`bot/src/engines/tradePipeline.ts`):** Switched all remaining `DOWN`-capable spread reads (`stepDryRunMaker` FOK fallback, `applyTradeFilters`, `entryData.spread`, dry-run FOK/fallback `fokBuyPrice`, and live FOK `fokBuyPrice`) from hardcoded `orderbookUp?.spread` to `sideBook?.spread ?? orderbookUp?.spread ?? null`.
+- **Live GTD `isMaker` Snapshot Parity (`bot/src/loop.ts`):** Stamped `isMaker: true, fillModel: 'maker_join'` on all 5 live GTD limit-order `captureEntrySnapshot()` paths (`LIMIT`, `LIMIT_PARTIAL`, upgrade/cancel `LIMIT_PHANTOM`, and live `PREMARKET` GTD) so `breakevenMargin.ts` and `markoutTracker.ts` apply `0` maker fee consistently with `positionTracker.ts`.
+- **Supply-Chain Advisory Remediation (`package-lock.json`, `bot/package.json`, `bot/package-lock.json`):** Fixed all root advisories (`0` vulnerabilities) and eliminated all `5` high-severity advisories in `bot/` (`0` high/moderate/critical remaining; `@solana/kit` `^8.6.0`, `@x402/core` `^2.31.0`, `@x402/svm` `^2.31.0`, overrides `axios` `^1.21.1` & `follow-redirects` `^1.16.3`) while keeping `@polymarket/clob-client-v2@1.2.0` pinned intact. Zero impact on `DRY_RUN` signal selection or the active `40/300` evaluation window.
+
+## 2026-11-19 — Install Trail of Bits Agent Skills Pack (`trailofbits/skills`, 97 Skills)
+
+- **Workspace & Global Antigravity Installation (`skills-lock.json`, `.agents/skills/`, `~/.gemini/antigravity/skills/`):** Installed all `97` skills from `https://github.com/trailofbits/skills` (commit `149d7b21f4067765b82e67029730b42d228ef4b4`, `--agent antigravity --copy`) into both project `.agents/skills/` (`299` total skills, gitignored) and global `~/.gemini/config/skills/` → `~/.gemini/antigravity/skills/` (`128` total skills). Updated tracked `skills-lock.json` (`98` total pinned entries: `1` existing `cloudflare/security-audit-skill` + `97` `trailofbits/skills`). Zero impact on runtime bot execution or dry-run evaluation.
+
 ## 2026-11-19 — Phase-2 Quant Refinement Roadmap Added to Next Update Backlog
 
 - **Scope & Timing Guard:** Engine and GitHub reference adoption (~95% of infrastructure) are frozen while `DRY_RUN` completes the clean `100–300`-trade sample (`40/300`, `27W–13L`, `$107.18`). Five data-driven Phase-2 upgrades are queued for empirical validation:

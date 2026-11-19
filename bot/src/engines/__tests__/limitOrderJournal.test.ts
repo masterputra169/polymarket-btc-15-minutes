@@ -296,3 +296,30 @@ describe('journal entry written for a LIMIT fill', () => {
     expect(record.analysis.mlWasRight).toBe(true);
   });
 });
+
+describe('fail-closed fill verification on REST outages', () => {
+  test('never returns FILLED when getOrderStatus is null or throws after 3 null checks', async () => {
+    const depsNullStatus = makeDeps({ getOrderStatus: vi.fn(async () => null) });
+    await placeLimitOrder(PLACE_ARGS, depsNullStatus);
+    const r1 = await driveToFill(depsNullStatus);
+    expect(r1.action).toBe('HOLD');
+    expect(r1.detail).toBe('order_status_unavailable');
+
+    resetLimitOrderState();
+    vi.setSystemTime(T0);
+    const depsErrStatus = makeDeps({ getOrderStatus: vi.fn(async () => { throw new Error('timeout'); }) });
+    await placeLimitOrder(PLACE_ARGS, depsErrStatus);
+    const r2 = await driveToFill(depsErrStatus);
+    expect(r2.action).toBe('HOLD');
+    expect(r2.detail).toBe('order_status_error');
+  });
+
+  test('never advances to FILLED when getOrderById throws on REST errors', async () => {
+    const deps = makeDeps({ getOrderById: vi.fn(async () => { throw new Error('503'); }) });
+    await placeLimitOrder(PLACE_ARGS, deps);
+    const res = await driveToFill(deps);
+    expect(res.action).toBe('HOLD');
+    expect(res.detail).toBe('check_error: 503');
+    expect(deps.getOrderStatus).not.toHaveBeenCalled();
+  });
+});

@@ -647,14 +647,19 @@ export async function monitorLimitOrder({
         try {
           const detail = await deps.getOrderStatus(state.orderId);
           const st = (detail?.status ?? detail?.order_status ?? '').toUpperCase();
-          if (st && st !== 'MATCHED') {
+          if (!st) {
+            log.warn(`LIMIT ORDER status check inconclusive (null/empty) — holding until confirmed | orderId=${state.orderId}`);
+            return { action: 'HOLD', detail: 'order_status_unavailable' };
+          }
+          if (st !== 'MATCHED') {
             log.info(`LIMIT ORDER not filled (status: ${st}) — GTD expired or cancelled on-chain | orderId=${state.orderId}`);
             deps.setPendingCost(0);
             resetLimitOrderState();
             return { action: 'CANCEL_EXPIRED', detail: `order_status_${st.toLowerCase()}` };
           }
         } catch (err) {
-          log.debug(`getOrderStatus during fill check failed: ${err.message} — treating as filled`);
+          log.warn(`getOrderStatus during fill check failed: ${err.message} — holding until confirmed`);
+          return { action: 'HOLD', detail: 'order_status_error' };
         }
       }
 
@@ -915,7 +920,18 @@ export async function cancelLimitOrder(reason, deps): Promise<CancelLimitOrderRe
       }
       // else: order still on book + cancel API OK → truly cancelled
     } catch (checkErr) {
-      log.warn(`Order status verification failed: ${checkErr.message} — GTD expiration is safety net`);
+      log.warn(`Order status verification failed: ${checkErr.message} — checking Layer 2 / GTD fallback`);
+      if (!cancelApiOk && deps.getOrderStatus) {
+        try {
+          const orderDetail = await deps.getOrderStatus(orderId);
+          const status = (orderDetail?.status ?? orderDetail?.order_status ?? '').toUpperCase();
+          if (status === 'MATCHED') {
+            return returnPhantomFill('OPEN_ORDERS_ERROR_BUT_MATCHED');
+          }
+        } catch (statusErr) {
+          log.debug(`getOrderStatus recovery after checkErr failed: ${statusErr.message}`);
+        }
+      }
     }
   } else if (!cancelApiOk && deps.getOrderStatus) {
     // ── No getOrderById but getOrderStatus available — use it directly ──

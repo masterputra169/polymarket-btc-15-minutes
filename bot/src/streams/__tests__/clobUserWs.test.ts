@@ -201,4 +201,63 @@ describe('clobUserWs & real-time monitorLimitOrder integration', () => {
     expect(cancelRes.action).toBe('CANCEL_EXPIRED');
     expect(cancelRes.detail).toBe('ws_user_cancelled');
   });
+
+  test('deduplicates partial fill across order UPDATE and trade MATCHED -> MINED -> CONFIRMED lifecycle', () => {
+    const t0 = 1_795_000_000_000;
+    ingestClobUserMessage(JSON.stringify({
+      event_type: 'order',
+      type: 'PLACEMENT',
+      id: 'ord-partial-1',
+      price: '0.56',
+      original_size: '10',
+      size_matched: '0',
+    }), t0);
+
+    ingestClobUserMessage(JSON.stringify({
+      event_type: 'order',
+      type: 'UPDATE',
+      id: 'ord-partial-1',
+      original_size: '10',
+      size_matched: '3',
+    }), t0 + 100);
+
+    for (const [offset, status, hash] of [
+      [200, 'MATCHED', undefined],
+      [300, 'MINED', '0x999'],
+      [400, 'CONFIRMED', '0x999'],
+    ] as const) {
+      ingestClobUserMessage(JSON.stringify({
+        event_type: 'trade',
+        id: 'tr-1',
+        status,
+        price: '0.56',
+        size: '3',
+        ...(hash ? { transaction_hash: hash } : {}),
+        maker_orders: [{ order_id: 'ord-partial-1', matched_amount: '3', price: '0.56' }],
+      }), t0 + offset);
+    }
+
+    expect(getUserOrderEvent('ord-partial-1')).toMatchObject({
+      status: 'PARTIAL',
+      originalSize: 10,
+      sizeMatched: 3,
+      txHash: '0x999',
+    });
+
+    // Second distinct trade on the same order advances sizeMatched to 3 + 4 = 7
+    ingestClobUserMessage(JSON.stringify({
+      event_type: 'trade',
+      id: 'tr-2',
+      status: 'MATCHED',
+      price: '0.56',
+      size: '4',
+      maker_orders: [{ order_id: 'ord-partial-1', matched_amount: '4', price: '0.56' }],
+    }), t0 + 500);
+
+    expect(getUserOrderEvent('ord-partial-1')).toMatchObject({
+      status: 'PARTIAL',
+      originalSize: 10,
+      sizeMatched: 7,
+    });
+  });
 });

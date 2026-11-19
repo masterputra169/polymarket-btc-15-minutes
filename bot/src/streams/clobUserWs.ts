@@ -34,6 +34,8 @@ export interface ClobUserOrderState {
 }
 
 const orderStates = new Map<string, ClobUserOrderState>();
+const orderCumulativeMatched = new Map<string, number>();
+const orderTradeFills = new Map<string, Map<string, number>>();
 let ws: WebSocket | null = null;
 let connected = false;
 let lastMsgMs = 0;
@@ -51,10 +53,22 @@ function parseNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function sumTradeFills(orderId: string): number {
+  const fills = orderTradeFills.get(orderId);
+  if (!fills) return 0;
+  let sum = 0;
+  for (const v of fills.values()) sum += v;
+  return sum;
+}
+
 function setOrderState(orderId: string, next: ClobUserOrderState): void {
   if (!orderStates.has(orderId) && orderStates.size >= MAX_TRACKED_ORDERS) {
     const oldest = orderStates.keys().next().value;
-    if (oldest !== undefined) orderStates.delete(oldest);
+    if (oldest !== undefined) {
+      orderStates.delete(oldest);
+      orderCumulativeMatched.delete(oldest);
+      orderTradeFills.delete(oldest);
+    }
   }
   orderStates.set(orderId, next);
 }
@@ -69,8 +83,16 @@ function mergeOrderEvent(ev: Record<string, any>, now: number): void {
   const parsedMatched = parseNum(ev.size_matched);
   const parsedPrice = parseNum(ev.price);
 
+  if (parsedMatched != null && parsedMatched >= 0) {
+    orderCumulativeMatched.set(orderId, Math.max(orderCumulativeMatched.get(orderId) ?? 0, parsedMatched));
+  }
+
   const originalSize = parsedOrig ?? prev?.originalSize ?? null;
-  const sizeMatched = Math.max(prev?.sizeMatched ?? 0, parsedMatched ?? 0);
+  const sizeMatched = Math.max(
+    prev?.sizeMatched ?? 0,
+    orderCumulativeMatched.get(orderId) ?? 0,
+    sumTradeFills(orderId),
+  );
   const price = parsedPrice ?? prev?.price ?? null;
   const side = (typeof ev.side === 'string' && ev.side) ? ev.side : (prev?.side ?? null);
   const assetId = (typeof ev.asset_id === 'string' && ev.asset_id) ? ev.asset_id : (prev?.assetId ?? null);
@@ -106,6 +128,7 @@ function mergeOrderEvent(ev: Record<string, any>, now: number): void {
 
 function mergeTradeFill(
   orderId: string,
+  tradeKey: string,
   matchedAmount: number | null,
   price: number | null,
   side: string | null,
@@ -119,7 +142,19 @@ function mergeTradeFill(
   const prev = orderStates.get(cleanId);
   const orig = prev?.originalSize ?? null;
   const inc = matchedAmount != null && matchedAmount > 0 ? matchedAmount : 0;
-  const nextMatched = (prev?.sizeMatched ?? 0) + inc;
+  if (inc > 0) {
+    let fills = orderTradeFills.get(cleanId);
+    if (!fills) {
+      fills = new Map<string, number>();
+      orderTradeFills.set(cleanId, fills);
+    }
+    fills.set(tradeKey, Math.max(fills.get(tradeKey) ?? 0, inc));
+  }
+  const nextMatched = Math.max(
+    orderCumulativeMatched.get(cleanId) ?? 0,
+    sumTradeFills(cleanId),
+    inc === 0 ? (prev?.sizeMatched ?? 0) : 0,
+  );
 
   let status: ClobUserOrderState['status'];
   if (prev?.status === 'MATCHED') {
@@ -154,9 +189,11 @@ function handleTradeEvent(ev: Record<string, any>, now: number): void {
   const evPrice = parseNum(ev.price);
   const evSize = parseNum(ev.size);
   const evSide = (typeof ev.side === 'string' && ev.side) ? ev.side : null;
+  const rawTradeId = String(ev.id ?? ev.trade_id ?? '').trim();
+  const baseTradeKey = rawTradeId || (txHash ? `tx:${txHash}` : `anon:${evPrice ?? ''}:${evSize ?? ''}:${now}`);
 
   if (typeof ev.taker_order_id === 'string' && ev.taker_order_id.trim()) {
-    mergeTradeFill(ev.taker_order_id, evSize, evPrice, evSide, assetId, txHash, true, now);
+    mergeTradeFill(ev.taker_order_id, `${baseTradeKey}:taker`, evSize, evPrice, evSide, assetId, txHash, true, now);
   }
 
   if (Array.isArray(ev.maker_orders)) {
@@ -167,7 +204,7 @@ function handleTradeEvent(ev: Record<string, any>, now: number): void {
       const moAmount = parseNum(mo.matched_amount ?? mo.size);
       const moPrice = parseNum(mo.price) ?? evPrice;
       const moAsset = (typeof mo.asset_id === 'string' && mo.asset_id) ? mo.asset_id : assetId;
-      mergeTradeFill(moId, moAmount, moPrice, (typeof mo.side === 'string' && mo.side) ? mo.side : evSide, moAsset, txHash, false, now);
+      mergeTradeFill(moId, `${baseTradeKey}:maker:${moId}`, moAmount, moPrice, (typeof mo.side === 'string' && mo.side) ? mo.side : evSide, moAsset, txHash, false, now);
     }
   }
 }
@@ -326,6 +363,8 @@ export function getClobUserWsHealth() {
 export function resetClobUserWsForTest(): void {
   disconnectClobUserWs();
   orderStates.clear();
+  orderCumulativeMatched.clear();
+  orderTradeFills.clear();
   lastMsgMs = 0;
   reconnectMs = 500;
   forceConnect = false;

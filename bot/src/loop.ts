@@ -2436,6 +2436,7 @@ export async function pollOnce() {
                   priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
                   cost: fd.price * fd.size, size: fd.size,
                   confidence: 'LIMIT_PHANTOM', phase: rec?.phase, reason: 'phantom_fill_upgrade',
+                  isMaker: true, fillModel: 'maker_join',
                   timeLeftMin, session: getSessionName(),
                 });
                 notify('warn',
@@ -2497,6 +2498,7 @@ export async function pollOnce() {
               priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
               cost: fd.price * fd.size, size: fd.size,
               confidence: 'LIMIT', phase: rec?.phase, reason: 'limit_order_filled',
+              isMaker: true, fillModel: 'maker_join',
               timeLeftMin, session: getSessionName(),
             });
             if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
@@ -2535,6 +2537,7 @@ export async function pollOnce() {
               priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
               cost: fd.price * fd.size, size: fd.size,
               confidence: 'LIMIT_PARTIAL', phase: rec?.phase, reason: 'limit_order_partial',
+              isMaker: true, fillModel: 'maker_join',
               timeLeftMin, session: getSessionName(),
             });
             if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
@@ -2619,6 +2622,7 @@ export async function pollOnce() {
                 priceToBeat: priceToBeat.value, marketSlug: fd.marketSlug,
                 cost: fd.price * fd.size, size: fd.size,
                 confidence: 'LIMIT_PHANTOM', phase: rec?.phase, reason: `phantom_fill_${cancelReason}`,
+                isMaker: true, fillModel: 'maker_join',
                 timeLeftMin, session: getSessionName(),
               });
               if (updateConditionalApproval && !BOT_CONFIG.dryRun) {
@@ -2812,7 +2816,7 @@ export async function pollOnce() {
                 // Audit fix Tier-1 HIGH (2026-05-14): add actualCost.
                 recordTrade({ side: 'UP', tokenId: pmTokenId, conditionId: currentConditionId, price: limitPrice, size: pmLimitShares, marketSlug, orderId: pmOrderId, actualCost: pmLimitCost, isMaker: true });
                 entryRegime = regimeInfo?.regime ?? null;
-                captureEntrySnapshot({ ...pmSignalBlock, side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', timeLeftMin, session: getSessionName() });
+                captureEntrySnapshot({ ...pmSignalBlock, side: 'UP', tokenPrice: limitPrice, btcPrice: lastPrice, priceToBeat: priceToBeat.value, marketSlug, cost: pmLimitCost, size: pmLimitShares, confidence: 'PREMARKET', phase: rec?.phase, reason: 'premarket_long_gtd', isMaker: true, fillModel: 'maker_join', timeLeftMin, session: getSessionName() });
                 onPreMarketEntry(limitPrice, marketSlug);
                 preMarketEnteredThisPoll = true;
                 // ERC-1155 approval for subsequent sells

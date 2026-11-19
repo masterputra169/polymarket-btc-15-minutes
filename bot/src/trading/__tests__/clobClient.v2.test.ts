@@ -20,6 +20,7 @@ const sdk = vi.hoisted(() => ({
   instances: [] as any[],
   omitSettlementHook: false,
   nextResponse: null as any,
+  nextOpenOrdersError: null as Error | null,
 }));
 
 vi.mock('@polymarket/clob-client-v2', async (importOriginal) => {
@@ -36,6 +37,11 @@ vi.mock('@polymarket/clob-client-v2', async (importOriginal) => {
     async createOrDeriveApiKey() { return { key: 'derived-key', secret: 'derived-secret', passphrase: 'derived-pass' }; }
     async getVersion() { return 2; }
     async getClobMarketInfo(conditionID: string) { this.calls.push(['getClobMarketInfo', conditionID]); return { condition_id: conditionID }; }
+    async getOpenOrders() {
+      this.calls.push(['getOpenOrders']);
+      if (sdk.nextOpenOrdersError) throw sdk.nextOpenOrdersError;
+      return [];
+    }
     async postHeartbeat(heartbeatId?: string) { this.calls.push(['postHeartbeat', heartbeatId]); return { heartbeat_id: 'hb-next-1' }; }
     async updateBalanceAllowance(params: any) { this.calls.push(['updateBalanceAllowance', params]); }
     async createAndPostMarketOrder(...args: any[]) {
@@ -88,6 +94,7 @@ beforeEach(() => {
   sdk.instances.length = 0;
   sdk.omitSettlementHook = false;
   sdk.nextResponse = null;
+  sdk.nextOpenOrdersError = null;
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -290,5 +297,14 @@ describe('responses', () => {
     expect(outage.active).toBe(true);
     expect(outage.reason).toBe('post_only_mode');
     resetClobOutageStats();
+  });
+
+  test('getOrderById rethrows REST errors instead of returning null', async () => {
+    const { clob } = await loadModules();
+    await clob.initClobClient();
+    sdk.nextOpenOrdersError = new Error('CLOB 503 Service Unavailable');
+    await expect(clob.getOrderById('ord-timeout')).rejects.toThrow('CLOB 503 Service Unavailable');
+    sdk.nextOpenOrdersError = null;
+    await expect(clob.getOrderById('ord-absent')).resolves.toBeNull();
   });
 });

@@ -1,12 +1,788 @@
 {
   "version": 2,
   "skills": {
+    "address-sanitizer": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/address-sanitizer/SKILL.md",
+      "computedHash": "73407f088a6ac917a512d79af683fb6035fa3020f8b521f635f229fae4023821",
+      "installMode": "copy"
+    },
+    "adjudicate-regression": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/adjudicate-regression/SKILL.md",
+      "computedHash": "32a107b0a96f25cb45b0c3dc36dcf81a248a751c5aef260d11f4eaac4b269636",
+      "installMode": "copy"
+    },
+    "aflpp": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/aflpp/SKILL.md",
+      "computedHash": "5d0cbc14b0d48d65dc2bee191f0151cb8ada0fbbc2f99879a25bbcd47ba672a0",
+      "installMode": "copy"
+    },
+    "agentic-actions-auditor": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/agentic-actions-auditor/skills/agentic-actions-auditor/SKILL.md",
+      "computedHash": "cc7b3d1a75443e02b5fbd5955adf64da393b4ed202ef7be152ac14a506b6ec95",
+      "installMode": "copy"
+    },
+    "algorand-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/algorand-vulnerability-scanner/SKILL.md",
+      "computedHash": "688598e063e64063f57e40678bc4d5b5b2345c65290a7e75c214ded967ed3395",
+      "installMode": "copy"
+    },
+    "atheris": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/atheris/SKILL.md",
+      "computedHash": "934e2a11d624855ff8a196ae1313b4fa26730e23ab4242638f6dec10f1cd0a77",
+      "installMode": "copy"
+    },
+    "audit-augmentation": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/audit-augmentation/SKILL.md",
+      "computedHash": "a68dcf8cb57df065537085ad68f22646aff175d093a8f5ed80a6b1f5d13f86b4",
+      "installMode": "copy"
+    },
+    "audit-context-building": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/audit-context-building/skills/audit-context-building/SKILL.md",
+      "computedHash": "69aff40ecdbfcd0f03f231f9c68c9657512aa911752e68a83d2d912815cf47b6",
+      "installMode": "copy"
+    },
+    "audit-prep-assistant": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/audit-prep-assistant/SKILL.md",
+      "computedHash": "3a7dd12f1f6cf9dbb119fe8cc20fc60043b2c200f8046bac7d957f265f7f44ea",
+      "installMode": "copy"
+    },
+    "burpsuite-project-parser": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/burpsuite-project-parser/skills/burpsuite-project-parser/SKILL.md",
+      "computedHash": "f7b944afd990803e0f339a7bdaae125eb9dda9f3b72af98f1c0a9d96b13bbdcf",
+      "installMode": "copy"
+    },
+    "c-review": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/c-review/skills/c-review/SKILL.md",
+      "computedHash": "3572a40ee406b79aa406e3a971873fca3f13a1dc23f65cc8e94049a574bd95a8",
+      "installMode": "copy"
+    },
+    "cairo-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/cairo-vulnerability-scanner/SKILL.md",
+      "computedHash": "b8dc1925743962cae69955a8ab5105fbb69116871ce0b27ca094c2f89da7f04b",
+      "installMode": "copy"
+    },
+    "cargo-fuzz": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/cargo-fuzz/SKILL.md",
+      "computedHash": "aadcb6ae5be75f384a2c119e2d2cbb352d08c54af3a526b88d097ddbe2e613f4",
+      "installMode": "copy"
+    },
+    "chrome-mcp-troubleshooting": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/chrome-mcp-troubleshooting/skills/chrome-mcp-troubleshooting/SKILL.md",
+      "computedHash": "1f998a2a2854a33e2fd7123b51b87a889fa60ba30836316f295c791d33137362",
+      "installMode": "copy"
+    },
+    "code-improver": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/code-improver/skills/code-improver/SKILL.md",
+      "computedHash": "8fe6d7be77e61acf1309ffee91d21d620d3374e2aa072c40392c8af0957b46c0",
+      "installMode": "copy"
+    },
+    "code-maturity-assessor": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/code-maturity-assessor/SKILL.md",
+      "computedHash": "70e3babb3aead1d6eb9901983c9f1b50cfc0e1f2ab32adfcb23698e32fc5e149",
+      "installMode": "copy"
+    },
+    "codeql": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/codeql/SKILL.md",
+      "computedHash": "3aa08ccca1566c1bfe34bf6b2259098ae40fa5d64dce7bb4f7267828ed080a36",
+      "installMode": "copy"
+    },
+    "constant-time-analysis": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/constant-time-analysis/skills/constant-time-analysis/SKILL.md",
+      "computedHash": "b2577b92161a1c35ca6327518c85760efd697efb6ff8e6d4be52e272f0cf8a87",
+      "installMode": "copy"
+    },
+    "constant-time-testing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/constant-time-testing/SKILL.md",
+      "computedHash": "2ddb76df4a149893b7e9a61269511c0223010170c8b762fe43e2d08c76e1f3d5",
+      "installMode": "copy"
+    },
+    "cosmos-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/cosmos-vulnerability-scanner/SKILL.md",
+      "computedHash": "1b23d47a43fd02e091aa53fe0d7a8251f001bcda17089aee1ec070138b681efc",
+      "installMode": "copy"
+    },
+    "coverage-analysis": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/coverage-analysis/SKILL.md",
+      "computedHash": "0cb16e44d959a426b56209677f097fc72bf07501f72e65f36f194d3e46a9457a",
+      "installMode": "copy"
+    },
+    "crypto-protocol-diagram": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/crypto-protocol-diagram/SKILL.md",
+      "computedHash": "c694cbbef9f076fdcbfd1de940ad7d1a8388b389f4ef90f384bba5ea6b1f7580",
+      "installMode": "copy"
+    },
+    "cvss-scoring": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/cvss-scoring/skills/cvss-scoring/SKILL.md",
+      "computedHash": "a78d83cb5a6e4eec8d4a3956e161f6472088c72d3355c7e227311b91d238e7a1",
+      "installMode": "copy"
+    },
+    "devcontainer-setup": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/devcontainer-setup/skills/devcontainer-setup/SKILL.md",
+      "computedHash": "6c35391b1523809e7277574004f449d618565e533038b1fe727aa09135faad08",
+      "installMode": "copy"
+    },
+    "diagramming-code": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/diagramming-code/SKILL.md",
+      "computedHash": "e90cf8d22575159f324d6e0e94992f80bdfb59b8667983ae789172a3dd56f1a0",
+      "installMode": "copy"
+    },
+    "differential-review": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/differential-review/skills/differential-review/SKILL.md",
+      "computedHash": "41b93cf300a463adf697abb9467fc281fd0b6cdadee1092db8f11619e9be4362",
+      "installMode": "copy"
+    },
+    "dimensional-analysis": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/dimensional-analysis/skills/dimensional-analysis/SKILL.md",
+      "computedHash": "9ad531ac4083358dbe83dace4993dfd0eda125785f112f2ce2b1e17378330755",
+      "installMode": "copy"
+    },
+    "dwarf-expert": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/dwarf-expert/skills/dwarf-expert/SKILL.md",
+      "computedHash": "6880f74b95d69f0f2a3c76bc183e000b6f052c32630476beb4f820aac88a0d68",
+      "installMode": "copy"
+    },
+    "entry-point-analyzer": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/entry-point-analyzer/skills/entry-point-analyzer/SKILL.md",
+      "computedHash": "34619df7ec80de2e38a00ebbf3f6ac28bbe93ecfea1b4697aa29efdc0df39a13",
+      "installMode": "copy"
+    },
+    "firebase-apk-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/firebase-apk-scanner/skills/firebase-apk-scanner/SKILL.md",
+      "computedHash": "43d1d40248eeb198e1d556c6f5106de8ff106ba3a2f9be8353d29c54c53d00d8",
+      "installMode": "copy"
+    },
+    "fp-check": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/fp-check/skills/fp-check/SKILL.md",
+      "computedHash": "364313e5f7c4ae2c1116f5934bb9722ccfa45afc008a7824c24d8820f09f37c0",
+      "installMode": "copy"
+    },
+    "fuzzing-dictionary": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/fuzzing-dictionary/SKILL.md",
+      "computedHash": "c091d27b353fd0d99df479837c5b12390578b45ccc0d9242d97dae240847d3ea",
+      "installMode": "copy"
+    },
+    "fuzzing-obstacles": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/fuzzing-obstacles/SKILL.md",
+      "computedHash": "74002176604a2c58bc282e2d4db6b70d90ca176e8ed3f88c2377aa1fc11fe300",
+      "installMode": "copy"
+    },
+    "genotoxic": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/genotoxic/SKILL.md",
+      "computedHash": "0a98b1f2a598abf46de9f90e4b66fb808a4adc179ce48568967065b82a75c780",
+      "installMode": "copy"
+    },
+    "gh-cli": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/gh-cli/skills/gh-cli/SKILL.md",
+      "computedHash": "1dd0c7d43c2dc7b2744bb19a65ea88918104e31bbcd681903f76c037ef86a5fd",
+      "installMode": "copy"
+    },
+    "github-triage": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/github-triage/skills/github-triage/SKILL.md",
+      "computedHash": "b83e94f57921a9224b71fa46f141eb6e9d0e00763de7d36b14fc7940a571ff11",
+      "installMode": "copy"
+    },
+    "goal-prompt": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/goal-prompt/skills/goal-prompt/SKILL.md",
+      "computedHash": "f9bcedee5b05358fab81c38d1d0f3db9e2a3308a104dbc60e7b7b0198d053c57",
+      "installMode": "copy"
+    },
+    "graph-evolution": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/graph-evolution/SKILL.md",
+      "computedHash": "17126f01228e86562609f7271a3aa62a9caa82e5ce69940ff3d5acf143ae6784",
+      "installMode": "copy"
+    },
+    "guidelines-advisor": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/guidelines-advisor/SKILL.md",
+      "computedHash": "6ecbf533b1d7ffbc08b791a1c2f7ba4a81a57b22086ca99676102b7f1478e00b",
+      "installMode": "copy"
+    },
+    "harness-writing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/harness-writing/SKILL.md",
+      "computedHash": "d7e16c5f1512ca5eb62d3133bdca84f9891c486fa0a070b1b284dccf816a30cc",
+      "installMode": "copy"
+    },
+    "hunt-regressions": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/hunt-regressions/SKILL.md",
+      "computedHash": "d7ed6e682351443641c29a18729a13b8c62a7a5227d87c31ea9391e0d4e505cb",
+      "installMode": "copy"
+    },
+    "implement-patch": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/patching-bugs/skills/implement-patch/SKILL.md",
+      "computedHash": "887bc5987a41970508fffbbcd4bca9b930a351ba1ea76bfc1be384ef24d88841",
+      "installMode": "copy"
+    },
+    "interpreting-culture-index": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/culture-index/skills/interpreting-culture-index/SKILL.md",
+      "computedHash": "b06127d2552b8c31f769aea4752413fc0e549d15086c6fcf53476d79e800c7a4",
+      "installMode": "copy"
+    },
+    "let-fate-decide": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/let-fate-decide/skills/let-fate-decide/SKILL.md",
+      "computedHash": "24d01a113222e8c33ea28e942811c73e384ad05024fc2bd79384f31c628bda0e",
+      "installMode": "copy"
+    },
+    "libafl": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/libafl/SKILL.md",
+      "computedHash": "7e96da66ee92ecced0c679e3260a89099b4ec6f18722ff6e055e7ec029b1bc65",
+      "installMode": "copy"
+    },
+    "libfuzzer": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/libfuzzer/SKILL.md",
+      "computedHash": "517824953bf8ca541f9d23bc64068474357329b802c37ea6ca4a5c70222dfd07",
+      "installMode": "copy"
+    },
+    "mermaid-to-proverif": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/mermaid-to-proverif/SKILL.md",
+      "computedHash": "a8cfce2a989e1f9684781b7b69ec75ffb32a99aeb8d7062e598ad2ece3c89660",
+      "installMode": "copy"
+    },
+    "modern-cpp": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/modern-cpp/skills/modern-cpp/SKILL.md",
+      "computedHash": "33d005f91709c390b9bfe1da5fe5268307f04855afc967d5b7fb544f501b7425",
+      "installMode": "copy"
+    },
+    "modern-python": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/modern-python/skills/modern-python/SKILL.md",
+      "computedHash": "6f78e1948cc291dfc71672a87f83a02de3cec01545ed289312ce432d129ec00b",
+      "installMode": "copy"
+    },
+    "mutation-testing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/mutation-testing/skills/mutation-testing/SKILL.md",
+      "computedHash": "e1d35d62f37194bf39f256bc3f9e35567506e5b2fae042c36e0bf2264658bd09",
+      "installMode": "copy"
+    },
+    "open-sourcing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/open-sourcing/skills/open-sourcing/SKILL.md",
+      "computedHash": "3ac109d34a725a99a52ab9799e74859e56d99d5f4ea0ba5039cc42be7361e629",
+      "installMode": "copy"
+    },
+    "ossfuzz": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/ossfuzz/SKILL.md",
+      "computedHash": "26b8100e11f0f08f09a410497b048fb307c6e30d96dd559233550a7fdb8b8694",
+      "installMode": "copy"
+    },
+    "patching-bugs": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/patching-bugs/skills/patching-bugs/SKILL.md",
+      "computedHash": "96b8d9b1670c6a7b8062c4be128ea14f00cd09378ce92ff73ca4dc10e9e449a4",
+      "installMode": "copy"
+    },
+    "post-patch-validation": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/post-patch-validation/skills/post-patch-validation/SKILL.md",
+      "computedHash": "f22fc753c2eba33bd77dc7313ea92ba3402117c787213d4bfc78f1c854f31e5a",
+      "installMode": "copy"
+    },
+    "pr-improver": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/code-improver/skills/pr-improver/SKILL.md",
+      "computedHash": "24abe4cbe388ab15d70677da9257be9f632aa88f214dbc35dda6ecd8b1fa1b09",
+      "installMode": "copy"
+    },
+    "prepare-regression": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/prepare-regression/SKILL.md",
+      "computedHash": "b9a8c9d7bac4da796402c7f207c4a068787bf9cfef71eaabc86db69c2feda22e",
+      "installMode": "copy"
+    },
+    "property-based-testing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/property-based-testing/skills/property-based-testing/SKILL.md",
+      "computedHash": "1fadba845ba4a8f8916bb58f5b61dda6142780851ffb6a5a5ff82574b7798bfa",
+      "installMode": "copy"
+    },
+    "prove-patch": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/patching-bugs/skills/prove-patch/SKILL.md",
+      "computedHash": "a63515f358a640e57bbbcefc6a6ef43a47c1796715b3749a732b15991945ba92",
+      "installMode": "copy"
+    },
+    "regression-hunt": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/regression-hunt/SKILL.md",
+      "computedHash": "898d2d214b7c672e3970a9cd85c62002a83cf5fb5fec7bc2aee2cf008c24b12b",
+      "installMode": "copy"
+    },
+    "replay-regression": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/replay-regression/SKILL.md",
+      "computedHash": "0be8ee8765118e1651ac17b66f8fcf609bbee20f44eca35a59ea490101333e50",
+      "installMode": "copy"
+    },
+    "report-regressions": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/report-regressions/SKILL.md",
+      "computedHash": "97eff90948ec9d2a69a3067c0817d83301fa049d7893f7dc6b42f2919ea0e7f0",
+      "installMode": "copy"
+    },
+    "reproduce-bug": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/patching-bugs/skills/reproduce-bug/SKILL.md",
+      "computedHash": "d30a7683fbed5e7585d1358f82ccb076d44ec921ef208c2640671a7ed0e3c8ab",
+      "installMode": "copy"
+    },
+    "reproduce-regression": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/regression-hunt/skills/reproduce-regression/SKILL.md",
+      "computedHash": "101588143653da03a2479853b36c78766f26fa88a4775963c854eecddb949db2",
+      "installMode": "copy"
+    },
+    "review-walkthrough": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/review-walkthrough/skills/review-walkthrough/SKILL.md",
+      "computedHash": "a50d41da77eb5155266a729eb9bc484fffb1d80f97594dc1cff8e022547c3495",
+      "installMode": "copy"
+    },
+    "rust-review": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/rust-review/skills/rust-review/SKILL.md",
+      "computedHash": "76c1eca6f7544650022e51013ab967a6672845ea46d56de600caff171fa924cd",
+      "installMode": "copy"
+    },
+    "ruzzy": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/ruzzy/SKILL.md",
+      "computedHash": "ef60244ff5198bc5c52ff0bd2a79ce8cfa83a881ec87bc5bfae820623fde024d",
+      "installMode": "copy"
+    },
+    "sarif-parsing": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/sarif-parsing/SKILL.md",
+      "computedHash": "86b55fe4f5a443ac39bc8d62dc113a854e8df49b4d9efe2941d15766604baee1",
+      "installMode": "copy"
+    },
+    "second-opinion": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/second-opinion/skills/second-opinion/SKILL.md",
+      "computedHash": "97b06cbf0dc8d1298bab56f3c6b6e3a443967322446b951a4d18454eb4f4dac3",
+      "installMode": "copy"
+    },
+    "secure-workflow-guide": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/secure-workflow-guide/SKILL.md",
+      "computedHash": "f4577cd81869a265e6e0decc842d6fa07dedf1bc8248c685b2af17c545398a22",
+      "installMode": "copy"
+    },
     "security-audit": {
       "source": "cloudflare/security-audit-skill",
       "commit": "c1c8a8c1471069fb0e188eeaff69b8e8db6564a8",
       "sourceType": "github",
       "skillPath": "skills/security-audit/SKILL.md",
       "computedHash": "8513eb3b2c39b8d05ef4f47b32ef4d18280b93a5efb91d8df6272f7435034af5"
+    },
+    "semgrep": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/static-analysis/skills/semgrep/SKILL.md",
+      "computedHash": "6ce4dd995d671502bec8f33fa13d66ddf3d0e23e2d91a7d9c0531ae9ac547985",
+      "installMode": "copy"
+    },
+    "semgrep-rule-creator": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/semgrep-rule-creator/skills/semgrep-rule-creator/SKILL.md",
+      "computedHash": "79a1c87020356968bfba7e6d20bed9b177cfb0318770ee59d96f7786e06a08fd",
+      "installMode": "copy"
+    },
+    "semgrep-rule-variant-creator": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/semgrep-rule-variant-creator/skills/semgrep-rule-variant-creator/SKILL.md",
+      "computedHash": "7f0280408e6f3a9928e54051d03aef6ce5e81079c1557fad7c64f2af2ed16adb",
+      "installMode": "copy"
+    },
+    "sharp-edges": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/sharp-edges/skills/sharp-edges/SKILL.md",
+      "computedHash": "fa36c2d4f9fa315eebcf03b4687dc760ff6b5805de69a3d2614a6b0fce695c6d",
+      "installMode": "copy"
+    },
+    "skill-improver": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/code-improver/skills/skill-improver/SKILL.md",
+      "computedHash": "967032928b6a0b522c6e72bb1d4c6d4a12d2b20f80a775dd3c2f16cdfd549122",
+      "installMode": "copy"
+    },
+    "slicing-code-context": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/slicing-code-context/SKILL.md",
+      "computedHash": "93acef93315096fa6f4d61cf3e4da9eb965ee1d1b6e0f7ba3bc639826d7881e7",
+      "installMode": "copy"
+    },
+    "solana-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/solana-vulnerability-scanner/SKILL.md",
+      "computedHash": "f5d8034a25fd6027df81352eec14b83fe1eacac762fba105a7c7ea65bffa0584",
+      "installMode": "copy"
+    },
+    "spec-to-code-compliance": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/spec-to-code-compliance/skills/spec-to-code-compliance/SKILL.md",
+      "computedHash": "73485ad724626ad99344c5ab6221c6fe20067827661c8d8e46137ee5d27f0f25",
+      "installMode": "copy"
+    },
+    "substrate-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/substrate-vulnerability-scanner/SKILL.md",
+      "computedHash": "a8790c69710bd022c9f7d569e8f3edea94a3c3f41d0984ec72b421c32e7d3f1a",
+      "installMode": "copy"
+    },
+    "supply-chain-risk-auditor": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/supply-chain-risk-auditor/skills/supply-chain-risk-auditor/SKILL.md",
+      "computedHash": "8a15fe1e5cb75e02781bcf4d823a3ea32095c2e16c964c49182312f666aff866",
+      "installMode": "copy"
+    },
+    "taint-trace": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/taint-trace/SKILL.md",
+      "computedHash": "0bbf5b72dc71e7768b2d910e77d8648e2c5599aede4d10d17364ea17804bae5e",
+      "installMode": "copy"
+    },
+    "testing-handbook-generator": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/testing-handbook-generator/SKILL.md",
+      "computedHash": "d1a7e67b4068c72178f43326909876f1e797dd665f1c30f8f0a9a5daf1bb5e6d",
+      "installMode": "copy"
+    },
+    "token-integration-analyzer": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/token-integration-analyzer/SKILL.md",
+      "computedHash": "b881209777fda9af2e4a21bb253d5ddb50277f1ba98ef8b8359784e7502c48c0",
+      "installMode": "copy"
+    },
+    "ton-vulnerability-scanner": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/building-secure-contracts/skills/ton-vulnerability-scanner/SKILL.md",
+      "computedHash": "2523b944b248587be5a8fa791b3fd6b7593807d89cd32d4e3da26ce85cfeabc8",
+      "installMode": "copy"
+    },
+    "trailmark": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark/SKILL.md",
+      "computedHash": "87050da0e72cba4620693e0c7227ec63658bd7c661601ce41e2eca3bc93aa346",
+      "installMode": "copy"
+    },
+    "trailmark-finding-triage": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark-finding-triage/SKILL.md",
+      "computedHash": "38363e0933116709d92a2c094bd44d710f5670d39b5c9ac76cf95ab6a47f8b9f",
+      "installMode": "copy"
+    },
+    "trailmark-review-gate": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark-review-gate/SKILL.md",
+      "computedHash": "70e27f279626e9a8a88581ef412b0b0458700ef0938a6f9273dd27f9d5953e5e",
+      "installMode": "copy"
+    },
+    "trailmark-structural": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark-structural/SKILL.md",
+      "computedHash": "711d66ad3a6308d51bff2885b9b97c82c42d392282c6b0575d6f488a3e427b5a",
+      "installMode": "copy"
+    },
+    "trailmark-summary": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark-summary/SKILL.md",
+      "computedHash": "fbe22534715b430753269ba2fcf626b5233d4b33f191dcbd55418c1d8c04bbda",
+      "installMode": "copy"
+    },
+    "trailmark-variant-neighborhood": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/trailmark-variant-neighborhood/SKILL.md",
+      "computedHash": "facb842b2ceb470b4ea2abeae8212fa86a3519ac285712e3fc2324ecf1193ac3",
+      "installMode": "copy"
+    },
+    "validate-bug": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/patching-bugs/skills/validate-bug/SKILL.md",
+      "computedHash": "5429fc3cde3862cf20e385d7775fc6d7b48686ee4994c23455730855b584073e",
+      "installMode": "copy"
+    },
+    "variant-analysis": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/variant-analysis/skills/variant-analysis/SKILL.md",
+      "computedHash": "3ec9c49ed7d71c732de360696f76a26252143077b293c063532de579c6a47e95",
+      "installMode": "copy"
+    },
+    "vector-forge": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/trailmark/skills/vector-forge/SKILL.md",
+      "computedHash": "ba078d712004d8043205486825e961bad8f54d2dad297380e9f672f9ba808aba",
+      "installMode": "copy"
+    },
+    "vulnerability-triage-brocards": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/vulnerability-triage-brocards/skills/vulnerability-triage-brocards/SKILL.md",
+      "computedHash": "c7aec7fa5cf3431e388c5c4622fdcf4d12d61e0cd7360b71ca8652e82fa52d0a",
+      "installMode": "copy"
+    },
+    "writing-lean-proofs": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/writing-lean-proofs/skills/writing-lean-proofs/SKILL.md",
+      "computedHash": "e1cd38c51056d52fc1cf7840ad7af69b598a2a59de296c95244d7a9de14f05fa",
+      "installMode": "copy"
+    },
+    "wycheproof": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/testing-handbook-skills/skills/wycheproof/SKILL.md",
+      "computedHash": "a859a5519f41a3da685dc566f71b1234c5bf2d5e555624ece416301cac195bb8",
+      "installMode": "copy"
+    },
+    "yara-rule-authoring": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/yara-authoring/skills/yara-rule-authoring/SKILL.md",
+      "computedHash": "caae36bcb70dd1e8470a0625f523421dfcbff4f155b30def7465b1e44078032c",
+      "installMode": "copy"
+    },
+    "zeroize-audit": {
+      "source": "trailofbits/skills",
+      "commit": "149d7b21f4067765b82e67029730b42d228ef4b4",
+      "sourceType": "github",
+      "skillPath": "plugins/zeroize-audit/skills/zeroize-audit/SKILL.md",
+      "computedHash": "1c5129ed15b742f70ef4d8d0a25b540f4953333fdd1a6aec82bdf3f9d20279ff",
+      "installMode": "copy"
     }
   }
 }

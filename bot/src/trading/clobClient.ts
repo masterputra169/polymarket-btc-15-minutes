@@ -344,7 +344,7 @@ export async function getOrderById(orderId) {
     return openOrders.find(o => (o.id ?? o.orderID ?? o.order_id) === orderId) ?? null;
   } catch (err) {
     log.debug(`getOrderById failed: ${err.message}`);
-    return null;
+    throw err;
   }
 }
 

@@ -376,7 +376,7 @@ export function stepDryRunMaker(params: {
     const liqOk = !(Number.isFinite(askLiqShares) && askLiqShares > 0 && pending.shares > askLiqShares);
 
     if (fokGate.allow && !runCheck.runaway && liqOk && currentAsk != null && currentAsk > 0.01 && currentAsk < 0.99) {
-      const fokPx = fokBuyPrice(currentAsk, params.orderbookUp?.spread);
+      const fokPx = fokBuyPrice(currentAsk, betBook?.spread ?? params.orderbookUp?.spread);
       pending.entryData.queueRemainingAtTimeout = order.queueAhead;
       pending.entryData.timeToFillMs = now - order.placedAtMs;
       log.info(
@@ -702,6 +702,8 @@ export async function executeDirectionalTrade({
   // ── Smart trade filters ──
   // Compute ET hour for blackout filter (DST-aware via Intl API)
   const etHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+  const sideBook = betSide === 'UP' ? orderbookUp : orderbookDown;
+  const sideSpread = sideBook?.spread ?? orderbookUp?.spread ?? null;
 
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
@@ -721,7 +723,7 @@ export async function executeDirectionalTrade({
     signalSide: rec.side,
     regime: regimeInfo?.regime ?? 'moderate',
     etHour,
-    spread: orderbookUp?.spread ?? null,
+    spread: sideSpread,
     mlAccuracy: deps.getMLAccuracy?.() ?? null,
     buyRatio: volDelta?.buyRatio ?? null,
     buyRatio300s: volDelta?.buyRatio300s ?? null,
@@ -1002,7 +1004,7 @@ export async function executeDirectionalTrade({
     delta1m, delta3m,
     regime: regimeInfo.regime, regimeConfidence: regimeInfo.confidence,
     marketUp, marketDown,
-    orderbookImbalance: orderbookSignal?.imbalance, spread: orderbookUp?.spread,
+    orderbookImbalance: orderbookSignal?.imbalance, spread: sideSpread,
     timeLeftMin, session,
     betAmount: betSizing.betAmount, kellyFraction: betSizing.kellyFraction,
     riskLevel: betSizing.riskLevel, expectedValue: betSizing.expectedValue,
@@ -1163,12 +1165,12 @@ export async function executeDirectionalTrade({
         deps.setPendingCost(0);
         return false;
       }
-      dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+      dryFillPrice = fokBuyPrice(betMarketPrice, sideSpread);
       fillModel = 'fok_after_maker_miss';
       log.info(`[DRY RUN] MAKER miss → FOK fallback (${fokGate.reason}) @ $${dryFillPrice.toFixed(3)}`);
     } else {
       // Price mirrors live FOK (same fokBuyPrice / spread input as the live path).
-      dryFillPrice = fokBuyPrice(betMarketPrice, orderbookUp?.spread);
+      dryFillPrice = fokBuyPrice(betMarketPrice, sideSpread);
       fillModel = 'fok_limit';
     }
 
@@ -1235,7 +1237,7 @@ export async function executeDirectionalTrade({
   try {
     const orderResult = await deps.placeBuyOrder({
       tokenId,
-      price: fokBuyPrice(betMarketPrice, orderbookUp?.spread),
+      price: fokBuyPrice(betMarketPrice, sideSpread),
       size: shares,
     });
     const orderId = orderResult?.orderId ?? orderResult?.orderID ?? orderResult?.id ?? null;
