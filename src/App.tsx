@@ -5,6 +5,7 @@ import { useCountdown } from './hooks/useCountdown.ts';
 import { initLoggerDB, shouldLog, logSnapshot } from './data/polymarketLogger.ts';
 import { recordPrediction, autoSettle, onMarketSwitch, getSignalPerfStats } from './engines/feedback.ts';
 import CurrentPriceCard from './components/CurrentPriceCard.tsx';
+import PriceChartPanel from './components/PriceChartPanel.tsx';
 import TAIndicators from './components/TAIndicators.tsx';
 import PredictPanel from './components/PredictPanel.tsx';
 import PolymarketPanel from './components/PolymarketPanel.tsx';
@@ -558,6 +559,60 @@ const botData = useMemo(() => {
   ]);
 
   const botPosition = data?.positions?.botPosition ?? null;
+
+  // PriceChartPanel: 15m Polymarket-style Chainlink spot + TWAP + PTB canvas widget
+  const priceChartPts = data?.priceChart?.points;
+  const priceChartLastTs = Array.isArray(priceChartPts) && priceChartPts.length > 0
+    ? priceChartPts[priceChartPts.length - 1][0]
+    : null;
+  const priceChartData = useMemo(() => {
+    if (!data) return null;
+    return {
+      priceChart: data.priceChart ?? null,
+      oraclePrice: chainlinkResolved.price ?? null,
+      settlePrice: data.settlePrice ?? null,
+      twapNow: data.twapNow ?? null,
+      priceToBeat: data.priceToBeat ?? null,
+      ptbExact: data.ptbExact ?? null,
+      ptbSource: data.ptbSource ?? null,
+      settlementMs: data.settlementMs ?? null,
+      timeLeftMin: smoothTimeLeft ?? data.timeLeftMin ?? null,
+      marketSlug: data.marketSlug ?? null,
+      marketUp: data.marketUp ?? null,
+      marketDown: data.marketDown ?? null,
+      openPosition: botPosition && !botPosition.settled && botPosition.marketSlug === data.marketSlug
+        ? {
+            side: botPosition.side,
+            price: typeof botPosition.price === 'number' ? botPosition.price : null,
+            enteredAt: typeof botPosition.enteredAt === 'number' ? botPosition.enteredAt : null,
+          }
+        : null,
+    };
+  }, [
+    data?.priceChart?.slug,
+    data?.priceChart?.ptb,
+    data?.priceChart?.ptbExact,
+    data?.priceChart?.entry?.ts,
+    priceChartPts?.length,
+    priceChartLastTs,
+    chainlinkResolved.price,
+    data?.settlePrice,
+    data?.twapNow,
+    data?.priceToBeat,
+    data?.ptbExact,
+    data?.ptbSource,
+    data?.settlementMs,
+    smoothTimeLeft,
+    data?.timeLeftMin,
+    data?.marketSlug,
+    data?.marketUp,
+    data?.marketDown,
+    botPosition?.side,
+    botPosition?.price,
+    botPosition?.enteredAt,
+    botPosition?.settled,
+    botPosition?.marketSlug,
+  ]);
   const openSize = Number(botPosition?.size ?? 0);
   const markPrice = botPosition?.side === 'UP' ? data?.marketUp
     : botPosition?.side === 'DOWN' ? data?.marketDown : null;
@@ -606,74 +661,79 @@ const botData = useMemo(() => {
       defaultRect: { x: 8, y: 0, w: 4, h: 2 }, content: <BotPanel connected={botConnected} data={botData} />,
     },
     {
+      id: 'priceChart', title: 'BTC 15m Chart', icon: '∿', description: 'live Polymarket-style Chainlink price & PTB curve',
+      category: 'market', accent: 'cyan', defaultW: 12, defaultH: 3, minW: 4, minH: 2,
+      defaultRect: { x: 0, y: 2, w: 12, h: 3 }, content: <PriceChartPanel data={priceChartData} />,
+    },
+    {
       id: 'prediction', title: 'Prediction', icon: '◆', description: 'model probability and recommendation',
       category: 'strategy', accent: 'cyan', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 0, y: 2, w: 4, h: 3 }, content: <PredictPanel data={predictData} />,
+      defaultRect: { x: 0, y: 5, w: 4, h: 3 }, content: <PredictPanel data={predictData} />,
     },
     {
       id: 'edge', title: 'Edge Analysis', icon: '⚖', description: 'edge, agreement and regime',
       category: 'strategy', accent: 'mint', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 4, y: 2, w: 4, h: 3 }, content: <EdgePanel data={edgeData} />,
+      defaultRect: { x: 4, y: 5, w: 4, h: 3 }, content: <EdgePanel data={edgeData} />,
     },
     {
       id: 'polymarket', title: 'Polymarket', icon: '◈', description: 'market book, liquidity and CLOB health',
       category: 'market', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 8, y: 2, w: 4, h: 3 }, content: <PolymarketPanel data={polyData} />,
+      defaultRect: { x: 8, y: 5, w: 4, h: 3 }, content: <PolymarketPanel data={polyData} />,
     },
     {
       id: 'ta', title: 'TA Matrix', icon: '▥', description: 'trend, momentum, volatility and flow',
       category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 0, y: 5, w: 4, h: 3 }, content: <TAIndicators data={taData} />,
+      defaultRect: { x: 0, y: 8, w: 4, h: 3 }, content: <TAIndicators data={taData} />,
     },
     {
       id: 'ml', title: 'ML Engine', icon: '◍', description: 'XGBoost + LightGBM inference',
       category: 'strategy', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 4, y: 5, w: 4, h: 3 }, content: <MLPanel data={mlData} sendBotCommand={sendBotCommand} />,
+      defaultRect: { x: 4, y: 8, w: 4, h: 3 }, content: <MLPanel data={mlData} sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'jev', title: 'JEV Layer', icon: '◇', description: 'independent judgment, shadow mode',
       category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 8, y: 5, w: 4, h: 2 }, content: <JevPanel data={jevData} />,
+      defaultRect: { x: 8, y: 8, w: 4, h: 2 }, content: <JevPanel data={jevData} />,
     },
     {
       id: 'betSizing', title: 'Bet Sizing', icon: '⌁', description: 'Kelly, bankroll and risk budget',
       category: 'strategy', accent: 'mint', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 0, y: 8, w: 4, h: 2 }, content: <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />,
+      defaultRect: { x: 0, y: 11, w: 4, h: 2 }, content: <BetSizingPanel data={betSizingData} setBankroll={setBankroll} />,
     },
     {
       id: 'position', title: 'Positions', icon: '▣', description: 'open book, exits and recent fills',
       category: 'system', accent: 'cyan', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 4, y: 8, w: 4, h: 2 }, content: <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />,
+      defaultRect: { x: 4, y: 11, w: 4, h: 2 }, content: <PositionPanel data={positionData} sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'session', title: 'Session', icon: '◷', description: 'market clock and session state',
       category: 'market', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 8, y: 8, w: 4, h: 2 }, content: <SessionInfo />,
+      defaultRect: { x: 8, y: 11, w: 4, h: 2 }, content: <SessionInfo />,
     },
     {
       id: 'accuracy', title: 'Accuracy', icon: '✓', description: 'Brier, calibration, streak and margin',
       category: 'analytics', accent: 'mint', defaultW: 6, defaultH: 3, minW: 4, minH: 2,
-      defaultRect: { x: 0, y: 10, w: 6, h: 3 }, content: <AccuracyPanel data={accuracyData} />,
+      defaultRect: { x: 0, y: 13, w: 6, h: 3 }, content: <AccuracyPanel data={accuracyData} />,
     },
     {
       id: 'journal', title: 'Journal Analytics', icon: '⌁', description: 'equity, sessions, hourly edge',
       category: 'analytics', accent: 'violet', defaultW: 6, defaultH: 3, minW: 4, minH: 2,
-      defaultRect: { x: 6, y: 10, w: 6, h: 3 }, content: <JournalTimeSeriesPanel data={journalAnalyticsData} sendBotCommand={sendBotCommand} />,
+      defaultRect: { x: 6, y: 13, w: 6, h: 3 }, content: <JournalTimeSeriesPanel data={journalAnalyticsData} sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'tape', title: 'Market Tape', icon: '◫', description: 'recorder health and coverage',
       category: 'analytics', accent: 'cyan', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 0, y: 13, w: 4, h: 2 }, content: <TapePanel tape={tapeData} />,
+      defaultRect: { x: 0, y: 16, w: 4, h: 2 }, content: <TapePanel tape={tapeData} />,
     },
     {
       id: 'limitOrder', title: 'Limit Order', icon: '↔', description: 'passive order lifecycle',
       category: 'strategy', accent: 'ember', defaultW: 4, defaultH: 2, minW: 3, minH: 2,
-      defaultRect: { x: 4, y: 13, w: 4, h: 2 }, content: <LimitOrderPanel data={limitOrderData} />,
+      defaultRect: { x: 4, y: 16, w: 4, h: 2 }, content: <LimitOrderPanel data={limitOrderData} />,
     },
     {
       id: 'traderDiscovery', title: 'Trader Discovery', icon: '⌖', description: 'wallet scan and simulation',
       category: 'analytics', accent: 'violet', defaultW: 4, defaultH: 3, minW: 3, minH: 2,
-      defaultRect: { x: 8, y: 13, w: 4, h: 3 }, content: <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />,
+      defaultRect: { x: 8, y: 16, w: 4, h: 3 }, content: <TraderDiscoveryPanel sendBotCommand={sendBotCommand} />,
     },
     {
       id: 'globalRisk', title: 'Global Risk', icon: '◈', description: 'macro, geopolitics and news',

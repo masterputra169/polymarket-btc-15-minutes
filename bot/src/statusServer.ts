@@ -29,7 +29,8 @@ const HEARTBEAT_MS = 15_000;             // W4: 30s→15s — faster zombie dete
 const SET_BANKROLL_COOLDOWN_MS = 5_000;  // rate limit: 1 setBankroll per 5s
 const BOT_CONTROL_COOLDOWN_MS = 2_000;   // rate limit: 1 pause/resume per 2s
 const BACKPRESSURE_MAX_BYTES = 64 * 1024; // W1: terminate clients with >64KB write backlog
-const BROADCAST_THROTTLE_MS = 750;        // W9: max ~1.3 broadcasts/sec (500ms poll → skip every other)
+const BROADCAST_THROTTLE_MS = 350;        // ~2.85 Hz live dashboard cadence (chart smoothness without WS flooding)
+const REDIS_MIRROR_MS = 1_000;            // Keep external Redis mirror at <= 1 Hz
 
 let wss = null;
 let heartbeatInterval = null;
@@ -37,6 +38,7 @@ let lastSnapshot = null;
 let lastSetBankrollMs = 0;
 let lastBotControlMs = 0;
 let lastBroadcastMs = 0;
+let lastRedisMirrorMs = 0;
 
 // Commands that spend money (LLM calls, third-party API sweeps) or write files are
 // rate limited per command so one client cannot loop them.
@@ -555,9 +557,11 @@ export function broadcast(stateObj) {
   if (now - lastBroadcastMs < BROADCAST_THROTTLE_MS) return;
   lastBroadcastMs = now;
 
-  // Redis mirror rides the same throttle — a SET every ~500ms poll tick was
-  // pure churn for a cache with a 120s TTL
-  void cacheStatusSnapshot(stateObj);
+  // Redis mirror stays throttled at 1 Hz even though browser WS ticks faster
+  if (now - lastRedisMirrorMs >= REDIS_MIRROR_MS) {
+    lastRedisMirrorMs = now;
+    void cacheStatusSnapshot(stateObj);
+  }
 
   for (const ws of wss.clients) {
     if (ws.readyState === 1) { // WebSocket.OPEN

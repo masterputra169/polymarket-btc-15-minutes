@@ -89,6 +89,21 @@ export function getLatestTwap(): Tick | null {
   return pb ?? rd;
 }
 
+/**
+ * Chainlink 60s TWAP ticks by source timestamp in `[from, to]`.
+ * Merges PolyBolt primary + RTDS fallback per timestamp (PolyBolt wins).
+ */
+export function getTwapTicksBetween(from: number, to: number): Tick[] {
+  const pbTicks = polybolt?.between(from, to) ?? [];
+  const rdTicks = rtds?.between(from, to) ?? [];
+  if (pbTicks.length === 0) return rdTicks;
+  if (rdTicks.length === 0) return pbTicks;
+  const merged = new Map<number, number>();
+  for (const t of rdTicks) merged.set(t.ts, t.value);
+  for (const t of pbTicks) merged.set(t.ts, t.value);
+  return [...merged.entries()].sort((a, b) => a[0] - b[0]).map(([ts, value]) => ({ ts, value }));
+}
+
 export function requestTwapReplay(reason: string): void {
   polybolt?.replay(reason);
   rtds?.replay(reason);

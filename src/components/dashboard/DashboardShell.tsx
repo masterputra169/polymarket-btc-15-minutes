@@ -76,10 +76,10 @@ interface SavedLayout {
 }
 
 const PRESETS: { id: string; label: string; ids: string[] }[] = [
-  { id: 'terminal', label: 'Terminal', ids: ['market', 'bot', 'prediction', 'edge', 'polymarket', 'ta', 'ml', 'jev', 'position', 'betSizing', 'accuracy', 'journal', 'tape', 'session', 'limitOrder', 'traderDiscovery'] },
-  { id: 'focus', label: 'Focus', ids: ['market', 'bot', 'prediction', 'edge', 'position', 'ta', 'ml', 'jev'] },
-  { id: 'analytics', label: 'Analytics', ids: ['market', 'bot', 'accuracy', 'journal', 'ml', 'ta', 'tape', 'betSizing'] },
-  { id: 'clean', label: 'Clean', ids: ['market', 'bot', 'prediction', 'position', 'edge'] },
+  { id: 'terminal', label: 'Terminal', ids: ['market', 'bot', 'priceChart', 'prediction', 'edge', 'polymarket', 'ta', 'ml', 'jev', 'position', 'betSizing', 'accuracy', 'journal', 'tape', 'session', 'limitOrder', 'traderDiscovery'] },
+  { id: 'focus', label: 'Focus', ids: ['market', 'bot', 'priceChart', 'prediction', 'edge', 'position', 'ta', 'ml', 'jev'] },
+  { id: 'analytics', label: 'Analytics', ids: ['market', 'bot', 'priceChart', 'accuracy', 'journal', 'ml', 'ta', 'tape', 'betSizing'] },
+  { id: 'clean', label: 'Clean', ids: ['market', 'bot', 'priceChart', 'prediction', 'position', 'edge'] },
 ];
 
 const ACCENTS: { id: AccentName; label: string }[] = [
@@ -108,6 +108,32 @@ function loadSaved(): SavedLayout | null {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
         }
         localStorage.setItem('btc15.dashboard.globalRiskMigratedV2', '1');
+      }
+      // One-time migration to reserve a prime row at y:2 for the BTC 15m chart widget
+      // in existing saved layouts whenever no panel straddles y=2.
+      const rawForChart = localStorage.getItem(STORAGE_KEY);
+      if (rawForChart && localStorage.getItem('btc15.dashboard.priceChartMigratedV1') !== '1') {
+        const saved = JSON.parse(rawForChart) as Partial<SavedLayout>;
+        if (saved && saved.layout && !(saved.layout as any).priceChart) {
+          const entries = Object.entries(saved.layout as LayoutMap);
+          const straddles = entries.some(([, r]) => r && r.y < 2 && r.y + r.h > 2);
+          if (!straddles) {
+            const shifted: LayoutMap = {};
+            for (const [id, r] of entries) {
+              shifted[id] = r && r.y >= 2 ? { ...r, y: r.y + 3 } : r;
+            }
+            shifted.priceChart = { x: 0, y: 2, w: 12, h: 3 };
+            saved.layout = shifted;
+            if (Array.isArray(saved.order) && !saved.order.includes('priceChart')) {
+              const nextOrder = saved.order.slice();
+              const botIdx = nextOrder.indexOf('bot');
+              nextOrder.splice(botIdx >= 0 ? botIdx + 1 : 1, 0, 'priceChart');
+              saved.order = nextOrder;
+            }
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+          }
+        }
+        localStorage.setItem('btc15.dashboard.priceChartMigratedV1', '1');
       }
     } catch { /* best effort */ }
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -148,7 +174,10 @@ function pct(n: number | null | undefined): string {
 function defaultLayout(widgets: DashboardWidget[]): LayoutMap {
   const layout: LayoutMap = {};
   for (const w of widgets) {
-    layout[w.id] = w.defaultRect ? clampRect(w.defaultRect) : findFreeSlot(layout, w.defaultW, w.defaultH);
+    const desired = w.defaultRect ? clampRect(w.defaultRect) : null;
+    layout[w.id] = desired && isAreaFree(layout, desired)
+      ? desired
+      : findFreeSlot(layout, w.defaultW, w.defaultH);
   }
   return layout;
 }
@@ -178,7 +207,24 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
   if (initialSaved.current === undefined) initialSaved.current = loadSaved();
   const [layout, setLayout] = useState<LayoutMap>(() => {
     const saved = initialSaved.current;
-    return saved?.layout ? { ...defaultLayout(widgets), ...saved.layout } : defaultLayout(widgets);
+    if (!saved?.layout) return defaultLayout(widgets);
+    const merged: LayoutMap = { ...saved.layout };
+    const savedHidden = saved.hidden ?? [];
+    const occupied = visibleLayout(
+      merged,
+      widgets.map(w => w.id).filter(id => Boolean(merged[id]) && !savedHidden.includes(id)),
+    );
+    for (const w of widgets) {
+      if (!merged[w.id]) {
+        const desired = w.defaultRect ? clampRect(w.defaultRect) : null;
+        const slot = desired && isAreaFree(occupied, desired)
+          ? desired
+          : findFreeSlot(occupied, w.defaultW, w.defaultH);
+        merged[w.id] = slot;
+        if (!savedHidden.includes(w.id)) occupied[w.id] = slot;
+      }
+    }
+    return merged;
   });
   const [hidden, setHidden] = useState<string[]>(() => initialSaved.current?.hidden ?? []);
   const [accent, setAccent] = useState<AccentName>(initialSaved.current?.accent ?? 'cyan');
@@ -257,7 +303,10 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       const occupied = visibleLayout(next, visibleIds);
       for (const w of widgets) {
         if (!next[w.id]) {
-          next[w.id] = w.defaultRect ? clampRect(w.defaultRect) : findFreeSlot(occupied, w.defaultW, w.defaultH);
+          const desired = w.defaultRect ? clampRect(w.defaultRect) : null;
+          next[w.id] = desired && isAreaFree(occupied, desired)
+            ? desired
+            : findFreeSlot(occupied, w.defaultW, w.defaultH);
           if (!hidden.includes(w.id)) occupied[w.id] = next[w.id];
           changed = true;
         }

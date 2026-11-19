@@ -20,7 +20,7 @@ import { setServerClockOffset } from './serverClock.ts';
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const STALE_TIMEOUT_MS = 15_000;
-const FLUSH_MS = 500; // Parse + flush to React 2x/sec
+const FLUSH_MS = 250; // Parse + flush to React 4x/sec for snappy real-time chart updates
 const BACKOFF_PAUSE_AFTER = 5; // After N failures, retry at the slow ceiling instead of stopping
 
 export function useBotData() {

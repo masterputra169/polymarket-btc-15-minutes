@@ -62,7 +62,8 @@ import {
   getLastUpdate as getPolyLiveLastUpdate,
   getSpotTicksBetween,
 } from './streams/polymarketLiveWs.ts';
-import { getTwapAt, getLatestTwap, requestTwapReplay, getTwapFeedHealth } from './streams/chainlinkTwap.ts';
+import { getTwapAt, getLatestTwap, getTwapTicksBetween, requestTwapReplay, getTwapFeedHealth } from './streams/chainlinkTwap.ts';
+import { buildPriceChartSnapshot, type PriceChartSnapshot } from './engines/priceChartSnapshot.ts';
 import { getOrderFlowFeatures } from './engines/orderFlowFeatures.ts';
 import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
@@ -346,6 +347,10 @@ let currentMarketEndMs: number | null = null;
 let currentConditionId: string | null = null;
 let priceToBeat: PriceToBeat = { slug: null, value: null, source: null, updatedAt: 0 };
 let startupPtbFetched = false;  // Guards the one-shot startup PTB resolution on restart
+let cachedPriceChart: PriceChartSnapshot | null = null;
+let cachedPriceChartAt = 0;
+let cachedPriceChartSlug: string | null = null;
+let cachedPriceChartPosKey = '';
 
 /**
  * Offer a price-to-beat value for `slug`. It is kept only if it outranks what
@@ -575,6 +580,10 @@ function resetMarketCache() {
   currentConditionId = null;
   priceToBeat = { slug: null, value: null, source: null, updatedAt: 0 };
   tokenIdsNotified = false;
+  cachedPriceChart = null;
+  cachedPriceChartAt = 0;
+  cachedPriceChartSlug = null;
+  cachedPriceChartPosKey = '';
 }
 
 function applyPolySnapshot(polyFetched: any, fetchedAt: number): void {
@@ -3020,6 +3029,40 @@ export async function pollOnce() {
 
     const usdcBalData = getUsdcBalanceData();
 
+    const twapNowValue = getLatestTwap()?.value ?? null;
+    const openChartPos = getCurrentPosition();
+    const chartPosKey = openChartPos && !openChartPos.settled
+      ? `${openChartPos.marketSlug ?? ''}:${openChartPos.enteredAt ?? ''}`
+      : '';
+    const chartEndMs = settlementMs ?? currentMarketEndMs;
+    const chartWindowMs = (CONFIG.candleWindowMinutes || 15) * 60_000;
+    const chartStartMs = chartEndMs != null ? chartEndMs - chartWindowMs : null;
+    const chartNowMs = Date.now();
+    if (
+      !cachedPriceChart ||
+      marketSlug !== cachedPriceChartSlug ||
+      chartPosKey !== cachedPriceChartPosKey ||
+      chartNowMs - cachedPriceChartAt >= 1_000
+    ) {
+      cachedPriceChartSlug = marketSlug;
+      cachedPriceChartPosKey = chartPosKey;
+      cachedPriceChartAt = chartNowMs;
+      cachedPriceChart = buildPriceChartSnapshot({
+        slug: marketSlug,
+        startMs: chartStartMs,
+        endMs: chartEndMs,
+        nowMs: chartNowMs,
+        ptb: priceToBeat.value,
+        ptbExact: isExactPtbSource(priceToBeat.source),
+        ptbSource: priceToBeat.source,
+        spotTicks: chartStartMs != null ? getSpotTicksBetween(chartStartMs, chartNowMs) : [],
+        twapTicks: chartStartMs != null ? getTwapTicksBetween(chartStartMs, chartNowMs) : [],
+        liveSpot: clSpot ?? chainlinkResolved.price ?? settlePrice ?? null,
+        liveTwap: twapNowValue,
+        position: openChartPos,
+      });
+    }
+
     broadcast({
       paused: false, ts: Date.now(), pollCounter,
       btcPrice: lastPrice, dryRun: BOT_CONFIG.dryRun,
@@ -3046,8 +3089,9 @@ export async function pollOnce() {
       ptbSource: priceToBeat.source, ptbExact: isExactPtbSource(priceToBeat.source),
       // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
       settlePrice, settlePriceSource: settle.source, crossFeed, v4Signals,
-      twapNow: getLatestTwap()?.value ?? null,
+      twapNow: twapNowValue,
       twapFeed: getTwapFeedHealth(),
+      priceChart: cachedPriceChart,
       deribitIv,
       leadLagImpulse,
       jev: getJevStatus(),

@@ -42,12 +42,14 @@ const RECONNECT_MAX_MS = WS_DEFAULTS.reconnectMaxMs;      // 10s
 const FEED_MODE: TwapFeedMode = resolveTwapFeedMode(process.env);
 /** A healthy Chainlink spot publishes every second; older than this hands reads back to RTDS. */
 const POLYBOLT_FRESH_MS = 15_000;
+/** Retain slightly over one full 15m window so browser dashboard refreshes get complete history. */
+const SPOT_KEEP_MS = 16 * 60_000;
 const pbSpot: PolyBoltFeed | null = FEED_MODE === 'polybolt'
   ? createPolyBoltFeed({
       name: 'SPOT',
       channel: POLYBOLT_CRYPTO_CHANNEL,
       filter: { symbol: 'btcusd', provider: 'chainlink' },
-      keepMs: 5 * 60_000,
+      keepMs: SPOT_KEEP_MS,
     })
   : null;
 
@@ -101,7 +103,7 @@ export function getPolyBoltSpotHealth(): PolyBoltHealth | null { return pbSpot?.
 // Spot ticks by the timestamp Chainlink put on them — the final-minute settlement
 // estimate (engines/settlePrice.ts) averages these, and "latest received" is
 // about a second behind them.
-const _ticks = new TickStore(5 * 60_000);
+const _ticks = new TickStore(SPOT_KEEP_MS);
 /**
  * Spot ticks by source timestamp. PolyBolt and the RTDS fallback are merged per
  * second (PolyBolt wins on a shared second — the values are identical, verified
