@@ -9,6 +9,7 @@ import {
   findNearestPointIndex,
   mergeChartSeries,
   resolvePillY,
+  shouldHideAxisTick,
   type ChartEntryMarker,
   type ChartPoint,
   type PriceChartSnapshotLike,
@@ -570,7 +571,7 @@ function drawChartCanvas(
 
   // Plot geometry
   const padL = 8;
-  const padR = width < 400 ? 64 : 74;
+  const padR = width < 400 ? 70 : 80;
   const padT = 12;
   const padB = 24;
   const plotW = Math.max(40, width - padL - padR);
@@ -656,6 +657,16 @@ function drawChartCanvas(
     return;
   }
 
+  // Precompute curve XY & right-axis pill Y slots before grid text so axis ticks yield cleanly
+  const primaryXY: XYPoint[] = primaryDisplayPts.map(p => ({ x: tsToX(p.tsMs), y: valToY(p.val) }));
+  const ptbValid = st.ptb != null && Number.isFinite(st.ptb);
+  const ptbY = ptbValid ? valToY(st.ptb!) : null;
+  const safePtbY = ptbY != null ? Math.max(padT + 10, Math.min(plotBottom - 10, ptbY)) : null;
+  const liveTipXY = primaryXY.length > 0 ? primaryXY[primaryXY.length - 1] : null;
+  const livePillY = liveTipXY != null && liveTipVal != null
+    ? resolvePillY(liveTipXY.y, safePtbY, padT + 10, plotBottom - 10, 20)
+    : null;
+
   // 1. Final 60s TWAP settlement zone shading on right side
   const twapStartX = Math.max(padL, Math.min(plotRight, tsToX(winEndMs - TWAP_ZONE_MS)));
   if (twapStartX < plotRight - 2) {
@@ -684,7 +695,7 @@ function drawChartCanvas(
     }
   }
 
-  // 2. Horizontal dollar grid + right Y-axis labels
+  // 2. Horizontal dollar grid + right Y-axis labels (suppressed where axis pills sit)
   ctx.font = '600 9.5px "JetBrains Mono", monospace';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
@@ -700,8 +711,10 @@ function drawChartCanvas(
     ctx.lineTo(plotRight, gy);
     ctx.stroke();
 
-    ctx.fillStyle = palette.dim;
-    ctx.fillText(fmtUsd(tv, 0), plotRight + 6, gy);
+    if (!shouldHideAxisTick(gy, [safePtbY, livePillY], 16)) {
+      ctx.fillStyle = palette.dim;
+      ctx.fillText(fmtUsd(tv, 0), plotRight + 6, gy);
+    }
   }
 
   // Bottom border line + subtle elapsed progress bar + X-axis 3-minute ticks
@@ -735,10 +748,7 @@ function drawChartCanvas(
     ctx.stroke();
   }
 
-  // 3. Map curve points to XY coordinates
-  const primaryXY: XYPoint[] = primaryDisplayPts.map(p => ({ x: tsToX(p.tsMs), y: valToY(p.val) }));
-  const ptbValid = st.ptb != null && Number.isFinite(st.ptb);
-  const ptbY = ptbValid ? valToY(st.ptb!) : null;
+  // 3. Curve coordinates & PTB status precomputed above for axis pill clearance
 
   // 4. Polymarket split-at-PTB area fills and monotone strokes
   if (primaryXY.length >= 2) {
@@ -836,8 +846,7 @@ function drawChartCanvas(
   }
 
   // 6. Dashed horizontal Price-to-Beat reference line + right-axis pill
-  if (ptbY != null && ptbValid) {
-    const safePtbY = Math.max(padT + 10, Math.min(plotBottom - 10, ptbY));
+  if (ptbY != null && ptbValid && safePtbY != null) {
     ctx.save();
     ctx.setLineDash([4, 4]);
     ctx.strokeStyle = st.ptbExact ? 'rgba(237, 244, 255, 0.56)' : 'rgba(251, 191, 36, 0.55)';
@@ -855,7 +864,7 @@ function drawChartCanvas(
     const tagW = ctx.measureText(tagText).width + 10;
     const tagY = ptbY > padT + 18 ? ptbY - 15 : ptbY + 3;
     drawRoundedRect(ctx, padL + 4, tagY, tagW, 13, 4);
-    ctx.fillStyle = 'rgba(10, 19, 34, 0.84)';
+    ctx.fillStyle = '#0a1322';
     ctx.fill();
     ctx.strokeStyle = 'rgba(148, 163, 184, 0.28)';
     ctx.lineWidth = 0.8;
@@ -873,7 +882,7 @@ function drawChartCanvas(
       padR - 6,
       17,
       fmtUsd(st.ptb!, 2),
-      'rgba(17, 32, 56, 0.96)',
+      '#112038',
       st.ptbExact ? 'rgba(237, 244, 255, 0.45)' : 'rgba(251, 191, 36, 0.45)',
       palette.text,
     );
@@ -923,8 +932,8 @@ function drawChartCanvas(
   }
 
   // 8. Pulsing live tip beacon + collision-avoided right-axis live price pill
-  if (primaryXY.length > 0 && liveTipVal != null) {
-    const tipXY = primaryXY[primaryXY.length - 1];
+  if (liveTipXY != null && liveTipVal != null && livePillY != null) {
+    const tipXY = liveTipXY;
     const tipColor = ptbValid
       ? (liveTipVal > st.ptb! ? palette.green : liveTipVal < st.ptb! ? palette.red : palette.accent)
       : palette.accent;
@@ -933,6 +942,11 @@ function drawChartCanvas(
       : tipColor === palette.red
         ? '251, 113, 133'
         : '34, 211, 238';
+    const livePillBg = tipColor === palette.green
+      ? '#0b2922'
+      : tipColor === palette.red
+        ? '#2d101b'
+        : '#0a2231';
 
     const pulse = 0.5 + 0.5 * Math.sin(frameNowMs / 240);
     const haloRadius = 6 + pulse * 6;
@@ -949,24 +963,22 @@ function drawChartCanvas(
     ctx.strokeStyle = palette.panel;
     ctx.stroke();
 
-    const safePtbY = ptbY != null ? Math.max(padT + 10, Math.min(plotBottom - 10, ptbY)) : null;
-    const pillY = resolvePillY(tipXY.y, safePtbY, padT + 10, plotBottom - 10, 20);
-    if (Math.abs(pillY - tipXY.y) > 2) {
+    if (Math.abs(livePillY - tipXY.y) > 2) {
       ctx.strokeStyle = `rgba(${tipRgb}, 0.45)`;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(tipXY.x, tipXY.y);
-      ctx.lineTo(plotRight + 4, pillY);
+      ctx.lineTo(plotRight + 4, livePillY);
       ctx.stroke();
     }
     drawAxisPill(
       ctx,
       plotRight + 4,
-      pillY,
+      livePillY,
       padR - 6,
       17,
       fmtUsd(liveTipVal, 2),
-      `rgba(${tipRgb}, 0.22)`,
+      livePillBg,
       tipColor,
       palette.text,
     );

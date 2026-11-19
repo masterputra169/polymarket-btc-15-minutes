@@ -323,3 +323,22 @@ export function resolvePillY(
   const altChoice = goAbove ? anchorY + minGap : anchorY - minGap;
   return clampY(altChoice);
 }
+
+/**
+ * Returns true when an axis grid tick label is close enough to any right-axis pill
+ * (`live` or `PTB`) that drawing both would cause text overlap.
+ */
+export function shouldHideAxisTick(
+  tickY: number,
+  pillYs: readonly (number | null | undefined)[],
+  minClearance = 16,
+): boolean {
+  if (!Number.isFinite(tickY)) return false;
+  for (let i = 0; i < pillYs.length; i++) {
+    const py = pillYs[i];
+    if (py != null && Number.isFinite(py) && Math.abs(tickY - py) < minClearance) {
+      return true;
+    }
+  }
+  return false;
+}

@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-19 — Suppress Right-Axis Tick Text Behind Live & PTB Price Pills (`priceChart`)
+
+- **Right Y-Axis Pill Clearance (`src/components/priceChartMath.ts`, `src/components/PriceChartPanel.tsx`, `src/components/__tests__/priceChartMath.test.ts`):** Added `shouldHideAxisTick(tickY, [safePtbY, livePillY], 16)` so rounded grid dollar labels (`$63,400`, `$63,300`) are suppressed wherever they fall within `16 px` of either right-axis badge, widened `padR` (`70`/`80 px`) for clean pill margins, and switched pill backgrounds from translucent alpha (`0.22`) to fully opaque dark fills (`#0b2922`, `#2d101b`, `#0a2231`, `#112038`).
+
 ## 2026-11-19 — Real-Time 60fps Polymarket-Style BTC Price & PTB Chart Widget (`priceChart`)
 
 - **15-Minute Oracle History & Lightweight Chart Snapshot (`bot/src/streams/polymarketLiveWs.ts`, `bot/src/streams/chainlinkTwap.ts`, `bot/src/engines/priceChartSnapshot.ts`, `bot/src/loop.ts`):** Extended Chainlink spot retention from `5 min` (`5 * 60_000`) to `16 min` (`16 * 60_000`) so browser refreshes recover the full active market window, exposed `getTwapTicksBetween()` merging PolyBolt primary + RTDS fallback ticks, and added a pure `1 Hz` cached `buildPriceChartSnapshot()` builder (`<= 300` `[sec, spot, twap]` tuples, lossless 1s resolution on the trailing `90s`, nearest-tick open position entry marker) broadcast without adding hot-loop work (`3–4 ms/poll` preserved).

@@ -7,6 +7,7 @@ import {
   findNearestPointIndex,
   mergeChartSeries,
   resolvePillY,
+  shouldHideAxisTick,
 } from '../priceChartMath.ts';
 
 function evalCubic(p0: number, c1: number, c2: number, p1: number, t: number): number {
@@ -109,5 +110,12 @@ describe('priceChartMath', () => {
 
     // No collision -> untouched
     expect(resolvePillY(150, 100, 20, 200, 20)).toBe(150);
+  });
+
+  it('hides right-axis grid tick labels within pill clearance', () => {
+    expect(shouldHideAxisTick(95, [100, 180], 16)).toBe(true);
+    expect(shouldHideAxisTick(165, [100, 180], 16)).toBe(true);
+    expect(shouldHideAxisTick(140, [100, 180], 16)).toBe(false);
+    expect(shouldHideAxisTick(100, [null, undefined], 16)).toBe(false);
   });
 });
