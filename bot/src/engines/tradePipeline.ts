@@ -15,7 +15,7 @@ import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
 import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
-import { escapeHtml, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
+import { escapeHtml, formatEntryBtcLine, entryAnomalyAlert, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
 import {
   dryRunMakerWouldFill,
@@ -36,6 +36,7 @@ import {
   type QueueTradeTick,
 } from './queueSim.ts';
 import { CLOB_QUIET_MS } from '../streams/clobFreshness.ts';
+import { checkEntryInvariants } from '../safety/entryInvariants.ts';
 
 /** Pre-execution 2c runaway ask haircut (emoubarak): abort chasing if live ask spiked above signal price. */
 function isAskRunaway(
@@ -381,9 +382,19 @@ export function stepDryRunMaker(params: {
     const askLiqShares = betBook?.askLiquidity;
     const askEmpty = betBook?.bestAsk === null;
     const liqOk = !askEmpty && !(Number.isFinite(askLiqShares) && askLiqShares >= 0 && pending.shares > askLiqShares);
+    const invCheck = currentAsk != null
+      ? checkEntryInvariants({
+          side: order.side,
+          entryPrice: currentAsk,
+          sideBook: betBook,
+          marketUp: params.marketUp,
+          marketDown: params.marketDown,
+        })
+      : { ok: false as const, code: 'invalid_price' as const, reason: 'missing ask price' };
 
-    if (fokGate.allow && !runCheck.runaway && liqOk && currentAsk != null && currentAsk > 0.01 && currentAsk < 0.99) {
-      const fokPx = fokBuyPrice(currentAsk, betBook?.spread ?? params.orderbookUp?.spread);
+    if (fokGate.allow && !runCheck.runaway && liqOk && invCheck.ok && currentAsk != null && currentAsk > 0.01 && currentAsk < 0.99) {
+      const fallbackSpread = betBook ? (betBook.spread ?? null) : (params.orderbookUp?.spread ?? null);
+      const fokPx = fokBuyPrice(currentAsk, fallbackSpread);
       pending.entryData.queueRemainingAtTimeout = order.queueAhead;
       pending.entryData.timeToFillMs = now - order.placedAtMs;
       log.info(
@@ -413,7 +424,9 @@ export function stepDryRunMaker(params: {
         ? `runaway_ask_${Number(runCheck.liveAsk).toFixed(3)}`
         : !liqOk
           ? (askEmpty ? 'empty_ask' : `thin_ask_${Number(askLiqShares).toFixed(0)}`)
-          : 'invalid_ask';
+          : !invCheck.ok
+            ? `invariant_${invCheck.code}`
+            : 'invalid_ask';
     log.info(`[DRY RUN] MAKER queue timeout + FOK blocked (${denyWhy}) — skip`);
     pending.deps.setPendingCost(0);
     return { active: false, entered: false, deniedFokForSlug: pending.marketSlug };
@@ -453,7 +466,7 @@ export async function executeArbitrage({
   const minAskLiq = Math.min(upAskLiq, downAskLiq);
 
   const budgetShares = Math.floor(arbBudget / arb.totalCost);
-  const liqShares = Number.isFinite(minAskLiq) && minAskLiq > 0
+  const liqShares = Number.isFinite(minAskLiq) && minAskLiq >= 0
     ? Math.floor(minAskLiq) // askLiquidity sums book `size` over the top 5 levels — SHARES, not dollars
     : budgetShares;
   const arbShares = Math.min(budgetShares, liqShares);
@@ -711,7 +724,7 @@ export async function executeDirectionalTrade({
   // Compute ET hour for blackout filter (DST-aware via Intl API)
   const etHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
   const sideBook = betSide === 'UP' ? orderbookUp : orderbookDown;
-  const sideSpread = sideBook?.spread ?? orderbookUp?.spread ?? null;
+  const sideSpread = sideBook ? (sideBook.spread ?? null) : (orderbookUp?.spread ?? null);
 
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
@@ -839,6 +852,35 @@ export async function executeDirectionalTrade({
 
   if (!priceCheck.valid || !tradeCheck.valid) {
     log.info(`Trade blocked: ${!priceCheck.valid ? priceCheck.reason : tradeCheck.reason}`);
+    return false;
+  }
+
+  const invCheck = checkEntryInvariants({
+    side: betSide,
+    entryPrice: betMarketPrice,
+    sideBook,
+    marketUp,
+    marketDown,
+    twapPhysicsZ,
+    bestEdge: edge?.bestEdge ?? null,
+  });
+  if (!invCheck.ok) {
+    log.warn(`[EntryInvariant] Blocked ${betSide} entry (${invCheck.code}): ${invCheck.reason}`);
+    noteTapeStage('pre', [`invariant:${invCheck.code}`]);
+    notify(
+      'warn',
+      entryAnomalyAlert({
+        dryRun,
+        code: invCheck.code,
+        side: betSide,
+        price: betMarketPrice,
+        reason: invCheck.reason,
+        btcPrice: settlePrice ?? lastPrice,
+        priceToBeat: priceToBeat?.value ?? null,
+        marketSlug,
+      }),
+      { key: `entry-invariant:${marketSlug}:${invCheck.code}` },
+    ).catch(e => log.debug(`Notify entry invariant: ${e.message}`));
     return false;
   }
 
@@ -1245,6 +1287,12 @@ export async function executeDirectionalTrade({
     deps.setPendingCost(0);
     return false;
   }
+  const liveAskEmpty = sideBook?.bestAsk === null || sideBook?.askLiquidity === 0;
+  if (liveAskEmpty) {
+    log.info(`[Execution] Live FOK aborted: ${betSide} ask side empty (no sellers resting on book)`);
+    deps.setPendingCost(0);
+    return false;
+  }
 
   try {
     const orderResult = await deps.placeBuyOrder({
@@ -1323,12 +1371,14 @@ export async function executeDirectionalTrade({
           : '-';
         const mlStr = mlResult.available ? `${(mlResult.mlConfidence * 100).toFixed(0)}%` : 'off';
         const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
+        const btcLine = formatEntryBtcLine(settlePrice ?? lastPrice, priceToBeat?.value ?? null);
         notify('info', [
           `🧠 MetEngine + Bot ALIGNED!`,
           `${sideArrow} ${betSide} | $${cost.toFixed(2)} (smart money boost +${((ME_BOOST_MULTIPLIER - 1) * 100).toFixed(0)}%)`,
           ``,
           `Smart: ${betSide} ${(meConsensusStrength * 100).toFixed(0)}%${meInsiderScore > 0 ? ` | topInsider=${meInsiderScore}` : ''}`,
-          `₿ BTC: $${lastPrice != null ? lastPrice.toFixed(0) : '?'} | Token: ${actualPrice.toFixed(3)}c`,
+          ...(btcLine ? [btcLine] : []),
+          `🎟 Token: ${(actualPrice * 100).toFixed(1)}c`,
           `📐 Edge: ${((edge.bestEdge ?? 0) * 100).toFixed(1)}% | 🤖 ML: ${mlStr}`,
           `⏱ Market ends in ${timeText}`,
           `<a href="${marketUrl}">View Market</a>`,

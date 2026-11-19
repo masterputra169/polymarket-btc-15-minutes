@@ -63,6 +63,32 @@ export function avgRecentTradeSize(): number | null {
 }
 
 /**
+ * Normalize CLOB trade timestamp (`match_time` / `timestamp`) into epoch milliseconds.
+ * Polymarket returns ISO strings, unix seconds (number/string), ms, us, or ns.
+ */
+export function parseTradeTimestampMs(
+  t: { match_time?: unknown; timestamp?: unknown } | null | undefined,
+): number {
+  if (!t || typeof t !== 'object') return 0;
+  for (const raw of [t.match_time, t.timestamp]) {
+    if (raw === null || raw === undefined || raw === '') continue;
+    if (typeof raw === 'number' || (typeof raw === 'string' && /^\d+(?:\.\d+)?$/.test(raw.trim()))) {
+      const n = typeof raw === 'number' ? raw : Number(raw.trim());
+      if (!Number.isFinite(n) || n <= 0) continue;
+      if (n < 1e11) return Math.round(n * 1000);
+      if (n < 1e14) return Math.round(n);
+      if (n < 1e17) return Math.round(n / 1000);
+      return Math.round(n / 1e6);
+    }
+    if (typeof raw === 'string') {
+      const parsed = Date.parse(raw.trim());
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+  }
+  return 0;
+}
+
+/**
  * Runtime fill-size sanity guard (emoubarak/pmlab/mm_guard.py):
  * A fill for our order can never materially exceed the submitted clip size.
  */
@@ -208,7 +234,7 @@ export async function checkPendingFill(): Promise<PendingFillResult[] | null> {
         ]);
         // Match by tokenId + time window + price proximity + size proximity
         const matchingTrade = Array.isArray(trades) && trades.find(t => {
-          const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
+          const matchTime = parseTradeTimestampMs(t);
           const assetMatch = (t.asset_id === pending.tokenId) || (t.token_id === pending.tokenId);
           const inWindow = matchTime >= pending.placedAt - 5000 && matchTime <= pending.placedAt + 60000;
           const tradePrice = parseFloat(t.price ?? t.fill_price ?? 0);
@@ -374,7 +400,7 @@ export async function checkPendingFill(): Promise<PendingFillResult[] | null> {
           new Promise((_, rej) => setTimeout(() => rej(new Error('final-verify timeout')), 3000)),
         ]);
         const found = Array.isArray(finalTrades) && finalTrades.find(t => {
-          const matchTime = t.match_time ? new Date(t.match_time).getTime() : (t.timestamp ?? 0);
+          const matchTime = parseTradeTimestampMs(t);
           return (t.asset_id === order.tokenId || t.token_id === order.tokenId) &&
             matchTime >= order.placedAt - 5000 && matchTime <= order.placedAt + 600_000;
         });

@@ -55,7 +55,9 @@ vi.mock('../../services/runtimeIntegrations.ts', () => ({
 import {
   computeTargetPrice,
   evaluateLimitEntry,
+  monitorLimitOrder,
   placeLimitOrder,
+  resetLimitAttempts,
   resetLimitOrderState,
 } from '../limitOrderManager.ts';
 
@@ -187,5 +189,64 @@ describe('limitOrderManager Hybrid JOIN & edge math', () => {
 
     expect(rej).toEqual({ placed: false, orderId: null, reason: 'post_only_rejected' });
     expect(setPending).toHaveBeenLastCalledWith(0);
+  });
+
+  it('resets per-market attemptCount on slug change and clamps UserWS sub-0.5 partial fills to >= 1 share', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_795_000_000_000);
+      resetLimitAttempts();
+      resetLimitOrderState();
+      mockGetEffectiveLimitOrderConfig.mockReturnValue({
+        ...DEFAULT_CFG,
+        maxAttemptsPerMarket: 2,
+        minEvalPolls: 1,
+        partialFillAcceptRatio: 0.60,
+        maxUnfilledSec: 60,
+        cancelAfterElapsedMin: 12,
+      });
+
+      const failPlace = vi.fn(async () => { throw new Error('network error'); });
+      const setPending = vi.fn();
+
+      // 1 failed attempt on slug-a
+      await placeLimitOrder({
+        side: 'UP', targetPrice: 0.56, tokenId: 'tok-up', marketSlug: 'slug-a',
+        conditionId: '0xc1', marketEndMs: Date.now() + 10 * 60_000, bankroll: 100, mlConfidence: 0.75, sessionQuality: 1.0,
+      }, { placeLimitBuyOrder: failPlace, setPendingCost: setPending });
+
+      vi.advanceTimersByTime(31_000);
+
+      // 1 failed attempt on new market slug-b should reset attemptCount to 1 (not increment to 2)
+      await placeLimitOrder({
+        side: 'UP', targetPrice: 0.56, tokenId: 'tok-up', marketSlug: 'slug-b',
+        conditionId: '0xc2', marketEndMs: Date.now() + 10 * 60_000, bankroll: 100, mlConfidence: 0.75, sessionQuality: 1.0,
+      }, { placeLimitBuyOrder: failPlace, setPendingCost: setPending });
+
+      vi.advanceTimersByTime(31_000);
+
+      const secondEval = evaluateLimitEntry(makeSignal({ marketSlug: 'slug-b', bestBidUp: 0.56, bestAskUp: 0.58 }));
+      expect(secondEval.shouldPlace).toBe(true);
+
+      // Place valid order then verify UserWS sub-0.5 partial fill clamps size >= 1
+      await placeLimitOrder({
+        side: 'UP', targetPrice: 0.56, tokenId: 'tok-up', marketSlug: 'slug-b',
+        conditionId: '0xc2', marketEndMs: Date.now() + 10 * 60_000, bankroll: 100, mlConfidence: 0.75, sessionQuality: 1.0,
+      }, { placeLimitBuyOrder: vi.fn(async () => ({ orderId: 'ord-sub-1' })), setPendingCost: setPending });
+
+      const mon = await monitorLimitOrder({
+        mlConfidence: 0.75, mlSide: 'UP', ensembleProb: 0.85, btcPrice: 100_050,
+        priceToBeat: 100_000, elapsedMin: 4, marketSlug: 'slug-b', sideProb: 0.85,
+      }, {
+        getUserOrderEvent: () => ({ status: 'PARTIAL', originalSize: 0.5, sizeMatched: 0.4, price: 0.56 }),
+        getOrderById: vi.fn(),
+        cancelOrder: vi.fn(),
+        setPendingCost: setPending,
+      });
+      expect(mon.action).toBe('PARTIAL_ACCEPT');
+      expect(mon.fillData?.size).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

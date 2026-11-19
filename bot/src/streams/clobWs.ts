@@ -116,13 +116,20 @@ export function getFeedHealth() {
   };
 }
 
+/** Price strictly inside (0, 1) — Polymarket sends 0/1/"" boundary markers for empty book sides. */
+function insidePrice(v: unknown): number | null {
+  const p = toNumber(v);
+  return p !== null && p > 0 && p < 1 ? p : null;
+}
+
 function bestLevelFromLevels(levels, side) {
   if (!Array.isArray(levels) || levels.length === 0) return null;
   let best = null;
   for (const lvl of levels) {
-    const p = toNumber(lvl.price);
+    const p = insidePrice(lvl?.price);
     if (p === null) continue;
-    const size = toNumber(lvl.size) ?? 0;
+    const size = toNumber(lvl?.size) ?? 0;
+    if (size <= 0) continue;
     if (best === null || (side === 'bid' ? p > best.price : p < best.price)) best = { price: p, size };
   }
   return best;
@@ -159,13 +166,23 @@ function handleBookEvent(data) {
   lastBookQuoteMs = Date.now();
   const bids = Array.isArray(data.bids) ? data.bids : [];
   const asks = Array.isArray(data.asks) ? data.asks : [];
-  const bidLevel = bestLevelFromLevels(bids, 'bid');
-  const askLevel = bestLevelFromLevels(asks, 'ask');
+  const validBids = bids.filter(l => insidePrice(l?.price) !== null);
+  const validAsks = asks.filter(l => insidePrice(l?.price) !== null);
+  const bidLevel = bestLevelFromLevels(validBids, 'bid');
+  const askLevel = bestLevelFromLevels(validAsks, 'ask');
   const bestBid = bidLevel?.price ?? null;
   const bestAsk = askLevel?.price ?? null;
-  const spread = bestBid !== null && bestAsk !== null ? bestAsk - bestBid : null;
+  const spread = bestBid !== null && bestAsk !== null && bestAsk >= bestBid ? bestAsk - bestBid : null;
   // Best levels first: the market channel lists both sides worst-first (see depthNearTop).
-  const bookData = { bestBid, bestAsk, spread, bidLiquidity: depthNearTop(bids, 'bid'), askLiquidity: depthNearTop(asks, 'ask'), bidSize: bidLevel?.size ?? 0, askSize: askLevel?.size ?? 0 };
+  const bookData = {
+    bestBid,
+    bestAsk,
+    spread,
+    bidLiquidity: bestBid !== null ? depthNearTop(validBids, 'bid') : 0,
+    askLiquidity: bestAsk !== null ? depthNearTop(validAsks, 'ask') : 0,
+    bidSize: bidLevel?.size ?? 0,
+    askSize: askLevel?.size ?? 0,
+  };
   const nextPx = (bestBid !== null && bestAsk !== null) ? (bestBid + bestAsk) / 2 : (bestBid ?? bestAsk);
 
   if (assetId === tokenIds.up) {
@@ -191,21 +208,27 @@ function handlePriceChange(data) {
 
   for (const change of changes) {
     const assetId = change.asset_id;
-    const bestBid = toNumber(change.best_bid);
-    const bestAsk = toNumber(change.best_ask);
-    if (bestBid !== null && bestAsk !== null) {
-      const mid = (bestBid + bestAsk) / 2;
-      if (assetId === tokenIds.up) {
-        _upPrice = mid;
-        _orderbook.up.bestBid = bestBid;
-        _orderbook.up.bestAsk = bestAsk;
-        _orderbook.up.spread = bestAsk - bestBid;
-      } else if (assetId === tokenIds.down) {
-        _downPrice = mid;
-        _orderbook.down.bestBid = bestBid;
-        _orderbook.down.bestAsk = bestAsk;
-        _orderbook.down.spread = bestAsk - bestBid;
-      }
+    if (change.best_bid === undefined && change.best_ask === undefined) continue;
+    const book = assetId === tokenIds.up ? _orderbook.up : assetId === tokenIds.down ? _orderbook.down : null;
+    if (!book) continue;
+    const bestBid = insidePrice(change.best_bid);
+    const bestAsk = insidePrice(change.best_ask);
+    const spread = bestBid !== null && bestAsk !== null && bestAsk >= bestBid ? bestAsk - bestBid : null;
+    book.bestBid = bestBid;
+    book.bestAsk = bestAsk;
+    book.spread = spread;
+    if (bestBid === null) {
+      book.bidLiquidity = 0;
+      book.bidSize = 0;
+    }
+    if (bestAsk === null) {
+      book.askLiquidity = 0;
+      book.askSize = 0;
+    }
+    const nextPx = (bestBid !== null && bestAsk !== null) ? (bestBid + bestAsk) / 2 : (bestBid ?? bestAsk);
+    if (nextPx !== null) {
+      if (assetId === tokenIds.up) _upPrice = nextPx;
+      else if (assetId === tokenIds.down) _downPrice = nextPx;
     }
   }
   _lastUpdate = Date.now();

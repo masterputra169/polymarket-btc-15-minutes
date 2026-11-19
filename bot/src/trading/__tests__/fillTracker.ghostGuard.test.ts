@@ -18,7 +18,7 @@ vi.mock('../clobClient.ts', () => ({
   cancelAllOrders: (...args: any[]) => mocks.cancelAllOrders(...args),
 }));
 
-import { checkPendingFill, clearPendingOrders, getFillTrackerStatus, isFillSizeWithinClip, trackOrderPlacement } from '../fillTracker.ts';
+import { checkPendingFill, clearPendingOrders, getFillTrackerStatus, isFillSizeWithinClip, parseTradeTimestampMs, trackOrderPlacement } from '../fillTracker.ts';
 import { resetGhostGuardStats } from '../ghostGuard.ts';
 
 describe('fillTracker + GhostGuard on-chain receipt verification', () => {
@@ -127,5 +127,43 @@ describe('fillTracker + GhostGuard on-chain receipt verification', () => {
     expect(isFillSizeWithinClip(5, 5)).toBe(true);
     expect(isFillSizeWithinClip(5.2, 5)).toBe(true);
     expect(isFillSizeWithinClip(114, 5)).toBe(false);
+  });
+
+  it('normalizes unix-second string match_time and verifies fills via checkPendingFill', async () => {
+    expect(parseTradeTimestampMs({ match_time: '1795096762' })).toBe(1795096762000);
+    expect(parseTradeTimestampMs({ match_time: 1795096762 })).toBe(1795096762000);
+    expect(parseTradeTimestampMs({ match_time: 1795096762000 })).toBe(1795096762000);
+    expect(parseTradeTimestampMs({ match_time: '2026-11-19T14:59:22.000Z' })).toBe(Date.parse('2026-11-19T14:59:22.000Z'));
+    expect(parseTradeTimestampMs({ match_time: 'invalid', timestamp: 1795096762 })).toBe(1795096762000);
+    expect(parseTradeTimestampMs({ match_time: '0', timestamp: '' })).toBe(0);
+
+    const txHash = '0x' + 'e'.repeat(64);
+    trackOrderPlacement('ord-sec-1', {
+      tokenId: 'tok-up-sec',
+      price: 0.60,
+      size: 5,
+      side: 'UP',
+      confirmed: false,
+      gtd: false,
+      midPrice: 0.60,
+    });
+    // Numeric unix-seconds string match_time (previously parsed by Date() as NaN -> missed fill)
+    mocks.getTradeHistory.mockResolvedValue([{
+      asset_id: 'tok-up-sec',
+      match_time: '1700000001',
+      price: '0.60',
+      size: '5',
+      transaction_hash: txHash,
+    }]);
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      result: { status: '0x1', blockNumber: '0x789' },
+    }))) as typeof fetch;
+
+    vi.advanceTimersByTime(6_000);
+    const results = await checkPendingFill();
+    expect(results).toHaveLength(1);
+    expect(results![0]).toMatchObject({ orderId: 'ord-sec-1', filled: true, verified: true, txHash });
   });
 });

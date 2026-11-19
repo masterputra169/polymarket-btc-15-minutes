@@ -356,9 +356,9 @@ export function evaluateCutLoss({
 
   // ── Gate 10: Orderbook liquidity — HARD GATE ──
   if (orderbook) {
-    const bidLiq = orderbook.bidLiquidity ?? 0;
+    const bidLiq = orderbook.bidLiquidity;
     const spread = orderbook.spread ?? 0;
-    if (bidLiq > 0 && bidLiq < cfg.minBidLiquidity) {
+    if (bidLiq != null && Number.isFinite(bidLiq) && bidLiq < cfg.minBidLiquidity) {
       return no(`thin_book_${bidLiq.toFixed(1)}<${cfg.minBidLiquidity}`);
     }
     if (spread > cfg.maxCutSpreadPct / 100) {

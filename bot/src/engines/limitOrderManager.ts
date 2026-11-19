@@ -69,6 +69,16 @@ let attemptCount = 0;
 let lastCancelAt = 0;
 let marketForAttempts = null;
 
+function recordAttempt(slug: string | null): void {
+  if (marketForAttempts !== slug) {
+    marketForAttempts = slug;
+    attemptCount = 1;
+  } else {
+    attemptCount++;
+  }
+  lastCancelAt = Date.now();
+}
+
 // ── Last event (persists across state resets for frontend transition display) ──
 const LAST_EVENT_TTL_MS = 20_000; // Show fill/cancel event for 20s on frontend
 let lastEvent = { type: null, data: null, at: 0 };
@@ -455,9 +465,7 @@ export async function placeLimitOrder({
       log.error(`LIMIT ORDER FAILED: ${errMsg}`);
     }
     // Count as attempt to prevent retry spam (anti-loop)
-    attemptCount++;
-    lastCancelAt = Date.now();
-    marketForAttempts = marketSlug;
+    recordAttempt(marketSlug);
     resetLimitOrderState();
     return {
       placed: false,
@@ -604,7 +612,7 @@ export async function monitorLimitOrder({
         side: state.side,
         tokenId: state.tokenId,
         price: wsEv.price ?? state.targetPrice,
-        size: Math.round(wsEv.sizeMatched),
+        size: Math.max(1, Math.round(wsEv.sizeMatched)),
         conditionId: state.conditionId,
         marketSlug: state.marketSlug,
         orderId: state.orderId,
@@ -796,9 +804,7 @@ export async function cancelLimitOrder(reason, deps): Promise<CancelLimitOrderRe
     );
     deps.setPendingCost(0);
     lastEvent = { type: 'FILLED', data: savedFillData, at: Date.now() };
-    attemptCount++;
-    lastCancelAt = Date.now();
-    marketForAttempts = savedMarketSlug;
+    recordAttempt(savedMarketSlug);
     resetLimitOrderState();
     return { cancelled: false, filledInstead: true, fillData: savedFillData };
   };
@@ -952,9 +958,7 @@ export async function cancelLimitOrder(reason, deps): Promise<CancelLimitOrderRe
   lastEvent = { type: 'CANCELLED', data: { ...savedFillData, reason }, at: Date.now() };
 
   // Track cooldown (prevents immediate re-placement)
-  attemptCount++;
-  lastCancelAt = Date.now();
-  marketForAttempts = savedMarketSlug;
+  recordAttempt(savedMarketSlug);
 
   // Release bankroll reservation
   deps.setPendingCost(0);

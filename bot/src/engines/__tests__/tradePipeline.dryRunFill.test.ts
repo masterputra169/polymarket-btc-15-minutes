@@ -40,7 +40,8 @@ vi.mock('../../config.ts', () => ({
   },
 }));
 
-import { executeDirectionalTrade } from '../tradePipeline.ts';
+import { executeDirectionalTrade, executeArbitrage } from '../tradePipeline.ts';
+import { notify } from '../../monitoring/notifier.ts';
 
 const SLUG = 'btc-updown-15m-1788800000';
 
@@ -412,13 +413,126 @@ describe('the depth gate reads the book of the side being traded', () => {
   });
 
   test('rejects dry-run FOK when asks are empty or explicit askLiquidity is 0 (one-sided 99c book)', async () => {
-    const deps = makeDeps();
-    const rejected = await executeDirectionalTrade(signal({
+    const depsOneSided = makeDeps();
+    const rejOneSided = await executeDirectionalTrade(signal({
       betMarketPrice: 0.595,
       orderbookUp: { spread: null, bestBid: 0.99, bestAsk: null, askLiquidity: 0 },
+    }), depsOneSided);
+    expect(rejOneSided).toBe(false);
+    expect(depsOneSided.recordTrade).not.toHaveBeenCalled();
+    expect(depsOneSided.setPendingCost).not.toHaveBeenCalled();
+
+    const depsZeroLiq = makeDeps();
+    const rejZeroLiq = await executeDirectionalTrade(signal({
+      betMarketPrice: 0.60,
+      orderbookUp: { spread: 0.01, bestBid: 0.59, bestAsk: 0.60, askLiquidity: 0 },
+    }), depsZeroLiq);
+    expect(rejZeroLiq).toBe(false);
+    expect(depsZeroLiq.recordTrade).not.toHaveBeenCalled();
+    expect(depsZeroLiq.setPendingCost).toHaveBeenLastCalledWith(0);
+  });
+
+  test('aborts LIVE FOK when asks are empty (bestAsk=null or askLiquidity=0)', async () => {
+    const depsEmpty = makeDeps();
+    const resEmpty = await executeDirectionalTrade(signal({
+      dryRun: false,
+      betMarketPrice: 0.60,
+      orderbookUp: { bestBid: 0.59, bestAsk: 0.60, spread: 0.01, askLiquidity: 0 },
+    }), depsEmpty);
+    expect(resEmpty).toBe(false);
+    expect(depsEmpty.placeBuyOrder).not.toHaveBeenCalled();
+
+    const depsNullAsk = makeDeps();
+    const resNullAsk = await executeDirectionalTrade(signal({
+      dryRun: false,
+      betMarketPrice: 0.60,
+      orderbookUp: { spread: 0.01, bestBid: 0.59, bestAsk: null, askLiquidity: 100 },
+    }), depsNullAsk);
+    expect(resNullAsk).toBe(false);
+    expect(depsNullAsk.placeBuyOrder).not.toHaveBeenCalled();
+  });
+
+  test('executeArbitrage caps shares to 0 when minAskLiq === 0 instead of falling back to budgetShares', async () => {
+    const deps = makeDeps();
+    await executeArbitrage({
+      arb: { found: true, askUp: 0.45, askDown: 0.48, totalCost: 0.93, netProfit: 0.04, profitPct: 4.3, spreadHealthy: true },
+      poly: { tokens: { upTokenId: 'tok-up', downTokenId: 'tok-down' }, market: {} },
+      marketSlug: SLUG,
+      currentConditionId: 'cond-arb',
+      regimeInfo: { regime: 'moderate' },
+      rec: { confidence: 'HIGH', phase: 'MID' },
+      priceToBeat: { value: 80000, source: 'chainlink_twap' },
+      lastPrice: 80010,
+      orderbookUp: { bestAsk: 0.45, spread: 0.01, askLiquidity: 0 },
+      orderbookDown: { bestAsk: 0.48, spread: 0.01, askLiquidity: 100 },
+      dryRun: false,
+    }, deps);
+    expect(deps.placeBuyOrder).not.toHaveBeenCalled();
+  });
+
+  test('DOWN entry uses orderbookDown.spread (does not borrow orderbookUp.spread) and blocks one-sided invariant', async () => {
+    const deps = makeDeps();
+    const blocked = await executeDirectionalTrade(signal({
+      betSide: 'DOWN',
+      rec: { action: 'ENTER', side: 'DOWN', confidence: 'HIGH', phase: 'MID', reason: 'test' },
+      betMarketPrice: 0.60,
+      mlResult: { available: true, mlConfidence: 0.9, mlProbUp: 0.1, mlSide: 'DOWN' },
+      orderbookUp: { bestBid: 0.39, bestAsk: 0.41, spread: 0.02, askLiquidity: 200 },
+      orderbookDown: { bestBid: null, bestAsk: 0.60, spread: null, askLiquidity: 200 },
+      marketUp: 0.40,
+      marketDown: 0.60,
     }), deps);
-    expect(rejected).toBe(false);
-    expect(deps.recordTrade).not.toHaveBeenCalled();
-    expect(deps.setPendingCost).toHaveBeenLastCalledWith(0);
+    expect(blocked).toBe(false);
+    expect(deps.applyTradeFilters).toHaveBeenCalledWith(expect.objectContaining({ spread: null }));
+    expect(notify).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining('one_sided_book'),
+      expect.objectContaining({ key: expect.stringContaining('one_sided_book') }),
+    );
+  });
+
+  test('blocks extreme z-score with cheap price contradiction (Trade #42 signature) and formats MetEngine alert in cents + BTC line', async () => {
+    const depsInv = makeDeps();
+    const blocked = await executeDirectionalTrade(signal({
+      betMarketPrice: 0.60,
+      twapPhysicsZ: 4.50,
+      edge: { edgeUp: 0.291, edgeDown: -0.291, bestEdge: 0.291, spreadPenaltyUp: 0, spreadPenaltyDown: 0 },
+      orderbookUp: { bestBid: 0.59, bestAsk: 0.60, spread: 0.01, askLiquidity: 200 },
+      lastPrice: 63_873,
+      priceToBeat: { value: 63_672.88, source: 'chainlink_twap' },
+    }), depsInv);
+    expect(blocked).toBe(false);
+    expect(depsInv.recordTrade).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      'warn',
+      expect.stringContaining('extreme_z_cheap_price'),
+      expect.any(Object),
+    );
+
+    vi.mocked(notify).mockClear();
+    const depsMe = makeDeps({
+      querySmartMoney: vi.fn(async () => ({ blocked: false, boost: true, consensusStrength: 0.85, insiderScore: 3, reason: 'aligned' })),
+      notifyTrade: vi.fn(),
+      placeBuyOrder: vi.fn(async () => ({ orderId: 'ord-me', makingAmount: '3.0', takingAmount: '5' })),
+    });
+    const okMe = await executeDirectionalTrade(signal({
+      dryRun: false,
+      betMarketPrice: 0.60,
+      orderbookUp: { bestBid: 0.59, bestAsk: 0.60, spread: 0.01, askLiquidity: 200 },
+      lastPrice: 63_873,
+      settlePrice: 63_850,
+      priceToBeat: { value: 63_672.88, source: 'chainlink_twap' },
+    }), depsMe);
+    expect(okMe).toBe(true);
+    expect(notify).toHaveBeenCalledWith(
+      'info',
+      expect.stringContaining('Token: 60.0c'),
+      expect.any(Object),
+    );
+    expect(notify).toHaveBeenCalledWith(
+      'info',
+      expect.stringContaining('₿ BTC <b>$63,850.00</b> (PTB $63,672.88, +$177.12)'),
+      expect.any(Object),
+    );
   });
 });

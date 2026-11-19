@@ -8,7 +8,7 @@
  * at 1-5c and 95-99c.
  */
 import { describe, test, expect } from 'vitest';
-import { depthNearTop } from '../utils.ts';
+import { depthNearTop, toNumber } from '../utils.ts';
 import { summarizeOrderBook } from '../data/polymarket.ts';
 
 // As the CLOB sends them: worst first on both sides.
@@ -47,5 +47,18 @@ describe('depthNearTop', () => {
     const s = summarizeOrderBook({ bids: BIDS, asks: ASKS });
     expect(s).toMatchObject({ bestBid: 0.58, bestAsk: 0.59, bidLiquidity: 115, askLiquidity: 35 });
     expect(s.spread).toBeCloseTo(0.01, 12);
+  });
+
+  test('toNumber rejects empty strings, whitespace, booleans and nulls while preserving 0', () => {
+    expect(toNumber(0)).toBe(0);
+    expect(toNumber('0')).toBe(0);
+    expect(toNumber('0.62')).toBe(0.62);
+    expect(toNumber('')).toBeNull();
+    expect(toNumber('   ')).toBeNull();
+    expect(toNumber(null)).toBeNull();
+    expect(toNumber(undefined)).toBeNull();
+    expect(toNumber(false)).toBeNull();
+    expect(toNumber(true)).toBeNull();
+    expect(toNumber(Number.NaN)).toBeNull();
   });
 });

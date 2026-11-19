@@ -105,8 +105,8 @@ export function scheduleUsdcCheck({
     const hasPendingCost = getPendingCost() > 0;
 
     // Sanity check: reject obviously invalid API responses
-    if (onChain < 0 || onChain > 100_000) {
-      log.warn(`SYNC REJECTED: on-chain=$${onChain.toFixed(2)} looks invalid (out of range)`);
+    if (!Number.isFinite(onChain) || onChain < 0 || onChain > 100_000) {
+      log.warn(`SYNC REJECTED: on-chain=$${Number.isFinite(onChain) ? onChain.toFixed(2) : String(onChain)} looks invalid (out of range)`);
     } else if (drift > 0.01 && !hasPos && !hasPendingCost) {
       log.info(`AUTO-SYNC queued: local=$${localBankroll.toFixed(2)} -> on-chain=$${onChain.toFixed(2)} (drift $${drift.toFixed(2)})`);
       pendingUsdcSync = onChain;

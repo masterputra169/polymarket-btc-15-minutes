@@ -144,3 +144,28 @@ export function feedAlertMessage(a: FeedAlertView): string {
     a.slug ? '🎫 <code>' + escapeHtml(a.slug) + '</code>' : null,
   ].filter(Boolean).join('\n');
 }
+
+export interface EntryAnomalyAlert {
+  dryRun: boolean;
+  code: string;
+  side: string;
+  price: number;
+  reason: string;
+  btcPrice?: number | null;
+  priceToBeat?: number | null;
+  marketSlug?: string | null;
+}
+
+/** Anomaly alert emitted when runtime pre-entry invariants block an abnormal execution. */
+export function entryAnomalyAlert(p: EntryAnomalyAlert): string {
+  const btcLine = formatEntryBtcLine(p.btcPrice, p.priceToBeat);
+  const pxText = Number.isFinite(p.price) ? (p.price * 100).toFixed(1) + 'c' : String(p.price);
+  return [
+    '🚨 <b>ENTRY BLOCKED (INVARIANT)</b>' + (p.dryRun ? ' [DRY]' : ' [LIVE]'),
+    '🧱 Code: <code>' + escapeHtml(p.code) + '</code>',
+    '🎯 Side: <b>' + escapeHtml(p.side) + '</b> @ <code>' + escapeHtml(pxText) + '</code>',
+    btcLine,
+    '⚠️ ' + escapeHtml(p.reason),
+    p.marketSlug ? '<a href="https://polymarket.com/event/' + encodeURIComponent(p.marketSlug) + '">View Market</a>' : null,
+  ].filter(Boolean).join('\n');
+}

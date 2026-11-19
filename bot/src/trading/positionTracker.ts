@@ -647,21 +647,34 @@ export function recordArbTrade({ upCost, downCost, shares, marketSlug, orderId, 
  * @param {number} recoveredUsdc - Actual USDC recovered from the sell
  * @returns {boolean} Whether partial exit occurred
  */
-export function partialExit(sellSize, recoveredUsdc) {
+export function partialExit(sellSize, recoveredUsdc, exitFee = 0) {
   if (!state.currentPosition || state.currentPosition.settled) return false;
+  if (!Number.isFinite(sellSize) || sellSize <= 0 || !Number.isFinite(recoveredUsdc) || recoveredUsdc < 0) {
+    log.error(`partialExit ABORTED: invalid sellSize=${sellSize} recoveredUsdc=${recoveredUsdc}`);
+    return false;
+  }
 
   const pos = state.currentPosition;
+  if (!Number.isFinite(pos.size) || pos.size <= 0 || !Number.isFinite(pos.cost) || pos.cost < 0) {
+    log.error(`partialExit ABORTED: pos.size=${pos.size} pos.cost=${pos.cost} not finite`);
+    auditLog({ type: 'PARTIAL_CUT_ABORTED', reason: 'NaN_guard', size: pos.size, cost: pos.cost });
+    return false;
+  }
+
+  const exit = Number.isFinite(exitFee) && exitFee > 0 ? roundMoney(exitFee) : 0;
 
   // If selling all remaining shares, delegate to full exit
   if (sellSize >= pos.size) {
-    return settleTradeEarlyExit(recoveredUsdc);
+    return settleTradeEarlyExit(recoveredUsdc, exit);
   }
+
+  if (!assertBankrollOk('partialExit')) return false;
 
   const fractionSold = sellSize / pos.size;
   const costPortion = roundMoney(pos.cost * fractionSold);
   const recovered = roundMoney(Math.max(0, recoveredUsdc));
   const feePortion = entryFeeOf(pos, sellSize); // the rest is booked when the remainder closes
-  const pnl = roundMoney(recovered - costPortion - feePortion);
+  const pnl = roundMoney(recovered - costPortion - feePortion - exit);
 
   // Update position in-place (reduce size + cost)
   // Round size to prevent float drift (e.g. 10 - 7.5 = 2.4999999...)
@@ -669,8 +682,8 @@ export function partialExit(sellSize, recoveredUsdc) {
   pos.size = Math.round((pos.size - sellSize) * 1e8) / 1e8;
   pos.cost = roundMoney(pos.cost - costPortion);
 
-  // Add recovery to bankroll, less the entry fee of the shares sold
-  state.bankroll = roundMoney(state.bankroll + recovered - feePortion);
+  // Add recovery to bankroll, less the entry fee of the shares sold and sell exit fee
+  state.bankroll = roundMoney(state.bankroll + recovered - feePortion - exit);
 
   state.trades.push({
     type: 'PARTIAL_CUT',

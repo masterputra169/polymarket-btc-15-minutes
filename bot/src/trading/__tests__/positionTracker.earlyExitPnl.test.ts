@@ -14,7 +14,7 @@ vi.mock('../../logger.ts', () => ({
 }));
 vi.mock('../../config.ts', () => ({ BOT_CONFIG: { bankroll: 100, stateFile: '/tmp/test_state_pnl.json' } }));
 
-const { _resetForTest, recordTrade, getCurrentPosition, getBankroll, settleTradeEarlyExit, earlyExitPnl } =
+const { _resetForTest, recordTrade, partialExit, getCurrentPosition, getBankroll, settleTradeEarlyExit, earlyExitPnl } =
   await import('../positionTracker.ts');
 
 beforeEach(() => { _resetForTest({ bankroll: 100 }); });
@@ -45,5 +45,20 @@ describe('earlyExitPnl', () => {
     expect(earlyExitPnl(pos, 2, 0.17)).toBe(-4.34);
     expect(settleTradeEarlyExit(2, 0.17)).toBe(true);
     expect(getBankroll()).toBeCloseTo(before + 2 - 0.17 - 0.17, 2);
+  });
+
+  it('partialExit guards NaN/non-positive inputs and subtracts exitFee', () => {
+    recordTrade({ side: 'UP', tokenId: 't', price: 0.6, size: 10, marketSlug: 'm', orderId: null });
+    const before = getBankroll(); // 94
+    expect(partialExit(0, 2)).toBe(false);
+    expect(partialExit(Number.NaN, 2)).toBe(false);
+    expect(partialExit(4, -1)).toBe(false);
+    expect(partialExit(4, Number.NaN)).toBe(false);
+    expect(getBankroll()).toBe(before);
+
+    // Sell 4 shares for $3 with $0.05 exitFee; entry fee portion on 4@0.60 = 0.0672
+    expect(partialExit(4, 3, 0.05)).toBe(true);
+    expect(getCurrentPosition()?.size).toBe(6);
+    expect(getBankroll()).toBeCloseTo(before + 3 - 0.0672 - 0.05, 2);
   });
 });

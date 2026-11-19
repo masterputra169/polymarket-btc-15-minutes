@@ -504,4 +504,29 @@ describe('orderbook liquidity', () => {
     expect(clob.getOrderbook().up).toMatchObject({ bestBid: 0.99, bestAsk: null, askLiquidity: 0 });
     expect(clob.getOrderbook().down).toMatchObject({ bestBid: null, bestAsk: 0.01, bidLiquidity: 0 });
   });
+
+  test('price_change boundary markers (0/1/empty/null) clear stale askLiquidity and avoid negative spread', () => {
+    const sock = bringUp();
+    // UP starts at 0.48 / 0.52 with 500 bid/ask liquidity from bringUp()
+    sock.deliver({
+      event_type: 'price_change',
+      price_changes: [
+        { asset_id: UP, best_bid: '0.99', best_ask: '' },
+        { asset_id: DOWN, best_bid: '0', best_ask: '0.01' },
+      ],
+    });
+
+    const ob = clob.getOrderbook();
+    expect(ob.up).toMatchObject({ bestBid: 0.99, bestAsk: null, spread: null, askLiquidity: 0, askSize: 0 });
+    expect(ob.down).toMatchObject({ bestBid: null, bestAsk: 0.01, spread: null, bidLiquidity: 0, bidSize: 0 });
+    expect(clob.getUpPrice()).toBe(0.99);
+    expect(clob.getDownPrice()).toBe(0.01);
+
+    // Boundary "1" on best_ask also maps to null (never 1.00 phantom ask)
+    sock.deliver({
+      event_type: 'price_change',
+      price_changes: [{ asset_id: UP, best_bid: '0.98', best_ask: '1' }],
+    });
+    expect(clob.getOrderbook().up).toMatchObject({ bestBid: 0.98, bestAsk: null, spread: null, askLiquidity: 0 });
+  });
 });

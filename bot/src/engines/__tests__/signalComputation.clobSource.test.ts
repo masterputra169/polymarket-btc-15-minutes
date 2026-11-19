@@ -85,4 +85,35 @@ describe('computeSignals — CLOB price source', () => {
     expect(sig.marketDown).toBe(REST_DOWN);
     expect(sig.orderbookUp.bestBid).toBe(restBook.up.bestBid);
   });
+
+  test('keeps one-sided 1c WS book (bestBid=null, bestAsk=0.01) instead of falling back to 30s REST', () => {
+    resetMarketUpHistory();
+    const oneSidedWs = {
+      up: { bestBid: 0.99, bestAsk: null, spread: null, bidLiquidity: 500, askLiquidity: 0 },
+      down: { bestBid: null, bestAsk: 0.01, spread: null, bidLiquidity: 0, askLiquidity: 500 },
+    };
+    const sig = computeSignals({
+      klines1m: candles(240),
+      klines5m: candles(48),
+      lastPrice: 81_000,
+      poly: { prices: { up: REST_UP, down: REST_DOWN }, orderbook: restBook },
+      priceToBeat: { slug: 'btc-15m', value: 80_900, source: 'chainlink_twap', updatedAt: Date.now() },
+      marketSlug: 'btc-15m',
+      now: Date.now(),
+      clobUsable: true,
+      getClobUpPrice: () => 0.99,
+      getClobDownPrice: () => 0.01,
+      getClobOrderbook: () => oneSidedWs,
+      feedbackStats: null,
+      timeLeftMin: 8,
+      candleWindowMinutes: 15,
+      getMLPrediction: () => ({ available: false }),
+      fundingRate: null,
+      smartFlowSignal: null,
+      oraclePrice: 80_900,
+    });
+    expect(sig.orderbookUp.bestBid).toBe(0.99);
+    expect(sig.orderbookDown.bestBid).toBeNull();
+    expect(sig.orderbookDown.bestAsk).toBe(0.01);
+  });
 });

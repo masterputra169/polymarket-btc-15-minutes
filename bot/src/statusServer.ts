@@ -350,8 +350,10 @@ export function startStatusServer() {
                     }
                   } else if (owns) {
                     // Partial sell: the tracker keeps the rest of the position riding to settlement.
-                    settled = partialExit(size, recovered);
-                    if (settled) writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: 'partial_sell', recovered, size } });
+                    const partialShares = Number.isFinite(filledShares) && filledShares > 0 ? filledShares : size;
+                    const exitFee = sellFillFee(recovered, filledShares, price, size);
+                    settled = partialExit(partialShares, recovered, exitFee);
+                    if (settled) writeJournalEntry({ outcome: 'SELL_ORPHAN', pnl: 0, exitData: { source: 'dashboard_sell', note: 'partial_sell', recovered, size: partialShares } });
                   }
                   // M8: Write journal entry even when nothing was settled (audit trail for the CLOB sell)
                   if (!settled) {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { tradeEntryAlert, startupAlert, feedAlertMessage, escapeHtml, fmtUsd } from '../alertTemplates.ts';
+import { tradeEntryAlert, startupAlert, feedAlertMessage, entryAnomalyAlert, escapeHtml, fmtUsd } from '../alertTemplates.ts';
 
 describe('alert templates', () => {
   it('escapes HTML in dynamic values', () => {
@@ -68,5 +68,25 @@ describe('alert templates', () => {
       .toContain('Chainlink TWAP feed');
     expect(feedAlertMessage({ kind: 'ptb', level: 'info', detail: 'exact', slug: 'm1' }))
       .toContain('recovered');
+  });
+
+  it('formats entry anomaly alerts with escaped HTML and BTC/PTB context', () => {
+    const msg = entryAnomalyAlert({
+      dryRun: false,
+      code: 'extreme_z_cheap_price',
+      side: 'UP',
+      price: 0.60,
+      reason: 'z >= 4.0 & stale <book>',
+      btcPrice: 63_873,
+      priceToBeat: 63_672.88,
+      marketSlug: 'btc-updown-15m-1795095900',
+    });
+    expect(msg).toContain('ENTRY BLOCKED (INVARIANT)');
+    expect(msg).toContain('[LIVE]');
+    expect(msg).toContain('extreme_z_cheap_price');
+    expect(msg).toContain('60.0c');
+    expect(msg).toContain('z &gt;= 4.0 &amp; stale &lt;book&gt;');
+    expect(msg).toContain('₿ BTC <b>$63,873.00</b> (PTB $63,672.88, +$200.12)');
+    expect(msg).toContain('View Market');
   });
 });

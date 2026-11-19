@@ -181,6 +181,8 @@ export function shallowChanged(
 }
 
 function toNumber(x: unknown): number | null {
+  if (x === null || x === undefined || typeof x === 'boolean') return null;
+  if (typeof x === 'string' && x.trim() === '') return null;
   const n = Number(x);
   return Number.isFinite(n) ? n : null;
 }

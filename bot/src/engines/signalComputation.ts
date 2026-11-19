@@ -315,8 +315,8 @@ export function computeSignals({
 
   // ── Orderbook: WS (instant) → REST (fallback) ──
   const wsBook = useClobWs ? getClobOrderbook() : null;
-  const orderbookUp = (wsBook?.up?.bestBid != null) ? wsBook.up : (poly?.orderbook?.up ?? null);
-  const orderbookDown = (wsBook?.down?.bestBid != null) ? wsBook.down : (poly?.orderbook?.down ?? null);
+  const orderbookUp = (wsBook?.up?.bestBid != null || wsBook?.up?.bestAsk != null) ? wsBook.up : (poly?.orderbook?.up ?? null);
+  const orderbookDown = (wsBook?.down?.bestBid != null || wsBook?.down?.bestAsk != null) ? wsBook.down : (poly?.orderbook?.down ?? null);
 
   const orderbookSignal = analyzeOrderbook({ orderbookUp, orderbookDown, marketUp, marketDown });
 

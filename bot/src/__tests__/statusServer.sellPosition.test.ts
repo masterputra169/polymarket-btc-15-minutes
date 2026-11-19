@@ -90,7 +90,8 @@ describe('sellPosition RPC', () => {
   test('a real partial sell of the tracked token keeps the rest of the position', async () => {
     const r = await rpc({ type: 'sellPosition', tokenId: 'tok-mine', size: 4, price: 0.25 });
     expect(r.ok).toBe(true);
-    expect(tracker.partialExit).toHaveBeenCalledWith(4, 2.5);
+    // 2.5 USDC / 4 shares = 0.625 -> exit taker fee = 4*0.07*0.625*0.375 = 0.06563 (5 dp).
+    expect(tracker.partialExit).toHaveBeenCalledWith(4, 2.5, 0.06563);
     expect(tracker.settleTradeEarlyExit).not.toHaveBeenCalled();
   });
 
