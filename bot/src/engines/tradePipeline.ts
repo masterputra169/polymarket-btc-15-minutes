@@ -756,6 +756,12 @@ export async function executeDirectionalTrade({
     binanceDistPct: crossFeed?.binanceDistPct ?? null,
     oracleDistPct: crossFeed?.oracleDistPct ?? null,
     twapPhysicsZ,
+    rsiNow: rsiNow ?? null,
+    stochK: stochRsi?.k ?? null,
+    ruleSideProb:
+      timeAware?.adjustedUp != null && Number.isFinite(timeAware.adjustedUp)
+        ? (rec.side === 'UP' ? timeAware.adjustedUp : rec.side === 'DOWN' ? (1 - timeAware.adjustedUp) : null)
+        : null,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);

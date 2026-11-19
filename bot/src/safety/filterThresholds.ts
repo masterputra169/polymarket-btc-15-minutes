@@ -33,6 +33,7 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   mlConfRelaxed: { env: 'FILTER_ML_CONF_RELAXED', def: 0.45, min: 0, max: 1, doc: 'ML confidence floor when edge ≥ highEdgeBypass or oracle-lag' },
   hardMlFloor: { env: 'FILTER_HARD_ML_FLOOR', def: 0, min: 0, max: 1, doc: 'absolute minimum ML confidence regardless of bypasses (0 disables)' },
   highEdgeBypass: { env: 'FILTER_HIGH_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that relaxes the ML gate (and waives the Asia floor)' },
+  bypassMinMlEdge: { env: 'FILTER_BYPASS_MIN_ML_EDGE', def: 0, min: 0, max: 0.5, doc: 'minimum raw ML edge (mlSideProb - marketPrice) required for edge bypasses to waive ML floors (0 disables)' },
   // Oracle-lag sniper (only with LATE_SNIPER_ENABLED=true)
   oracleLagMinTimeLeft: { env: 'FILTER_ORACLE_LAG_MIN_TIME_LEFT', def: 5.0, min: 0, max: 15, doc: 'minutes left required' },
   oracleLagMaxPrice: { env: 'FILTER_ORACLE_LAG_MAX_PRICE', def: 0.62, min: 0, max: 1, doc: 'token price ceiling' },
@@ -61,6 +62,9 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   // Mid-phase decay protection (timeLeft < 11m)
   midPhaseMaxPrice: { env: 'FILTER_MID_PHASE_MAX_PRICE', def: 0, min: 0, max: 1, doc: 'max token price when timeLeftMin < 11m (0 disables)' },
   midPhaseMinEdge: { env: 'FILTER_MID_PHASE_MIN_EDGE', def: 0.08, min: 0, max: 1, doc: 'min edge required when timeLeftMin < 11m and price > midPhaseMaxPrice' },
+  // Early-phase anti-pucuk (timeLeft >= 11m)
+  earlyPhaseMaxPrice: { env: 'FILTER_EARLY_PHASE_MAX_PRICE', def: 0, min: 0, max: 1, doc: 'max token price in EARLY phase (timeLeftMin >= 11m) when rule-ML gap is inflated or ML edge is thin (0 disables)' },
+  earlyMaxRuleMlGap: { env: 'FILTER_EARLY_MAX_RULE_ML_GAP', def: 0.25, min: 0, max: 1, doc: 'max ruleSideProb - mlSideProb divergence allowed above earlyPhaseMaxPrice in EARLY phase (0 disables)' },
   // Dry-run-only volume probe: the early-time gate is the second-largest blocker
   // after the price cap. Defaults to the live 12 min; can be raised in DRY_RUN only.
   dryRunMaxTimeLeft: { env: 'FILTER_DRY_RUN_MAX_TIME_LEFT', def: TRADE_FILTERS.MAX_TIME_LEFT_MIN, min: 0, max: 15, doc: 'dry-run only: max minutes left for an entry (live stays 12)' },
@@ -107,6 +111,10 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   blockOpposingLeadLag: { env: 'FILTER_BLOCK_OPPOSING_LEAD_LAG', def: 0, min: 0, max: 1, doc: 'block entry when 3s Binance lead-lag impulse opposes signalSide (>=0.5 enables, 0 disables)' },
   // 20f. Binance vs Chainlink cross-feed alignment guard
   crossFeedSkewPct: { env: 'FILTER_CROSS_FEED_SKEW_PCT', def: 0.035, min: 0, max: 2, doc: 'block entry when Binance-vs-Chainlink skew inflates or flips signal near PTB (% of PTB; 0 disables)' },
+  // 20g. Anti-chase oversold/overbought (RSI + StochRSI extreme guard)
+  rsiExtremeMaxPrice: { env: 'FILTER_RSI_EXTREME_MAX_PRICE', def: 0, min: 0, max: 1, doc: 'max token price when chasing extreme oversold/overbought RSI + StochRSI (0 disables)' },
+  rsiOversold: { env: 'FILTER_RSI_OVERSOLD', def: 22, min: 5, max: 45, doc: 'RSI oversold threshold for DOWN anti-chase guard' },
+  rsiOverbought: { env: 'FILTER_RSI_OVERBOUGHT', def: 78, min: 55, max: 95, doc: 'RSI overbought threshold for UP anti-chase guard' },
   // 21. Volatility-normalized TWAP lead floor (emoubarak zlead)
   minTwapZ: { env: 'FILTER_MIN_TWAP_Z', def: 0, min: 0, max: 5, doc: 'minimum volatility-normalized TWAP lead |z| when exact PTB & sigma available (0 disables)' },
 };

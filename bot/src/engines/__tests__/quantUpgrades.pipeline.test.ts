@@ -133,6 +133,9 @@ describe('tradePipeline Quant Upgrades (R4 300s & 3s Lead-Lag)', () => {
       leadLagDirection: 'UP',
       binanceDistPct: 0.063,
       oracleDistPct: 0.037,
+      rsiNow: 58,
+      stochK: 60,
+      ruleSideProb: 0.68,
     }));
     expect(deps.captureEntrySnapshot).toHaveBeenCalledWith(expect.objectContaining({
       liveBasisUsd: 25,

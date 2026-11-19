@@ -321,8 +321,24 @@ export function applyTradeFilters({
   binanceDistPct = null,     // (Binance_now − Binance_open) / Binance_open * 100
   oracleDistPct = null,      // (Chainlink_settle − exact_PTB) / exact_PTB * 100
   twapPhysicsZ = null,       // normalized Chainlink TWAP lead (S − PTB) / (σ·√T_eff)
+  rsiNow = null,             // current 14-period RSI (0-100) for anti-chase oversold/overbought guard
+  stochK = null,             // current StochRSI K (0-100) for anti-chase oversold/overbought guard
+  ruleSideProb = null,       // rule-engine directional probability for signalSide in [0, 1]
 }: Record<string, any>) {
   const reasons = [];
+
+  // Raw ML side probability and raw ML edge (independent of Rule Engine inflation).
+  // Used to prevent Rule Engine momentum spikes (e.g. ruleSideProb = 95%) from
+  // triggering highEdgeBypass / lateEdgeBypass / trendingEdgeBypass when ML's own
+  // edge over the entry price is thinner than T.bypassMinMlEdge.
+  const mlAlignedWithSignal = !mlSide || !signalSide || mlSide === signalSide;
+  const mlSideProb = (mlAvailable && mlConfidence != null && Number.isFinite(mlConfidence))
+    ? (mlAlignedWithSignal ? (0.5 + mlConfidence / 2) : (0.5 - mlConfidence / 2))
+    : null;
+  const rawMlEdge = (mlSideProb != null && marketPrice != null && Number.isFinite(marketPrice))
+    ? (mlSideProb - marketPrice)
+    : null;
+  const mlEdgeOkForBypass = T.bypassMinMlEdge <= 0 || rawMlEdge == null || rawMlEdge >= T.bypassMinMlEdge;
 
   // 0. Blocked session — hard gate, evaluated before every bypass below.
   // The bypasses in this module (high edge, oracle-lag, ML high-confidence) relax
@@ -355,7 +371,7 @@ export function applyTradeFilters({
   // that moderate ML uncertainty shouldn't block. Relax ML threshold from 65% → 45%.
   // Rationale: edge = modelProb - marketPrice. At 15%+ edge, ensemble strongly favors the side
   // even if ML specifically is uncertain (rule-based indicators still contribute).
-  const highEdgeBypass = bestEdge != null && bestEdge >= T.highEdgeBypass;
+  const highEdgeBypass = bestEdge != null && bestEdge >= T.highEdgeBypass && mlEdgeOkForBypass;
   const baseMLMin = (highEdgeBypass || oracleLagBypass)
     ? Math.max(T.hardMlFloor, Math.min(T.mlConfMin, T.mlConfRelaxed)) // relax to 45% when edge or oracle-lag triggers (never below hard floor)
     : T.mlConfMin;
@@ -500,7 +516,7 @@ export function applyTradeFilters({
   // EARLY/MID unaffected (76%/74% WR, working well).
   // Edge bypass (Audit v5 A+B): edge ≥ 15% → relax from 80% to 55% (price advantage compensates time pressure)
   if (Number.isFinite(timeLeftMin) && timeLeftMin < T.lateTimeLeft) {
-    const lateEdgeBypass = bestEdge != null && bestEdge >= T.lateEdgeBypass;
+    const lateEdgeBypass = bestEdge != null && bestEdge >= T.lateEdgeBypass && mlEdgeOkForBypass;
     const LATE_ML_MIN = lateEdgeBypass ? T.lateMlRelaxed : T.lateMlMin;
     if (mlAvailable && mlConfidence != null && mlConfidence < LATE_ML_MIN) {
       const edgeTag = lateEdgeBypass ? ` [edge ${(bestEdge * 100).toFixed(0)}%≥${(T.lateEdgeBypass * 100).toFixed(0)}%→relaxed]` : '';
@@ -518,6 +534,27 @@ export function applyTradeFilters({
         reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(T.midPhaseMaxPrice * 100).toFixed(0)}c without high edge (${bestEdge != null ? (bestEdge * 100).toFixed(1) + '%' : 'N/A'} < ${(T.midPhaseMinEdge * 100).toFixed(0)}%)`);
       } else if (marketPrice > midHardCeil) {
         reasons.push(`MID phase price ${(marketPrice * 100).toFixed(0)}c > ${(midHardCeil * 100).toFixed(0)}c ceiling`);
+      }
+    }
+  }
+
+  // 4e. EARLY phase anti-pucuk (timeLeftMin >= 11.0m):
+  // Blocks expensive early entries (> earlyPhaseMaxPrice, e.g. 61c) when the ensemble edge is
+  // inflated by a single-direction Rule Engine spike (ruleSideProb - mlSideProb >= earlyMaxRuleMlGap)
+  // or when raw ML edge is thinner than bypassMinMlEdge while ML confidence is below 45%.
+  if (T.earlyPhaseMaxPrice > 0 && Number.isFinite(timeLeftMin) && timeLeftMin >= 11.0) {
+    if (marketPrice != null && marketPrice > T.earlyPhaseMaxPrice && (mlConfidence == null || mlConfidence < 0.45)) {
+      const ruleMlGap = (ruleSideProb != null && Number.isFinite(ruleSideProb) && mlSideProb != null)
+        ? (ruleSideProb - mlSideProb)
+        : null;
+      if (T.earlyMaxRuleMlGap > 0 && ruleMlGap != null && ruleMlGap >= T.earlyMaxRuleMlGap) {
+        reasons.push(
+          `EARLY phase anti-pucuk: price ${(marketPrice * 100).toFixed(0)}c > ${(T.earlyPhaseMaxPrice * 100).toFixed(0)}c with rule-ML divergence +${(ruleMlGap * 100).toFixed(0)}pp ≥ ${(T.earlyMaxRuleMlGap * 100).toFixed(0)}pp (ML conf ${mlConfidence != null ? (mlConfidence * 100).toFixed(0) + '%' : 'N/A'})`,
+        );
+      } else if (T.bypassMinMlEdge > 0 && rawMlEdge != null && rawMlEdge < T.bypassMinMlEdge) {
+        reasons.push(
+          `EARLY phase anti-pucuk: price ${(marketPrice * 100).toFixed(0)}c > ${(T.earlyPhaseMaxPrice * 100).toFixed(0)}c with thin ML edge ${(rawMlEdge * 100).toFixed(1)}% < ${(T.bypassMinMlEdge * 100).toFixed(1)}%`,
+        );
       }
     }
   }
@@ -649,7 +686,7 @@ export function applyTradeFilters({
     const TRENDING_ML_WITH = T.trendingMlWith;         // signal aligns with BTC direction (trend supports us)
     const TRENDING_ML_AGAINST = T.trendingMlAgainst;   // signal fights BTC direction (riskier)
     const TRENDING_EDGE_BYPASS = T.trendingEdgeBypass; // edge ≥ 15% → price signal strong enough, bypass ML gate
-    const trendEdgeBypass = bestEdge != null && bestEdge >= TRENDING_EDGE_BYPASS;
+    const trendEdgeBypass = bestEdge != null && bestEdge >= TRENDING_EDGE_BYPASS && mlEdgeOkForBypass;
     if (!trendEdgeBypass && mlAvailable && mlConfidence != null) {
       // Direction alignment: does our signal match where BTC sits relative to PTB?
       const btcFavorsUp = btcPrice != null && priceToBeat != null && btcPrice > priceToBeat;
@@ -846,6 +883,28 @@ export function applyTradeFilters({
           `Cross-feed skew: Oracle only +${signedOracle.toFixed(3)}% while Binance +${signedBinance.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${T.crossFeedSkewPct.toFixed(3)}%)`,
         );
       }
+    }
+  }
+
+  // 20g. Anti-chase oversold/overbought (RSI + StochRSI extreme guard)
+  // Prevents buying expensive DOWN tokens (>= rsiExtremeMaxPrice, e.g. 59c) at local V-bottoms
+  // (RSI < rsiOversold & StochK < 25) or expensive UP tokens at local blow-off tops
+  // (RSI > rsiOverbought & StochK > 75) unless ML confidence is high (>= 45%).
+  if (
+    T.rsiExtremeMaxPrice > 0
+    && marketPrice != null && Number.isFinite(marketPrice) && marketPrice >= T.rsiExtremeMaxPrice
+    && rsiNow != null && Number.isFinite(rsiNow)
+    && (mlConfidence == null || mlConfidence < 0.45)
+  ) {
+    const stochKnown = stochK != null && Number.isFinite(stochK);
+    if (signalSide === 'DOWN' && rsiNow < T.rsiOversold && (!stochKnown || stochK < 25)) {
+      reasons.push(
+        `Anti-chase oversold: DOWN @ ${(marketPrice * 100).toFixed(0)}c ≥ ${(T.rsiExtremeMaxPrice * 100).toFixed(0)}c while RSI ${rsiNow.toFixed(1)} < ${T.rsiOversold}${stochKnown ? ` & StochK ${stochK.toFixed(0)}` : ''} (bounce risk)`,
+      );
+    } else if (signalSide === 'UP' && rsiNow > T.rsiOverbought && (!stochKnown || stochK > 75)) {
+      reasons.push(
+        `Anti-chase overbought: UP @ ${(marketPrice * 100).toFixed(0)}c ≥ ${(T.rsiExtremeMaxPrice * 100).toFixed(0)}c while RSI ${rsiNow.toFixed(1)} > ${T.rsiOverbought}${stochKnown ? ` & StochK ${stochK.toFixed(0)}` : ''} (pullback risk)`,
+      );
     }
   }
 

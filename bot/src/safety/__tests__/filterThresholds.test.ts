@@ -236,5 +236,84 @@ describe('tradeFilters honours the thresholds', () => {
     const mlBypass = mod.applyTradeFilters({ ...input, mlConfidence: 0.85, twapPhysicsZ: 0.05 });
     expect(mlBypass.reasons.filter(r => r.startsWith('TWAP lead too weak:'))).toEqual([]);
   });
+
+  test('3-part anti-pucuk & anti-bottom-chase guard blocks Trade #44 (DOWN @ 62.5c V-bottom) while passing genuine ML edge', async () => {
+    const mod = await load({
+      FILTER_BYPASS_MIN_ML_EDGE: '0.035',
+      FILTER_EARLY_PHASE_MAX_PRICE: '0.61',
+      FILTER_EARLY_MAX_RULE_ML_GAP: '0.25',
+      FILTER_RSI_EXTREME_MAX_PRICE: '0.59',
+      FILTER_RSI_OVERSOLD: '22',
+      FILTER_RSI_OVERBOUGHT: '78',
+      FILTER_TRENDING_MAX_TIME_LEFT: '13.5',
+      FILTER_TRENDING_MIN_TOKEN: '0.52',
+      FILTER_TRENDING_ML_WITH: '0.32',
+      FILTER_ML_CONF_MIN: '0.30',
+      FILTER_ML_CONF_RELAXED: '0.30',
+      FILTER_HARD_ML_FLOOR: '0.30',
+    });
+
+    // Exact replay of Trade #44 (btc-updown-15m-1795103100):
+    // DOWN @ 0.625, tl=13.47m, regime='trending', mlConf=0.3139 (mlSideProb=0.65695 -> rawMlEdge=+0.03195 < 0.035),
+    // ruleSideProb=0.955 (gap +0.298 >= 0.25), bestEdge=0.160 (>= 0.15), rsiNow=19.6, stochK=18.3.
+    const trade44 = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.3139,
+      marketPrice: 0.625,
+      timeLeftMin: 13.47,
+      regime: 'trending',
+      btcPrice: 62784.22,
+      priceToBeat: 62858.76,
+      bestEdge: 0.160,
+      ruleSideProb: 0.955,
+      rsiNow: 19.6,
+      stochK: 18.3,
+    });
+    expect(trade44.pass).toBe(false);
+    // All 3 anti-pucuk protections trigger on Trade #44:
+    expect(trade44.reasons.some((r: string) => r.startsWith('Trending+low ML blocked:'))).toBe(true);
+    expect(trade44.reasons.some((r: string) => r.startsWith('EARLY phase anti-pucuk:'))).toBe(true);
+    expect(trade44.reasons.some((r: string) => r.startsWith('Anti-chase oversold:'))).toBe(true);
+
+    // Genuine ML conviction (mlConfidence=0.38 -> mlSideProb=0.69 -> rawMlEdge=+0.065 >= 0.035,
+    // ruleSideProb=0.78 -> gap +0.09 < 0.25, RSI=34 -> not extreme oversold) passes cleanly:
+    const genuine = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.38,
+      marketPrice: 0.625,
+      timeLeftMin: 12.0,
+      regime: 'trending',
+      btcPrice: 62784.22,
+      priceToBeat: 62858.76,
+      bestEdge: 0.11,
+      ruleSideProb: 0.78,
+      rsiNow: 34.0,
+      stochK: 38.0,
+    });
+    expect(genuine.reasons.filter((r: string) =>
+      r.startsWith('Trending+low ML blocked:')
+      || r.startsWith('EARLY phase anti-pucuk:')
+      || r.startsWith('Anti-chase '),
+    )).toEqual([]);
+
+    // Symmetry check: UP @ 0.61 with RSI 81 > 78 & StochK 84 > 75 is blocked by Anti-chase overbought
+    const overboughtUp = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'UP',
+      mlSide: 'UP',
+      mlConfidence: 0.34,
+      marketPrice: 0.61,
+      timeLeftMin: 9.5,
+      regime: 'moderate',
+      bestEdge: 0.10,
+      rsiNow: 81.2,
+      stochK: 84.0,
+    });
+    expect(overboughtUp.reasons.some((r: string) => r.startsWith('Anti-chase overbought:'))).toBe(true);
+  });
 });
 

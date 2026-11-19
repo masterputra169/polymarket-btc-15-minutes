@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-19 — 3-Layer Anti-Pucuk & Anti-Bottom-Chase Entry Filters (Rule-Inflated Edge, EARLY Phase Divergence, RSI+StochRSI Extreme Guard)
+
+- **Root Cause (`btc-updown-15m-1795103100`, Trade `#44` `DOWN @ 62.0c` at `22:46:34 WIB`):** Early in the 15m window (`timeLeftMin = 13.47m`, `EARLY` phase), BTC dipped `$74.54` below PTB (`$62,784.22` vs `$62,858.76`) to a local V-bottom (`RSI = 19.6`, `StochK = 18.3`). While ML (`20261116-p2-ef8dfd`) saw only `65.7%` `P(DOWN)` (`mlConfidence = 31.4% < trendingMlWith 32%`, raw ML edge only `+3.2%` over `62.5c`), the short-term Rule Engine spiked to `95.5%` `P(DOWN)` (`ruleUp = 4.5%`), inflating the 50/50 ensemble to `80.6%` (`bestEdge = 16.0% >= 15%`) and triggering `trendingEdgeBypass` right before BTC bounced to `$62,992.03`.
+- **Protection 1 — Raw ML Edge Floor for Edge Bypasses (`bypassMinMlEdge` / `FILTER_BYPASS_MIN_ML_EDGE`, `bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`):** Requires `rawMlEdge = mlSideProb - marketPrice >= T.bypassMinMlEdge` (configured at `0.035` on active profile `20261116-p2-ef8dfd`; default `0` preserves 20,000-case golden hashes) before `highEdgeBypass`, `lateEdgeBypass`, or `trendingEdgeBypass` can waive `mlConfMin` / `trendingMlWith` / `trendingMlAgainst` / `lateMlMin`.
+- **Protection 2 — Gate 4e: `EARLY` Phase (`timeLeftMin >= 11.0m`) Anti-Pucuk on Rule-vs-ML Inflation (`earlyPhaseMaxPrice` / `FILTER_EARLY_PHASE_MAX_PRICE` & `earlyMaxRuleMlGap` / `FILTER_EARLY_MAX_RULE_ML_GAP`):** Blocks expensive `EARLY`-phase entries (`marketPrice > earlyPhaseMaxPrice`, `0.61` on active profile) when `mlConfidence < 0.45` and either `ruleSideProb - mlSideProb >= earlyMaxRuleMlGap` (`0.25`) or `rawMlEdge < bypassMinMlEdge` (`0.035`).
+- **Protection 3 — Gate 20g: Anti-Chase Oversold/Overbought Guard (`rsiExtremeMaxPrice` / `FILTER_RSI_EXTREME_MAX_PRICE`, `rsiOversold` / `FILTER_RSI_OVERSOLD`, `rsiOverbought` / `FILTER_RSI_OVERBOUGHT`):** Forwards `rsiNow`, `stochK`, and `ruleSideProb` from `executeDirectionalTrade()` (`bot/src/engines/tradePipeline.ts`) into `applyTradeFilters()`. Blocks `DOWN` entries at `marketPrice >= rsiExtremeMaxPrice` (`0.59` on active profile) when `rsiNow < 22` and `stochK < 25` (and symmetric `UP` entries when `rsiNow > 78` and `stochK > 75`) unless `mlConfidence >= 0.45`.
+- **Verification & Live Profile Application (`polyvps`):** Added unit tests in `bot/src/safety/__tests__/filterThresholds.test.ts` (including exact replay of Trade `#44` blocked by all 3 gates) and `bot/src/engines/__tests__/quantUpgrades.pipeline.test.ts`, exposed new filter keys in `UI_FILTER_KEYS` (`bot/src/ml/modelProfiles.ts`), and activated `bypassMinMlEdge: 0.035`, `earlyPhaseMaxPrice: 0.61`, `earlyMaxRuleMlGap: 0.25`, `rsiExtremeMaxPrice: 0.59` on `20261116-p2-ef8dfd`.
+
 ## 2026-11-19 — Full-Codebase Bug Hunt Fixes + 5-Layer Automated Detection & Hardening Suite
 
 - **Fixed 8 Real Audit & Variant Bugs Across All 5 Subsystems:**
