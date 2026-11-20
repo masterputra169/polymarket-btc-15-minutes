@@ -805,3 +805,300 @@ export function drawStage2WindowBars(container, normalWindow, finalWindow) {
   }
   container.appendChild(leg);
 }
+
+const fmtShortUsd = (v) => {
+  if (!Number.isFinite(v)) return '—';
+  if (Math.abs(v) >= 10000) return `$${(v / 1000).toFixed(0)}k`;
+  if (Math.abs(v) >= 1000) return `$${(v / 1000).toFixed(1)}k`;
+  return `$${v.toFixed(0)}`;
+};
+
+/**
+ * Draw 10,000-trial adaptive Monte Carlo Equity Fan Chart up to selected trade horizon.
+ */
+export function drawMonteCarloFanChart(container, scenario, horizon, tradesPerDay = null) {
+  if (!container) return;
+  container.replaceChildren();
+  if (!scenario || !Array.isArray(scenario.fanSteps) || !scenario.fan?.p50?.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Monte Carlo fan data unavailable — awaiting settled trades.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const maxStep = Number(horizon) || scenario.summaryMaxH || 5000;
+  const indices = [];
+  for (let i = 0; i < scenario.fanSteps.length; i++) {
+    if (scenario.fanSteps[i] <= maxStep) indices.push(i);
+  }
+  if (indices.length < 2) indices.push(scenario.fanSteps.length - 1);
+
+  const steps = indices.map((i) => scenario.fanSteps[i]);
+  const p5 = indices.map((i) => scenario.fan.p5[i]);
+  const p25 = indices.map((i) => scenario.fan.p25[i]);
+  const p50 = indices.map((i) => scenario.fan.p50[i]);
+  const p75 = indices.map((i) => scenario.fan.p75[i]);
+  const p95 = indices.map((i) => scenario.fan.p95[i]);
+
+  const W = 820;
+  const H = 290;
+  const pad = { l: 64, r: 22, t: 18, b: 36 };
+  const innerW = W - pad.l - pad.r;
+  const innerH = H - pad.t - pad.b;
+
+  const base = Number(scenario.startBankroll) || 100;
+  let minV = Math.min(base, ...p5);
+  let maxV = Math.max(base, ...p95);
+  for (const sp of scenario.samplePaths || []) {
+    for (const i of indices) {
+      const val = sp[i];
+      if (Number.isFinite(val)) {
+        if (val < minV) minV = val;
+        if (val > maxV) maxV = val;
+      }
+    }
+  }
+  if (Math.abs(maxV - minV) < 5) { minV = Math.max(0, minV - 5); maxV += 5; }
+  const margin = (maxV - minV) * 0.08;
+  minV = Math.max(0, minV - margin);
+  maxV += margin;
+
+  const xMax = Math.max(1, steps[steps.length - 1]);
+  const xOf = (step) => pad.l + (step / xMax) * innerW;
+  const yOf = (v) => pad.t + innerH - ((v - minV) / (maxV - minV)) * innerH;
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg' });
+
+  // Horizontal grid + Y labels
+  for (let g = 0; g <= 4; g++) {
+    const val = minV + ((maxV - minV) * g) / 4;
+    const y = yOf(val);
+    svg.appendChild(svgEl('line', {
+      x1: pad.l, x2: W - pad.r, y1: y, y2: y,
+      stroke: 'rgba(148,163,184,0.12)', 'stroke-dasharray': '3,3',
+    }));
+    svg.appendChild(svgEl('text', {
+      x: pad.l - 8, y: y + 4, 'text-anchor': 'end',
+      fill: '#64748b', 'font-size': '10.5', 'font-family': 'var(--font-mono)',
+    }, fmtShortUsd(val)));
+  }
+
+  // Band helper (upper forward + lower backward polygon)
+  const makeBandPath = (hiArr, loArr) => {
+    const fwd = steps.map((s, k) => `${k === 0 ? 'M' : 'L'} ${xOf(s).toFixed(1)},${yOf(hiArr[k]).toFixed(1)}`).join(' ');
+    const rev = [...steps].reverse().map((s, rk) => {
+      const k = steps.length - 1 - rk;
+      return `L ${xOf(s).toFixed(1)},${yOf(loArr[k]).toFixed(1)}`;
+    }).join(' ');
+    return `${fwd} ${rev} Z`;
+  };
+
+  svg.appendChild(svgEl('path', { d: makeBandPath(p95, p5), fill: 'rgba(34,211,238,0.11)' }));
+  svg.appendChild(svgEl('path', { d: makeBandPath(p75, p25), fill: 'rgba(34,211,238,0.22)' }));
+
+  // Faint simulated sample paths
+  for (const sp of scenario.samplePaths || []) {
+    const pts = indices
+      .map((idx, k) => `${xOf(steps[k]).toFixed(1)},${yOf(sp[idx] ?? base).toFixed(1)}`)
+      .join(' ');
+    svg.appendChild(svgEl('polyline', {
+      points: pts, fill: 'none', stroke: 'rgba(148,163,184,0.22)', 'stroke-width': '1',
+    }));
+  }
+
+  // Baseline horizontal line
+  const baseY = yOf(base);
+  svg.appendChild(svgEl('line', {
+    x1: pad.l, x2: W - pad.r, y1: baseY, y2: baseY,
+    stroke: '#f59e0b', 'stroke-opacity': '0.55', 'stroke-width': '1.2', 'stroke-dasharray': '5,4',
+  }));
+
+  const linePts = (arr) => steps.map((s, k) => `${xOf(s).toFixed(1)},${yOf(arr[k]).toFixed(1)}`).join(' ');
+  svg.appendChild(svgEl('polyline', { points: linePts(p95), fill: 'none', stroke: '#10b981', 'stroke-width': '1.8', 'stroke-dasharray': '4,3' }));
+  svg.appendChild(svgEl('polyline', { points: linePts(p5), fill: 'none', stroke: '#f43f5e', 'stroke-width': '1.8', 'stroke-dasharray': '4,3' }));
+  svg.appendChild(svgEl('polyline', { points: linePts(p50), fill: 'none', stroke: '#22d3ee', 'stroke-width': '2.6' }));
+
+  // X-axis labels (trade count + optional estimated calendar days)
+  const tickCount = Math.min(5, steps.length - 1);
+  for (let t = 0; t <= tickCount; t++) {
+    const stepVal = Math.round((xMax * t) / Math.max(1, tickCount));
+    const x = xOf(stepVal);
+    const dayStr = tradesPerDay && tradesPerDay > 0 && stepVal > 0
+      ? ` (~${Math.round(stepVal / tradesPerDay)}h)`
+      : '';
+    svg.appendChild(svgEl('text', {
+      x, y: H - 10,
+      'text-anchor': t === 0 ? 'start' : t === tickCount ? 'end' : 'middle',
+      fill: '#64748b', 'font-size': '10', 'font-family': 'var(--font-mono)',
+    }, `${stepVal.toLocaleString()}tr${dayStr}`));
+  }
+
+  // Interactive hover markers along fan steps
+  for (let k = 0; k < steps.length; k++) {
+    const stepVal = steps[k];
+    const cx = xOf(stepVal);
+    const colW = steps.length > 1 ? Math.max(10, innerW / steps.length) : innerW;
+    const hit = svgEl('rect', {
+      x: cx - colW / 2, y: pad.t, width: colW, height: innerH,
+      fill: 'transparent', style: 'cursor:crosshair',
+    });
+    const dot = svgEl('circle', {
+      cx, cy: yOf(p50[k]), r: 3.5, fill: '#22d3ee', stroke: '#040810', 'stroke-width': '1.2',
+      'fill-opacity': '0.9', style: 'pointer-events:none',
+    });
+    const daysHint = tradesPerDay && tradesPerDay > 0 && stepVal > 0
+      ? ` (~${Math.max(1, Math.round(stepVal / tradesPerDay))} hari @ ${tradesPerDay}/hari)`
+      : '';
+    const tipText = `Trade #${stepVal.toLocaleString()}${daysHint}\n` +
+      `P95: $${p95[k].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | P75: $${p75[k].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+      `Median (P50): $${p50[k].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n` +
+      `P25: $${p25[k].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} | P5: $${p5[k].toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    hit.addEventListener('mousemove', (e) => {
+      dot.setAttribute('r', '5.5');
+      showTip(e, tipText);
+    });
+    hit.addEventListener('mouseleave', () => {
+      dot.setAttribute('r', '3.5');
+      hideTip();
+    });
+    svg.appendChild(dot);
+    svg.appendChild(hit);
+  }
+
+  container.appendChild(svg);
+
+  const leg = document.createElement('div');
+  leg.className = 'chip-list';
+  for (const [lbl, col] of [
+    ['Median (P50)', '#22d3ee'],
+    ['P95 Optimis', '#10b981'],
+    ['P5 Konservatif', '#f43f5e'],
+    ['Start Bankroll', '#f59e0b'],
+  ]) {
+    const b = document.createElement('span');
+    b.className = 'badge';
+    b.style.color = col;
+    b.style.borderColor = col;
+    b.textContent = lbl;
+    leg.appendChild(b);
+  }
+  container.appendChild(leg);
+}
+
+/**
+ * Draw distribution histogram (Final Bankroll or Max Drawdown) with percentile markers.
+ */
+export function drawMonteCarloHistogram(container, hist, opts = {}) {
+  if (!container) return;
+  container.replaceChildren();
+  const counts = hist?.counts;
+  const edges = hist?.edges;
+  if (!Array.isArray(counts) || !Array.isArray(edges) || counts.length === 0 || edges.length !== counts.length + 1) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Histogram data unavailable.';
+    container.appendChild(empty);
+    return;
+  }
+
+  const mode = opts.mode || 'bankroll';
+  const totalPaths = opts.totalPaths || counts.reduce((a, b) => a + b, 0) || 1;
+  const fmt = opts.formatVal || ((v) => (mode === 'drawdown' ? `${v.toFixed(0)}%` : fmtShortUsd(v)));
+
+  const W = 540;
+  const H = 225;
+  const pad = { l: 42, r: 16, t: 22, b: 32 };
+  const innerW = W - pad.l - pad.r;
+  const innerH = H - pad.t - pad.b;
+
+  const minX = edges[0];
+  const maxX = Math.max(minX + 1e-6, edges[edges.length - 1]);
+  const maxC = Math.max(1, ...counts);
+  const xOf = (v) => pad.l + ((Math.max(minX, Math.min(maxX, v)) - minX) / (maxX - minX)) * innerW;
+  const yOf = (c) => pad.t + innerH - (c / maxC) * innerH;
+
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart-svg' });
+
+  for (let g = 0; g <= 3; g++) {
+    const c = (maxC * g) / 3;
+    const y = yOf(c);
+    svg.appendChild(svgEl('line', {
+      x1: pad.l, x2: W - pad.r, y1: y, y2: y,
+      stroke: 'rgba(148,163,184,0.12)', 'stroke-dasharray': '3,3',
+    }));
+    const pctLabel = `${((c / totalPaths) * 100).toFixed(0)}%`;
+    svg.appendChild(svgEl('text', {
+      x: pad.l - 6, y: y + 4, 'text-anchor': 'end',
+      fill: '#64748b', 'font-size': '10', 'font-family': 'var(--font-mono)',
+    }, pctLabel));
+  }
+
+  const nBins = counts.length;
+  const binW = innerW / nBins;
+  for (let i = 0; i < nBins; i++) {
+    const c = counts[i];
+    const lo = edges[i];
+    const hi = edges[i + 1];
+    const mid = (lo + hi) / 2;
+    const barH = Math.max(c > 0 ? 2 : 0, (c / maxC) * innerH);
+    const bx = pad.l + i * binW + 1;
+    const bw = Math.max(2, binW - 2);
+    const by = pad.t + innerH - barH;
+
+    let col = '#22d3ee';
+    if (mode === 'drawdown') {
+      col = mid >= 50 ? '#f43f5e' : mid >= 25 ? '#f59e0b' : '#10b981';
+    } else if (opts.startValue != null) {
+      col = hi <= opts.startValue ? '#f43f5e' : '#10b981';
+    }
+
+    const rect = svgEl('rect', {
+      x: bx, y: by, width: bw, height: barH, rx: 2,
+      fill: col, 'fill-opacity': '0.82', style: 'cursor:pointer',
+    });
+    const share = ((c / totalPaths) * 100).toFixed(2);
+    rect.addEventListener('mousemove', (e) => showTip(
+      e,
+      `${fmt(lo)} – ${fmt(hi)}\n${c.toLocaleString()} / ${totalPaths.toLocaleString()} percobaan (${share}%)`,
+    ));
+    rect.addEventListener('mouseleave', hideTip);
+    svg.appendChild(rect);
+  }
+
+  // Reference lines (Start, Median P50, P95)
+  const markers = mode === 'drawdown'
+    ? [
+        { v: opts.p50, lbl: 'Med', col: '#22d3ee' },
+        { v: opts.p95, lbl: 'P95', col: '#f43f5e' },
+      ]
+    : [
+        { v: opts.startValue, lbl: 'Start', col: '#f59e0b' },
+        { v: opts.p50, lbl: 'Med', col: '#22d3ee' },
+        { v: opts.p95, lbl: 'P95', col: '#10b981' },
+      ];
+  for (const mk of markers) {
+    if (typeof mk.v !== 'number' || !Number.isFinite(mk.v) || mk.v < minX || mk.v > maxX) continue;
+    const mx = xOf(mk.v);
+    svg.appendChild(svgEl('line', {
+      x1: mx, x2: mx, y1: pad.t, y2: pad.t + innerH,
+      stroke: mk.col, 'stroke-width': '1.4', 'stroke-dasharray': '4,3',
+    }));
+    svg.appendChild(svgEl('text', {
+      x: Math.min(W - pad.r - 16, Math.max(pad.l + 12, mx)), y: 13,
+      'text-anchor': 'middle', fill: mk.col, 'font-size': '9.5', 'font-weight': '700', 'font-family': 'var(--font-mono)',
+    }, mk.lbl));
+  }
+
+  // X ticks
+  for (let t = 0; t <= 4; t++) {
+    const v = minX + ((maxX - minX) * t) / 4;
+    svg.appendChild(svgEl('text', {
+      x: pad.l + (innerW * t) / 4, y: H - 10,
+      'text-anchor': t === 0 ? 'start' : t === 4 ? 'end' : 'middle',
+      fill: '#64748b', 'font-size': '10', 'font-family': 'var(--font-mono)',
+    }, fmt(v)));
+  }
+
+  container.appendChild(svg);
+}

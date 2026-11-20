@@ -14,17 +14,22 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
 import { buildFeatureCatalog, extractExperimentSummary } from './study/models.mjs';
+import { buildMonteCarloBundle, MC_DEFAULT_PATHS } from '../study-site/mc-engine.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(HERE, '..');
 
 function parseCli(argv) {
-  const opts = { root: DEFAULT_ROOT, dataDir: null, outDir: null, onlyIfChanged: false, quiet: false };
+  const opts = { root: DEFAULT_ROOT, dataDir: null, outDir: null, onlyIfChanged: false, quiet: false, monteCarloPaths: MC_DEFAULT_PATHS };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--root' && argv[i + 1]) opts.root = path.resolve(argv[++i]);
     else if (a === '--data-dir' && argv[i + 1]) opts.dataDir = path.resolve(argv[++i]);
     else if (a === '--out' && argv[i + 1]) opts.outDir = path.resolve(argv[++i]);
+    else if (a === '--mc-paths' && argv[i + 1]) {
+      const n = Number(argv[++i]);
+      if (Number.isFinite(n) && n >= 10) opts.monteCarloPaths = Math.round(n);
+    }
     else if (a === '--only-if-changed') opts.onlyIfChanged = true;
     else if (a === '--quiet') opts.quiet = true;
   }
@@ -703,6 +708,7 @@ function buildEvalAndHealthBundle(repoRoot, dataDir) {
       bySource: ptbBySource,
     } : null,
     archiveSummary,
+    _settledTrades: trades,
   };
 }
 
@@ -748,7 +754,8 @@ function copyStaticFrontend(repoRoot, outDir) {
     } else if (file === 'app.js') {
       const js = fs.readFileSync(src, 'utf8')
         .replace(/from '\.\/markdown\.js(?:\?[^']*)?'/, `from './markdown.js?v=${bundleVer}'`)
-        .replace(/from '\.\/charts\.js(?:\?[^']*)?'/, `from './charts.js?v=${bundleVer}'`);
+        .replace(/from '\.\/charts\.js(?:\?[^']*)?'/, `from './charts.js?v=${bundleVer}'`)
+        .replace(/from '\.\/mc-engine\.js(?:\?[^']*)?'/, `from './mc-engine.js?v=${bundleVer}'`);
       fs.writeFileSync(dest, js);
     } else {
       fs.copyFileSync(src, dest);
@@ -877,8 +884,46 @@ export function buildStudySite(options = {}) {
   const modelsBundle = buildModelsBundle(root, dataDir, modelProfiles);
   const studiesBundle = buildStudiesBundle(root, dataDir, outDir, modelsBundle.journalNotes);
   const evalBundle = buildEvalAndHealthBundle(root, dataDir);
+  const settledTrades = Array.isArray(evalBundle._settledTrades) ? evalBundle._settledTrades : [];
+  delete evalBundle._settledTrades;
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
   const stage2Bundle = buildStage2Bundle(root, dataDir, activeModel?.id ?? null);
+  const mcBundle = buildMonteCarloBundle(settledTrades, {
+    startBankroll: evalBundle.bankroll,
+    nPaths: options.monteCarloPaths ?? MC_DEFAULT_PATHS,
+    generatedAt,
+  });
+
+  const pickSnap = (scen, h) => {
+    const row = scen?.horizons?.[h];
+    if (!row) return null;
+    return {
+      p5: row.p5,
+      p50: row.p50,
+      p95: row.p95,
+      mean: row.mean,
+      probProfitPct: row.probProfitPct,
+      probDoublePct: row.probDoublePct,
+      p95MaxDdPct: row.p95MaxDdPct,
+      probRuinHalfPct: row.probRuinHalfPct,
+    };
+  };
+  const defaultMcScen = mcBundle.available
+    ? (mcBundle.scenarios.find((s) => s.id === mcBundle.defaultScenarioId) || mcBundle.scenarios[0] || null)
+    : null;
+  const monteCarloSummary = mcBundle.available && defaultMcScen ? {
+    available: true,
+    nPaths: mcBundle.nPaths,
+    defaultScenarioId: mcBundle.defaultScenarioId,
+    defaultHorizon: mcBundle.defaultHorizon,
+    currentBankroll: mcBundle.currentBankroll,
+    stats: mcBundle.stats,
+    snapshots: {
+      1000: pickSnap(defaultMcScen, 1000),
+      5000: pickSnap(defaultMcScen, 5000),
+      10000: pickSnap(defaultMcScen, 10000),
+    },
+  } : { available: false, nPaths: mcBundle.nPaths };
 
   const sitePayload = {
     generatedAt,
@@ -911,6 +956,7 @@ export function buildStudySite(options = {}) {
       rows: updates.statusRows,
     },
     eval: evalBundle,
+    monteCarloSummary,
     stage2Available: stage2Bundle.available,
     counts: {
       models: modelsBundle.models.length,
@@ -925,6 +971,7 @@ export function buildStudySite(options = {}) {
   fs.writeFileSync(path.join(outDir, 'data', 'studies.json'), JSON.stringify(studiesBundle, null, 2));
   fs.writeFileSync(path.join(outDir, 'data', 'updates.json'), JSON.stringify(updates, null, 2));
   fs.writeFileSync(path.join(outDir, 'data', 'stage2.json'), JSON.stringify(stage2Bundle, null, 2));
+  fs.writeFileSync(path.join(outDir, 'data', 'montecarlo.json'), JSON.stringify(mcBundle));
   fs.writeFileSync(sigPath, sig);
 
   return {

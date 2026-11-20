@@ -25,6 +25,7 @@
 
         <nav class="tabs" aria-label="Study sections">
           <button class="tab is-active" data-tab="overview">Overview &amp; Eval</button>
+          <button class="tab" data-tab="montecarlo">Monte Carlo 10k</button>
           <button class="tab" data-tab="models">ML Model Lab</button>
           <button class="tab" data-tab="stage2">Tahap 2 · v4 Lab</button>
           <button class="tab" data-tab="studies">Studies &amp; Reports</button>
@@ -34,6 +35,7 @@
         <div class="topbar__actions">
           <span class="pill" id="pill-mode">—</span>
           <span class="pill pill--cyan" id="pill-model">—</span>
+          <span class="pill pill--live" id="pill-autosync" title="Auto-syncs every 60s when new bot trades settle">AUTO-SYNC</span>
           <button class="btn btn--ghost" id="btn-refresh" title="Reload published JSON data">Refresh</button>
           <a class="btn btn--primary" href="https://poly15.dollarkilat.xyz/" target="_blank" rel="noopener noreferrer">Terminal ↗</a>
         </div>
@@ -70,6 +72,17 @@
             <div id="active-model-panel"></div>
           </article>
         </div>
+
+        <article class="card" id="overview-mc-card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Adaptive Monte Carlo (10,000 Trials · Live Sync)</h2>
+              <p class="card__sub" id="overview-mc-sub">Bayesian posterior simulation updating automatically as live bot trades settle</p>
+            </div>
+            <button class="btn btn--primary btn--small" id="btn-open-mc">Open Monte Carlo 10k Lab →</button>
+          </div>
+          <div id="overview-mc-body"></div>
+        </article>
 
         <div class="grid-2">
           <article class="card">
@@ -115,7 +128,126 @@
         </article>
       </section>
 
-      <!-- TAB 2: ML MODEL LAB -->
+      <!-- TAB 2: ADAPTIVE MONTE CARLO 10K -->
+      <section class="view is-hidden" data-view="montecarlo">
+        <div class="card inspector-bar">
+          <div>
+            <h2 class="card__title">Adaptive Monte Carlo 10,000-Trial Simulator</h2>
+            <p class="card__sub" id="mc-hdr-sub">Auto-calibrated from settled bot trades (Bayesian Posterior, Bootstrap, Compounding &amp; Stress)</p>
+          </div>
+          <div class="inspector-bar__right">
+            <span class="badge badge--emerald" id="mc-live-badge">10,000 TRIALS</span>
+            <select class="select" id="mc-scenario-select" aria-label="Select Monte Carlo scenario"></select>
+            <div class="segmented" id="mc-horizon-switcher">
+              <button class="seg" data-horizon="100">100t</button>
+              <button class="seg" data-horizon="250">250t</button>
+              <button class="seg" data-horizon="500">500t</button>
+              <button class="seg" data-horizon="1000">1kt</button>
+              <button class="seg" data-horizon="2000">2kt</button>
+              <button class="seg is-active" data-horizon="5000">5kt</button>
+              <button class="seg" data-horizon="10000">10kt</button>
+            </div>
+          </div>
+        </div>
+
+        <article class="card mc-whatif">
+          <div class="mc-field">
+            <label for="mc-in-bankroll">Start Saldo ($)</label>
+            <input type="number" id="mc-in-bankroll" class="mc-input-sm" min="5" max="1000000" step="5" value="100" />
+          </div>
+          <div class="mc-field">
+            <label for="mc-in-mode">Mode</label>
+            <select id="mc-in-mode" class="select">
+              <option value="bayesian">Bayesian Adaptive Posterior</option>
+              <option value="bootstrap">Live Empirical Bootstrap (Fixed)</option>
+              <option value="compounding">Adaptive Compounding (% Saldo)</option>
+              <option value="stress">Stress Test (WR Shift)</option>
+            </select>
+          </div>
+          <div class="mc-field">
+            <label for="mc-in-risk">Risk % (Compounding)</label>
+            <input type="number" id="mc-in-risk" class="mc-input-sm" min="0.5" max="20" step="0.5" value="3.0" />
+          </div>
+          <div class="mc-field">
+            <label for="mc-in-shift">WR Shift (pp)</label>
+            <input type="number" id="mc-in-shift" class="mc-input-sm" min="-15" max="15" step="0.5" value="0" />
+          </div>
+          <div class="mc-whatif__actions">
+            <button type="button" class="btn btn--primary" id="btn-mc-run">Run Live 10,000 Trials</button>
+            <button type="button" class="btn btn--ghost" id="btn-mc-reset">Reset to Bot Live</button>
+            <span class="mono-dim" id="mc-run-status"></span>
+          </div>
+        </article>
+
+        <section class="kpi-grid" id="mc-kpis"></section>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Equity Fan Projection (P5 / P25 / Median / P75 / P95 across 10,000 Trials)</h2>
+              <p class="card__sub" id="mc-fan-sub">Percentile cone up to selected trade horizon</p>
+            </div>
+            <span class="badge badge--cyan" id="mc-mode-badge">—</span>
+          </div>
+          <div class="chart-box" id="chart-mc-fan"></div>
+        </article>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Final Bankroll Distribution (10,000 Trials)</h2>
+                <p class="card__sub" id="mc-final-hist-sub">Red bars below start capital · Green bars profitable</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-mc-final-hist"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Maximum Drawdown Distribution (10,000 Trials)</h2>
+                <p class="card__sub" id="mc-dd-hist-sub">Peak-to-trough drawdown risk across simulated paths</p>
+              </div>
+            </div>
+            <div class="chart-box" id="chart-mc-dd-hist"></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Multi-Horizon Scaling (100 → 10,000 Trades)</h2>
+                <p class="card__sub">Click any row to inspect that horizon across all charts &amp; KPIs</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="mc-horizons-table"></div>
+          </article>
+
+          <article class="card">
+            <div class="card__head">
+              <div>
+                <h2 class="card__title">Scenario Comparison at Selected Horizon</h2>
+                <p class="card__sub">Click any scenario row to switch active projection</p>
+              </div>
+            </div>
+            <div class="table-wrap" id="mc-scenarios-table"></div>
+          </article>
+        </div>
+
+        <article class="card">
+          <div class="card__head">
+            <div>
+              <h2 class="card__title">Adaptive Methodology &amp; Live Synchronization</h2>
+              <p class="card__sub">How the simulator evolves automatically with live bot trades</p>
+            </div>
+          </div>
+          <div id="mc-methodology-panel"></div>
+        </article>
+      </section>
+
+      <!-- TAB 3: ML MODEL LAB -->
       <section class="view is-hidden" data-view="models">
         <div class="card toolbar inspector-bar">
           <div>

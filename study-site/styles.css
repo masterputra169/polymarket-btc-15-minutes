@@ -237,3 +237,59 @@ tr:hover td { background: rgba(148, 163, 184, 0.04); }
   margin: 0 0 6px; font-family: var(--font-mono); font-size: 0.72rem;
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim);
 }
+
+.pill--live {
+  color: var(--emerald);
+  border-color: rgba(16, 185, 129, 0.38);
+  background: rgba(16, 185, 129, 0.1);
+}
+.pill--live::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--emerald);
+}
+
+.mc-whatif {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.mc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mc-field label {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.mc-input-sm {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 7px 10px;
+  font-size: 0.84rem;
+  font-family: var(--font-mono);
+  width: 118px;
+  outline: none;
+}
+.mc-input-sm:focus { border-color: var(--cyan); }
+.mc-whatif__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.mc-row-active td {
+  background: rgba(34, 211, 238, 0.1);
+  border-bottom-color: rgba(34, 211, 238, 0.35);
+}

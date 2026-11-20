@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { redactSecretText, sanitizeTradeEntry } from '../../../scripts/study/redact.mjs';
 import { parseUpdatesMd, buildStudySite } from '../../../scripts/build-study-site.mjs';
+import { buildMonteCarloBundle } from '../../../study-site/mc-engine.js';
 
 describe('study portal redaction & sanitization', () => {
   test('redactSecretText scrubs tokens, keys, bearer headers, and query params', () => {
@@ -97,18 +98,26 @@ describe('parseUpdatesMd & buildStudySite', () => {
           analysis: { outcome: 'WIN', pnl: 1.67 },
         }) + '\n');
 
-        const res = buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
+        const res = buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, monteCarloPaths: 500 });
         expect(res.skipped).toBe(false);
         const outHtml = fs.readFileSync(path.join(tmpOut, 'index.html'), 'utf8');
         const outApp = fs.readFileSync(path.join(tmpOut, 'app.js'), 'utf8');
         expect(outHtml).toMatch(/\.\/styles\.css\?v=[a-f0-9]{8}/);
         expect(outHtml).toMatch(/\.\/app\.js\?v=[a-f0-9]{8}/);
         expect(outApp).toMatch(/\.\/charts\.js\?v=[a-f0-9]{8}/);
+        expect(outApp).toMatch(/\.\/mc-engine\.js\?v=[a-f0-9]{8}/);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'site.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'models.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'studies.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'updates.json'))).toBe(true);
         expect(fs.existsSync(path.join(tmpOut, 'data', 'stage2.json'))).toBe(true);
+        expect(fs.existsSync(path.join(tmpOut, 'data', 'montecarlo.json'))).toBe(true);
+        const mcRaw = fs.readFileSync(path.join(tmpOut, 'data', 'montecarlo.json'), 'utf8');
+        expect(mcRaw).not.toContain('0xdeadbeef');
+        const mcJson = JSON.parse(mcRaw);
+        expect(mcJson.available).toBe(true);
+        expect(mcJson.nPaths).toBe(500);
+        expect(mcJson.scenarios).toHaveLength(5);
         const stage2Json = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'stage2.json'), 'utf8'));
         expect(stage2Json.available).toBe(true);
         expect(stage2Json.coverage?.dateRange?.totalDays).toBeGreaterThanOrEqual(54);
@@ -118,6 +127,9 @@ describe('parseUpdatesMd & buildStudySite', () => {
         expect(siteJson).not.toContain('0xdeadbeef');
         const site = JSON.parse(siteJson);
         expect(site.eval.wins).toBe(1);
+        expect(site.eval.bankroll).toBe(101.67);
+        expect(site.monteCarloSummary?.available).toBe(true);
+        expect(site.monteCarloSummary?.nPaths).toBe(500);
         expect(site.eval.bankroll).toBe(101.67);
 
         const modelsJson = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'models.json'), 'utf8'));
@@ -173,7 +185,7 @@ describe('parseUpdatesMd & buildStudySite', () => {
         losses: 1,
         currentPosition: null,
       }));
-      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, monteCarloPaths: 200 });
       const siteFlat = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8'));
       expect(siteFlat.eval.startBankroll).toBe(100);
       expect(siteFlat.eval.bankroll).toBe(110.38);
@@ -192,7 +204,7 @@ describe('parseUpdatesMd & buildStudySite', () => {
         losses: 1,
         currentPosition: { settled: false, cost: 3.15 },
       }));
-      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut });
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, monteCarloPaths: 200 });
       const siteOpen = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'site.json'), 'utf8'));
       expect(siteOpen.eval.startBankroll).toBe(100);
       expect(siteOpen.eval.bankroll).toBe(110.38);
@@ -201,5 +213,53 @@ describe('parseUpdatesMd & buildStudySite', () => {
       fs.rmSync(tmpData, { recursive: true, force: true });
       fs.rmSync(tmpOut, { recursive: true, force: true });
     }
+  });
+
+  test('buildMonteCarloBundle runs full 10,000-trial adaptive simulation up to 10,000 trades', { timeout: 30_000 }, () => {
+    const empty = buildMonteCarloBundle([], { startBankroll: 100, nPaths: 10000 });
+    expect(empty.available).toBe(false);
+    expect(empty.scenarios).toEqual([]);
+
+    const startTs = 1794795465000;
+    const trades = Array.from({ length: 50 }, (_, i) => {
+      const won = i < 34; // 34W-16L = 68.0% WR
+      return {
+        pnl: won ? 1.85 : -3.15,
+        cost: 3.15,
+        tokenPrice: 0.63,
+        outcome: won ? 'WIN' : 'LOSS',
+        isMaker: true,
+        enteredAt: startTs + i * 2_400_000,
+        exitedAt: startTs + i * 2_400_000 + 600_000,
+      };
+    });
+
+    const bundle = buildMonteCarloBundle(trades, { startBankroll: 110.65, nPaths: 10000 });
+    expect(bundle.available).toBe(true);
+    expect(bundle.nPaths).toBe(10000);
+    expect(bundle.currentBankroll).toBe(110.65);
+    expect(bundle.scenarios).toHaveLength(5);
+
+    // Bayesian Beta(34+12, 16+8) posterior shrinks 68.0% empirical WR conservatively toward 60% prior
+    expect(bundle.stats.empiricalWrPct).toBe(68);
+    expect(bundle.stats.bayesianWrPct).toBeLessThan(68);
+    expect(bundle.stats.bayesianWrPct).toBeGreaterThan(64);
+
+    const byId = Object.fromEntries(bundle.scenarios.map((s: any) => [s.id, s]));
+    for (const sc of bundle.scenarios) {
+      expect(sc.nPaths).toBe(10000);
+      for (const hz of [100, 250, 500, 1000, 2000, 5000, 10000]) {
+        const h = sc.horizons[hz];
+        expect(h).toBeDefined();
+        const finalSum = h.finalHist.counts.reduce((a: number, b: number) => a + b, 0);
+        const ddSum = h.ddHist.counts.reduce((a: number, b: number) => a + b, 0);
+        expect(finalSum).toBe(10000);
+        expect(ddSum).toBe(10000);
+      }
+    }
+
+    // Stress test (-3pp WR & -$0.05 slippage) must produce strictly lower median than fixed empirical bootstrap
+    expect(byId.live_stress_test.horizons[5000].p50).toBeLessThan(byId.live_bootstrap_fixed.horizons[5000].p50);
+    expect(byId.live_compounding_kelly.horizons[5000].p50).toBeGreaterThan(byId.live_bootstrap_fixed.horizons[5000].p50);
   });
 });

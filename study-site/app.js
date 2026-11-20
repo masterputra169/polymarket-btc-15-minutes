@@ -11,7 +11,10 @@ import {
   drawFeatureImportanceBars,
   drawTapeCoverageChart,
   drawStage2WindowBars,
+  drawMonteCarloFanChart,
+  drawMonteCarloHistogram,
 } from './charts.js';
+import { runMonteCarloScenario } from './mc-engine.js';
 
 const state = {
   site: null,
@@ -19,7 +22,12 @@ const state = {
   studies: null,
   updates: null,
   stage2: null,
+  mc: null,
   activeTab: 'overview',
+  mcScenarioId: 'live_bayesian_adaptive',
+  mcHorizon: 5000,
+  mcCustomScenario: null,
+  mcBankrollEdited: false,
   metricKey: 'accuracy',
   selectedModelId: null,
   featMode: 'xgbSplits',
@@ -84,7 +92,7 @@ function makeTable(headers, rows) {
 }
 
 function setTab(tabName) {
-  const valid = ['overview', 'models', 'stage2', 'studies', 'updates'];
+  const valid = ['overview', 'montecarlo', 'models', 'stage2', 'studies', 'updates'];
   state.activeTab = valid.includes(tabName) ? tabName : 'overview';
   document.querySelectorAll('.tab').forEach((btn) => {
     btn.classList.toggle('is-active', btn.dataset.tab === state.activeTab);
@@ -266,6 +274,56 @@ function renderOverview() {
   cst?.replaceChildren();
   const sRows = (site.currentStatus?.rows || []).map((r) => [r.area, r.state.replace(/`/g, '').replace(/\*\*/g, '')]);
   cst.appendChild(makeTable(['Area', 'Current State'], sRows));
+
+  renderOverviewMcCard();
+}
+
+function renderOverviewMcCard() {
+  const body = document.getElementById('overview-mc-body');
+  const sub = document.getElementById('overview-mc-sub');
+  if (!body) return;
+  body.replaceChildren();
+
+  const summary = state.site?.monteCarloSummary;
+  if (!summary?.available) {
+    if (sub) sub.textContent = 'Awaiting settled live bot trades before running 10,000-trial adaptive projection.';
+    body.appendChild(h('div', 'empty-state', 'Adaptive Monte Carlo 10,000 trials populates automatically as soon as settled trades are recorded.'));
+    return;
+  }
+
+  const st = summary.stats || {};
+  if (sub) {
+    sub.textContent =
+      `Calibrated on ${st.nTrades} live settled trades (${st.wins}W–${st.losses}L · Empirical WR ${st.empiricalWrPct}% · Bayesian Post. WR ${st.bayesianWrPct}% · Start ${fmtUsd(summary.currentBankroll)})`;
+  }
+
+  const grid = h('div', 'stat-pair-grid');
+  const snaps = summary.snapshots || {};
+  const cards = [
+    ['Bayesian Post. WR', `${st.bayesianWrPct}% (CI ${st.wrCiLoPct}–${st.wrCiHiPct}%)`, 'c-cyan'],
+    ['Live EV / Half-Kelly', `${fmtUsd(st.evPerTradeUsd, true)}/tr · ${st.halfKellyPct}%`, (st.evPerTradeUsd ?? 0) >= 0 ? 'c-pos' : 'c-neg'],
+  ];
+  for (const hz of [1000, 5000, 10000]) {
+    const s = snaps[hz];
+    if (!s) continue;
+    cards.push([
+      `Horizon ${hz.toLocaleString()}t Median`,
+      `${fmtUsd(s.p50)} (P5 ${fmtUsd(s.p5)} · P95 ${fmtUsd(s.p95)})`,
+      s.p50 >= summary.currentBankroll ? 'c-pos' : 'c-neg',
+    ]);
+    cards.push([
+      `${hz.toLocaleString()}t Profit / P95 DD`,
+      `${s.probProfitPct}% Profit · ${s.p95MaxDdPct}% P95 DD`,
+      s.probProfitPct >= 90 ? 'c-pos' : 'c-warn',
+    ]);
+  }
+  for (const [k, v, cls] of cards) {
+    const m = h('div', 'stat-mini');
+    m.appendChild(h('div', 'stat-mini__k', k));
+    m.appendChild(h('div', `stat-mini__v ${cls}`, v));
+    grid.appendChild(m);
+  }
+  body.appendChild(grid);
 }
 
 function renderModelKpis(m) {
@@ -1118,24 +1176,320 @@ function renderStage2Tab() {
   }
 }
 
+function renderMonteCarloTab() {
+  const mc = state.mc;
+  const kpiWrap = document.getElementById('mc-kpis');
+  const hdrSub = document.getElementById('mc-hdr-sub');
+  const liveBadge = document.getElementById('mc-live-badge');
+  const sel = document.getElementById('mc-scenario-select');
+  const fanBox = document.getElementById('chart-mc-fan');
+  const finalHistBox = document.getElementById('chart-mc-final-hist');
+  const ddHistBox = document.getElementById('chart-mc-dd-hist');
+  const hzTableBox = document.getElementById('mc-horizons-table');
+  const scTableBox = document.getElementById('mc-scenarios-table');
+  const methBox = document.getElementById('mc-methodology-panel');
+
+  kpiWrap?.replaceChildren();
+  hzTableBox?.replaceChildren();
+  scTableBox?.replaceChildren();
+  methBox?.replaceChildren();
+
+  if (!mc || !mc.available || !Array.isArray(mc.scenarios) || mc.scenarios.length === 0) {
+    if (hdrSub) hdrSub.textContent = 'Awaiting settled bot trades before generating 10,000-trial simulations.';
+    if (liveBadge) liveBadge.textContent = 'WAITING TRADES';
+    fanBox?.replaceChildren(h('div', 'empty-state', 'Adaptive Monte Carlo populates automatically once settled trades are available.'));
+    finalHistBox?.replaceChildren();
+    ddHistBox?.replaceChildren();
+    return;
+  }
+
+  const allScenarios = state.mcCustomScenario ? [...mc.scenarios, state.mcCustomScenario] : [...mc.scenarios];
+  if (!allScenarios.some((s) => s.id === state.mcScenarioId)) {
+    state.mcScenarioId = mc.defaultScenarioId || allScenarios[0].id;
+  }
+  const activeScenario = allScenarios.find((s) => s.id === state.mcScenarioId) || allScenarios[0];
+
+  if (sel) {
+    sel.replaceChildren();
+    for (const sc of allScenarios) {
+      const opt = h('option', null, sc.label);
+      opt.value = sc.id;
+      if (sc.id === activeScenario.id) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+
+  document.querySelectorAll('#mc-horizon-switcher .seg').forEach((btn) => {
+    btn.classList.toggle('is-active', Number(btn.dataset.horizon) === state.mcHorizon);
+  });
+
+  const bankrollIn = document.getElementById('mc-in-bankroll');
+  if (bankrollIn && !state.mcBankrollEdited && mc.currentBankroll) {
+    bankrollIn.value = String(mc.currentBankroll);
+  }
+
+  const st = mc.stats || {};
+  if (hdrSub) {
+    hdrSub.textContent =
+      `Live data: ${st.nTrades} trades (${st.wins}W–${st.losses}L · WR ${st.empiricalWrPct}% · Post. ${st.bayesianWrPct}% · Avg $${st.avgCostUsd}/tr) · Updated ${fmtTime(mc.generatedAt)}`;
+  }
+  if (liveBadge) {
+    liveBadge.textContent = `${activeScenario.nPaths.toLocaleString()} TRIALS · ${st.nTrades} TR`;
+  }
+
+  const hData = activeScenario.horizons?.[state.mcHorizon]
+    || activeScenario.horizons?.[mc.defaultHorizon]
+    || Object.values(activeScenario.horizons || {})[0];
+  if (!hData) return;
+
+  const daysHint = st.tradesPerDay && st.tradesPerDay > 0
+    ? `~${Math.max(1, Math.round(state.mcHorizon / st.tradesPerDay))} hari (${st.tradesPerDay} tr/hari)`
+    : `horizon ${state.mcHorizon.toLocaleString()} trades`;
+
+  const kpiCards = [
+    {
+      k: `Median Saldo (${state.mcHorizon.toLocaleString()}t)`,
+      v: fmtUsd(hData.p50),
+      cls: hData.p50 >= activeScenario.startBankroll ? 'c-pos' : 'c-neg',
+      hint: `Return ${hData.medianReturnPct >= 0 ? '+' : ''}${hData.medianReturnPct}% · ${daysHint}`,
+    },
+    {
+      k: 'Mean Saldo (Expected)',
+      v: fmtUsd(hData.mean),
+      cls: hData.mean >= activeScenario.startBankroll ? 'c-cyan' : 'c-neg',
+      hint: `Mean Return ${hData.meanReturnPct >= 0 ? '+' : ''}${hData.meanReturnPct}% (Start ${fmtUsd(activeScenario.startBankroll)})`,
+    },
+    {
+      k: 'P5 – P95 Range',
+      v: `${fmtUsd(hData.p5)} – ${fmtUsd(hData.p95)}`,
+      cls: 'c-cyan',
+      hint: `IQR P25–P75: ${fmtUsd(hData.p25)} – ${fmtUsd(hData.p75)}`,
+    },
+    {
+      k: 'Prob. Profit / ≥2×',
+      v: `${hData.probProfitPct}% / ${hData.probDoublePct}%`,
+      cls: hData.probProfitPct >= 85 ? 'c-pos' : hData.probProfitPct >= 60 ? 'c-warn' : 'c-neg',
+      hint: `≥5× Capital: ${hData.probFiveXPct}% across ${activeScenario.nPaths.toLocaleString()} trials`,
+    },
+    {
+      k: 'Max Drawdown Risk',
+      v: `Med ${hData.medianMaxDdPct}% · P95 ${hData.p95MaxDdPct}%`,
+      cls: hData.p95MaxDdPct < 35 ? 'c-pos' : hData.p95MaxDdPct < 55 ? 'c-warn' : 'c-neg',
+      hint: `P99 DD ${hData.p99MaxDdPct}% · P(DD≥25%) ${hData.probDdOver25Pct}%`,
+    },
+    {
+      k: 'Ruin Risk (<50% / Blowup)',
+      v: `${hData.probRuinHalfPct}% / ${hData.probBankruptPct}%`,
+      cls: hData.probRuinHalfPct <= 5 ? 'c-pos' : hData.probRuinHalfPct <= 15 ? 'c-warn' : 'c-neg',
+      hint: `Assumed WR ${activeScenario.assumedWrPct}% · Empirical ${st.empiricalWrPct}% (Wilson ${st.wrCiLoPct}–${st.wrCiHiPct}%)`,
+    },
+  ];
+  for (const c of kpiCards) {
+    const box = h('div', 'kpi');
+    box.appendChild(h('div', 'kpi__label', c.k));
+    box.appendChild(h('div', `kpi__val ${c.cls}`, c.v));
+    box.appendChild(h('div', 'kpi__hint', c.hint));
+    kpiWrap?.appendChild(box);
+  }
+
+  const fanSub = document.getElementById('mc-fan-sub');
+  if (fanSub) fanSub.textContent = `${activeScenario.description || activeScenario.label} (${daysHint})`;
+  const modeBadge = document.getElementById('mc-mode-badge');
+  if (modeBadge) {
+    modeBadge.textContent = activeScenario.mode === 'compounding'
+      ? `COMPOUND ${activeScenario.riskPct}%`
+      : activeScenario.mode.toUpperCase();
+  }
+
+  drawMonteCarloFanChart(fanBox, activeScenario, state.mcHorizon, st.tradesPerDay);
+  drawMonteCarloHistogram(finalHistBox, hData.finalHist, {
+    mode: 'bankroll',
+    startValue: activeScenario.startBankroll,
+    p5: hData.p5,
+    p50: hData.p50,
+    p95: hData.p95,
+    totalPaths: activeScenario.nPaths,
+  });
+  drawMonteCarloHistogram(ddHistBox, hData.ddHist, {
+    mode: 'drawdown',
+    p50: hData.medianMaxDdPct,
+    p95: hData.p95MaxDdPct,
+    totalPaths: activeScenario.nPaths,
+  });
+
+  // Horizon scaling table (clickable rows)
+  const hTable = makeTable(
+    ['Trades', 'Est. Waktu', 'P5', 'Median P50', 'P95', 'Profit %', 'P95 DD %', 'Ruin <50%'],
+    (mc.horizons || []).map((hz) => {
+      const r = activeScenario.horizons?.[hz];
+      if (!r) return [`${hz}`, '—', '—', '—', '—', '—', '—', '—'];
+      const estDays = st.tradesPerDay && st.tradesPerDay > 0
+        ? `~${Math.max(1, Math.round(hz / st.tradesPerDay))} hari`
+        : '—';
+      return [
+        `${hz.toLocaleString()}t`,
+        estDays,
+        fmtUsd(r.p5),
+        { text: fmtUsd(r.p50), cls: r.p50 >= activeScenario.startBankroll ? 'c-pos' : 'c-neg' },
+        fmtUsd(r.p95),
+        { text: `${r.probProfitPct}%`, cls: r.probProfitPct >= 85 ? 'c-pos' : 'c-warn' },
+        `${r.p95MaxDdPct}%`,
+        `${r.probRuinHalfPct}%`,
+      ];
+    }),
+  );
+  hTable.querySelectorAll('tbody tr').forEach((tr, idx) => {
+    const hz = (mc.horizons || [])[idx];
+    if (!hz) return;
+    tr.style.cursor = 'pointer';
+    if (hz === state.mcHorizon) tr.classList.add('mc-row-active');
+    tr.addEventListener('click', () => {
+      state.mcHorizon = hz;
+      renderMonteCarloTab();
+    });
+  });
+  hzTableBox?.appendChild(hTable);
+
+  // Scenarios comparison table (clickable rows)
+  const sTable = makeTable(
+    ['Scenario', 'WR %', 'Median P50', 'P5 – P95', 'Profit %', 'P95 DD %', 'Ruin <50%'],
+    allScenarios.map((sc) => {
+      const r = sc.horizons?.[state.mcHorizon];
+      if (!r) return [sc.label, '—', '—', '—', '—', '—', '—'];
+      return [
+        sc.label,
+        `${sc.assumedWrPct}%`,
+        { text: fmtUsd(r.p50), cls: r.p50 >= sc.startBankroll ? 'c-pos' : 'c-neg' },
+        `${fmtUsd(r.p5)} – ${fmtUsd(r.p95)}`,
+        { text: `${r.probProfitPct}%`, cls: r.probProfitPct >= 85 ? 'c-pos' : 'c-warn' },
+        `${r.p95MaxDdPct}%`,
+        `${r.probRuinHalfPct}%`,
+      ];
+    }),
+  );
+  sTable.querySelectorAll('tbody tr').forEach((tr, idx) => {
+    const sc = allScenarios[idx];
+    if (!sc) return;
+    tr.style.cursor = 'pointer';
+    if (sc.id === activeScenario.id) tr.classList.add('mc-row-active');
+    tr.addEventListener('click', () => {
+      state.mcScenarioId = sc.id;
+      renderMonteCarloTab();
+    });
+  });
+  scTableBox?.appendChild(sTable);
+
+  // Methodology & live sync stats grid
+  if (methBox) {
+    const grid = h('div', 'stat-pair-grid');
+    const items = [
+      ['Empirical Sample', `${st.nTrades} trades (${st.wins}W–${st.losses}L)`],
+      ['Wilson 95% WR CI', `${st.wrCiLoPct}% – ${st.wrCiHiPct}%`],
+      ['Bayesian Posterior', `Beta(${st.bayesianAlpha}, ${st.bayesianBeta}) = ${st.bayesianWrPct}%`],
+      ['Avg Win / Avg Loss', `+${fmtUsd(st.avgWinUsd)} / -${fmtUsd(st.avgLossUsd)}`],
+      ['Avg Cost / Entry', `${fmtUsd(st.avgCostUsd)} (${st.avgEntryCents}¢)`],
+      ['Full / Half Kelly', `${st.fullKellyPct}% / ${st.halfKellyPct}%`],
+      ['Maker Fill Share', st.makerSharePct != null ? `${st.makerSharePct}% (0 maker fee)` : '—'],
+      ['Live Velocity', st.tradesPerDay != null ? `${st.tradesPerDay} trades / 24h` : 'Collecting…'],
+    ];
+    for (const [k, v] of items) {
+      const m = h('div', 'stat-mini');
+      m.appendChild(h('div', 'stat-mini__k', k));
+      m.appendChild(h('div', 'stat-mini__v', v));
+      grid.appendChild(m);
+    }
+    methBox.appendChild(grid);
+    const p = h(
+      'p',
+      'card__sub',
+      'Adaptif otomatis: setiap trade baru yang settled memperbarui bot/data/trade_journal.jsonl -> systemd timer merebuild montecarlo.json (10.000 percobaan × hingga 10.000 trade) setiap <=2 menit saat data berubah, dan halaman ini melakukan auto-sync tiap 60 detik.',
+    );
+    p.style.marginTop = '12px';
+    methBox.appendChild(p);
+  }
+}
+
+function runCustomMonteCarlo() {
+  const mc = state.mc;
+  if (!mc?.available || !Array.isArray(mc.tradePool) || mc.tradePool.length === 0) return;
+
+  const btn = document.getElementById('btn-mc-run');
+  const statusEl = document.getElementById('mc-run-status');
+  const bankroll = Math.max(5, Math.min(1_000_000, Number(document.getElementById('mc-in-bankroll')?.value) || mc.currentBankroll || 100));
+  const mode = document.getElementById('mc-in-mode')?.value || 'bayesian';
+  const riskPct = Math.max(0.5, Math.min(20, Number(document.getElementById('mc-in-risk')?.value) || 3)) / 100;
+  const wrShiftPp = Math.max(-15, Math.min(15, Number(document.getElementById('mc-in-shift')?.value) || 0));
+
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Running 10k…';
+  }
+  if (statusEl) statusEl.textContent = 'Simulating 10,000 × 10,000 trades…';
+
+  setTimeout(() => {
+    try {
+      const t0 = performance.now();
+      const customSeed = (Date.now() ^ ((Math.random() * 1e9) | 0)) | 0;
+      const custom = runMonteCarloScenario({
+        id: 'custom_live',
+        label: `Custom Live 10k (${mode} · $${bankroll}${mode === 'compounding' ? ` · ${(riskPct * 100).toFixed(1)}%` : ''}${wrShiftPp !== 0 ? ` · ${wrShiftPp >= 0 ? '+' : ''}${wrShiftPp}pp WR` : ''})`,
+        description: `Browser-executed 10,000-trial live simulation over ${mc.tradePool.length} settled bot trades (start $${bankroll}, mode=${mode}).`,
+        mode: wrShiftPp !== 0 && mode === 'bootstrap' ? 'stress' : mode,
+        tradePool: mc.tradePool,
+        startBankroll: bankroll,
+        nPaths: 10000,
+        bayesianAlpha: mc.stats?.bayesianAlpha,
+        bayesianBeta: mc.stats?.bayesianBeta,
+        riskPct,
+        wrShiftPp,
+        seed: customSeed,
+      });
+      const ms = Math.round(performance.now() - t0);
+      state.mcCustomScenario = custom;
+      state.mcScenarioId = 'custom_live';
+      if (statusEl) statusEl.textContent = `10,000 trials × 10,000 trades selesai dalam ${ms}ms`;
+      renderMonteCarloTab();
+    } catch (err) {
+      if (statusEl) statusEl.textContent = `Error: ${err.message}`;
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Run Live 10,000 Trials';
+      }
+    }
+  }, 20);
+}
+
 async function loadAll() {
   const errBox = document.getElementById('banner-error');
   try {
     errBox.classList.add('is-hidden');
-    const [site, models, studies, updates, stage2] = await Promise.all([
+    const [site, models, studies, updates, stage2, mc] = await Promise.all([
       fetchJson('./data/site.json'),
       fetchJson('./data/models.json'),
       fetchJson('./data/studies.json'),
       fetchJson('./data/updates.json'),
       fetchJson('./data/stage2.json').catch(() => null),
+      fetchJson('./data/montecarlo.json').catch(() => null),
     ]);
+    const prevTrades = state.mc?.stats?.nTrades;
     state.site = site;
     state.models = models;
     state.studies = studies;
     state.updates = updates;
     state.stage2 = stage2;
+    state.mc = mc;
+    if (prevTrades != null && mc?.stats?.nTrades != null && prevTrades !== mc.stats.nTrades) {
+      state.mcCustomScenario = null;
+    }
+    const syncPill = document.getElementById('pill-autosync');
+    if (syncPill) {
+      syncPill.textContent = `LIVE ${fmtTime(site.generatedAt).replace(/ WIB$/, '')}`;
+      syncPill.title = `Auto-sync active (every 60s) · Last build ${site.generatedAt}`;
+    }
     renderHeader();
     renderOverview();
+    renderMonteCarloTab();
     renderModelsTab();
     renderStage2Tab();
     renderStudiesTab();
@@ -1155,7 +1509,35 @@ function wireEvents() {
     setTab('overview');
   });
   document.getElementById('btn-open-models')?.addEventListener('click', () => setTab('models'));
+  document.getElementById('btn-open-mc')?.addEventListener('click', () => setTab('montecarlo'));
   document.getElementById('btn-refresh')?.addEventListener('click', loadAll);
+  document.getElementById('mc-scenario-select')?.addEventListener('change', (e) => {
+    state.mcScenarioId = e.target.value;
+    renderMonteCarloTab();
+  });
+  document.querySelectorAll('#mc-horizon-switcher .seg').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.mcHorizon = Number(btn.dataset.horizon) || 5000;
+      renderMonteCarloTab();
+    });
+  });
+  document.getElementById('mc-in-bankroll')?.addEventListener('input', () => {
+    state.mcBankrollEdited = true;
+  });
+  document.getElementById('btn-mc-run')?.addEventListener('click', runCustomMonteCarlo);
+  document.getElementById('btn-mc-reset')?.addEventListener('click', () => {
+    state.mcCustomScenario = null;
+    state.mcBankrollEdited = false;
+    state.mcScenarioId = state.mc?.defaultScenarioId || 'live_bayesian_adaptive';
+    state.mcHorizon = state.mc?.defaultHorizon || 5000;
+    const shiftEl = document.getElementById('mc-in-shift');
+    const riskEl = document.getElementById('mc-in-risk');
+    const statusEl = document.getElementById('mc-run-status');
+    if (shiftEl) shiftEl.value = '0';
+    if (riskEl) riskEl.value = '3.0';
+    if (statusEl) statusEl.textContent = '';
+    renderMonteCarloTab();
+  });
   document.querySelectorAll('#metric-switcher .seg').forEach((btn) => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('#metric-switcher .seg').forEach((b) => b.classList.remove('is-active'));
@@ -1204,6 +1586,16 @@ function wireEvents() {
   });
   window.addEventListener('hashchange', () => setTab(location.hash.replace('#', '')));
 }
+
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    const fresh = await fetchJson('./data/site.json');
+    if (fresh?.generatedAt && fresh.generatedAt !== state.site?.generatedAt) {
+      await loadAll();
+    }
+  } catch { /* retry next 60s tick */ }
+}, 60_000);
 
 wireEvents();
 setTab(location.hash.replace('#', '') || 'overview');
