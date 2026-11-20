@@ -203,6 +203,47 @@ describe('tradeFilters honours the thresholds', () => {
     expect(cfReason(off.applyTradeFilters({
       ...input, signalSide: 'UP', binanceDistPct: 0.04, oracleDistPct: -0.015,
     }).reasons)).toEqual([]);
+
+    // 7. Extreme phantom lead replay: Trade #50 (UP, Binance +0.279% vs Oracle +0.054%, skew +0.225% >= 0.140%, z=0.28)
+    const trade50Reasons = cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.279, oracleDistPct: 0.054, twapPhysicsZ: 0.28,
+    }).reasons);
+    expect(trade50Reasons).toHaveLength(1);
+    expect(trade50Reasons[0].startsWith('Cross-feed phantom lead:')).toBe(true);
+
+    // 8. Extreme phantom lead replay: Trade #49 (UP, Binance +0.378% vs Oracle +0.043%, skew +0.335% >= 0.140%, z=0.17)
+    const trade49Reasons = cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.378, oracleDistPct: 0.043, twapPhysicsZ: 0.17,
+    }).reasons);
+    expect(trade49Reasons).toHaveLength(1);
+    expect(trade49Reasons[0].startsWith('Cross-feed phantom lead:')).toBe(true);
+
+    // 9. Moderate skew (Trade #7: skew 0.108% < 0.140%) -> PASS
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.152, oracleDistPct: 0.044,
+    }).reasons)).toEqual([]);
+
+    // 10. Strong TWAP physics lead (|z| >= 0.50) exempts extreme phantom lead -> PASS
+    expect(cfReason(def.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.279, oracleDistPct: 0.054, twapPhysicsZ: 0.65,
+    }).reasons)).toEqual([]);
+
+    // 11. Disabled via FILTER_CROSS_FEED_SKEW_PCT=0 also disables extreme phantom lead -> PASS
+    expect(cfReason(off.applyTradeFilters({
+      ...input, signalSide: 'UP', binanceDistPct: 0.279, oracleDistPct: 0.054, twapPhysicsZ: 0.28,
+    }).reasons)).toEqual([]);
+  });
+
+  test('normalizeFilterLogKey collapses oscillating EARLY phase anti-pucuk sub-variants to a single throttle key', async () => {
+    const mod = await load({});
+    const k1 = mod.normalizeFilterLogKey([
+      'EARLY phase anti-pucuk: price 71c > 61c with rule-ML divergence +25pp ≥ 25pp (ML conf 37%)',
+    ]);
+    const k2 = mod.normalizeFilterLogKey([
+      'EARLY phase anti-pucuk: price 71c > 61c with thin ML edge -1.9% < 3.5%',
+    ]);
+    expect(k1).toBe(k2);
+    expect(k1).toBe('EARLY phase anti-pucuk');
   });
 
   test('FILTER_CHOPPY_ML_MIN blocks low ML in choppy regime and FILTER_MID_PHASE_MAX_PRICE honours 63c ceiling', async () => {

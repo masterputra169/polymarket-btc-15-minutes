@@ -45,12 +45,19 @@ import {
 const log = createLogger('Filter');
 
 const FILTER_LOG_THROTTLE_MS = 5_000;
-let lastFilteredLogMs = 0;
-let lastFilteredKey = '';
+const MAX_RECENT_FILTER_KEYS = 32;
+const recentFilteredLogs = new Map<string, number>();
 
 /** Collapse live numeric fluctuations into a stable key so 5s log throttling holds across ticks. */
 export function normalizeFilterLogKey(reasons: string[]): string {
-  return reasons.map(r => r.replace(/[+-]?\d+(?:\.\d+)?/g, '#')).join(' | ');
+  return reasons
+    .map(r => {
+      const normalized = r.startsWith('EARLY phase anti-pucuk:')
+        ? 'EARLY phase anti-pucuk'
+        : r;
+      return normalized.replace(/[+-]?\d+(?:\.\d+)?/g, '#');
+    })
+    .join(' | ');
 }
 
 // Every number the gates below compare against (filterThresholds.ts): the
@@ -882,6 +889,15 @@ export function applyTradeFilters({
         reasons.push(
           `Cross-feed skew: Oracle only +${signedOracle.toFixed(3)}% while Binance +${signedBinance.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${T.crossFeedSkewPct.toFixed(3)}%)`,
         );
+      } else if (
+        inflationPct >= T.crossFeedSkewPct * 4
+        && signedOracle < 0.10
+        && signedBinance >= signedOracle * 2.5
+        && (twapPhysicsZ == null || !Number.isFinite(twapPhysicsZ) || Math.abs(twapPhysicsZ) < 0.50)
+      ) {
+        reasons.push(
+          `Cross-feed phantom lead: Oracle +${signedOracle.toFixed(3)}% vs Binance +${signedBinance.toFixed(3)}% for ${signalSide} (skew ${inflationPct.toFixed(3)}% ≥ ${(T.crossFeedSkewPct * 4).toFixed(3)}%, ${(signedBinance / signedOracle).toFixed(1)}× inflated)`,
+        );
       }
     }
   }
@@ -922,9 +938,19 @@ export function applyTradeFilters({
   if (!pass) {
     const throttleKey = normalizeFilterLogKey(reasons);
     const nowMs = Date.now();
-    if (throttleKey !== lastFilteredKey || nowMs - lastFilteredLogMs >= FILTER_LOG_THROTTLE_MS) {
-      lastFilteredKey = throttleKey;
-      lastFilteredLogMs = nowMs;
+    const prevMs = recentFilteredLogs.get(throttleKey);
+    if (prevMs == null || nowMs - prevMs >= FILTER_LOG_THROTTLE_MS) {
+      recentFilteredLogs.delete(throttleKey);
+      recentFilteredLogs.set(throttleKey, nowMs);
+      if (recentFilteredLogs.size > MAX_RECENT_FILTER_KEYS) {
+        for (const [k, ts] of recentFilteredLogs) {
+          if (nowMs - ts >= FILTER_LOG_THROTTLE_MS) recentFilteredLogs.delete(k);
+        }
+        if (recentFilteredLogs.size > MAX_RECENT_FILTER_KEYS) {
+          const oldestKey = recentFilteredLogs.keys().next().value;
+          if (oldestKey !== undefined) recentFilteredLogs.delete(oldestKey);
+        }
+      }
       log.info(`Filtered: ${reasons.join(' | ')}`);
     }
   }

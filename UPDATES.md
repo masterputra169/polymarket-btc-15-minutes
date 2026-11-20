@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-20 — Gate 20f Extreme Phantom-Lead Block + Anti-Flap Filter Log Throttling
+
+- **Gate 20f Extreme Cross-Feed Phantom-Lead Protection (`bot/src/safety/tradeFilters.ts`):** Added a third branch inside Gate 20f blocking entries when Binance-vs-Chainlink open/TWAP skew heavily inflates a marginal Oracle lead (`inflationPct >= 4 * T.crossFeedSkewPct` (`0.140%` by default), `0 < signedOracle < 0.10%`, `signedBinance >= 2.5 * signedOracle`, and `|twapPhysicsZ| < 0.50` or unavailable). Catches extreme TWAP-open dislocation cases like Trade `#50` (`UP @ 63c`, `LOSS -$3.15`, `+$138.73` skew, `Oracle +0.054%`, `Binance +0.279%`, `z=0.28`) and `#49` (`+$207.21` skew) while sparing moderate-skew winners (`#7`, `#48`) and strong-`z` leads (`|z| >= 0.50`), and remains cleanly toggleable via `FILTER_CROSS_FEED_SKEW_PCT=0`.
+- **Anti-Flap Per-Key Filter Log Throttling (`bot/src/safety/tradeFilters.ts`):** Replaced single-slot `lastFilteredKey`/`lastFilteredLogMs` state with a bounded `recentFilteredLogs` `Map` (`32` keys, `5s` per-key cooldown) and normalized `EARLY phase anti-pucuk:` sub-variants (`rule-ML divergence` vs `thin ML edge`) in `normalizeFilterLogKey()` so tick-by-tick threshold oscillation no longer bypasses log throttling.
+- **Verification:** Added Trade `#50`/`#49`/`#7`/strong-`z`/toggle-off assertions and `normalizeFilterLogKey` unit tests in `bot/src/safety/__tests__/filterThresholds.test.ts`; verified `typecheck`, golden 20,000-case hashes, AST invariants, Vite production build, CI, and live service restart on `polyvps`.
+
 ## 2026-11-19 — 3-Layer Anti-Pucuk & Anti-Bottom-Chase Entry Filters (Rule-Inflated Edge, EARLY Phase Divergence, RSI+StochRSI Extreme Guard)
 
 - **Root Cause (`btc-updown-15m-1795103100`, Trade `#44` `DOWN @ 62.0c` at `22:46:34 WIB`):** Early in the 15m window (`timeLeftMin = 13.47m`, `EARLY` phase), BTC dipped `$74.54` below PTB (`$62,784.22` vs `$62,858.76`) to a local V-bottom (`RSI = 19.6`, `StochK = 18.3`). While ML (`20261116-p2-ef8dfd`) saw only `65.7%` `P(DOWN)` (`mlConfidence = 31.4% < trendingMlWith 32%`, raw ML edge only `+3.2%` over `62.5c`), the short-term Rule Engine spiked to `95.5%` `P(DOWN)` (`ruleUp = 4.5%`), inflating the 50/50 ensemble to `80.6%` (`bestEdge = 16.0% >= 15%`) and triggering `trendingEdgeBypass` right before BTC bounced to `$62,992.03`.
