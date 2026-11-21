@@ -64,6 +64,7 @@ export const UI_FILTER_KEYS: readonly string[] = [
   'rsiExtremeMaxPrice',
   'trendingMlWith',
   'trendingMlAgainst',
+  'moderateMinMlEdge',
   'btcDistMinPct',
   'btcDistMlBypass',
   'deadZoneLo',

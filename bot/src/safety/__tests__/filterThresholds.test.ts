@@ -356,5 +356,89 @@ describe('tradeFilters honours the thresholds', () => {
     });
     expect(overboughtUp.reasons.some((r: string) => r.startsWith('Anti-chase overbought:'))).toBe(true);
   });
+
+  test('FILTER_MODERATE_MIN_ML_EDGE blocks thin raw ML edge in moderate/choppy regimes while sparing trending/mean_reverting', async () => {
+    const mod = await load({
+      FILTER_MODERATE_MIN_ML_EDGE: '0.035',
+      FILTER_ML_CONF_MIN: '0.30',
+      FILTER_HARD_ML_FLOOR: '0.30',
+    });
+
+    // Trade #51 replay (moderate, DOWN @ 64c, ML conf 31.4% -> mlSideProb 65.7%, rawMlEdge +1.7% < 3.5%)
+    const trade51 = mod.applyTradeFilters({
+      ...input,
+      regime: 'moderate',
+      timeLeftMin: 6.0,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.314,
+      marketPrice: 0.64,
+    });
+    expect(trade51.reasons).toContain('Moderate regime thin ML edge: 1.7% < 3.5% min');
+
+    // Trade #55 replay (moderate, DOWN @ 64c, ML conf 32.3% -> rawMlEdge +2.15% < 3.5%)
+    const trade55 = mod.applyTradeFilters({
+      ...input,
+      regime: 'moderate',
+      timeLeftMin: 6.5,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.323,
+      marketPrice: 0.64,
+    });
+    expect(trade55.reasons.some((r: string) => r.startsWith('Moderate regime thin ML edge:'))).toBe(true);
+
+    // Trade #52 replay (moderate, DOWN @ 62c, ML conf 31.4% -> rawMlEdge +3.7% >= 3.5%) passes Gate 11c
+    const trade52 = mod.applyTradeFilters({
+      ...input,
+      regime: 'moderate',
+      timeLeftMin: 5.8,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.314,
+      marketPrice: 0.62,
+    });
+    expect(trade52.reasons.filter((r: string) => r.includes('regime thin ML edge:'))).toEqual([]);
+
+    // Choppy regime with +2.0% rawMlEdge < 3.5% is blocked with Choppy prefix
+    const choppyThin = mod.applyTradeFilters({
+      ...input,
+      regime: 'choppy',
+      timeLeftMin: 8.0,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.32,
+      marketPrice: 0.64,
+    });
+    expect(choppyThin.reasons.some((r: string) => r.startsWith('Choppy regime thin ML edge:'))).toBe(true);
+
+    // Trending and mean_reverting remain unaffected by moderateMinMlEdge
+    for (const r of ['trending', 'mean_reverting']) {
+      const ok = mod.applyTradeFilters({
+        ...input,
+        regime: r,
+        timeLeftMin: 8.0,
+        signalSide: 'DOWN',
+        mlSide: 'DOWN',
+        mlConfidence: 0.314,
+        marketPrice: 0.64,
+      });
+      expect(ok.reasons.filter((x: string) => x.includes('regime thin ML edge:'))).toEqual([]);
+    }
+
+    // Default (unset / 0) disables Gate 11c
+    expect(readFilterThresholds({}).values.moderateMinMlEdge).toBe(0);
+    const off = await load({ FILTER_MODERATE_MIN_ML_EDGE: '0', FILTER_ML_CONF_MIN: '0.30' });
+    expect(off.getFilterThresholds().moderateMinMlEdge).toBe(0);
+    const offRes = off.applyTradeFilters({
+      ...input,
+      regime: 'moderate',
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.314,
+      marketPrice: 0.64,
+    });
+    expect(offRes.reasons.filter((x: string) => x.includes('regime thin ML edge:'))).toEqual([]);
+  });
 });
 

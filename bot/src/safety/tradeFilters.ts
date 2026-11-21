@@ -715,6 +715,20 @@ export function applyTradeFilters({
     reasons.push(`Choppy regime: ML conf ${(mlConfidence * 100).toFixed(0)}% < ${(T.choppyMlMin * 100).toFixed(0)}% min`);
   }
 
+  // 11c. Directionless regime (moderate / choppy) raw ML edge floor
+  // Trending (+$13.37) and mean_reverting (+$6.39) carry structural edge; moderate (-$6.26)
+  // and choppy (-$1.40) do not, so require genuine raw ML edge (mlSideProb - marketPrice).
+  if (
+    T.moderateMinMlEdge > 0
+    && (regime === 'moderate' || regime === 'choppy')
+    && rawMlEdge != null
+    && rawMlEdge < T.moderateMinMlEdge
+  ) {
+    reasons.push(
+      `${regime === 'choppy' ? 'Choppy' : 'Moderate'} regime thin ML edge: ${(rawMlEdge * 100).toFixed(1)}% < ${(T.moderateMinMlEdge * 100).toFixed(1)}% min`,
+    );
+  }
+
   // 12. Wide spread gate — illiquid market = slippage eats edge
   if (spread != null && Number.isFinite(spread)) {
     const maxSpread = TRADE_FILTERS.MAX_ENTRY_SPREAD_PCT != null
