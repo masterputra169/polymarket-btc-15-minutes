@@ -2,8 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   calibrateJevSettleUp,
   calibrateWithBins,
+  calibrateWithPlatt,
   fitLaplaceCalibrationBins,
+  fitOnlinePlatt,
   getJevCalibrationBlocks,
+  JEV_ONLINE_CALIBRATION_TAG,
   JEV_SETTLE_CALIBRATION_VERSION,
 } from '../jevSettleCalibration.ts';
 
@@ -51,5 +54,34 @@ describe('JEV settle calibration', () => {
       expect(bins[i].mean).toBeGreaterThanOrEqual(bins[i - 1].mean);
     }
     expect(calibrateWithBins(0.85, bins)).toBeGreaterThan(calibrateWithBins(0.15, bins));
+  });
+
+  it('fits online Platt recalibration, corrects directional bias monotonically, and guards small samples', () => {
+    expect(fitOnlinePlatt([{ rawProb: 0.5, outcomeUp: 1 }], { minSamples: 40 })).toBeNull();
+    expect(calibrateWithPlatt(0.75, null)).toBeCloseTo(calibrateJevSettleUp(0.75), 6);
+    expect(Number.isNaN(calibrateWithPlatt(Number.NaN, null))).toBe(true);
+
+    // Raw JEV under-predicts UP (bearish bias: raw ~0.35 wins 60%, raw ~0.65 wins 85%)
+    const biasedSamples = [
+      ...Array.from({ length: 12 }, () => ({ rawProb: 0.35, outcomeUp: 1 as const })),
+      ...Array.from({ length: 8 }, () => ({ rawProb: 0.35, outcomeUp: 0 as const })),
+      ...Array.from({ length: 17 }, () => ({ rawProb: 0.65, outcomeUp: 1 as const })),
+      ...Array.from({ length: 3 }, () => ({ rawProb: 0.65, outcomeUp: 0 as const })),
+    ];
+    const platt = fitOnlinePlatt(biasedSamples, { minSamples: 40 });
+    expect(platt).not.toBeNull();
+    expect(platt!.version).toBe(JEV_ONLINE_CALIBRATION_TAG);
+    expect(platt!.samples).toBe(40);
+    expect(platt!.a).toBeGreaterThanOrEqual(0.05);
+    expect(platt!.b).toBeGreaterThan(0);
+
+    const lo = calibrateWithPlatt(0.35, platt);
+    const mid = calibrateWithPlatt(0.50, platt);
+    const hi = calibrateWithPlatt(0.65, platt);
+    expect(lo).toBeGreaterThan(0.35); // upward bias correction
+    expect(hi).toBeGreaterThan(mid);
+    expect(mid).toBeGreaterThan(lo);
+    expect(lo).toBeGreaterThanOrEqual(0.05);
+    expect(hi).toBeLessThanOrEqual(0.95);
   });
 });

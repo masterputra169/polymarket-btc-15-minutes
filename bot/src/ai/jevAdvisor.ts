@@ -1,27 +1,30 @@
 /**
  * JEV decision advisor - TypeSafe System One model (docs.typesafe.ai).
  *
- * v3 architecture:
- *   - Sends rich v3 state including Chainlink TWAP settle distance, Binance/Chainlink basis,
- *     TWAP z-score, L2 book liquidity/spread, and live order-flow features (VPIN, OFI, microprice edge).
- *   - Asks six typed questions in one parallel System One evaluation:
- *       1) direction        (choice: UP / DOWN / NO_EDGE)
- *       2) settle_above_ptb (noul: calibrated with 10-bin Laplace + PAVA + lerp + Bayesian prior)
- *       3) regime           (choice: trending_up / trending_down / mean_reverting / choppy / neutral)
- *       4) chop_hazard      (score 0..4: two-sided chop / whipsaw risk)
- *       5) exhaustion_risk  (score 0..4: overextended spike / snapback risk)
+ * v4 architecture:
+ *   - Sends structured v4 state including Chainlink TWAP settle distance, Binance/Chainlink basis,
+ *     TWAP z-score, L2 book liquidity/spread, order-flow features (VPIN, OFI, microprice edge),
+ *     and episodic self-memory (`recent_memory`: recent hit rate, directional bias, streak, misses).
+ *   - Asks eight typed questions in one parallel System One evaluation:
+ *       1) direction          (choice: UP / DOWN / NO_EDGE)
+ *       2) settle_above_ptb   (noul: online rolling Platt calibration or Laplace-10 PAVA fallback + adaptive Bayesian prior)
+ *       3) regime             (choice: trending_up / trending_down / mean_reverting / choppy / neutral)
+ *       4) chop_hazard        (score 0..4: two-sided chop / whipsaw risk)
+ *       5) exhaustion_risk    (score 0..4: overextended spike / snapback risk)
  *       6) flow_contradiction (score 0..4: L2 orderbook / VPIN / basis divergence vs momentum)
- *   - Combines risk dimensions deterministically in code (`jevBayesian.ts`), anchors probability
- *     onto Polymarket odds log-odds prior, routes via 3-zone confidence gating, and enforces a
- *     Rolling Brier Skill Guard that auto-demotes active veto if JEV trails market mid.
+ *       7) bull_case_strength (score 0..4: parallel bullish thesis strength)
+ *       8) bear_case_strength (score 0..4: parallel bearish thesis strength)
+ *   - Combines bull/bear debate disagreement + risk dimensions in code (`jevBayesian.ts`), adapts
+ *     Bayesian anchor weight smoothly to rolling Brier skill, applies split-conformal empirical
+ *     risk-veto thresholds, and enforces Rolling Brier Skill auto-demotion.
  *
  * Default is SHADOW: the answer is written to bot/data/jev_log.jsonl and the
  * trading path is untouched.
  *
  * Contract:
- *   initJevAdvisor()                 - startup log, key check, & Brier history warmup
+ *   initJevAdvisor()                 - startup log, key check, Platt & memory warmup
  *   maybeJevAnalyze(snapshot)        - fire-and-forget, called from the poll loop
- *   recordJevWindowOutcome(slug, y)  - feeds resolved market outcome into rolling Brier guard
+ *   recordJevWindowOutcome(slug, y)  - feeds resolved market outcome into Brier guard, memory, & online Platt
  *   getJevStatus()                   - dashboard / diagnostics snapshot
  *   checkJevAdvisory(side, slug)     - future active-mode veto (null while shadow / demoted)
  */
@@ -30,16 +33,28 @@ import { dirname, resolve } from 'path';
 import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { isTypesafeConfigured, resolveJevProviderConfig, systemOne, TypesafeError } from './typesafeClient.ts';
-import { calibrateJevSettleUp, JEV_SETTLE_CALIBRATION_VERSION } from './jevSettleCalibration.ts';
 import {
+  calibrateJevSettleUp,
+  calibrateWithPlatt,
+  fitOnlinePlatt,
+  JEV_SETTLE_CALIBRATION_VERSION,
+  type PlattParams,
+} from './jevSettleCalibration.ts';
+import {
+  computeAdaptiveBayesianWeight,
   computeBayesianAnchor,
+  computeBullBearDebate,
   computeCompositeRiskScore,
+  computeEmpiricalRiskThreshold,
   evaluateBrierSkillGate,
   normalizeTypesafeScore,
   routeJevDecision,
+  summarizeEpisodicMemory,
   type BrierObservation,
   type BrierSkillReport,
   type ConfidenceRoute,
+  type JevEpisodicMemorySummary,
+  type JevMemoryEntry,
   type RiskDeskScores,
 } from './jevBayesian.ts';
 import type { OrderFlowFeatures } from '../engines/orderFlowFeatures.ts';
@@ -128,9 +143,17 @@ export interface JevDecision {
   chopHazard?: number | null;
   exhaustionRisk?: number | null;
   flowContradiction?: number | null;
+  /** Parallel bull/bear debate strength and disagreement metrics (v4). */
+  bullStrength?: number | null;
+  bearStrength?: number | null;
+  netConviction?: number | null;
+  debateDisagreement?: number | null;
   /** Weighted composite risk score in [0, 1] combining Risk Desk dimensions. */
   compositeRisk?: number | null;
   riskConfidence?: number | null;
+  onlineCalibrated?: boolean;
+  effectiveBayesianWeight?: number;
+  effectiveRiskThreshold?: number;
   route?: ConfidenceRoute;
   latencyMs: number;
   inputTokens: number | null;
@@ -177,10 +200,48 @@ let _pausedUntil = 0;
 let _current: (JevDecision & { ts: number; slug: string | null; marketUp?: number | null; marketDown?: number | null }) | null = null;
 const _stats = { calls: 0, errors: 0, lastLatencyMs: 0, lastCostUsd: 0, totalCostUsd: 0, lastError: null as string | null };
 
-const _pendingOutcomesBySlug = new Map<string, { marketProbUp: number; jevProbUp: number; ts: number }>();
+const MAX_MEMORY_HISTORY = 250;
+const PLATT_REFIT_INTERVAL = 10;
+
+interface PendingOutcomeMeta {
+  marketProbUp: number;
+  jevProbUp: number;
+  rawProbUp: number;
+  direction: 'UP' | 'DOWN' | 'NO_EDGE';
+  regime: string | null;
+  compositeRisk: number | null;
+  ts: number;
+}
+
+const _pendingOutcomesBySlug = new Map<string, PendingOutcomeMeta>();
 const _recordedSlugs = new Set<string>();
 const _brierHistory: BrierObservation[] = [];
+const _memorySlugs = new Set<string>();
+const _memoryHistory: JevMemoryEntry[] = [];
+let _onlinePlatt: PlattParams | null = null;
+let _outcomesSincePlattFit = 0;
 let _persistOutcomes = false;
+
+function pushMemoryEntry(entry: JevMemoryEntry): void {
+  if (_memorySlugs.has(entry.slug)) return;
+  if (!(entry.marketProbUp > 0.01 && entry.marketProbUp < 0.99)) return;
+  _memorySlugs.add(entry.slug);
+  _memoryHistory.push(entry);
+  while (_memoryHistory.length > MAX_MEMORY_HISTORY) {
+    const dropped = _memoryHistory.shift();
+    if (dropped) _memorySlugs.delete(dropped.slug);
+  }
+}
+
+function refitOnlinePlatt(): void {
+  const samples: Array<{ rawProb: number; outcomeUp: 0 | 1 }> = [];
+  for (const m of _memoryHistory) {
+    if (Number.isFinite(m.rawProbUp)) {
+      samples.push({ rawProb: m.rawProbUp, outcomeUp: m.outcomeUp });
+    }
+  }
+  _onlinePlatt = fitOnlinePlatt(samples);
+}
 
 function persistJevOutcome(slug: string, outcomeLabel: 'UP' | 'DOWN'): void {
   if (!_persistOutcomes) return;
@@ -214,8 +275,12 @@ function roundOpt(v: number | null | undefined, digits = 4): number | null {
   return Math.round(v * f) / f;
 }
 
-/** Compact structured state object (v3). JSON structure is cheaper and sharper for JEV than prose. */
-export function buildJevState(s: JevSnapshot, independent = false): Record<string, unknown> {
+/** Compact structured state object (v4). JSON structure is cheaper and sharper for JEV than prose. */
+export function buildJevState(
+  s: JevSnapshot,
+  independent = false,
+  memory?: JevEpisodicMemorySummary | null,
+): Record<string, unknown> {
   const basisUsd = s.basisUsd != null && Number.isFinite(s.basisUsd)
     ? s.basisUsd
     : (s.btcPrice != null && s.settlePrice != null ? s.btcPrice - s.settlePrice : null);
@@ -282,8 +347,21 @@ export function buildJevState(s: JevSnapshot, independent = false): Record<strin
       bankroll_usd: s.bankroll,
     },
   };
+  if (memory && memory.sampleCount >= 3) {
+    state.recent_memory = {
+      window_count: memory.sampleCount,
+      market_up_rate: memory.marketUpRate,
+      streak: memory.streakSide ? `${memory.streakSide}x${memory.streakLength}` : null,
+      whipsaw_rate: memory.whipsawRate,
+      jev_down_call_rate: memory.jevDownCallRate,
+      jev_up_call_rate: memory.jevUpCallRate,
+      jev_direction_hit_rate: memory.jevDirectionHitRate,
+      jev_prob_bias: memory.jevProbBias,
+      recent_misses: memory.recentMisses,
+    };
+  }
   if (independent) delete state.algo_view;
-  state.state_variant = independent ? 'independent_v3' : 'collaborative_v3';
+  state.state_variant = independent ? 'independent_v4' : 'collaborative_v4';
   return state;
 }
 
@@ -292,8 +370,8 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
     direction: {
       type: 'choice',
       instructions: independent
-        ? 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, momentum, volatility, and order_flow to form an independent view (NO bot recommendation in state). Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?'
-        : 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, order_flow, and algo_view. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?',
+        ? 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, momentum, volatility, order_flow, and recent_memory (NO bot recommendation in state). Default to NO_EDGE unless both drift and order flow clearly exceed market_odds; watch recent_memory for any over-bearish or over-bullish streak bias. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?'
+        : 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, order_flow, recent_memory, and algo_view. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?',
       criteria: {
         UP: 'Expected settlement is above PTB with momentum and order flow supporting higher probability than market_odds.up.',
         DOWN: 'Expected settlement is below PTB with momentum and order flow supporting higher probability than market_odds.down.',
@@ -302,7 +380,7 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
     },
     settle_above_ptb: {
       type: 'noul',
-      instructions: 'Estimate the probability that Chainlink 60s TWAP settles at or above price_to_beat at market close. Anchor around market_odds.up, adjusted by settle_distance_to_ptb_usd, twap_physics_z, and remaining time; avoid 0 or 1 extremes unless near-certain.',
+      instructions: 'Estimate the probability that Chainlink 60s TWAP settles at or above price_to_beat at market close. Superforecaster workflow: start from market_odds.up as outside-view base rate, adjust using settle_distance_to_ptb_usd, twap_physics_z, and remaining time; if recent_memory.jev_prob_bias is negative/positive, actively correct your recent bias; avoid 0 or 1 extremes unless near-certain.',
       criteria: {
         true: 'Chainlink 60s TWAP settles >= price_to_beat.',
         false: 'Chainlink 60s TWAP settles < price_to_beat.',
@@ -352,6 +430,28 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
         'Strong flow contradiction: heavy opposite-side book pressure, high VPIN, or adverse basis against spot drift.',
       ],
     },
+    bull_case_strength: {
+      type: 'score',
+      instructions: 'Argue the strongest objective BULLISH case (why BTC settles >= price_to_beat) from settle distance, TWAP z-score, VWAP slope, and positive order flow.',
+      criteria: [
+        'No credible bullish thesis; price, momentum, and flow all favor lower settle.',
+        'Weak bullish case: minor bounce potential only.',
+        'Moderate bullish case: balanced upside arguments or positive support.',
+        'Strong bullish case: solid upward drift above PTB or supportive buy flow.',
+        'Dominant bullish case: decisive settle lead, rising momentum, and aligned bid/OFI support.',
+      ],
+    },
+    bear_case_strength: {
+      type: 'score',
+      instructions: 'Argue the strongest objective BEARISH case (why BTC settles < price_to_beat) from settle distance, TWAP z-score, exhaustion, and selling order flow.',
+      criteria: [
+        'No credible bearish thesis; upward drift and bid support dominate.',
+        'Weak bearish case: minor pullback risk only.',
+        'Moderate bearish case: mixed overhead resistance or fading momentum.',
+        'Strong bearish case: clear downward drift below PTB or heavy sell pressure.',
+        'Dominant bearish case: decisive deficit below PTB, falling slope, and aligned ask/OFI selling.',
+      ],
+    },
   };
 }
 
@@ -363,10 +463,20 @@ function extractScoreDimension(ans: TypesafeAnswer | undefined): { normalized: n
   return { normalized, confidence: Number.isFinite(sAns.confidence) ? sAns.confidence : 0 };
 }
 
+export interface ParseJevContext {
+  marketUp?: number | null;
+  bayesianMaxWeight?: number;
+  minConfidence?: number;
+  riskVetoThreshold?: number;
+  plattParams?: PlattParams | null;
+  skillReport?: BrierSkillReport | null;
+  memoryHistory?: readonly JevMemoryEntry[];
+}
+
 export function parseJevAnswers(
   model: string,
   answers: Record<string, TypesafeAnswer>,
-  ctx: { marketUp?: number | null; bayesianMaxWeight?: number; minConfidence?: number; riskVetoThreshold?: number } = {},
+  ctx: ParseJevContext = {},
 ): JevDecision {
   const directionAnswer = answers.direction;
   if (!directionAnswer || directionAnswer.type !== 'choice') throw new Error('JEV direction answer missing');
@@ -376,30 +486,49 @@ export function parseJevAnswers(
   if (!regimeAnswer || regimeAnswer.type !== 'choice') throw new Error('JEV regime answer missing');
 
   const choice = directionAnswer.choice === 'UP' || directionAnswer.choice === 'DOWN' ? directionAnswer.choice : 'NO_EDGE';
-  const settleUpCalibrated = calibrateJevSettleUp(settleAnswer.noul);
+  const onlineCalibrated = Boolean(ctx.plattParams);
+  const settleUpCalibrated = calibrateWithPlatt(settleAnswer.noul, ctx.plattParams ?? null);
 
   const chopDim = extractScoreDimension(answers.chop_hazard);
   const exhaustDim = extractScoreDimension(answers.exhaustion_risk);
   const flowDim = extractScoreDimension(answers.flow_contradiction);
+  const bullDim = extractScoreDimension(answers.bull_case_strength);
+  const bearDim = extractScoreDimension(answers.bear_case_strength);
+  const debate = computeBullBearDebate(bullDim, bearDim);
+
   const riskScores: RiskDeskScores = {
     chopHazard: chopDim,
     exhaustionRisk: exhaustDim,
     flowContradiction: flowDim,
+    debateDisagreement: debate.disagreement != null ? { normalized: debate.disagreement, confidence: debate.confidence } : null,
   };
   const composite = computeCompositeRiskScore(riskScores);
+
+  const baseMaxWeight = ctx.bayesianMaxWeight ?? BOT_CONFIG.jev?.bayesianMaxWeight ?? 0.20;
+  const effectiveBayesianWeight = ctx.skillReport
+    ? computeAdaptiveBayesianWeight(baseMaxWeight, ctx.skillReport)
+    : baseMaxWeight;
+
   const bayes = computeBayesianAnchor(
     ctx.marketUp ?? null,
     settleUpCalibrated,
     directionAnswer.confidence,
-    ctx.bayesianMaxWeight ?? BOT_CONFIG.jev?.bayesianMaxWeight ?? 0.20,
+    effectiveBayesianWeight,
   );
+
+  const fallbackRiskThresh = BOT_CONFIG.jev?.riskVetoThreshold ?? 0.78;
+  const effectiveRiskThreshold = ctx.riskVetoThreshold
+    ?? (ctx.memoryHistory
+      ? computeEmpiricalRiskThreshold(ctx.memoryHistory, { fallbackThreshold: fallbackRiskThresh })
+      : fallbackRiskThresh);
+
   const route = routeJevDecision({
     direction: choice,
     directionConfidence: directionAnswer.confidence,
     compositeRisk: composite.compositeRisk,
     riskConfidence: composite.riskConfidence,
     minConfidence: ctx.minConfidence ?? BOT_CONFIG.jev?.minConfidence ?? 0.60,
-    riskVetoThreshold: ctx.riskVetoThreshold ?? BOT_CONFIG.jev?.riskVetoThreshold ?? 0.78,
+    riskVetoThreshold: effectiveRiskThreshold,
   });
 
   return {
@@ -408,15 +537,22 @@ export function parseJevAnswers(
     directionProbabilities: directionAnswer.probabilities,
     directionConfidence: directionAnswer.confidence,
     settleUpProbability: settleAnswer.noul,
-    settleUpCalibrated,
+    settleUpCalibrated: +settleUpCalibrated.toFixed(4),
     bayesianProbUp: +bayes.posterior.toFixed(4),
     regime: regimeAnswer.choice,
     regimeConfidence: regimeAnswer.confidence,
     chopHazard: chopDim ? +chopDim.normalized.toFixed(4) : null,
     exhaustionRisk: exhaustDim ? +exhaustDim.normalized.toFixed(4) : null,
     flowContradiction: flowDim ? +flowDim.normalized.toFixed(4) : null,
+    bullStrength: debate.bullStrength,
+    bearStrength: debate.bearStrength,
+    netConviction: debate.netConviction,
+    debateDisagreement: debate.disagreement,
     compositeRisk: composite.compositeRisk != null ? +composite.compositeRisk.toFixed(4) : null,
     riskConfidence: composite.dimensionsPresent > 0 ? +composite.riskConfidence.toFixed(4) : null,
+    onlineCalibrated,
+    effectiveBayesianWeight: +effectiveBayesianWeight.toFixed(4),
+    effectiveRiskThreshold: +effectiveRiskThreshold.toFixed(4),
     route,
     latencyMs: 0,
     inputTokens: null,
@@ -438,7 +574,7 @@ function pushBrierObservation(obs: BrierObservation): void {
   }
 }
 
-/** Record settled market outcome (`'UP' | 'DOWN' | 0 | 1`) for the rolling Brier skill guard. */
+/** Record settled market outcome (`'UP' | 'DOWN' | 0 | 1`) for the rolling Brier guard, memory, & online Platt. */
 export function recordJevWindowOutcome(slug: string | null | undefined, outcome: 'UP' | 'DOWN' | 0 | 1): boolean {
   if (!slug) return false;
   const outcomeUp: 0 | 1 = outcome === 'UP' || outcome === 1 ? 1 : 0;
@@ -453,6 +589,21 @@ export function recordJevWindowOutcome(slug: string | null | undefined, outcome:
     jevProbUp: pred.jevProbUp,
     outcomeUp,
   });
+  pushMemoryEntry({
+    slug,
+    ts: pred.ts,
+    direction: pred.direction,
+    rawProbUp: pred.rawProbUp,
+    marketProbUp: pred.marketProbUp,
+    outcomeUp,
+    regime: pred.regime,
+    compositeRisk: pred.compositeRisk,
+  });
+  _outcomesSincePlattFit++;
+  if (_memoryHistory.length >= 40 && (_onlinePlatt == null || _outcomesSincePlattFit >= PLATT_REFIT_INTERVAL)) {
+    refitOnlinePlatt();
+    _outcomesSincePlattFit = 0;
+  }
   return true;
 }
 
@@ -465,7 +616,7 @@ function warmLoadBrierHistory(): void {
     const outcomes = JSON.parse(readFileSync(outcomesFile, 'utf8')) as Record<string, 'UP' | 'DOWN'>;
     const rawLines = readFileSync(cfg.logFile, 'utf8').split('\n').filter(Boolean);
     const maxKeep = Math.max(20, cfg.brierGateWindow ?? 100);
-    const tail = rawLines.slice(-Math.max(maxKeep * 10, 1500));
+    const tail = rawLines.slice(-Math.max(maxKeep * 15, 2500));
     for (const line of tail) {
       let row: Partial<JevRecord> | null = null;
       try { row = JSON.parse(line) as Partial<JevRecord>; } catch { row = null; }
@@ -476,14 +627,30 @@ function warmLoadBrierHistory(): void {
       if (typeof mktUp !== 'number' || mktUp <= 0.01 || mktUp >= 0.99) continue;
       const jevP = row.bayesianProbUp ?? row.settleUpCalibrated ?? (typeof row.settleUpProbability === 'number' ? calibrateJevSettleUp(row.settleUpProbability) : null);
       if (jevP == null || !Number.isFinite(jevP)) continue;
+      const outcomeUp: 0 | 1 = out === 'UP' ? 1 : 0;
+      const ts = Number(row.ts) || Date.now();
       pushBrierObservation({
         slug: row.slug,
-        ts: Number(row.ts) || Date.now(),
+        ts,
         marketProbUp: mktUp,
         jevProbUp: jevP,
-        outcomeUp: out === 'UP' ? 1 : 0,
+        outcomeUp,
       });
+      if (typeof row.settleUpProbability === 'number' && Number.isFinite(row.settleUpProbability)) {
+        const dir: 'UP' | 'DOWN' | 'NO_EDGE' = row.direction === 'UP' || row.direction === 'DOWN' ? row.direction : 'NO_EDGE';
+        pushMemoryEntry({
+          slug: row.slug,
+          ts,
+          direction: dir,
+          rawProbUp: row.settleUpProbability,
+          marketProbUp: mktUp,
+          outcomeUp,
+          regime: typeof row.regime === 'string' ? row.regime : null,
+          compositeRisk: typeof row.compositeRisk === 'number' && Number.isFinite(row.compositeRisk) ? row.compositeRisk : null,
+        });
+      }
     }
+    refitOnlinePlatt();
   } catch {
     // Non-critical warmup; starts empty cleanly if malformed
   }
@@ -514,10 +681,17 @@ export function initJevAdvisor(): void {
   }
   const mode = cfg.shadowMode ? 'SHADOW' : 'ACTIVE';
   const skill = getJevBrierSkill();
+  const riskThresh = computeEmpiricalRiskThreshold(_memoryHistory, { fallbackThreshold: cfg.riskVetoThreshold ?? 0.78 });
+  const plattDesc = _onlinePlatt
+    ? `${_onlinePlatt.version}(a=${_onlinePlatt.a},b=${_onlinePlatt.b},n=${_onlinePlatt.samples})`
+    : `static(${JEV_SETTLE_CALIBRATION_VERSION})`;
   log.info(
-    'JEV v3: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model +
+    'JEV v4: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model +
     ' every=' + (cfg.intervalMs > 0 ? Math.round(cfg.intervalMs / 1000) + 's' : 'market') +
     ' brierGuard=' + skill.status + '(' + skill.samples + ')' +
+    ' platt=' + plattDesc +
+    ' mem=' + _memoryHistory.length +
+    ' riskThresh=' + riskThresh +
     ' log=' + cfg.logFile,
   );
 }
@@ -527,15 +701,18 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
   const started = Date.now();
   const prov = resolveJevProviderConfig();
   const independent = BOT_CONFIG.jev.independentState;
+  const memSummary = summarizeEpisodicMemory(_memoryHistory);
   const res = await systemOne(
-    { state: buildJevState(snapshot, independent), questions: buildJevQuestions(independent), model: prov.model },
+    { state: buildJevState(snapshot, independent, memSummary), questions: buildJevQuestions(independent), model: prov.model },
     { apiKey: prov.apiKey, baseUrl: prov.baseUrl, timeoutMs: BOT_CONFIG.jev.timeoutMs },
   );
   const parsed = parseJevAnswers(res.model, res.answers, {
     marketUp: snapshot.marketUp,
     bayesianMaxWeight: BOT_CONFIG.jev.bayesianMaxWeight,
     minConfidence: BOT_CONFIG.jev.minConfidence,
-    riskVetoThreshold: BOT_CONFIG.jev.riskVetoThreshold,
+    plattParams: _onlinePlatt,
+    skillReport: getJevBrierSkill(),
+    memoryHistory: _memoryHistory,
   });
   parsed.latencyMs = Date.now() - started;
   parsed.inputTokens = res.usage?.input_tokens ?? null;
@@ -582,7 +759,7 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
     },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
-    stateVariant: independent ? 'independent_v3' : 'collaborative_v3',
+    stateVariant: independent ? 'independent_v4' : 'collaborative_v4',
     ...(decision ? { decisionShadow: true } : {}),
   };
   try {
@@ -598,6 +775,10 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
       _pendingOutcomesBySlug.set(record.slug, {
         marketProbUp: snapshot.marketUp,
         jevProbUp: parsed.bayesianProbUp ?? parsed.settleUpCalibrated ?? parsed.settleUpProbability,
+        rawProbUp: parsed.settleUpProbability,
+        direction: parsed.direction,
+        regime: parsed.regime ?? null,
+        compositeRisk: parsed.compositeRisk ?? null,
         ts: record.ts,
       });
       if (_pendingOutcomesBySlug.size > 200) {
@@ -639,13 +820,17 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
   _stats.totalCostUsd += parsed.costUsd ?? 0;
   const riskTag = parsed.compositeRisk != null ? ' | risk ' + Math.round(parsed.compositeRisk * 100) + '%' : '';
   const bayesTag = parsed.bayesianProbUp != null ? ' bayes ' + Math.round(parsed.bayesianProbUp * 100) + '%' : '';
+  const debateTag = parsed.netConviction != null
+    ? ' | deb ' + (parsed.netConviction >= 0 ? '+' : '') + Math.round(parsed.netConviction * 100) + '%(dis ' + Math.round((parsed.debateDisagreement ?? 0) * 100) + '%)'
+    : '';
+  const calTag = parsed.onlineCalibrated && _onlinePlatt ? _onlinePlatt.version : JEV_SETTLE_CALIBRATION_VERSION;
   log.info(
     (decision ? 'JEV decision shadow ' : 'JEV ') + snapshot.slug + ': ' +
     parsed.direction + ' (' + Math.round(parsed.directionConfidence * 100) + '%) | settle_up raw ' +
     Math.round(parsed.settleUpProbability * 100) + '% -> cal ' +
-    Math.round((parsed.settleUpCalibrated ?? parsed.settleUpProbability) * 100) + '%' + bayesTag + riskTag +
+    Math.round((parsed.settleUpCalibrated ?? parsed.settleUpProbability) * 100) + '%' + bayesTag + riskTag + debateTag +
     ' | ' + parsed.regime + ' | ' + parsed.latencyMs + 'ms | ' +
-    (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd | cal ' + JEV_SETTLE_CALIBRATION_VERSION,
+    (parsed.costUsd != null ? parsed.costUsd.toFixed(6) : 'n/a') + ' usd | cal ' + calTag,
   );
 }
 
@@ -789,6 +974,9 @@ export function getJevSummary(slug?: string | null): string | null {
 }
 
 export function getJevStatus() {
+  const effectiveRiskThreshold = computeEmpiricalRiskThreshold(_memoryHistory, {
+    fallbackThreshold: BOT_CONFIG.jev?.riskVetoThreshold ?? 0.78,
+  });
   return {
     enabled: BOT_CONFIG.jev?.enabled ?? false,
     configured: isTypesafeConfigured(),
@@ -797,7 +985,10 @@ export function getJevStatus() {
     primaryMinConfidence: BOT_CONFIG.jev?.primaryMinConfidence ?? null,
     settleMargin: BOT_CONFIG.jev?.settleMargin ?? null,
     sizingWeight: BOT_CONFIG.jev?.sizingWeight ?? null,
-    calibrationVersion: JEV_SETTLE_CALIBRATION_VERSION,
+    calibrationVersion: _onlinePlatt ? _onlinePlatt.version : JEV_SETTLE_CALIBRATION_VERSION,
+    onlinePlatt: _onlinePlatt,
+    effectiveRiskThreshold,
+    memorySummary: summarizeEpisodicMemory(_memoryHistory),
     brierSkill: getJevBrierSkill(),
     model: BOT_CONFIG.jev?.model ?? null,
     provider: resolveJevProviderConfig().provider,
@@ -823,13 +1014,16 @@ export function checkJevAdvisory(side: string, slug?: string | null): { action: 
   const d = freshDecision(slug);
   if (!d) return null;
 
+  const riskVetoThreshold = d.effectiveRiskThreshold ?? computeEmpiricalRiskThreshold(_memoryHistory, {
+    fallbackThreshold: cfg.riskVetoThreshold ?? 0.78,
+  });
   const route = d.route ?? routeJevDecision({
     direction: d.direction,
     directionConfidence: d.directionConfidence,
     compositeRisk: d.compositeRisk ?? null,
     riskConfidence: d.riskConfidence ?? 0,
     minConfidence: cfg.minConfidence,
-    riskVetoThreshold: cfg.riskVetoThreshold ?? 0.78,
+    riskVetoThreshold,
   });
 
   if (route === 'risk_veto') {
@@ -883,6 +1077,10 @@ export function resetJevAdvisorForTests(): void {
   _pendingOutcomesBySlug.clear();
   _recordedSlugs.clear();
   _brierHistory.length = 0;
+  _memorySlugs.clear();
+  _memoryHistory.length = 0;
+  _onlinePlatt = null;
+  _outcomesSincePlattFit = 0;
 }
 
 /** Test-only: inject a cached decision so mode logic can be unit-tested without a network call. */
@@ -898,6 +1096,11 @@ export function __setJevDecisionForTests(partial: {
   chopHazard?: number | null;
   exhaustionRisk?: number | null;
   flowContradiction?: number | null;
+  bullStrength?: number | null;
+  bearStrength?: number | null;
+  netConviction?: number | null;
+  debateDisagreement?: number | null;
+  effectiveRiskThreshold?: number;
   route?: ConfidenceRoute;
   slug?: string | null;
   ts?: number;
@@ -917,6 +1120,11 @@ export function __setJevDecisionForTests(partial: {
     chopHazard: partial.chopHazard ?? null,
     exhaustionRisk: partial.exhaustionRisk ?? null,
     flowContradiction: partial.flowContradiction ?? null,
+    bullStrength: partial.bullStrength ?? null,
+    bearStrength: partial.bearStrength ?? null,
+    netConviction: partial.netConviction ?? null,
+    debateDisagreement: partial.debateDisagreement ?? null,
+    effectiveRiskThreshold: partial.effectiveRiskThreshold,
     compositeRisk: partial.compositeRisk ?? null,
     riskConfidence: partial.riskConfidence ?? null,
     route: partial.route,

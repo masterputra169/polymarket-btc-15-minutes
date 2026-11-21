@@ -27,12 +27,52 @@ export interface RiskDeskScores {
   chopHazard?: RiskDimensionScore | null;
   exhaustionRisk?: RiskDimensionScore | null;
   flowContradiction?: RiskDimensionScore | null;
+  debateDisagreement?: RiskDimensionScore | null;
 }
 
 export interface CompositeRiskResult {
   compositeRisk: number | null;
   riskConfidence: number;
   dimensionsPresent: number;
+}
+
+export interface BullBearDebateResult {
+  bullStrength: number | null;
+  bearStrength: number | null;
+  netConviction: number | null;
+  disagreement: number | null;
+  confidence: number;
+}
+
+export interface JevMemoryEntry {
+  slug: string;
+  ts: number;
+  direction: 'UP' | 'DOWN' | 'NO_EDGE';
+  rawProbUp: number;
+  marketProbUp: number;
+  outcomeUp: 0 | 1;
+  regime?: string | null;
+  compositeRisk?: number | null;
+}
+
+export interface JevEpisodicMemorySummary {
+  sampleCount: number;
+  marketUpRate: number | null;
+  streakSide: 'UP' | 'DOWN' | null;
+  streakLength: number;
+  whipsawRate: number | null;
+  jevUpCallRate: number | null;
+  jevDownCallRate: number | null;
+  jevDirectionHitRate: number | null;
+  jevProbBias: number | null;
+  recentMisses: Array<{
+    slug: string;
+    predicted: 'UP' | 'DOWN';
+    outcome: 'UP' | 'DOWN';
+    marketUp: number;
+    rawProbUp: number;
+    regime: string | null;
+  }>;
 }
 
 export type ConfidenceRoute = 'risk_veto' | 'confident' | 'uncertain_passthrough';
@@ -152,6 +192,13 @@ export function computeCompositeRiskScore(scores: RiskDeskScores | null | undefi
       });
     }
   }
+  if (scores.debateDisagreement && Number.isFinite(scores.debateDisagreement.normalized)) {
+    dims.push({
+      w: 0.20,
+      val: clamp01(scores.debateDisagreement.normalized),
+      conf: clamp01(scores.debateDisagreement.confidence),
+    });
+  }
   if (dims.length === 0) {
     return { compositeRisk: null, riskConfidence: 0, dimensionsPresent: 0 };
   }
@@ -159,6 +206,174 @@ export function computeCompositeRiskScore(scores: RiskDeskScores | null | undefi
   const compositeRisk = dims.reduce((acc, d) => acc + (d.w / totalW) * d.val, 0);
   const riskConfidence = dims.reduce((acc, d) => acc + (d.w / totalW) * d.conf, 0);
   return { compositeRisk: clamp01(compositeRisk), riskConfidence: clamp01(riskConfidence), dimensionsPresent: dims.length };
+}
+
+/** Combine opposing bull/bear scores into net conviction and symmetric debate disagreement. */
+export function computeBullBearDebate(
+  bull: RiskDimensionScore | null | undefined,
+  bear: RiskDimensionScore | null | undefined,
+): BullBearDebateResult {
+  const b = bull && Number.isFinite(bull.normalized) ? clamp01(bull.normalized) : null;
+  const r = bear && Number.isFinite(bear.normalized) ? clamp01(bear.normalized) : null;
+  if (b == null || r == null) {
+    return {
+      bullStrength: b != null ? +b.toFixed(4) : null,
+      bearStrength: r != null ? +r.toFixed(4) : null,
+      netConviction: null,
+      disagreement: null,
+      confidence: 0,
+    };
+  }
+  const bConf = bull && Number.isFinite(bull.confidence) ? clamp01(bull.confidence) : 0;
+  const rConf = bear && Number.isFinite(bear.confidence) ? clamp01(bear.confidence) : 0;
+  return {
+    bullStrength: +b.toFixed(4),
+    bearStrength: +r.toFixed(4),
+    netConviction: +(b - r).toFixed(4),
+    disagreement: +clamp01(2 * Math.min(b, r)).toFixed(4),
+    confidence: +((bConf + rConf) / 2).toFixed(4),
+  };
+}
+
+/** Scale Bayesian update weight continuously from rolling Brier skill against market mid. */
+export function computeAdaptiveBayesianWeight(
+  baseMaxWeight: number,
+  skillReport: BrierSkillReport | null | undefined,
+): number {
+  const base = clamp01(baseMaxWeight);
+  if (base <= 0) return 0;
+  if (!skillReport || skillReport.status === 'warmup' || skillReport.skillScore == null || !Number.isFinite(skillReport.skillScore)) {
+    return +(base * 0.5).toFixed(4);
+  }
+  if (skillReport.skillScore <= 0) {
+    return +Math.min(base, Math.max(0.02, base * Math.exp(skillReport.skillScore * 12))).toFixed(4);
+  }
+  return +Math.min(0.45, base * (1 + skillReport.skillScore * 6)).toFixed(4);
+}
+
+/** Summarize recent resolved outcomes and JEV prediction biases for episodic self-reflection. */
+export function summarizeEpisodicMemory(
+  entries: readonly JevMemoryEntry[],
+  recentWindow = 12,
+): JevEpisodicMemorySummary {
+  const nWin = Math.max(1, Math.floor(recentWindow));
+  const slice = entries.slice(-nWin);
+  const sampleCount = slice.length;
+  if (sampleCount === 0) {
+    return {
+      sampleCount: 0,
+      marketUpRate: null,
+      streakSide: null,
+      streakLength: 0,
+      whipsawRate: null,
+      jevUpCallRate: null,
+      jevDownCallRate: null,
+      jevDirectionHitRate: null,
+      jevProbBias: null,
+      recentMisses: [],
+    };
+  }
+
+  let upOutcomes = 0;
+  let upCalls = 0;
+  let downCalls = 0;
+  let dirTotal = 0;
+  let dirHits = 0;
+  let biasSum = 0;
+  let biasN = 0;
+  let flips = 0;
+  const misses: JevEpisodicMemorySummary['recentMisses'] = [];
+
+  for (let i = 0; i < sampleCount; i++) {
+    const e = slice[i];
+    if (e.outcomeUp === 1) upOutcomes++;
+    if (i > 0 && e.outcomeUp !== slice[i - 1].outcomeUp) flips++;
+    if (e.direction === 'UP') {
+      upCalls++;
+      dirTotal++;
+      if (e.outcomeUp === 1) dirHits++;
+      else {
+        misses.push({
+          slug: e.slug,
+          predicted: 'UP',
+          outcome: 'DOWN',
+          marketUp: +e.marketProbUp.toFixed(4),
+          rawProbUp: Number.isFinite(e.rawProbUp) ? +e.rawProbUp.toFixed(4) : 0.5,
+          regime: e.regime ?? null,
+        });
+      }
+    } else if (e.direction === 'DOWN') {
+      downCalls++;
+      dirTotal++;
+      if (e.outcomeUp === 0) dirHits++;
+      else {
+        misses.push({
+          slug: e.slug,
+          predicted: 'DOWN',
+          outcome: 'UP',
+          marketUp: +e.marketProbUp.toFixed(4),
+          rawProbUp: Number.isFinite(e.rawProbUp) ? +e.rawProbUp.toFixed(4) : 0.5,
+          regime: e.regime ?? null,
+        });
+      }
+    }
+    if (Number.isFinite(e.rawProbUp)) {
+      biasSum += e.rawProbUp - e.outcomeUp;
+      biasN++;
+    }
+  }
+
+  const lastOut = slice[sampleCount - 1].outcomeUp;
+  const streakSide: 'UP' | 'DOWN' = lastOut === 1 ? 'UP' : 'DOWN';
+  let streakLength = 0;
+  for (let i = sampleCount - 1; i >= 0; i--) {
+    if (slice[i].outcomeUp === lastOut) streakLength++;
+    else break;
+  }
+
+  return {
+    sampleCount,
+    marketUpRate: +(upOutcomes / sampleCount).toFixed(4),
+    streakSide,
+    streakLength,
+    whipsawRate: sampleCount >= 2 ? +(flips / (sampleCount - 1)).toFixed(4) : null,
+    jevUpCallRate: +(upCalls / sampleCount).toFixed(4),
+    jevDownCallRate: +(downCalls / sampleCount).toFixed(4),
+    jevDirectionHitRate: dirTotal > 0 ? +(dirHits / dirTotal).toFixed(4) : null,
+    jevProbBias: biasN > 0 ? +(biasSum / biasN).toFixed(4) : null,
+    recentMisses: misses.slice(-3).reverse(),
+  };
+}
+
+/** Compute split-conformal empirical compositeRisk cutoff targeting `targetVetoRate` of historical windows. */
+export function computeEmpiricalRiskThreshold(
+  entries: readonly JevMemoryEntry[],
+  opts: {
+    targetVetoRate?: number;
+    minSamples?: number;
+    fallbackThreshold?: number;
+    minThreshold?: number;
+    maxThreshold?: number;
+  } = {},
+): number {
+  const targetVetoRate = Math.max(0.01, Math.min(0.49, opts.targetVetoRate ?? 0.15));
+  const minSamples = Math.max(5, opts.minSamples ?? 25);
+  const fallbackThreshold = opts.fallbackThreshold ?? 0.78;
+  const minThreshold = opts.minThreshold ?? 0.58;
+  const maxThreshold = opts.maxThreshold ?? 0.85;
+
+  const vals: number[] = [];
+  for (const e of entries) {
+    if (typeof e.compositeRisk === 'number' && Number.isFinite(e.compositeRisk)) {
+      vals.push(e.compositeRisk);
+    }
+  }
+  if (vals.length < minSamples) return fallbackThreshold;
+  vals.sort((a, b) => a - b);
+  const n = vals.length;
+  const idx = Math.min(n - 1, Math.max(0, Math.ceil((1 - targetVetoRate) * (n + 1)) - 1));
+  const clamped = Math.max(minThreshold, Math.min(maxThreshold, vals[idx]));
+  return +clamped.toFixed(4);
 }
 
 /**

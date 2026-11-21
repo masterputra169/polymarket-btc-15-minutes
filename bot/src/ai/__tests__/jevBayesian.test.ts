@@ -6,6 +6,10 @@ import {
   computeBayesianAnchor,
   normalizeTypesafeScore,
   computeCompositeRiskScore,
+  computeBullBearDebate,
+  computeAdaptiveBayesianWeight,
+  summarizeEpisodicMemory,
+  computeEmpiricalRiskThreshold,
   routeJevDecision,
   evaluateBrierSkillGate,
 } from '../jevBayesian.ts';
@@ -117,5 +121,72 @@ describe('Rolling Brier Skill Gate', () => {
     expect(demoted.status).toBe('demoted');
     expect(demoted.allowActiveVeto).toBe(false);
     expect(demoted.skillScore!).toBeLessThan(0);
+  });
+});
+
+describe('JEV v4 debate, adaptive Bayesian weight, episodic memory & conformal threshold', () => {
+  it('computes symmetric bull/bear debate conviction and disagreement, and folds optional disagreement into compositeRisk', () => {
+    const bullDom = computeBullBearDebate({ normalized: 0.85, confidence: 0.8 }, { normalized: 0.15, confidence: 0.6 });
+    expect(bullDom.netConviction).toBeCloseTo(0.70, 4);
+    expect(bullDom.disagreement).toBeCloseTo(0.30, 4);
+    expect(bullDom.confidence).toBeCloseTo(0.70, 4);
+
+    const deadlock = computeBullBearDebate({ normalized: 0.8, confidence: 0.9 }, { normalized: 0.8, confidence: 0.9 });
+    expect(deadlock.netConviction).toBeCloseTo(0, 4);
+    expect(deadlock.disagreement).toBeCloseTo(1.0, 4);
+
+    const partialDebate = computeBullBearDebate({ normalized: 0.6, confidence: 0.7 }, null);
+    expect(partialDebate.bullStrength).toBeCloseTo(0.6, 4);
+    expect(partialDebate.disagreement).toBeNull();
+
+    const withDebate = computeCompositeRiskScore({
+      chopHazard: { normalized: 0.5, confidence: 0.8 },
+      exhaustionRisk: { normalized: 0.5, confidence: 0.8 },
+      flowContradiction: { normalized: 0.5, confidence: 0.8 },
+      debateDisagreement: { normalized: 1.0, confidence: 0.8 },
+    });
+    // (0.40*0.5 + 0.35*0.5 + 0.25*0.5 + 0.20*1.0) / 1.20 = 0.70 / 1.20 = 0.583333
+    expect(withDebate.dimensionsPresent).toBe(4);
+    expect(withDebate.compositeRisk).toBeCloseTo(0.70 / 1.20, 4);
+  });
+
+  it('scales Bayesian weight adaptively with rolling Brier skill', () => {
+    expect(computeAdaptiveBayesianWeight(0, null)).toBe(0);
+    expect(computeAdaptiveBayesianWeight(0.20, { status: 'warmup', allowActiveVeto: true, samples: 5, minSamples: 30, windowSize: 100, jevBrier: null, marketBrier: null, skillScore: null })).toBeCloseTo(0.10, 4);
+    const negWeight = computeAdaptiveBayesianWeight(0.20, { status: 'demoted', allowActiveVeto: false, samples: 50, minSamples: 30, windowSize: 100, jevBrier: 0.25, marketBrier: 0.23, skillScore: -0.08 });
+    expect(negWeight).toBeLessThan(0.10);
+    expect(negWeight).toBeGreaterThanOrEqual(0.02);
+    const posWeight = computeAdaptiveBayesianWeight(0.20, { status: 'pass', allowActiveVeto: true, samples: 50, minSamples: 30, windowSize: 100, jevBrier: 0.21, marketBrier: 0.24, skillScore: 0.125 });
+    expect(posWeight).toBeGreaterThan(0.20);
+    expect(posWeight).toBeLessThanOrEqual(0.45);
+  });
+
+  it('summarizes episodic memory (streak, whipsaw, hit rate, bias, recent misses) and conformal risk threshold', () => {
+    const entries = [
+      { slug: 'm-1', ts: 1, direction: 'DOWN' as const, rawProbUp: 0.30, marketProbUp: 0.55, outcomeUp: 1 as const, regime: 'trending_up', compositeRisk: 0.50 },
+      { slug: 'm-2', ts: 2, direction: 'DOWN' as const, rawProbUp: 0.35, marketProbUp: 0.52, outcomeUp: 0 as const, regime: 'trending_down', compositeRisk: 0.60 },
+      { slug: 'm-3', ts: 3, direction: 'UP' as const, rawProbUp: 0.60, marketProbUp: 0.50, outcomeUp: 1 as const, regime: 'trending_up', compositeRisk: 0.45 },
+      { slug: 'm-4', ts: 4, direction: 'DOWN' as const, rawProbUp: 0.25, marketProbUp: 0.48, outcomeUp: 1 as const, regime: 'mean_reverting', compositeRisk: 0.72 },
+    ];
+    const sum = summarizeEpisodicMemory(entries, 12);
+    expect(sum.sampleCount).toBe(4);
+    expect(sum.marketUpRate).toBeCloseTo(0.75, 4);
+    expect(sum.streakSide).toBe('UP');
+    expect(sum.streakLength).toBe(2); // m-3 and m-4 both outcomeUp=1
+    expect(sum.whipsawRate).toBeCloseTo(2 / 3, 4); // 1->0, 0->1, 1->1 => 2 flips / 3
+    expect(sum.jevDownCallRate).toBeCloseTo(0.75, 4);
+    expect(sum.jevDirectionHitRate).toBeCloseTo(0.50, 4);
+    expect(sum.jevProbBias!).toBeLessThan(0); // negative bias when under-predicting UP
+    expect(sum.recentMisses.map((m) => m.slug)).toEqual(['m-4', 'm-1']);
+
+    // Empirical risk threshold: fallback below minSamples, quantile >= minSamples clamped to [0.58, 0.85]
+    expect(computeEmpiricalRiskThreshold(entries, { minSamples: 25, fallbackThreshold: 0.78 })).toBe(0.78);
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      slug: `r-${i}`, ts: i, direction: 'NO_EDGE' as const, rawProbUp: 0.5, marketProbUp: 0.5, outcomeUp: (i % 2) as 0 | 1,
+      compositeRisk: 0.40 + (i / 39) * 0.30, // 0.40 .. 0.70
+    }));
+    const thresh = computeEmpiricalRiskThreshold(many, { targetVetoRate: 0.15, minSamples: 25 });
+    expect(thresh).toBeGreaterThanOrEqual(0.58);
+    expect(thresh).toBeLessThanOrEqual(0.70);
   });
 });

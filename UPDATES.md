@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-11-22 — JEV v4: Online Platt Calibration, Episodic Memory, Bull/Bear Debate & Conformal Risk Threshold
+
+- **Online Rolling Platt Recalibration (`bot/src/ai/jevSettleCalibration.ts`):** Added `fitOnlinePlatt()` (L2-regularized Newton-Raphson `sigmoid(a * logit(p) + b)` shrunk toward `(a0=0.5, b0=0)` with bounds `a ∈ [0.05, 4.0]`, `b ∈ [-2.5, 2.5]`, `minSamples=40`) and `calibrateWithPlatt()`, falling back cleanly to the static 10-bin Laplace+PAVA curve below sample threshold. Auto-hydrates at startup from `jev_log.jsonl` + `jev_outcomes.json` (last 250 unique resolved markets) and refits every 10 settled windows (`online-platt-v4`).
+- **Adaptive Bayesian Weight, Parallel Bull-vs-Bear Debate & Split-Conformal Risk Threshold (`bot/src/ai/jevBayesian.ts`):**
+  - Added `computeAdaptiveBayesianWeight()` scaling the Polymarket prior anchor weight smoothly by Rolling Brier Skill (`exp(skill * 12)` shrinkage when negative, up to `0.45` when positive).
+  - Added `computeBullBearDebate()` combining parallel `bull_case_strength` / `bear_case_strength` scores into `netConviction` and clamped `debateDisagreement` (`[0, 1]`), folded as an optional `0.20`-weight dimension in `computeCompositeRiskScore()`.
+  - Added `summarizeEpisodicMemory()` (trailing `12`-window UP rate, streak, whipsaw rate, JEV call rates, directional hit rate, probability bias, and 3 most recent misses) and `computeEmpiricalRiskThreshold()` (split-conformal `85th`-percentile `compositeRisk` cutoff clamped to `[0.58, 0.85]`).
+- **JEV v4 Single-Call Parallel Architecture (`bot/src/ai/jevAdvisor.ts`):** Updated `buildJevState()` (`collaborative_v4` / `independent_v4` with compact `recent_memory`) and `buildJevQuestions()` (`8` parallel questions: adding `bull_case_strength`, `bear_case_strength`, and superforecaster outside-view/self-bias instructions on `settle_above_ptb`), preserving single-call latency and `SHADOW` mode (`JEV_SHADOW=true`) while logging v4 telemetry and serving v4 diagnostics in `getJevStatus()`.
+- **Verification:** Updated & added unit tests in `bot/src/ai/__tests__/jevSettleCalibration.test.ts`, `bot/src/ai/__tests__/jevBayesian.test.ts`, and `bot/src/ai/__tests__/jevAdvisor.test.ts`; verified `43/43` Vitest assertions (incl. `jevPolicy.test.ts` and `codeInvariants.test.ts`), 4-target `npm run typecheck`, and Vite production `npm run build`.
+
 ## 2026-11-21 — Gate 11c: Raw ML Edge Floor for `moderate` & `choppy` Regimes (`moderateMinMlEdge`)
 
 - **Root Cause Audit (`59` Live Eval Trades on `polyvps`):** Splitting performance by market regime revealed structural positive edge in `trending` (`16W–5L`, `76.2%`, `+$13.37`) and `mean_reverting` (`7W–2L`, `77.8%`, `+$6.39`), while `moderate` (`16W–11L`, `59.3%`, `-$6.26`) and `choppy` (`1W–1L`, `-$1.40`) accounted for the entire leak — driven by thin-ML-edge entries (`rawMlEdge < 3.5%`, e.g. `#51` `DOWN @ 64c` `+1.7%` and `#55` `DOWN @ 64c` `+2.15%`, especially in `MID` phase where `EARLY`-only Gate 4e did not apply).

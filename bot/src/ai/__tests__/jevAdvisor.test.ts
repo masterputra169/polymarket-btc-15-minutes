@@ -45,9 +45,21 @@ const snapshot: JevSnapshot = {
   },
 };
 
-describe('buildJevState v3', () => {
-  it('builds structured v3 state with Chainlink settle distance, order flow, and hybrid fields', () => {
-    const state = buildJevState(snapshot) as Record<string, any>;
+describe('buildJevState v4', () => {
+  it('builds structured v4 state with Chainlink settle distance, order flow, hybrid fields, and optional recent_memory', () => {
+    const mem = {
+      sampleCount: 5,
+      marketUpRate: 0.6,
+      streakSide: 'UP' as const,
+      streakLength: 2,
+      whipsawRate: 0.5,
+      jevUpCallRate: 0.2,
+      jevDownCallRate: 0.6,
+      jevDirectionHitRate: 0.5,
+      jevProbBias: -0.14,
+      recentMisses: [{ slug: 'btc-updown-15m-1', predicted: 'DOWN' as const, outcome: 'UP' as const, marketUp: 0.55, rawProbUp: 0.35, regime: 'moderate' }],
+    };
+    const state = buildJevState(snapshot, false, mem) as Record<string, any>;
     expect(state.market.asset).toBe('BTC/USD');
     expect(state.market.distance_to_ptb_usd).toBe(50);
     expect(state.market.settle_distance_to_ptb_usd).toBe(28);
@@ -61,23 +73,30 @@ describe('buildJevState v3', () => {
     expect(state.algo_view.provisional_side).toBe('UP');
     expect(state.algo_view.hybrid_delta_prob).toBe(0.02);
     expect(state.algo_view.hybrid_active).toBe(true);
-    expect(state.state_variant).toBe('collaborative_v3');
+    expect(state.recent_memory.window_count).toBe(5);
+    expect(state.recent_memory.streak).toBe('UPx2');
+    expect(state.recent_memory.jev_prob_bias).toBe(-0.14);
+    expect(state.state_variant).toBe('collaborative_v4');
     expect(state.momentum.delta_1m_usd).toBe(12);
   });
 
-  it('handles missing values without NaN', () => {
-    const state = buildJevState({ ...snapshot, btcPrice: null, priceToBeat: null, settlePrice: null, basisUsd: null }) as Record<string, any>;
+  it('handles missing values without NaN and skips recent_memory under 3 samples', () => {
+    const state = buildJevState({ ...snapshot, btcPrice: null, priceToBeat: null, settlePrice: null, basisUsd: null }, false, {
+      sampleCount: 2, marketUpRate: 0.5, streakSide: 'UP', streakLength: 1, whipsawRate: 1,
+      jevUpCallRate: 0.5, jevDownCallRate: 0.5, jevDirectionHitRate: 0.5, jevProbBias: 0, recentMisses: [],
+    }) as Record<string, any>;
     expect(state.market.distance_to_ptb_usd).toBeNull();
     expect(state.market.settle_distance_to_ptb_usd).toBeNull();
     expect(state.market.binance_chainlink_basis_usd).toBeNull();
+    expect(state.recent_memory).toBeUndefined();
   });
 });
 
-describe('independent state v3', () => {
-  it('omits algo_view, preserves order_flow, and marks independent_v3', () => {
+describe('independent state v4', () => {
+  it('omits algo_view, preserves order_flow, and marks independent_v4', () => {
     const state = buildJevState(snapshot, true) as Record<string, any>;
     expect(state.algo_view).toBeUndefined();
-    expect(state.state_variant).toBe('independent_v3');
+    expect(state.state_variant).toBe('independent_v4');
     expect(state.order_flow.vpin).toBe(0.18);
     expect(state.market_odds.up).toBe(0.56);
   });
@@ -90,9 +109,11 @@ describe('independent state v3', () => {
 });
 
 describe('buildJevQuestions', () => {
-  it('asks direction, settle, regime, and three TypeSafe score Risk Desk dimensions', () => {
+  it('asks direction, settle, regime, Risk Desk scores, and parallel bull/bear debate dimensions', () => {
     const q = buildJevQuestions();
     expect(Object.keys(q).sort()).toEqual([
+      'bear_case_strength',
+      'bull_case_strength',
       'chop_hazard',
       'direction',
       'exhaustion_risk',
@@ -103,11 +124,16 @@ describe('buildJevQuestions', () => {
     expect(q.direction.type).toBe('choice');
     expect(Object.keys((q.direction as any).criteria).sort()).toEqual(['DOWN', 'NO_EDGE', 'UP']);
     expect(q.settle_above_ptb.type).toBe('noul');
+    expect(String(q.settle_above_ptb.instructions)).toContain('recent_memory.jev_prob_bias');
     expect(q.regime.type).toBe('choice');
     expect(q.chop_hazard.type).toBe('score');
     expect(q.exhaustion_risk.type).toBe('score');
     expect(q.flow_contradiction.type).toBe('score');
+    expect(q.bull_case_strength.type).toBe('score');
+    expect(q.bear_case_strength.type).toBe('score');
     expect((q.chop_hazard as any).criteria).toHaveLength(5);
+    expect((q.bull_case_strength as any).criteria).toHaveLength(5);
+    expect((q.bear_case_strength as any).criteria).toHaveLength(5);
   });
 });
 
@@ -130,8 +156,39 @@ describe('parseJevAnswers', () => {
     expect(decision.exhaustionRisk).toBeCloseTo(0.40, 4);
     expect(decision.flowContradiction).toBeCloseTo(0.10, 4);
     expect(decision.compositeRisk).toBeCloseTo(0.40 * 0.20 + 0.35 * 0.40 + 0.25 * 0.10, 4);
+    expect(decision.onlineCalibrated).toBe(false);
     expect(decision.route).toBe('confident');
     expect(decision.regime).toBe('trending_up');
+  });
+
+  it('parses v4 bull/bear debate, online Platt calibration, adaptive Bayesian weight & empirical risk threshold', () => {
+    const memoryHistory = Array.from({ length: 30 }, (_, i) => ({
+      slug: `m-${i}`, ts: i, direction: 'UP' as const, rawProbUp: 0.6, marketProbUp: 0.55, outcomeUp: 1 as const,
+      compositeRisk: 0.50 + (i / 29) * 0.12, // 0.50 .. 0.62 -> empirical threshold ~ 0.61..0.62
+    }));
+    const decision = parseJevAnswers('jev-1.14.0', {
+      direction: { type: 'choice', choice: 'UP', probabilities: { UP: 0.7, DOWN: 0.2, NO_EDGE: 0.1 }, confidence: 0.75 },
+      settle_above_ptb: { type: 'noul', noul: 0.70 },
+      regime: { type: 'choice', choice: 'trending_up', probabilities: { trending_up: 0.8 }, confidence: 0.7 },
+      chop_hazard: { type: 'score', score: 2.8, legend: {}, probabilities: {}, confidence: 0.85 },
+      exhaustion_risk: { type: 'score', score: 2.0, legend: {}, probabilities: {}, confidence: 0.85 },
+      flow_contradiction: { type: 'score', score: 2.0, legend: {}, probabilities: {}, confidence: 0.85 },
+      bull_case_strength: { type: 'score', score: 3.2, legend: {}, probabilities: {}, confidence: 0.9 },
+      bear_case_strength: { type: 'score', score: 2.8, legend: {}, probabilities: {}, confidence: 0.9 },
+    }, {
+      marketUp: 0.52,
+      plattParams: { a: 0.8, b: 0.4, samples: 80, version: 'online-platt-v4' },
+      skillReport: { status: 'pass', allowActiveVeto: true, samples: 60, minSamples: 30, windowSize: 100, jevBrier: 0.21, marketBrier: 0.23, skillScore: 0.087 },
+      memoryHistory,
+    });
+    expect(decision.onlineCalibrated).toBe(true);
+    expect(decision.bullStrength).toBeCloseTo(0.80, 4);
+    expect(decision.bearStrength).toBeCloseTo(0.70, 4);
+    expect(decision.netConviction).toBeCloseTo(0.10, 4);
+    expect(decision.debateDisagreement).toBeCloseTo(1.0, 4);
+    expect(decision.effectiveBayesianWeight!).toBeGreaterThan(0.20);
+    expect(decision.effectiveRiskThreshold!).toBeLessThanOrEqual(0.62);
+    expect(decision.route).toBe('risk_veto'); // compositeRisk >= empirical ~0.61 and riskConf >= 0.60
   });
 
   it('gracefully handles answers omitting optional score dimensions and rejects missing core fields', () => {

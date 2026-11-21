@@ -127,3 +127,95 @@ export function fitLaplaceCalibrationBins(
   }
   return bins;
 }
+
+export const JEV_ONLINE_CALIBRATION_TAG = 'online-platt-v4';
+
+export interface PlattParams {
+  a: number;
+  b: number;
+  samples: number;
+  version: string;
+}
+
+const PLATT_PROB_MIN = 1e-4;
+const PLATT_PROB_MAX = 1 - PLATT_PROB_MIN;
+
+function logit(p: number): number {
+  const c = Math.max(PLATT_PROB_MIN, Math.min(PLATT_PROB_MAX, p));
+  return Math.log(c / (1 - c));
+}
+
+function sigmoid(x: number): number {
+  if (x >= 0) {
+    const z = Math.exp(-x);
+    return 1 / (1 + z);
+  }
+  const z = Math.exp(x);
+  return z / (1 + z);
+}
+
+/**
+ * Fit regularized online Platt logistic recalibration `p = sigmoid(a * logit(raw) + b)`
+ * via Newton-Raphson shrunk toward prior `(a0=0.5, b0=0)` for stability on small windows.
+ */
+export function fitOnlinePlatt(
+  samples: ReadonlyArray<{ rawProb: number; outcomeUp: 0 | 1 }>,
+  opts: { minSamples?: number; l2?: number; maxIter?: number } = {},
+): PlattParams | null {
+  const minSamples = Math.max(10, opts.minSamples ?? 40);
+  const valid: Array<{ x: number; y: number }> = [];
+  for (const s of samples) {
+    if (!Number.isFinite(s.rawProb)) continue;
+    valid.push({ x: logit(s.rawProb), y: s.outcomeUp === 1 ? 1 : 0 });
+  }
+  if (valid.length < minSamples) return null;
+
+  const l2 = Math.max(0.01, opts.l2 ?? 1.0);
+  const maxIter = Math.max(1, opts.maxIter ?? 25);
+  const a0 = 0.5;
+  const b0 = 0.0;
+  let a = a0;
+  let b = b0;
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    let ga = l2 * (a - a0);
+    let gb = l2 * (b - b0);
+    let haa = l2;
+    let hab = 0;
+    let hbb = l2;
+
+    for (const { x, y } of valid) {
+      const p = sigmoid(a * x + b);
+      const err = p - y;
+      const w = p * (1 - p);
+      ga += err * x;
+      gb += err;
+      haa += w * x * x;
+      hab += w * x;
+      hbb += w;
+    }
+
+    const det = haa * hbb - hab * hab;
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) break;
+    const da = (hbb * ga - hab * gb) / det;
+    const db = (haa * gb - hab * ga) / det;
+    a = Math.max(0.05, Math.min(4.0, a - da));
+    b = Math.max(-2.5, Math.min(2.5, b - db));
+    if (Math.abs(da) < 1e-6 && Math.abs(db) < 1e-6) break;
+  }
+
+  return {
+    a: +a.toFixed(4),
+    b: +b.toFixed(4),
+    samples: valid.length,
+    version: JEV_ONLINE_CALIBRATION_TAG,
+  };
+}
+
+/** Calibrate a raw probability using fitted Platt parameters, or fall back to static PAVA bins. */
+export function calibrateWithPlatt(raw: number, platt: PlattParams | null | undefined): number {
+  if (!Number.isFinite(raw)) return Number.NaN;
+  if (!platt) return calibrateJevSettleUp(raw);
+  const calibrated = sigmoid(platt.a * logit(raw) + platt.b);
+  return Math.max(0.05, Math.min(0.95, calibrated));
+}
