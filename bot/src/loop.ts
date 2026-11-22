@@ -231,6 +231,8 @@ import { getGlobalRisk } from './monitoring/globalRisk.ts';
 import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
+import { noteMlWindowPrediction, recordMlWindowOutcome } from './ml/onlineCalibration.ts';
+import { scoreMetaLabeler } from './ml/metaLabeler.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -427,6 +429,7 @@ async function closeTwapFor(slug: string | null | undefined, waitMs = 3_000): Pr
  * so it must run before that) and a slug switch — and at most once per market.
  */
 const ptbVerifyScheduled = new Set<string>();
+let lastMetaShadowSlug: string | null = null;
 function verifyClosedMarketPtb(slug: string | null): void {
   if (!slug || ptbVerifyScheduled.has(slug) || priceToBeat.slug !== slug) return;
   ptbVerifyScheduled.add(slug);
@@ -435,7 +438,11 @@ function verifyClosedMarketPtb(slug: string | null): void {
   if (isExactPtbSource(priceToBeat.source) && priceToBeat.value != null) {
     const ptbVal = priceToBeat.value;
     void closeTwapFor(slug).then((closeTwap) => {
-      if (closeTwap != null) recordJevWindowOutcome(slug, closeTwap >= ptbVal ? 'UP' : 'DOWN');
+      if (closeTwap != null) {
+        const outcomeSide = closeTwap >= ptbVal ? 'UP' : 'DOWN';
+        recordJevWindowOutcome(slug, outcomeSide);
+        recordMlWindowOutcome(slug, outcomeSide);
+      }
     }).catch(() => {});
   }
 }
@@ -2169,6 +2176,7 @@ export async function pollOnce() {
         orderFlow: getOrderFlowFeatures(),
     };
     try { maybeJevAnalyze(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
+    try { if (mlResult.available) noteMlWindowPrediction(marketSlug, mlResult.mlProbUp, marketUp); } catch { /* record-only */ }
     // Dedicated 15s order-flow history, independent of JEV call cadence.
     try {
       maybeRecordOrderFlow({
@@ -2181,6 +2189,30 @@ export async function pollOnce() {
     } catch { /* record-only */ }
     if (rec.action === 'ENTER') {
       try { maybeJevDecisionShadow(jevSnapshot); } catch { /* record-only - never disturb the poll */ }
+      try {
+        if (marketSlug && marketSlug !== lastMetaShadowSlug && (rec.side === 'UP' || rec.side === 'DOWN')) {
+          const mPrice = rec.side === 'UP' ? marketUp : marketDown;
+          if (mPrice != null && mPrice > 0.01 && mPrice < 0.99) {
+            lastMetaShadowSlug = marketSlug;
+            const mlSideProb = mlResult.available ? (rec.side === 'UP' ? mlResult.mlProbUp : 1 - mlResult.mlProbUp) : null;
+            const rawMlEdge = mlSideProb != null ? mlSideProb - mPrice : 0;
+            const jevAligned = jevLatest?.netConviction != null
+              ? (rec.side === 'UP' ? jevLatest.netConviction : -jevLatest.netConviction)
+              : 0;
+            const ms = scoreMetaLabeler({
+              entryPrice: mPrice,
+              mlConfidence: mlResult.available ? mlResult.mlConfidence : 0,
+              rawMlEdge,
+              timeLeftMin: timeLeftMin ?? 7.5,
+              regime: regimeInfo?.regime ?? null,
+              jevNetConvAligned: jevAligned,
+            }, { slug: marketSlug });
+            if (ms.winProb != null) {
+              log.info(`[MetaLabeler] shadow ${marketSlug} ${rec.side} @ ${(mPrice * 100).toFixed(1)}c: P(WIN)=${(ms.winProb * 100).toFixed(1)}% (AUC=${ms.holdoutAuc ?? 'n/a'}, n=${ms.samples})`);
+            }
+          }
+        }
+      } catch { /* record-only */ }
     }
     // ── 8. Bet sizing ──
     const betSide = rec.side;

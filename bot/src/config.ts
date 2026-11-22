@@ -60,6 +60,19 @@ const BOT_CONFIG = {
     enabled: process.env.ML_HYBRID_RESIDUAL_ENABLED !== 'false',
     path: resolve(__dirname, '..', '..', 'public', 'ml', 'hybrid_residual_v4.json'),
   },
+  // Online recency Platt calibration for live ML probUp (SHADOW by default; ACTIVE self-guards on rolling Brier)
+  mlOnlineCalibration: {
+    mode: ((process.env.ML_ONLINE_CALIBRATION_MODE || 'shadow').trim().toLowerCase() === 'active' ? 'active' : 'shadow') as 'shadow' | 'active',
+    minSamples: envInt(process.env.ML_ONLINE_CALIB_MIN_SAMPLES, 50, 20, 300),
+    recencyHalfLife: envInt(process.env.ML_ONLINE_CALIB_HALF_LIFE, 50, 10, 200),
+  },
+  // Stage-2 Meta-Labeler predicting P(WIN | ENTER candidate) from trade_journal.jsonl (SHADOW by default)
+  metaLabeler: {
+    mode: ((process.env.ML_META_LABELER_MODE || 'shadow').trim().toLowerCase() === 'veto' ? 'veto' : 'shadow') as 'shadow' | 'veto',
+    minSamples: envInt(process.env.ML_META_LABELER_MIN_SAMPLES, 35, 20, 300),
+    minWinProb: envNum(process.env.ML_META_LABELER_MIN_WIN_PROB, 0.55, 0.35, 0.85),
+    minAuc: envNum(process.env.ML_META_LABELER_MIN_AUC, 0.56, 0.50, 0.90),
+  },
 
   // Position management
   positionsFile: resolve(__dirname, '..', 'data', 'positions.json'),

@@ -84,6 +84,8 @@ import { loadAnalysisFromDisk, maybeAnalyze, getLastAnalysis } from './src/ai/po
 import { maybeOptimize } from './src/ai/selfOptimizer.ts';
 import { initLLMRegime, maybeClassify as maybeClassifyRegime } from './src/ai/regimeClassifier.ts';
 import { initJevAdvisor } from './src/ai/jevAdvisor.ts';
+import { initMlOnlineCalibration } from './src/ml/onlineCalibration.ts';
+import { initMetaLabeler } from './src/ml/metaLabeler.ts';
 import { notify } from './src/monitoring/notifier.ts';
 import { startupAlert } from './src/monitoring/alertTemplates.ts';
 
@@ -330,6 +332,8 @@ async function main() {
 
   // 4d4. Initialize JEV / TypeSafe System One decision advisor (independent of OpenRouter).
   initJevAdvisor();
+  initMlOnlineCalibration();
+  initMetaLabeler(BOT_CONFIG.journalFile);
 
   // 5. Start WebSocket streams (real-time data)
   log.info('Connecting WebSocket streams...');

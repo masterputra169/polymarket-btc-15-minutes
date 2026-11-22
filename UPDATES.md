@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-22 — Online Recency ML Calibration + Stage-2 Meta-Labeler (Shadow-First)
+
+- **Online Recency ML Calibration (`bot/src/ml/onlineCalibration.ts`):** Reuses `fitOnlinePlatt()` / `calibrateWithPlatt()` (`recencyHalfLife=50`, `minSamples=50`, refit every `15` resolved windows) warm-loaded from `jev_log.jsonl` + `jev_outcomes.json` (up to `300` unique resolved windows) with a strict Rolling Brier Self-Guard (`allowActive = calMlBrier < rawMlBrier`). Wired into `bot/index.ts` and `bot/src/loop.ts` (`noteMlWindowPrediction` + `recordMlWindowOutcome`); defaults to `ML_ONLINE_CALIBRATION_MODE=shadow`.
+- **Stage-2 Online Meta-Labeler (`bot/src/ml/metaLabeler.ts`):** Zero-dependency L2-regularized standardized logistic regression predicting `P(WIN | ENTER)` from 8 decision-time features (`entryPrice`, `mlConfidence`, `rawMlEdge`, `timeLeftMin`, regime one-hots, `jevNetConvAligned`), evaluated with honest chronological 70/30 holdout ROC AUC & Brier. Warm-loaded from `trade_journal.jsonl` in `bot/index.ts`, shadow-scored once per market on `ENTER` candidates in `bot/src/loop.ts`, and defaults to `ML_META_LABELER_MODE=shadow` (veto requires `mode=veto` + `holdoutAuc >= 0.56`).
+
 ## 2026-11-22 — JEV v5: Recency-Weighted Variant-Aware Platt, Multi-Signal Debate Fusion, Self-Consistency Guard & Dashboard v5 Telemetry
 
 - **Live v4 Audit Findings (`69` resolved v4 windows on `polyvps`):** Bull/Bear debate achieved **`67.9%` (`38/56`)** accuracy when `|netConviction| >= 0.15`, and v4 `rawBrier` improved to **`0.2265`** (beating `mktBrier 0.2267`), but old v3 rows in the 250-sample Platt pool dragged `calBrier` to `0.2284`, and `minRiskConfidence=0.60` muted Risk Desk triggers when `compositeRisk > riskThresh`.
