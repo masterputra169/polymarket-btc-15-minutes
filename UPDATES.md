@@ -10,6 +10,10 @@
 
 - **Online Recency ML Calibration (`bot/src/ml/onlineCalibration.ts`):** Reuses `fitOnlinePlatt()` / `calibrateWithPlatt()` (`recencyHalfLife=50`, `minSamples=50`, refit every `15` resolved windows) warm-loaded from `jev_log.jsonl` + `jev_outcomes.json` (up to `300` unique resolved windows) with a strict Rolling Brier Self-Guard (`allowActive = calMlBrier < rawMlBrier`). Wired into `bot/index.ts` and `bot/src/loop.ts` (`noteMlWindowPrediction` + `recordMlWindowOutcome`); defaults to `ML_ONLINE_CALIBRATION_MODE=shadow`.
 - **Stage-2 Online Meta-Labeler (`bot/src/ml/metaLabeler.ts`):** Zero-dependency L2-regularized standardized logistic regression predicting `P(WIN | ENTER)` from 8 decision-time features (`entryPrice`, `mlConfidence`, `rawMlEdge`, `timeLeftMin`, regime one-hots, `jevNetConvAligned`), evaluated with honest chronological 70/30 holdout ROC AUC & Brier. Warm-loaded from `trade_journal.jsonl` in `bot/index.ts`, shadow-scored once per market on `ENTER` candidates in `bot/src/loop.ts`, and defaults to `ML_META_LABELER_MODE=shadow` (veto requires `mode=veto` + `holdoutAuc >= 0.56`).
+- **Scheduled Shadow→Active Promotion Milestones (1-by-1, never simultaneously):**
+  1. **`2026-11-23..24` WIB — Online ML Calibration (`ML_ONLINE_CALIBRATION_MODE=active`):** after `100–150` forward windows, require `calMlBrier < rawMlBrier` & `calMlBrier <= marketBrier` (`allowActive=true`).
+  2. **`2026-11-25..26` WIB — JEV v5 Veto (`JEV_MODE=veto`):** after `150–200` forward v5 resolved windows, require `brierGuard=pass(100)`, `skill > 0%`, and shadow veto audit showing vetoed candidates are majority LOSS.
+  3. **`2026-11-28..30` WIB — Stage-2 Meta-Labeler (`ML_META_LABELER_MODE=veto`):** at `100+` total settled trades, require `holdoutAUC >= 0.58` and forward `P(WIN) < 55%` shadow calls empirically `< 55%` WR.
 
 ## 2026-11-22 — JEV v5: Recency-Weighted Variant-Aware Platt, Multi-Signal Debate Fusion, Self-Consistency Guard & Dashboard v5 Telemetry
 
