@@ -2921,6 +2921,7 @@ export async function pollOnce() {
           validatePrice,
           validateTrade,
           getBankroll,
+          getPeakBankroll: () => getStats().peakBankroll,
           getAvailableBankroll,
           getConsecutiveLosses,
           hasOpenPosition,

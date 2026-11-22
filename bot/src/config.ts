@@ -123,6 +123,16 @@ const BOT_CONFIG = {
 
   // Bet sizing hard cap (data shows ~$1.30 avg is most consistent)
   maxBetAmountUsd: envNum(process.env.MAX_BET_AMOUNT_USD, 2.50, 1.00, 100),
+  // Step-Compounding tiers: keeps bet flat per bankroll tier and auto steps down on peak drawdown
+  stepCompounding: {
+    enabled: process.env.STEP_COMPOUNDING_ENABLED === 'true',
+    baseBankroll: envNum(process.env.STEP_COMP_BASE_BANKROLL, 100, 10, 100_000),
+    stepBankroll: envNum(process.env.STEP_COMP_STEP_BANKROLL, 50, 10, 10_000),
+    baseBetUsd: envNum(process.env.STEP_COMP_BASE_BET_USD, 2.10, 1.00, 100),
+    stepBetUsd: envNum(process.env.STEP_COMP_STEP_BET_USD, 0.90, 0.10, 50),
+    maxBetUsd: envNum(process.env.STEP_COMP_MAX_BET_USD, 25.00, 1.00, 500),
+    drawdownStepDownPct: envNum(process.env.STEP_COMP_DD_STEPDOWN_PCT, 15, 3, 50),
+  },
   // Kelly sizes on price + shrink * (model - price). Realised/claimed edge on
   // the v1 dry-run book was ~0.18; 0.20 is that evidence. 1 = trust the model fully.
   kellyProbShrink: envNum(process.env.KELLY_PROB_SHRINK, 0.60, 0, 1),

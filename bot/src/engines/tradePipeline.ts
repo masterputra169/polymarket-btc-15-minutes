@@ -28,6 +28,7 @@ import { routeOrder } from './orderRouter.ts';
 import { getEffectiveLimitOrderConfig, getEffectiveMaxBetAmountUsd } from '../ml/modelProfiles.ts';
 import { isClobOutageActive } from '../trading/clobOutageLatch.ts';
 import { isFillSizeWithinClip } from '../trading/fillTracker.ts';
+import { computeStepCompoundingCap } from '../trading/stepCompounding.ts';
 import {
   createQueueSimOrder,
   estimateQueueFillFeasibility,
@@ -964,15 +965,26 @@ export async function executeDirectionalTrade({
       }
     }
 
-    // Scale max bet with bankroll — fixed floor prevents Kelly-optimal sizing at very small bankrolls.
-    // Use the LARGER of: (a) configured dollar floor, (b) bankroll × confidence tier %.
-    // At $30 bankroll (HIGH): max(7, 30×0.035) = max(7, 1.05) = $7 (floor binds)
-    // At $200 bankroll (HIGH): max(7, 200×0.035) = max(7, 7.00) = $7 (both equal, compounding kicks in above)
+    // Scale max bet with bankroll — or enforce Step-Compounding tiers with peak-drawdown step-down.
     const bankrollForCap = deps.getBankroll?.() ?? 0;
-    const scaledMaxBet = Math.max(getEffectiveMaxBetAmountUsd(), bankrollForCap * kellyCapPct);
-    if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
-      log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
-      effectiveBetAmount = scaledMaxBet;
+    let stepCompSteppedDown = false;
+    if (BOT_CONFIG.stepCompounding?.enabled) {
+      const peakForCap = deps.getPeakBankroll?.() ?? bankrollForCap;
+      const stepRes = computeStepCompoundingCap(bankrollForCap, peakForCap, BOT_CONFIG.stepCompounding);
+      stepCompSteppedDown = stepRes.steppedDown;
+      if (effectiveBetAmount > stepRes.capUsd) {
+        log.info(
+          `[StepComp] Tier ${stepRes.effectiveTier} cap: $${effectiveBetAmount.toFixed(2)} → $${stepRes.capUsd.toFixed(2)} ` +
+          `(bankroll=$${bankrollForCap.toFixed(2)}, peak=$${peakForCap.toFixed(2)}, dd=${stepRes.drawdownPct.toFixed(1)}%${stepRes.steppedDown ? ', STEPPED DOWN' : ''})`,
+        );
+        effectiveBetAmount = stepRes.capUsd;
+      }
+    } else {
+      const scaledMaxBet = Math.max(getEffectiveMaxBetAmountUsd(), bankrollForCap * kellyCapPct);
+      if (scaledMaxBet > 0 && effectiveBetAmount > scaledMaxBet) {
+        log.info(`Bet capped: $${effectiveBetAmount.toFixed(2)} → $${scaledMaxBet.toFixed(2)} (${bankrollForCap > 0 ? 'scaled' : 'fixed'} maxBet)`);
+        effectiveBetAmount = scaledMaxBet;
+      }
     }
 
     shares = Math.floor(effectiveBetAmount / betMarketPrice);
@@ -994,7 +1006,7 @@ export async function executeDirectionalTrade({
       HIGH:      envInt(process.env.FOK_MIN_SHARES_HIGH,      6, 1, 50),
       VERY_HIGH: envInt(process.env.FOK_MIN_SHARES_VERY_HIGH, 7, 1, 50),
     };
-    const minShares = FOK_MIN_BY_CONF[rec.confidence] ?? 5;
+    const minShares = stepCompSteppedDown ? LIVE_MIN_SHARES : (FOK_MIN_BY_CONF[rec.confidence] ?? 5);
     // Quant safety: do not inflate shares with FOK bump if gamma dampener is active (late phase) or RoR cap binds
     const allowBump = gammaDamp >= 1.0 && !rorCapActive;
     if (allowBump && shares < minShares) {

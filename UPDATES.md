@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-22 — Step-Compounding Bet Cap + Peak-Drawdown Step-Down Guard (`STEP_COMPOUNDING_ENABLED`)
+
+- **Pure Step-Compounding Engine (`bot/src/trading/stepCompounding.ts`):** Added `computeStepCompoundingCap(bankroll, peakBankroll, cfg)` enforcing flat bet caps per bankroll tier (`$100–$149.99` → `$2.10` Tier 0, `$150–$199.99` → `$3.00` Tier 1, `$200–$249.99` → `$3.90` Tier 2, +`$0.90` per `$50` up to `$25.00` cap) with automatic peak-drawdown protection (`>=15%` drops 1 tier & suppresses FOK confidence-tier share bumps above the 5-share CLOB minimum; `>=30%` resets to Tier 0).
+- **Wiring & Opt-In Config (`bot/src/config.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`):** Added `BOT_CONFIG.stepCompounding` (`STEP_COMPOUNDING_ENABLED=false` by default in code) and passed `getPeakBankroll: () => getStats().peakBankroll` into `executeDirectionalTrade()`.
+- **VPS Activation (`polyvps:/opt/polybtc15/bot/.env`):** Enabled `STEP_COMPOUNDING_ENABLED=true` (keeping current `$117.45` bankroll flat at `$2.10` Tier 0 until crossing `$150`) and tightened `MAX_DAILY_LOSS_PCT` from `50` → `15`.
+
 ## 2026-11-22 — JEV v4 Direction Prompt Calibration (Remove Over-Defensive NO_EDGE Default)
 
 - **Live Telemetry Finding (`65` v4 calls / `61` resolved windows on `polyvps`):** JEV v4 lifted Rolling Brier Skill from `-1.64%` to **`+0.24%`** (`bayesBrier 0.2310` vs `mktBrier 0.2315`, `online-platt-v4`), and eliminated the v3 bearish skew, but the `"Default to NO_EDGE unless..."` instruction in `buildJevQuestions()` caused `65/65` calls to lock onto `NO_EDGE` (`uncertain_passthrough`).
