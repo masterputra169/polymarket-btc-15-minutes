@@ -53,6 +53,16 @@ export interface JevMemoryEntry {
   outcomeUp: 0 | 1;
   regime?: string | null;
   compositeRisk?: number | null;
+  stateVariant?: string | null;
+}
+
+export interface MultiSignalPosteriorResult {
+  posterior: number;
+  priorOdds: number;
+  settleLr: number;
+  debateLr: number;
+  effectiveWeight: number;
+  debateWeight: number;
 }
 
 export interface JevEpisodicMemorySummary {
@@ -377,10 +387,73 @@ export function computeEmpiricalRiskThreshold(
 }
 
 /**
- * 3-zone confidence routing:
+ * Fuse calibrated settle probability AND high-conviction bull/bear debate into a single
+ * market-anchored Bayesian log-odds posterior. Debate only updates when |netConviction| >= 0.15
+ * and disagreement < 0.65 (clean one-sided thesis).
+ */
+export function computeMultiSignalBayesianPosterior(params: {
+  marketPrior: number | null | undefined;
+  jevCalibratedProb: number;
+  directionConfidence: number;
+  maxWeight?: number;
+  debate?: BullBearDebateResult | null;
+  debateMaxWeight?: number;
+}): MultiSignalPosteriorResult {
+  const base = computeBayesianAnchor(
+    params.marketPrior,
+    params.jevCalibratedProb,
+    params.directionConfidence,
+    params.maxWeight ?? 0.20,
+  );
+  const debate = params.debate;
+  if (
+    !debate ||
+    debate.netConviction == null ||
+    !Number.isFinite(debate.netConviction) ||
+    Math.abs(debate.netConviction) < 0.15 ||
+    (debate.disagreement != null && debate.disagreement >= 0.65)
+  ) {
+    return {
+      posterior: base.posterior,
+      priorOdds: base.priorOdds,
+      settleLr: base.likelihoodRatio,
+      debateLr: 1,
+      effectiveWeight: base.effectiveWeight,
+      debateWeight: 0,
+    };
+  }
+  const debateProb = clampProb(0.5 + 0.40 * debate.netConviction);
+  const debateOdds = probToOdds(debateProb);
+  const debateLr = debateOdds / base.priorOdds;
+  const debateWeight = clamp01(clamp01(debate.confidence) * clamp01(params.debateMaxWeight ?? 0.12));
+  const combinedOdds = probToOdds(base.posterior) * dampenLr(debateLr, debateWeight);
+  return {
+    posterior: oddsToProb(combinedOdds),
+    priorOdds: base.priorOdds,
+    settleLr: base.likelihoodRatio,
+    debateLr,
+    effectiveWeight: base.effectiveWeight,
+    debateWeight,
+  };
+}
+
+/** Check whether JEV's directional call agrees with its parallel bull/bear debate netConviction. */
+export function isDirectionDebateConsistent(
+  direction: 'UP' | 'DOWN' | 'NO_EDGE',
+  netConviction: number | null | undefined,
+  contradictionMargin = 0.10,
+): boolean {
+  if (netConviction == null || !Number.isFinite(netConviction)) return true;
+  if (direction === 'UP' && netConviction < -contradictionMargin) return false;
+  if (direction === 'DOWN' && netConviction > contradictionMargin) return false;
+  return true;
+}
+
+/**
+ * 3-zone confidence routing with self-consistency guard:
  *  1) Risk Desk override when composite risk >= threshold with sufficient confidence.
- *  2) High directional confidence -> eligible for veto / gate / sizing.
- *  3) Uncertain -> pass-through unchanged.
+ *  2) High directional confidence (and consistent with parallel bull/bear debate) -> confident.
+ *  3) Uncertain or internally contradicted -> pass-through unchanged.
  */
 export function routeJevDecision(params: {
   direction: 'UP' | 'DOWN' | 'NO_EDGE';
@@ -390,9 +463,10 @@ export function routeJevDecision(params: {
   minConfidence: number;
   riskVetoThreshold?: number;
   minRiskConfidence?: number;
+  netConviction?: number | null;
 }): ConfidenceRoute {
   const riskThresh = params.riskVetoThreshold ?? 0.78;
-  const minRiskConf = params.minRiskConfidence ?? 0.60;
+  const minRiskConf = params.minRiskConfidence ?? 0.45;
   if (
     params.compositeRisk != null &&
     Number.isFinite(params.compositeRisk) &&
@@ -401,7 +475,11 @@ export function routeJevDecision(params: {
   ) {
     return 'risk_veto';
   }
-  if (params.direction !== 'NO_EDGE' && params.directionConfidence >= params.minConfidence) {
+  if (
+    params.direction !== 'NO_EDGE' &&
+    params.directionConfidence >= params.minConfidence &&
+    isDirectionDebateConsistent(params.direction, params.netConviction)
+  ) {
     return 'confident';
   }
   return 'uncertain_passthrough';

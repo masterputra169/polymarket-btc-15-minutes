@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-11-22 — JEV v5: Recency-Weighted Variant-Aware Platt, Multi-Signal Debate Fusion, Self-Consistency Guard & Dashboard v5 Telemetry
+
+- **Live v4 Audit Findings (`69` resolved v4 windows on `polyvps`):** Bull/Bear debate achieved **`67.9%` (`38/56`)** accuracy when `|netConviction| >= 0.15`, and v4 `rawBrier` improved to **`0.2265`** (beating `mktBrier 0.2267`), but old v3 rows in the 250-sample Platt pool dragged `calBrier` to `0.2284`, and `minRiskConfidence=0.60` muted Risk Desk triggers when `compositeRisk > riskThresh`.
+- **Recency-Weighted & Variant-Aware Platt (`bot/src/ai/jevSettleCalibration.ts`, `bot/src/ai/jevAdvisor.ts`):** Added exponential `recencyHalfLife` weighting (`35` windows) to `fitOnlinePlatt()` (`online-platt-v5`) and filtered Platt fitting to modern `_v4`/`_v5` rows once `>= 40` exist so stale v3 bearish bias cannot contaminate v5 calibration.
+- **Multi-Signal Log-Odds Fusion & Self-Consistency Guard (`bot/src/ai/jevBayesian.ts`, `bot/src/ai/jevAdvisor.ts`):** Added `computeMultiSignalBayesianPosterior()` fusing clean one-sided Bull/Bear debate (`|netConviction| >= 0.15`, `disagreement < 0.65`) alongside calibrated `settle_above_ptb` onto the Polymarket prior; added `isDirectionDebateConsistent()` downgrading contradicted `direction` calls to `uncertain_passthrough`; lowered `minRiskConfidence` default to `0.45`; added `book_skew_ratio` in `order_book` (`independent_v5`/`collaborative_v5`).
+- **Dashboard Telemetry (`src/components/JevPanel.tsx`):** Added live `Bull/Bear` debate conviction/disagreement row, conformal `riskThresh` display (`/ thresh`), and `calibrationVersion` footer tag.
+
 ## 2026-11-22 — Step-Compounding Bet Cap + Peak-Drawdown Step-Down Guard (`STEP_COMPOUNDING_ENABLED`)
 
 - **Pure Step-Compounding Engine (`bot/src/trading/stepCompounding.ts`):** Added `computeStepCompoundingCap(bankroll, peakBankroll, cfg)` enforcing flat bet caps per bankroll tier (`$100–$149.99` → `$2.10` Tier 0, `$150–$199.99` → `$3.00` Tier 1, `$200–$249.99` → `$3.90` Tier 2, +`$0.90` per `$50` up to `$25.00` cap) with automatic peak-drawdown protection (`>=15%` drops 1 tier & suppresses FOK confidence-tier share bumps above the 5-share CLOB minimum; `>=30%` resets to Tier 0).

@@ -16,6 +16,12 @@ interface JevLast {
   chopHazard?: number | null;
   exhaustionRisk?: number | null;
   flowContradiction?: number | null;
+  bullStrength?: number | null;
+  bearStrength?: number | null;
+  netConviction?: number | null;
+  debateDisagreement?: number | null;
+  effectiveRiskThreshold?: number | null;
+  selfConsistent?: boolean;
   route?: string | null;
   latencyMs?: number | null;
   costUsd?: number | null;
@@ -38,6 +44,7 @@ export interface JevStatusData {
   provider?: string;
   model?: string | null;
   calibrationVersion?: string | null;
+  effectiveRiskThreshold?: number | null;
   brierSkill?: JevBrierSkill | null;
   shadowMode?: boolean;
   calls?: number;
@@ -74,9 +81,10 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
   const upEdge = settle != null && last?.marketUp != null ? settle - last.marketUp : null;
   const downEdge = settle != null && last?.marketDown != null ? (1 - settle) - last.marketDown : null;
   const risk = last?.compositeRisk ?? null;
+  const riskThresh = last?.effectiveRiskThreshold ?? data.effectiveRiskThreshold ?? 0.78;
   const skill = data.brierSkill ?? null;
   const tone = !data.enabled || !data.configured ? 'var(--text-muted)' : MODE_COLOR[mode] ?? 'var(--text-secondary)';
-  const riskColor = risk == null ? 'var(--text-muted)' : risk >= 0.78 ? 'var(--red-bright)' : risk >= 0.55 ? 'var(--yellow-bright)' : 'var(--green-bright)';
+  const riskColor = risk == null ? 'var(--text-muted)' : risk >= riskThresh ? 'var(--red-bright)' : risk >= 0.55 ? 'var(--yellow-bright)' : 'var(--green-bright)';
   return (
     <div className="card span-2" style={{ animationDelay: '0.25s' }}>
       <div className="card__header">
@@ -114,10 +122,20 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
             <span
               className="data-row__value"
               style={{ color: riskColor, fontWeight: 600 }}
-              title={risk != null ? `Chop ${pct(last.chopHazard)} | Exhaust ${pct(last.exhaustionRisk)} | Flow ${pct(last.flowContradiction)}` : undefined}
+              title={risk != null ? `Chop ${pct(last.chopHazard)} | Exhaust ${pct(last.exhaustionRisk)} | Flow ${pct(last.flowContradiction)} | Thresh ${pct(riskThresh)}` : undefined}
             >
-              {pct(risk)}
+              {pct(risk)} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.62rem' }}>/ {pct(riskThresh)}</span>
             </span></div>
+          {last.netConviction != null && (
+            <div className="data-row"><span className="data-row__label">Bull/Bear</span>
+              <span
+                className="data-row__value"
+                style={{ color: last.netConviction > 0.1 ? 'var(--green-bright)' : last.netConviction < -0.1 ? 'var(--red-bright)' : 'var(--text-secondary)', fontWeight: 600 }}
+                title={`Bull ${pct(last.bullStrength)} vs Bear ${pct(last.bearStrength)} | Disagreement ${pct(last.debateDisagreement)}${last.selfConsistent === false ? ' | Self-consistency conflict' : ''}`}
+              >
+                {(last.netConviction >= 0 ? '+' : '') + Math.round(last.netConviction * 100)}% <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: '0.62rem' }}>(dis {pct(last.debateDisagreement)})</span>
+              </span></div>
+          )}
           <div className="data-row"><span className="data-row__label">Regime</span>
             <span className="data-row__value">{last.regime ?? '-'}</span></div>
           <div className="data-row"><span className="data-row__label">Latency</span>
@@ -140,6 +158,7 @@ const JevPanel = memo(function JevPanel({ data }: { data: JevStatusData | null }
         calls {data.calls ?? 0} · errors {data.errors ?? 0} · last latency {data.lastLatencyMs != null ? Math.round(data.lastLatencyMs) + 'ms' : '-'}
         {data.totalCostUsd != null ? ' · total $' + data.totalCostUsd.toFixed(4) : ''}
         {skill?.skillScore != null ? ' · skill ' + (skill.skillScore >= 0 ? '+' : '') + (skill.skillScore * 100).toFixed(1) + '%' : ''}
+        {data.calibrationVersion ? ' · ' + data.calibrationVersion : ''}
         {data.lastError ? ' · ' + data.lastError.slice(0, 80) : ''}
       </div>
     </div>

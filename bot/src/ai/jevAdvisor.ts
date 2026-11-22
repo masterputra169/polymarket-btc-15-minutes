@@ -42,11 +42,12 @@ import {
 } from './jevSettleCalibration.ts';
 import {
   computeAdaptiveBayesianWeight,
-  computeBayesianAnchor,
   computeBullBearDebate,
   computeCompositeRiskScore,
   computeEmpiricalRiskThreshold,
+  computeMultiSignalBayesianPosterior,
   evaluateBrierSkillGate,
+  isDirectionDebateConsistent,
   normalizeTypesafeScore,
   routeJevDecision,
   summarizeEpisodicMemory,
@@ -154,6 +155,7 @@ export interface JevDecision {
   onlineCalibrated?: boolean;
   effectiveBayesianWeight?: number;
   effectiveRiskThreshold?: number;
+  selfConsistent?: boolean;
   route?: ConfidenceRoute;
   latencyMs: number;
   inputTokens: number | null;
@@ -210,6 +212,7 @@ interface PendingOutcomeMeta {
   direction: 'UP' | 'DOWN' | 'NO_EDGE';
   regime: string | null;
   compositeRisk: number | null;
+  stateVariant: string | null;
   ts: number;
 }
 
@@ -233,14 +236,21 @@ function pushMemoryEntry(entry: JevMemoryEntry): void {
   }
 }
 
+function isModernJevVariant(variant: string | null | undefined): boolean {
+  return typeof variant === 'string' && (variant.endsWith('_v4') || variant.endsWith('_v5'));
+}
+
 function refitOnlinePlatt(): void {
-  const samples: Array<{ rawProb: number; outcomeUp: 0 | 1 }> = [];
+  const modern: Array<{ rawProb: number; outcomeUp: 0 | 1 }> = [];
+  const all: Array<{ rawProb: number; outcomeUp: 0 | 1 }> = [];
   for (const m of _memoryHistory) {
-    if (Number.isFinite(m.rawProbUp)) {
-      samples.push({ rawProb: m.rawProbUp, outcomeUp: m.outcomeUp });
-    }
+    if (!Number.isFinite(m.rawProbUp)) continue;
+    const item = { rawProb: m.rawProbUp, outcomeUp: m.outcomeUp };
+    all.push(item);
+    if (isModernJevVariant(m.stateVariant)) modern.push(item);
   }
-  _onlinePlatt = fitOnlinePlatt(samples);
+  const pool = modern.length >= 40 ? modern : all;
+  _onlinePlatt = fitOnlinePlatt(pool, { recencyHalfLife: 35 });
 }
 
 function persistJevOutcome(slug: string, outcomeLabel: 'UP' | 'DOWN'): void {
@@ -308,6 +318,10 @@ export function buildJevState(
       spread: roundOpt(s.spread ?? s.orderFlow?.spread, 4),
       bid_liquidity_usd: roundOpt(s.bidLiquidity, 2),
       ask_liquidity_usd: roundOpt(s.askLiquidity, 2),
+      book_skew_ratio:
+        s.bidLiquidity != null && s.askLiquidity != null && (s.bidLiquidity + s.askLiquidity) > 0
+          ? roundOpt(s.bidLiquidity / (s.bidLiquidity + s.askLiquidity), 4)
+          : null,
     },
     momentum: { delta_1m_usd: s.delta1m, delta_3m_usd: s.delta3m, vwap_distance: s.vwapDist, vwap_slope: s.vwapSlope, ema_cross: s.emaCrossSignal, ema_distance_pct: s.emaDistPct },
     volatility: { atr_pct: s.atrPct, atr_ratio: s.atrRatio, bb_percent_b: s.bbPercentB, bb_width: s.bbWidth },
@@ -361,7 +375,7 @@ export function buildJevState(
     };
   }
   if (independent) delete state.algo_view;
-  state.state_variant = independent ? 'independent_v4' : 'collaborative_v4';
+  state.state_variant = independent ? 'independent_v5' : 'collaborative_v5';
   return state;
 }
 
@@ -509,12 +523,13 @@ export function parseJevAnswers(
     ? computeAdaptiveBayesianWeight(baseMaxWeight, ctx.skillReport)
     : baseMaxWeight;
 
-  const bayes = computeBayesianAnchor(
-    ctx.marketUp ?? null,
-    settleUpCalibrated,
-    directionAnswer.confidence,
-    effectiveBayesianWeight,
-  );
+  const bayes = computeMultiSignalBayesianPosterior({
+    marketPrior: ctx.marketUp ?? null,
+    jevCalibratedProb: settleUpCalibrated,
+    directionConfidence: directionAnswer.confidence,
+    maxWeight: effectiveBayesianWeight,
+    debate,
+  });
 
   const fallbackRiskThresh = BOT_CONFIG.jev?.riskVetoThreshold ?? 0.78;
   const effectiveRiskThreshold = ctx.riskVetoThreshold
@@ -522,6 +537,7 @@ export function parseJevAnswers(
       ? computeEmpiricalRiskThreshold(ctx.memoryHistory, { fallbackThreshold: fallbackRiskThresh })
       : fallbackRiskThresh);
 
+  const selfConsistent = isDirectionDebateConsistent(choice, debate.netConviction);
   const route = routeJevDecision({
     direction: choice,
     directionConfidence: directionAnswer.confidence,
@@ -529,6 +545,7 @@ export function parseJevAnswers(
     riskConfidence: composite.riskConfidence,
     minConfidence: ctx.minConfidence ?? BOT_CONFIG.jev?.minConfidence ?? 0.60,
     riskVetoThreshold: effectiveRiskThreshold,
+    netConviction: debate.netConviction,
   });
 
   return {
@@ -553,6 +570,7 @@ export function parseJevAnswers(
     onlineCalibrated,
     effectiveBayesianWeight: +effectiveBayesianWeight.toFixed(4),
     effectiveRiskThreshold: +effectiveRiskThreshold.toFixed(4),
+    selfConsistent,
     route,
     latencyMs: 0,
     inputTokens: null,
@@ -598,6 +616,7 @@ export function recordJevWindowOutcome(slug: string | null | undefined, outcome:
     outcomeUp,
     regime: pred.regime,
     compositeRisk: pred.compositeRisk,
+    stateVariant: pred.stateVariant,
   });
   _outcomesSincePlattFit++;
   if (_memoryHistory.length >= 40 && (_onlinePlatt == null || _outcomesSincePlattFit >= PLATT_REFIT_INTERVAL)) {
@@ -647,6 +666,7 @@ function warmLoadBrierHistory(): void {
           outcomeUp,
           regime: typeof row.regime === 'string' ? row.regime : null,
           compositeRisk: typeof row.compositeRisk === 'number' && Number.isFinite(row.compositeRisk) ? row.compositeRisk : null,
+          stateVariant: typeof row.stateVariant === 'string' ? row.stateVariant : null,
         });
       }
     }
@@ -686,7 +706,7 @@ export function initJevAdvisor(): void {
     ? `${_onlinePlatt.version}(a=${_onlinePlatt.a},b=${_onlinePlatt.b},n=${_onlinePlatt.samples})`
     : `static(${JEV_SETTLE_CALIBRATION_VERSION})`;
   log.info(
-    'JEV v4: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model +
+    'JEV v5: enabled [' + mode + '] provider=' + prov.provider + ' model=' + prov.model +
     ' every=' + (cfg.intervalMs > 0 ? Math.round(cfg.intervalMs / 1000) + 's' : 'market') +
     ' brierGuard=' + skill.status + '(' + skill.samples + ')' +
     ' platt=' + plattDesc +
@@ -759,7 +779,7 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
     },
     ...parsed,
     ...(snapshot.entryRefresh ? { entryRefresh: true } : {}),
-    stateVariant: independent ? 'independent_v4' : 'collaborative_v4',
+    stateVariant: independent ? 'independent_v5' : 'collaborative_v5',
     ...(decision ? { decisionShadow: true } : {}),
   };
   try {
@@ -779,6 +799,7 @@ async function runAnalysis(snapshot: JevSnapshot, mode: 'normal' | 'decision' = 
         direction: parsed.direction,
         regime: parsed.regime ?? null,
         compositeRisk: parsed.compositeRisk ?? null,
+        stateVariant: record.stateVariant ?? null,
         ts: record.ts,
       });
       if (_pendingOutcomesBySlug.size > 200) {

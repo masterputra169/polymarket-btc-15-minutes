@@ -128,7 +128,7 @@ export function fitLaplaceCalibrationBins(
   return bins;
 }
 
-export const JEV_ONLINE_CALIBRATION_TAG = 'online-platt-v4';
+export const JEV_ONLINE_CALIBRATION_TAG = 'online-platt-v5';
 
 export interface PlattParams {
   a: number;
@@ -155,20 +155,30 @@ function sigmoid(x: number): number {
 }
 
 /**
- * Fit regularized online Platt logistic recalibration `p = sigmoid(a * logit(raw) + b)`
+ * Fit recency-weighted, L2-regularized online Platt recalibration `p = sigmoid(a * logit(raw) + b)`
  * via Newton-Raphson shrunk toward prior `(a0=0.5, b0=0)` for stability on small windows.
  */
 export function fitOnlinePlatt(
-  samples: ReadonlyArray<{ rawProb: number; outcomeUp: 0 | 1 }>,
-  opts: { minSamples?: number; l2?: number; maxIter?: number } = {},
+  samples: ReadonlyArray<{ rawProb: number; outcomeUp: 0 | 1; weight?: number }>,
+  opts: { minSamples?: number; l2?: number; maxIter?: number; recencyHalfLife?: number } = {},
 ): PlattParams | null {
   const minSamples = Math.max(10, opts.minSamples ?? 40);
-  const valid: Array<{ x: number; y: number }> = [];
+  const rawValid: Array<{ x: number; y: number; weight?: number }> = [];
   for (const s of samples) {
     if (!Number.isFinite(s.rawProb)) continue;
-    valid.push({ x: logit(s.rawProb), y: s.outcomeUp === 1 ? 1 : 0 });
+    rawValid.push({ x: logit(s.rawProb), y: s.outcomeUp === 1 ? 1 : 0, weight: s.weight });
   }
-  if (valid.length < minSamples) return null;
+  if (rawValid.length < minSamples) return null;
+
+  const halfLife = opts.recencyHalfLife != null && Number.isFinite(opts.recencyHalfLife) && opts.recencyHalfLife > 0
+    ? opts.recencyHalfLife
+    : 0;
+  const n = rawValid.length;
+  const valid = rawValid.map((s, idx) => {
+    const recencyW = halfLife > 0 ? Math.pow(0.5, (n - 1 - idx) / halfLife) : 1;
+    const baseW = s.weight != null && Number.isFinite(s.weight) && s.weight > 0 ? s.weight : 1;
+    return { x: s.x, y: s.y, sw: baseW * recencyW };
+  });
 
   const l2 = Math.max(0.01, opts.l2 ?? 1.0);
   const maxIter = Math.max(1, opts.maxIter ?? 25);
@@ -184,10 +194,10 @@ export function fitOnlinePlatt(
     let hab = 0;
     let hbb = l2;
 
-    for (const { x, y } of valid) {
+    for (const { x, y, sw } of valid) {
       const p = sigmoid(a * x + b);
-      const err = p - y;
-      const w = p * (1 - p);
+      const err = (p - y) * sw;
+      const w = p * (1 - p) * sw;
       ga += err * x;
       gb += err;
       haa += w * x * x;

@@ -8,6 +8,8 @@ import {
   computeCompositeRiskScore,
   computeBullBearDebate,
   computeAdaptiveBayesianWeight,
+  computeMultiSignalBayesianPosterior,
+  isDirectionDebateConsistent,
   summarizeEpisodicMemory,
   computeEmpiricalRiskThreshold,
   routeJevDecision,
@@ -188,5 +190,31 @@ describe('JEV v4 debate, adaptive Bayesian weight, episodic memory & conformal t
     const thresh = computeEmpiricalRiskThreshold(many, { targetVetoRate: 0.15, minSamples: 25 });
     expect(thresh).toBeGreaterThanOrEqual(0.58);
     expect(thresh).toBeLessThanOrEqual(0.70);
+  });
+
+  it('fuses clean one-sided bull/bear debate into multi-signal Bayesian posterior and checks self-consistency', () => {
+    const baseOnly = computeMultiSignalBayesianPosterior({
+      marketPrior: 0.50,
+      jevCalibratedProb: 0.55,
+      directionConfidence: 0.70,
+      maxWeight: 0.20,
+      debate: { bullStrength: 0.80, bearStrength: 0.80, netConviction: 0.0, disagreement: 1.0, confidence: 0.8 },
+    });
+    expect(baseOnly.debateWeight).toBe(0);
+
+    const fused = computeMultiSignalBayesianPosterior({
+      marketPrior: 0.50,
+      jevCalibratedProb: 0.55,
+      directionConfidence: 0.70,
+      maxWeight: 0.20,
+      debate: { bullStrength: 0.85, bearStrength: 0.15, netConviction: 0.70, disagreement: 0.30, confidence: 0.90 },
+    });
+    expect(fused.debateWeight).toBeGreaterThan(0);
+    expect(fused.posterior).toBeGreaterThan(baseOnly.posterior);
+
+    expect(isDirectionDebateConsistent('UP', 0.20)).toBe(true);
+    expect(isDirectionDebateConsistent('UP', -0.20)).toBe(false);
+    expect(isDirectionDebateConsistent('DOWN', 0.25)).toBe(false);
+    expect(isDirectionDebateConsistent('NO_EDGE', -0.80)).toBe(true);
   });
 });

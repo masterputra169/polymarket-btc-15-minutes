@@ -83,5 +83,14 @@ describe('JEV settle calibration', () => {
     expect(mid).toBeGreaterThan(lo);
     expect(lo).toBeGreaterThanOrEqual(0.05);
     expect(hi).toBeLessThanOrEqual(0.95);
+
+    // Recency weighting: recent neutral/upward regime outweighs stale bearish regime
+    const shifted = [
+      ...Array.from({ length: 40 }, () => ({ rawProb: 0.50, outcomeUp: 0 as const })),
+      ...Array.from({ length: 40 }, () => ({ rawProb: 0.50, outcomeUp: 1 as const })),
+    ];
+    const flatPlatt = fitOnlinePlatt(shifted, { minSamples: 40 });
+    const recentPlatt = fitOnlinePlatt(shifted, { minSamples: 40, recencyHalfLife: 20 });
+    expect(recentPlatt!.b).toBeGreaterThan(flatPlatt!.b);
   });
 });

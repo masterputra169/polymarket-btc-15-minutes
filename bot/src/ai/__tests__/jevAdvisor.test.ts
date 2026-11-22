@@ -67,7 +67,7 @@ describe('buildJevState v4', () => {
     expect(state.market.twap_physics_z).toBe(0.45);
     expect(state.market.price_to_beat_is_exact_twap).toBe(true);
     expect(state.market_odds).toEqual({ up: 0.56, down: 0.44 });
-    expect(state.order_book).toEqual({ spread: 0.01, bid_liquidity_usd: 420, ask_liquidity_usd: 380 });
+    expect(state.order_book).toEqual({ spread: 0.01, bid_liquidity_usd: 420, ask_liquidity_usd: 380, book_skew_ratio: 0.525 });
     expect(state.order_flow.vpin).toBe(0.18);
     expect(state.order_flow.microprice_edge_pct).toBe(0.36);
     expect(state.algo_view.provisional_side).toBe('UP');
@@ -76,7 +76,7 @@ describe('buildJevState v4', () => {
     expect(state.recent_memory.window_count).toBe(5);
     expect(state.recent_memory.streak).toBe('UPx2');
     expect(state.recent_memory.jev_prob_bias).toBe(-0.14);
-    expect(state.state_variant).toBe('collaborative_v4');
+    expect(state.state_variant).toBe('collaborative_v5');
     expect(state.momentum.delta_1m_usd).toBe(12);
   });
 
@@ -92,11 +92,11 @@ describe('buildJevState v4', () => {
   });
 });
 
-describe('independent state v4', () => {
-  it('omits algo_view, preserves order_flow, and marks independent_v4', () => {
+describe('independent state v5', () => {
+  it('omits algo_view, preserves order_flow, and marks independent_v5', () => {
     const state = buildJevState(snapshot, true) as Record<string, any>;
     expect(state.algo_view).toBeUndefined();
-    expect(state.state_variant).toBe('independent_v4');
+    expect(state.state_variant).toBe('independent_v5');
     expect(state.order_flow.vpin).toBe(0.18);
     expect(state.market_odds.up).toBe(0.56);
   });
@@ -188,7 +188,24 @@ describe('parseJevAnswers', () => {
     expect(decision.debateDisagreement).toBeCloseTo(1.0, 4);
     expect(decision.effectiveBayesianWeight!).toBeGreaterThan(0.20);
     expect(decision.effectiveRiskThreshold!).toBeLessThanOrEqual(0.62);
-    expect(decision.route).toBe('risk_veto'); // compositeRisk >= empirical ~0.61 and riskConf >= 0.60
+    expect(decision.selfConsistent).toBe(true);
+    expect(decision.route).toBe('risk_veto'); // compositeRisk >= empirical ~0.61 and riskConf >= 0.45
+  });
+
+  it('downgrades route to uncertain_passthrough when direction contradicts parallel bull/bear debate', () => {
+    const decision = parseJevAnswers('jev-1.14.0', {
+      direction: { type: 'choice', choice: 'UP', probabilities: { UP: 0.75, DOWN: 0.15, NO_EDGE: 0.10 }, confidence: 0.75 },
+      settle_above_ptb: { type: 'noul', noul: 0.65 },
+      regime: { type: 'choice', choice: 'neutral', probabilities: { neutral: 0.7 }, confidence: 0.7 },
+      chop_hazard: { type: 'score', score: 1.0, legend: {}, probabilities: {}, confidence: 0.8 },
+      exhaustion_risk: { type: 'score', score: 1.0, legend: {}, probabilities: {}, confidence: 0.8 },
+      flow_contradiction: { type: 'score', score: 1.0, legend: {}, probabilities: {}, confidence: 0.8 },
+      bull_case_strength: { type: 'score', score: 0.8, legend: {}, probabilities: {}, confidence: 0.85 },
+      bear_case_strength: { type: 'score', score: 3.2, legend: {}, probabilities: {}, confidence: 0.85 },
+    }, { marketUp: 0.55 });
+    expect(decision.netConviction).toBeLessThan(-0.10);
+    expect(decision.selfConsistent).toBe(false);
+    expect(decision.route).toBe('uncertain_passthrough');
   });
 
   it('gracefully handles answers omitting optional score dimensions and rejects missing core fields', () => {
