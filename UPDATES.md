@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-22 — JEV v4 Direction Prompt Calibration (Remove Over-Defensive NO_EDGE Default)
+
+- **Live Telemetry Finding (`65` v4 calls / `61` resolved windows on `polyvps`):** JEV v4 lifted Rolling Brier Skill from `-1.64%` to **`+0.24%`** (`bayesBrier 0.2310` vs `mktBrier 0.2315`, `online-platt-v4`), and eliminated the v3 bearish skew, but the `"Default to NO_EDGE unless..."` instruction in `buildJevQuestions()` caused `65/65` calls to lock onto `NO_EDGE` (`uncertain_passthrough`).
+- **Surgical Prompt Refinement (`bot/src/ai/jevAdvisor.ts`):** Replaced the over-defensive `NO_EDGE` default on `direction` (`independent` state) with balanced selection criteria (`UP`/`DOWN` when settle distance, `twap_physics_z`, or momentum/order flow show edge beyond `market_odds`, reserving `NO_EDGE` for genuinely balanced/choppy states). Left `settle_above_ptb`, `online-platt-v4`, episodic memory, Risk Desk, and `SHADOW` mode untouched.
+
 ## 2026-11-22 — JEV v4: Online Platt Calibration, Episodic Memory, Bull/Bear Debate & Conformal Risk Threshold
 
 - **Online Rolling Platt Recalibration (`bot/src/ai/jevSettleCalibration.ts`):** Added `fitOnlinePlatt()` (L2-regularized Newton-Raphson `sigmoid(a * logit(p) + b)` shrunk toward `(a0=0.5, b0=0)` with bounds `a ∈ [0.05, 4.0]`, `b ∈ [-2.5, 2.5]`, `minSamples=40`) and `calibrateWithPlatt()`, falling back cleanly to the static 10-bin Laplace+PAVA curve below sample threshold. Auto-hydrates at startup from `jev_log.jsonl` + `jev_outcomes.json` (last 250 unique resolved markets) and refits every 10 settled windows (`online-platt-v4`).

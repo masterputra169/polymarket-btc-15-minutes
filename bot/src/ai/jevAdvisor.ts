@@ -370,12 +370,12 @@ export function buildJevQuestions(independent = false): Record<string, TypesafeQ
     direction: {
       type: 'choice',
       instructions: independent
-        ? 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, momentum, volatility, order_flow, and recent_memory (NO bot recommendation in state). Default to NO_EDGE unless both drift and order flow clearly exceed market_odds; watch recent_memory for any over-bearish or over-bullish streak bias. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?'
+        ? 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, momentum, volatility, order_flow, and recent_memory (NO bot recommendation in state). Choose UP or DOWN whenever settle distance, twap_physics_z, or momentum/order_flow point to a directional edge beyond market_odds while avoiding streak bias from recent_memory; choose NO_EDGE only when bullish and bearish evidence are genuinely balanced or choppy.'
         : 'This is a 15-minute BTC up/down market settling on Chainlink 60s TWAP vs price-to-beat. Use settle_distance_to_ptb_usd, market_odds, order_flow, recent_memory, and algo_view. Which side has a clear edge beyond market_odds: UP, DOWN, or NO_EDGE?',
       criteria: {
-        UP: 'Expected settlement is above PTB with momentum and order flow supporting higher probability than market_odds.up.',
-        DOWN: 'Expected settlement is below PTB with momentum and order flow supporting higher probability than market_odds.down.',
-        NO_EDGE: 'No material edge beyond market_odds, or mixed/choppy evidence.',
+        UP: 'Expected settlement is above PTB or momentum/order flow support higher UP probability than market_odds.up.',
+        DOWN: 'Expected settlement is below PTB or momentum/order flow support higher DOWN probability than market_odds.down.',
+        NO_EDGE: 'Bullish and bearish evidence are genuinely balanced, compressed near PTB, or severely choppy.',
       },
     },
     settle_above_ptb: {
