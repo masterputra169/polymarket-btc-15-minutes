@@ -12,6 +12,7 @@
 - **Regime, JEV v5 & Meta-Labeler Integration (`src/engines/regime.ts`, `bot/src/ai/jevAdvisor.ts`, `bot/src/loop.ts`):** Attached `hmm` onto `detectRegime()` (`RegimeInfo.hmm`), forwarded `hmm_regime` into `JEV v5` `state.context`, and logged HMM posteriors alongside `[MetaLabeler] shadow` scores without altering primary rule/filter regime labels.
 - **Future Quant Roadmap (Post `2026-11-28..30` Shadow Audits):**
   - **2-State Kinematic Kalman Filter `(price, velocity)` + Adaptive Basis Kalman Gain (`bot/src/engines/settlePrice.ts`):** Replace fixed `alpha = 0.15` EWMA in `BasisTracker` with adaptive Kalman Gain `K_t` (tracks rapid `Binance − Chainlink` basis widening while rejecting single-tick spikes) and expose zero-lag instantaneous drift velocity `v_t` (`$/sec`) + innovation z-score for momentum-break detection.
+  - **Kyle's Lambda (`λ = ΔMid / SignedVolume`) + L2 Market-Impact Sizing Cap (`bot/src/engines/orderFlowFeatures.ts`, `bot/src/engines/tradePipeline.ts`):** Add rolling Kyle's `λ` price-impact slope to detect market-maker liquidity withdrawal / informed whale flow alongside `VPIN` & `OFI`, plus an Almgren-Chriss / L2 book-depth impact cap once Step-Compounding tiers reach `>$15–$25` per order.
 
 ## 2026-11-22 — Online Recency ML Calibration + Stage-2 Meta-Labeler (Shadow-First)
 
