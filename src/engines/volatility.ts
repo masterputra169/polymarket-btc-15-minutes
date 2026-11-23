@@ -156,3 +156,73 @@ export function computeRealizedVol(
     isAboveExpected: vol15m > profile.expectedRangePct * 0.5,
   };
 }
+
+
+export interface GarchVolForecast {
+  /** 1-minute conditional volatility forecast σ_t (fractional, e.g. 0.0008 = 0.08%) */
+  sigma1m: number;
+  /** 15-minute scaled volatility forecast σ_15m = σ_1m · √15 */
+  sigma15m: number;
+  /** Ratio σ_GARCH / σ_realized (>1.20 = volatility cluster expanding; <0.82 = cooling) */
+  volRatio: number;
+  /** Volatility regime state derived from GARCH clustering */
+  state: 'expanding' | 'normal' | 'cooling';
+  samples: number;
+}
+
+/**
+ * Causal GARCH(1,1) conditional volatility forecast (shadow / telemetry).
+ *
+ *   σ²_t = ω + α · r²_{t-1} + β · σ²_{t-1}
+ *
+ * Uses RiskMetrics-anchored BTC 1m persistence (α = 0.10, β = 0.86, persistence 0.96)
+ * with variance targeting ω = (1 − α − β) · σ²_long so it adapts cleanly across
+ * low-vol Asia and high-vol US sessions without numerical MLE instability.
+ */
+export function computeGarch11Vol(
+  closes: number[] | null | undefined,
+  opts?: { alpha?: number; beta?: number; minCandles?: number },
+): GarchVolForecast | null {
+  const minCandles = opts?.minCandles ?? 20;
+  if (!closes || closes.length < minCandles) return null;
+
+  const alpha = opts?.alpha ?? 0.10;
+  const beta = opts?.beta ?? 0.86;
+  const returns: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    const cur = closes[i];
+    if (Number.isFinite(prev) && Number.isFinite(cur) && prev > 0 && cur > 0) {
+      returns.push(Math.log(cur / prev));
+    }
+  }
+  if (returns.length < minCandles - 1) return null;
+
+  let sumSq = 0;
+  for (const r of returns) sumSq += r * r;
+  const longRunVar = Math.max(1e-10, sumSq / returns.length);
+  const omega = Math.max(1e-12, (1 - alpha - beta) * longRunVar);
+
+  let h = longRunVar;
+  for (const r of returns) {
+    h = omega + alpha * (r * r) + beta * h;
+  }
+  const sigma1m = Math.sqrt(Math.max(1e-10, h));
+  const sigma15m = sigma1m * Math.sqrt(15);
+
+  const recent = returns.slice(-15);
+  let rSumSq = 0;
+  for (const r of recent) rSumSq += r * r;
+  const realized1m = Math.sqrt(Math.max(1e-10, rSumSq / recent.length));
+  const volRatio = sigma1m / realized1m;
+  const state: GarchVolForecast['state'] =
+    volRatio >= 1.20 ? 'expanding' : volRatio <= 0.82 ? 'cooling' : 'normal';
+
+  return {
+    sigma1m: +sigma1m.toFixed(6),
+    sigma15m: +sigma15m.toFixed(6),
+    volRatio: +volRatio.toFixed(2),
+    state,
+    samples: returns.length,
+  };
+}

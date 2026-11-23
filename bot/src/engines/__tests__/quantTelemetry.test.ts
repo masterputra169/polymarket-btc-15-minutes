@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { KinematicKalmanTracker } from '../settlePrice.ts';
 import { recordOrderFlowTrades, getOrderFlowFeatures, resetOrderFlow } from '../orderFlowFeatures.ts';
+import { computeGarch11Vol } from '../../../../src/engines/volatility.ts';
 
 describe('KinematicKalmanTracker (2-State Price/Velocity + Adaptive Basis)', () => {
   it('tracks positive velocity and fires positive innovationZ on sudden upward jump', () => {
@@ -53,5 +54,22 @@ describe("OrderFlowFeatures Kyle's Lambda", () => {
     expect(feat.kylesLambda).not.toBeNull();
     expect(feat.kylesLambda!).toBeGreaterThan(5); // ~10c per 1,000 shares
     expect(feat.kylesLambdaR2!).toBeGreaterThan(0.9);
+  });
+});
+
+describe('computeGarch11Vol (Causal GARCH(1,1) Volatility Clustering)', () => {
+  it('detects volatility expansion after a shock relative to quiet baseline', () => {
+    const quiet = Array.from({ length: 40 }, (_, i) => 61_000 + (i % 2 === 0 ? 5 : -5));
+    const quietVol = computeGarch11Vol(quiet)!;
+    expect(quietVol).not.toBeNull();
+    expect(quietVol.sigma1m).toBeGreaterThan(0);
+
+    const shocked = [...quiet, 61_260, 61_010, 61_320];
+    const shockVol = computeGarch11Vol(shocked)!;
+    expect(shockVol.sigma15m).toBeGreaterThan(quietVol.sigma15m * 1.5);
+  });
+
+  it('returns null when fewer than minCandles bars are provided', () => {
+    expect(computeGarch11Vol([61_000, 61_010, 61_020])).toBeNull();
   });
 });

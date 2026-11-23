@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-23 — Commit-Stamped Trade Journal, Shadow GARCH(1,1) Volatility Clustering & Awesome-Quant Research Roadmap
+
+- **Opsi A — Commit-Stamped Trade Journal (`bot/src/engines/tradePipeline.ts`, `bot/scripts/shadowAudit.mts`):** Inspired by `midas-core`, every new `trade_journal.jsonl` entry now records `entry.gitCommit` (resolved once at startup from env or `git rev-parse --short HEAD`), and `shadowAudit.mts` prints Section `[4] Journal Breakdown by Git Commit` so pre-patch vs post-patch WR & PnL are cleanly separated without manual date slicing.
+- **Opsi B — Causal GARCH(1,1) Volatility Clustering Forecast (`src/engines/volatility.ts`, `bot/src/loop.ts`, `src/App.tsx`, `src/components/MlPanel.tsx`):** Added `computeGarch11Vol(closes)` (`α=0.10, β=0.86`, variance-targeted `ω`) in shadow/telemetry mode, broadcasting `sigma1m`, `sigma15m`, `volRatio`, and `state` (`expanding` | `normal` | `cooling`) to the dashboard `MlPanel` Quant Telemetry block.
+- **Opsi C — External Prediction-Market Research Roadmap (from `wilsonfreitas/awesome-quant`):**
+  - **`outcometick` (`outcometick-sdk-ts`) & `polymarket-canary-tape` (`polymarket-bot-lab`):** Use tick-level Polymarket Up/Down + full-precision Chainlink archive datasets to benchmark v4 features, `Kalman`, `Kyle's λ`, and `GARCH(1,1)` `σ` offline without waiting 7 weeks for R2 tape accumulation.
+  - **`pm-hftbacktest` / `marketlens` Queue-Exact Backtesting + `bashtage/arch` GARCH Calibration:** Fit GARCH(1,1) parameters (`α, β`) on 180d BTC 1m data for `twapPhysicsZ` / `monteCarlo.ts`, and validate Maker (`GTD/LIMIT`) `Cancel-on-Toxicity` adverse selection on L2 queue replay before real-money Maker activation.
+
 ## 2026-11-23 — Quant Telemetry UI (HMM, Online Platt, Meta-Labeler, Kalman, Kyle's λ), Shadow Audit CLI & Shadow Quant Engines
 
 - **Stage 1 — Dashboard Observability & Shadow Promotion Audit:**

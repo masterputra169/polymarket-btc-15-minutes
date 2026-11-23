@@ -752,6 +752,20 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
                   </span>
                 </div>
               )}
+
+              {data?.garchVol && (
+                <div className="data-row">
+                  <span className="data-row__label">GARCH(1,1) σ15m</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
+                    <span style={{ color: data.garchVol.state === 'expanding' ? '#fb7185' : data.garchVol.state === 'cooling' ? 'var(--accent-green)' : 'var(--text-secondary)' }}>
+                      {`${(data.garchVol.sigma15m * 100).toFixed(3)}%`}
+                    </span>
+                    <span style={{ color: 'var(--text-dim)', marginLeft: '5px' }}>
+                      {`${data.garchVol.state} (${data.garchVol.volRatio.toFixed(2)}×)`}
+                    </span>
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </>
@@ -803,6 +817,8 @@ export default memo(MLPanel, (prev, next) => {
     a.metaLabeler?.lastScore?.winProb === b.metaLabeler?.lastScore?.winProb &&
     a.kalman?.velocityUsdPerSec === b.kalman?.velocityUsdPerSec &&
     a.kalman?.adaptiveBasisUsd === b.kalman?.adaptiveBasisUsd &&
+    a.garchVol?.sigma15m === b.garchVol?.sigma15m &&
+    a.garchVol?.state === b.garchVol?.state &&
     a.orderFlow?.kylesLambda === b.orderFlow?.kylesLambda &&
     a.orderFlow?.vpin === b.orderFlow?.vpin
   );

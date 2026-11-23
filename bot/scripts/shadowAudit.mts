@@ -145,3 +145,27 @@ console.log(`    v5_windows=${nV5}/150 | bayesBrier=${v5BayesBrier?.toFixed(5) ?
 console.log('');
 console.log(`[3] Stage-2 Meta-Labeler (ML_META_LABELER_MODE=veto, target >=100 trades & AUC >=0.58): ${stage3Pass ? 'READY' : 'WAIT'}`);
 console.log(`    trades=${metaSamples.length}/100 | baseWR=${metaModel ? `${(metaModel.baseWinRate * 100).toFixed(1)}%` : '-'} | holdoutAUC=${metaModel?.holdoutAuc?.toFixed(4) ?? '-'} | holdoutBrier=${metaModel?.holdoutBrier?.toFixed(4) ?? '-'}`);
+
+// ── 4. Commit-Stamped Performance Breakdown (midas-core pattern) ──
+const byCommit = new Map<string, { w: number; l: number; pnl: number }>();
+for (const r of journalRows) {
+  const e = r.entry;
+  const x = r.exit;
+  if (!e || !x) continue;
+  const out = x.verifiedOutcome ?? x.outcome;
+  if (out !== 'UP' && out !== 'DOWN') continue;
+  const commit = String(e.gitCommit ?? 'legacy');
+  const cur = byCommit.get(commit) ?? { w: 0, l: 0, pnl: 0 };
+  if (out === e.side) cur.w++; else cur.l++;
+  cur.pnl += Number(r.analysis?.pnl ?? 0);
+  byCommit.set(commit, cur);
+}
+if (byCommit.size > 0) {
+  console.log('');
+  console.log('[4] Journal Breakdown by Git Commit:');
+  for (const [c, s] of byCommit.entries()) {
+    const n = s.w + s.l;
+    const wr = n > 0 ? ((s.w / n) * 100).toFixed(1) : '0.0';
+    console.log(`    ${c.padEnd(10)} n=${String(n).padStart(3)} | ${s.w}W-${s.l}L (${wr}% WR) | PnL=${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`);
+  }
+}

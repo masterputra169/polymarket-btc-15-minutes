@@ -70,6 +70,7 @@ import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
 import { refreshDeribitIv, getDeribitIvSnapshot } from './adapters/deribitIv.ts';
 import { estimateSettlePrice, BasisTracker, ChainlinkNowcastTracker, KinematicKalmanTracker } from './engines/settlePrice.ts';
+import { computeGarch11Vol } from '../../src/engines/volatility.ts';
 import { twapPhysics, SettleHistory } from './engines/twapPhysics.ts';
 import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
 import {
@@ -3147,6 +3148,7 @@ export async function pollOnce() {
       // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
       settlePrice, settlePriceSource: settle.source, crossFeed, v4Signals,
       kalman: kalmanSnapshot,
+      garchVol: computeGarch11Vol(klines1m?.map((k: any) => k.close)),
       onlineCalibration: getMlOnlineCalibrationStatus(),
       metaLabeler: getMetaLabelerStatus(),
       twapNow: twapNowValue,

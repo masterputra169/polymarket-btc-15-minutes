@@ -361,6 +361,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
       onlineCalibration: data.onlineCalibration ?? null,
       metaLabeler: data.metaLabeler ?? null,
       kalman: data.kalman ?? null,
+      garchVol: data.garchVol ?? null,
       orderFlow: data.orderFlow ?? null,
     };
   }, [
@@ -404,6 +405,8 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.kalman?.velocityUsdPerSec,
     data?.kalman?.innovationZ,
     data?.kalman?.adaptiveBasisUsd,
+    data?.garchVol?.sigma15m,
+    data?.garchVol?.state,
     data?.orderFlow?.kylesLambda,
     data?.orderFlow?.vpin,
   ]);

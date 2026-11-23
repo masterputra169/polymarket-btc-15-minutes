@@ -5,6 +5,7 @@
  * when `DRY_RUN_QUEUE_SIM=true` evaluates paper maker orders across polls).
  */
 
+import { execSync } from 'child_process';
 import { createLogger } from '../logger.ts';
 import { getSessionName } from '../../../src/utils.ts';
 import { EXECUTION } from '../../../src/config.ts';
@@ -60,6 +61,17 @@ function isAskRunaway(
 }
 
 const log = createLogger('TradePipeline');
+
+/** Short git SHA resolved once at startup so every trade journal row is stamped with its exact code version (midas-core pattern). */
+const RUNTIME_GIT_COMMIT: string = (() => {
+  const fromEnv = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.GIT_COMMIT_SHA || '';
+  if (fromEnv.trim()) return fromEnv.trim().slice(0, 8);
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString('utf8').trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
 
 const PIPELINE_LOG_THROTTLE_MS = 5_000;
 let _lastUnstableLogAt = 0;
@@ -1056,6 +1068,7 @@ export async function executeDirectionalTrade({
   // Build entry snapshot data (shared by DRY_RUN + live paths)
   const session = getSessionName();
   const entryData: Record<string, any> = {
+    gitCommit: RUNTIME_GIT_COMMIT,
     side: betSide, tokenPrice: betMarketPrice, btcPrice: lastPrice,
     priceToBeat: priceToBeat.value, marketSlug, cost: orderCost, size: shares,
     ptbSource: priceToBeat.source ?? null, settlePrice,
