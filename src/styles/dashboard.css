@@ -221,8 +221,33 @@ body::after { opacity: 0.7; }
   font-family: inherit; font-size: 10px; font-weight: 600;
   padding: 5px 8px; cursor: pointer; transition: 150ms ease;
 }
-.preset-btn:hover, .subbar-btn:hover { color: var(--dash-text); background: rgba(255, 255, 255, 0.05); border-color: rgba(148, 163, 184, 0.12); }
-.preset-btn:first-of-type { border-color: rgba(148, 163, 184, 0.16); background: rgba(255, 255, 255, 0.03); color: var(--dash-text); }
+.preset-btn:hover, .subbar-btn:hover { color: var(--dash-text); background: rgba(255, 255, 255, 0.05); border-color: rgba(148, 163, 184, 0.14); }
+.preset-btn.is-active {
+  color: var(--dash-text);
+  background: var(--dash-accent-soft);
+  border-color: var(--dash-accent);
+  box-shadow: inset 0 -2px 0 var(--dash-accent);
+  font-weight: 700;
+}
+.preset-kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dash-dim);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.preset-btn.is-active .preset-kbd {
+  border-color: var(--dash-accent);
+  color: var(--dash-accent);
+}
 .subbar-btn.is-active { color: #030a12; background: var(--dash-accent); border-color: var(--dash-accent); font-weight: 700; }
 .subbar-btn__icon { font-size: 12px; line-height: 1; }
 .count-badge { display: inline-grid; place-items: center; min-width: 16px; height: 15px; padding: 0 4px; border-radius: 5px; background: rgba(255, 255, 255, 0.08); color: var(--dash-text); font-family: 'JetBrains Mono', monospace; font-size: 8px; font-weight: 700; }
@@ -304,20 +329,25 @@ body::after { opacity: 0.7; }
   min-height: 0;
 }
 
-/* ── Widget shell ──────────────────────────────────────────── */
+/* ── Widget shell (sharp institutional terminal framing) ───── */
 .dash-widget {
   position: absolute;
   display: flex; flex-direction: column;
   min-width: 0; min-height: 0;
-  border: 1px solid rgba(148, 163, 184, 0.13);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(12, 22, 38, 0.94), rgba(7, 14, 25, 0.97));
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(10, 18, 31, 0.96), rgba(6, 11, 20, 0.98));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.36), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   overflow: hidden;
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 170ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .dash-widget:hover {
-  border-color: rgba(148, 163, 184, 0.24);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+.dash-widget__body .data-row__value,
+.dash-widget__body .metric-value,
+.dash-widget__body td {
+  font-variant-numeric: tabular-nums;
 }
 .dash-widget__cat {
   margin-left: auto;

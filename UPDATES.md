@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-23 — Terminal Desk Navigation & Sharp Institutional UI Polish (Fincept-Inspired)
+
+- **Role-Based Terminal Desks + Hotkeys (`src/components/dashboard/DashboardShell.tsx`):** Upgraded workspace presets into 5 focused terminal desks with active tab underline and instant keyboard shortcuts (`1` Terminal, `2` Execution, `3` Quant Lab, `4` Risk & Audit, `5` Clean — guarded against typing in inputs).
+- **Sharp Institutional Terminal Framing (`src/styles/dashboard.css`):** Tightened widget border radius (`14px -> 8px`), deepened dark panel contrast, styled active desk tabs with `<kbd>` hotkey badges, and enforced `font-variant-numeric: tabular-nums` across widget data rows and tables so live numbers stop jittering horizontally at 50ms updates. Zero changes to bot execution or trading logic.
+
 ## 2026-11-23 — Commit-Stamped Trade Journal, Shadow GARCH(1,1) Volatility Clustering & Awesome-Quant Research Roadmap
 
 - **Opsi A — Commit-Stamped Trade Journal (`bot/src/engines/tradePipeline.ts`, `bot/scripts/shadowAudit.mts`):** Inspired by `midas-core`, every new `trade_journal.jsonl` entry now records `entry.gitCommit` (resolved once at startup from env or `git rev-parse --short HEAD`), and `shadowAudit.mts` prints Section `[4] Journal Breakdown by Git Commit` so pre-patch vs post-patch WR & PnL are cleanly separated without manual date slicing.

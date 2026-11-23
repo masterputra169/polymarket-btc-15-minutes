@@ -75,11 +75,12 @@ interface SavedLayout {
   heights?: Record<string, number>;
 }
 
-const PRESETS: { id: string; label: string; ids: string[] }[] = [
-  { id: 'terminal', label: 'Terminal', ids: ['market', 'bot', 'priceChart', 'prediction', 'edge', 'polymarket', 'ta', 'ml', 'jev', 'position', 'betSizing', 'accuracy', 'journal', 'tape', 'session', 'limitOrder', 'traderDiscovery'] },
-  { id: 'focus', label: 'Focus', ids: ['market', 'bot', 'priceChart', 'prediction', 'edge', 'position', 'ta', 'ml', 'jev'] },
-  { id: 'analytics', label: 'Analytics', ids: ['market', 'bot', 'priceChart', 'accuracy', 'journal', 'ml', 'ta', 'tape', 'betSizing'] },
-  { id: 'clean', label: 'Clean', ids: ['market', 'bot', 'priceChart', 'prediction', 'position', 'edge'] },
+const PRESETS: { id: string; key: string; label: string; ids: string[] }[] = [
+  { id: 'terminal', key: '1', label: 'Terminal', ids: ['market', 'bot', 'priceChart', 'prediction', 'edge', 'polymarket', 'ta', 'ml', 'jev', 'position', 'betSizing', 'accuracy', 'journal', 'tape', 'session', 'limitOrder', 'traderDiscovery', 'globalRisk'] },
+  { id: 'execution', key: '2', label: 'Execution', ids: ['market', 'bot', 'priceChart', 'position', 'edge', 'prediction', 'polymarket', 'limitOrder', 'betSizing'] },
+  { id: 'quant', key: '3', label: 'Quant Lab', ids: ['market', 'priceChart', 'ml', 'jev', 'ta', 'prediction', 'edge', 'tape'] },
+  { id: 'risk', key: '4', label: 'Risk & Audit', ids: ['bot', 'position', 'globalRisk', 'accuracy', 'journal', 'tape', 'session'] },
+  { id: 'clean', key: '5', label: 'Clean', ids: ['market', 'bot', 'priceChart', 'prediction', 'position', 'edge'] },
 ];
 
 const ACCENTS: { id: AccentName; label: string }[] = [
@@ -631,13 +632,32 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
     window.addEventListener('pointercancel', onCancel, { once: true });
   }, [editMode, isCompact, layout, colWidth, rowHeight, showToast]);
 
-  const applyPreset = (preset: { id: string; label: string; ids: string[] }) => {
+  const [activePreset, setActivePreset] = useState<string>('terminal');
+
+  const applyPreset = useCallback((preset: { id: string; label: string; ids: string[] }) => {
     const wanted = widgets.filter(w => preset.ids.includes(w.id));
     const wantedSet = new Set(wanted.map(w => w.id));
     setHidden(widgets.filter(w => !wantedSet.has(w.id)).map(w => w.id));
     setLayout(packLayout(wanted.map(w => ({ id: w.id, w: w.defaultW, h: w.defaultH }))));
-    showToast('Workspace: ' + preset.label);
-  };
+    setActivePreset(preset.id);
+    showToast('Desk: ' + preset.label);
+  }, [widgets]);
+
+  // Terminal keyboard shortcuts: 1-5 switch desks when not typing in an input
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      const preset = PRESETS.find(p => p.key === e.key);
+      if (preset) {
+        e.preventDefault();
+        applyPreset(preset);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [applyPreset]);
 
   const autoArrange = () => {
     setLayout(packLayout(visibleWidgets.map(w => ({
@@ -804,10 +824,18 @@ export default function DashboardShell({ widgets, status, loading, onToggleBot, 
       </header>
 
       <div className="dash-subbar">
-        <div className="preset-group" aria-label="Workspace presets">
-          <span className="subbar-label">VIEWS</span>
+        <div className="preset-group" aria-label="Terminal desks">
+          <span className="subbar-label">DESKS</span>
           {PRESETS.map(preset => (
-            <button key={preset.id} className="preset-btn" onClick={() => applyPreset(preset)}>{preset.label}</button>
+            <button
+              key={preset.id}
+              className={cx('preset-btn', activePreset === preset.id ? 'is-active' : false)}
+              onClick={() => applyPreset(preset)}
+              title={`Switch to ${preset.label} desk (key ${preset.key})`}
+            >
+              <kbd className="preset-kbd">{preset.key}</kbd>
+              {preset.label}
+            </button>
           ))}
         </div>
         <div className="subbar-actions">
