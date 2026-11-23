@@ -14,6 +14,8 @@
 - **Stage 2 — Shadow Quant Engines (Read-Only Telemetry, Zero Entry-Logic Risk):**
   - **2-State Kinematic Kalman Filter + Adaptive Basis Kalman (`bot/src/engines/settlePrice.ts`):** Added `KinematicKalmanTracker` tracking filtered `[price, velocity ($/sec)]`, normalized `innovationZ`, and adaptive 1D `Binance − Chainlink` basis with NIS-based process noise inflation.
   - **Kyle's Lambda (`bot/src/engines/orderFlowFeatures.ts`):** Added rolling OLS price-impact slope `kylesLambda` (`¢` per `1,000` signed shares) and `kylesLambdaR2` over consecutive UP-equivalent CLOB trade prints.
+- **Future Quant Roadmap (Live Maker / Post-Shadow Audit):**
+  - **Maker Adverse Selection Guard — Cancel-on-Toxicity + Markout-by-Fill-Type Audit (`bot/src/engines/limitOrderManager.ts`, `bot/src/engines/tradePipeline.ts`):** Required before enabling passive GTD/LIMIT maker orders in real money (`DRY_RUN=false`). Cancel resting GTD bids in `<100ms` when Kalman `velocityUsdPerSec` flips against the bid, 3s Binance lead-lag opposes, or `VPIN`/`kylesLambda` spikes; automatically compare 5s/15s/30s markout and realized WR of Maker fills vs FOK fills and fall back to FOK if adverse selection cost exceeds the ~`1c` spread + taker fee savings.
 
 ## 2026-11-23 — Compound Anomaly Guards (Gates 20h, 20i, 20j) + Stage-1 Online ML Calibration Activation (`ML_ONLINE_CALIBRATION_MODE=active`)
 
