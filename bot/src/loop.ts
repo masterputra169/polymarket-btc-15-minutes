@@ -69,7 +69,7 @@ import { decidePtb, isExactPtbSource } from './engines/ptbSources.ts';
 import { resolveExactPtb } from './engines/ptbResolver.ts';
 import { fetchTwapWindowPrice } from './adapters/twapWindowPrice.ts';
 import { refreshDeribitIv, getDeribitIvSnapshot } from './adapters/deribitIv.ts';
-import { estimateSettlePrice, BasisTracker, ChainlinkNowcastTracker } from './engines/settlePrice.ts';
+import { estimateSettlePrice, BasisTracker, ChainlinkNowcastTracker, KinematicKalmanTracker } from './engines/settlePrice.ts';
 import { twapPhysics, SettleHistory } from './engines/twapPhysics.ts';
 import { scheduleOfficialPtbCheck } from './monitoring/ptbVerifier.ts';
 import {
@@ -231,8 +231,8 @@ import { getGlobalRisk } from './monitoring/globalRisk.ts';
 import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
-import { noteMlWindowPrediction, recordMlWindowOutcome } from './ml/onlineCalibration.ts';
-import { scoreMetaLabeler } from './ml/metaLabeler.ts';
+import { noteMlWindowPrediction, recordMlWindowOutcome, getMlOnlineCalibrationStatus } from './ml/onlineCalibration.ts';
+import { scoreMetaLabeler, getMetaLabelerStatus } from './ml/metaLabeler.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -453,6 +453,7 @@ const settleHistory = new SettleHistory(120_000);
 // Binance − Chainlink, tracked with a 21-sample rolling median + responsive EWMA
 // so single-poll glitches are ignored while sustained basis shifts track rapidly.
 const basisTracker = new BasisTracker(0.15, 10, 21);
+const kinematicKalman = new KinematicKalmanTracker();
 const chainlinkNowcastTracker = new ChainlinkNowcastTracker();
 
 // ── Pre-scheduled PTB capture ──
@@ -1464,6 +1465,12 @@ export async function pollOnce() {
       cbFresh ? cbPrice : null,
     );
     if (wsFresh && clSpot != null) basisTracker.update(lastPrice, clSpot);
+    const kalmanSnapshot = kinematicKalman.update(
+      clSpot ?? (wsFresh ? lastPrice : null),
+      now,
+      wsFresh ? lastPrice : null,
+      clSpot,
+    );
     const settle = estimateSettlePrice({
       nowMs: now, endMs: currentMarketEndMs, spot: clSpot,
       spotTicks: currentMarketEndMs ? getSpotTicksBetween(currentMarketEndMs - 63_000, now) : [],
@@ -3139,6 +3146,9 @@ export async function pollOnce() {
       ptbSource: priceToBeat.source, ptbExact: isExactPtbSource(priceToBeat.source),
       // Chainlink-based settlement estimate the bot measures PTB distance from, and the live 60 s TWAP.
       settlePrice, settlePriceSource: settle.source, crossFeed, v4Signals,
+      kalman: kalmanSnapshot,
+      onlineCalibration: getMlOnlineCalibrationStatus(),
+      metaLabeler: getMetaLabelerStatus(),
       twapNow: twapNowValue,
       twapFeed: getTwapFeedHealth(),
       priceChart: cachedPriceChart,

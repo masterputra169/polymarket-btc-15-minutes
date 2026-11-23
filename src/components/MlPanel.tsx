@@ -672,6 +672,88 @@ function MLPanel({ data, sendBotCommand }: MlPanelProps) {
               )}
             </div>
           )}
+
+          {(data?.hmm || data?.onlineCalibration || data?.metaLabeler || data?.kalman) && (
+            <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'grid', gap: '4px' }}>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+                Quant Telemetry (HMM · OnlineCal · Meta · Kalman · λ)
+              </div>
+
+              {data?.hmm && (
+                <div className="data-row">
+                  <span className="data-row__label">HMM Regime</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
+                    <span style={{ color: data.hmm.dominantState === 'trending' ? 'var(--accent-green)' : data.hmm.dominantState === 'choppy' ? '#fb7185' : 'var(--accent-cyan)' }}>
+                      {data.hmm.dominantState}
+                    </span>
+                    <span style={{ color: 'var(--text-dim)', marginLeft: '5px' }}>
+                      {`T:${Math.round((data.hmm.pTrending ?? 0) * 100)}% C:${Math.round((data.hmm.pChoppy ?? 0) * 100)}% MR:${Math.round((data.hmm.pMeanReverting ?? 0) * 100)}% · H:${(data.hmm.entropy ?? 0).toFixed(2)}`}
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {data?.onlineCalibration && (
+                <div className="data-row">
+                  <span className="data-row__label">Online Platt</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
+                    <span style={{ color: data.onlineCalibration.mode === 'active' && data.onlineCalibration.allowActive ? 'var(--accent-green)' : '#f59e0b' }}>
+                      {data.onlineCalibration.mode === 'active'
+                        ? (data.onlineCalibration.allowActive ? 'ACTIVE' : 'GUARDED')
+                        : 'SHADOW'}
+                    </span>
+                    {data.onlineCalibration.rawMlBrier != null && data.onlineCalibration.calMlBrier != null && (
+                      <span style={{ color: 'var(--text-dim)', marginLeft: '5px' }}>
+                        {`Brier ${data.onlineCalibration.rawMlBrier.toFixed(4)}→${data.onlineCalibration.calMlBrier.toFixed(4)} (n=${data.onlineCalibration.samples})`}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              )}
+
+              {data?.metaLabeler && (
+                <div className="data-row">
+                  <span className="data-row__label">Meta-Labeler</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
+                    <span style={{ color: data.metaLabeler.mode === 'veto' ? 'var(--accent-green)' : 'var(--accent-cyan)' }}>
+                      {String(data.metaLabeler.mode || 'shadow').toUpperCase()}
+                    </span>
+                    <span style={{ color: 'var(--text-dim)', marginLeft: '5px' }}>
+                      {`AUC:${data.metaLabeler.holdoutAuc != null ? data.metaLabeler.holdoutAuc.toFixed(3) : '-'} · n=${data.metaLabeler.samples ?? 0}`}
+                      {data.metaLabeler.lastScore?.winProb != null
+                        ? ` · P(W):${(data.metaLabeler.lastScore.winProb * 100).toFixed(1)}%`
+                        : ''}
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {data?.kalman && (
+                <div className="data-row">
+                  <span className="data-row__label">Kalman v / Basis</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem' }}>
+                    <span className={data.kalman.velocityUsdPerSec >= 0 ? 'c-green' : 'c-red'}>
+                      {`${data.kalman.velocityUsdPerSec >= 0 ? '+' : ''}${data.kalman.velocityUsdPerSec.toFixed(2)} $/s`}
+                    </span>
+                    <span style={{ color: 'var(--text-dim)', marginLeft: '5px' }}>
+                      {`z:${data.kalman.innovationZ >= 0 ? '+' : ''}${data.kalman.innovationZ.toFixed(1)}`}
+                      {data.kalman.adaptiveBasisUsd != null ? ` · basis $${data.kalman.adaptiveBasisUsd.toFixed(1)}` : ''}
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {data?.orderFlow && (data.orderFlow.kylesLambda != null || data.orderFlow.vpin > 0) && (
+                <div className="data-row">
+                  <span className="data-row__label">Kyle λ / VPIN</span>
+                  <span className="data-row__value" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.72rem', color: 'var(--text-secondary)' }}>
+                    {data.orderFlow.kylesLambda != null ? `λ:${data.orderFlow.kylesLambda.toFixed(2)}¢/1k` : 'λ:-'}
+                    {` · VPIN:${(data.orderFlow.vpin * 100).toFixed(0)}%`}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </div>
@@ -708,6 +790,20 @@ export default memo(MLPanel, (prev, next) => {
     a.v4Signals?.basisPct === b.v4Signals?.basisPct &&
     a.v4Signals?.basisDriftPct === b.v4Signals?.basisDriftPct &&
     a.v4Signals?.crossFeedLead === b.v4Signals?.crossFeedLead &&
-    a.v4Signals?.hasExactPtb === b.v4Signals?.hasExactPtb
+    a.v4Signals?.hasExactPtb === b.v4Signals?.hasExactPtb &&
+    a.hmm?.dominantState === b.hmm?.dominantState &&
+    a.hmm?.pTrending === b.hmm?.pTrending &&
+    a.hmm?.pChoppy === b.hmm?.pChoppy &&
+    a.hmm?.entropy === b.hmm?.entropy &&
+    a.onlineCalibration?.mode === b.onlineCalibration?.mode &&
+    a.onlineCalibration?.allowActive === b.onlineCalibration?.allowActive &&
+    a.onlineCalibration?.calMlBrier === b.onlineCalibration?.calMlBrier &&
+    a.metaLabeler?.mode === b.metaLabeler?.mode &&
+    a.metaLabeler?.holdoutAuc === b.metaLabeler?.holdoutAuc &&
+    a.metaLabeler?.lastScore?.winProb === b.metaLabeler?.lastScore?.winProb &&
+    a.kalman?.velocityUsdPerSec === b.kalman?.velocityUsdPerSec &&
+    a.kalman?.adaptiveBasisUsd === b.kalman?.adaptiveBasisUsd &&
+    a.orderFlow?.kylesLambda === b.orderFlow?.kylesLambda &&
+    a.orderFlow?.vpin === b.orderFlow?.vpin
   );
 });

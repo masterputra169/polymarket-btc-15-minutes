@@ -346,7 +346,7 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.arbitrage?.found, data?.arbitrage?.profitPct,
   ]);
 
-  // MLPanel: ML-specific + rule prob + model switcher/profile state + Tahap 2 v4 telemetry
+  // MLPanel: ML-specific + rule prob + model switcher/profile state + Tahap 2 v4 & Quant shadow telemetry
   const mlData = useMemo(() => {
     if (!data) return null;
     return {
@@ -357,6 +357,11 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
       rawUp: data.rawUp,
       ruleUp: data.ruleUp,
       v4Signals: data.v4Signals ?? null,
+      hmm: data.regimeInfo?.hmm ?? null,
+      onlineCalibration: data.onlineCalibration ?? null,
+      metaLabeler: data.metaLabeler ?? null,
+      kalman: data.kalman ?? null,
+      orderFlow: data.orderFlow ?? null,
     };
   }, [
     data?.ml?.available,
@@ -381,6 +386,26 @@ function DashboardApp({ onLogout }: { onLogout: () => void }) {
     data?.v4Signals?.basisDriftPct,
     data?.v4Signals?.crossFeedLead,
     data?.v4Signals?.hasExactPtb,
+    data?.regimeInfo?.hmm?.dominantState,
+    data?.regimeInfo?.hmm?.pTrending,
+    data?.regimeInfo?.hmm?.pChoppy,
+    data?.regimeInfo?.hmm?.pMeanReverting,
+    data?.regimeInfo?.hmm?.entropy,
+    data?.onlineCalibration?.mode,
+    data?.onlineCalibration?.allowActive,
+    data?.onlineCalibration?.rawMlBrier,
+    data?.onlineCalibration?.calMlBrier,
+    data?.onlineCalibration?.samples,
+    data?.metaLabeler?.mode,
+    data?.metaLabeler?.holdoutAuc,
+    data?.metaLabeler?.samples,
+    data?.metaLabeler?.lastScore?.winProb,
+    data?.metaLabeler?.lastScore?.slug,
+    data?.kalman?.velocityUsdPerSec,
+    data?.kalman?.innovationZ,
+    data?.kalman?.adaptiveBasisUsd,
+    data?.orderFlow?.kylesLambda,
+    data?.orderFlow?.vpin,
   ]);
 
   // AccuracyPanel: feedback + detailed stats + signal performance

@@ -34,6 +34,10 @@ export type OrderFlowFeatures = {
   topImbalance: number;
   tradeImbalance: number;
   vpin: number;
+  /** Kyle's Lambda (Δmid_cents / signed_shares × 1000) — price impact per 1,000 signed shares */
+  kylesLambda?: number | null;
+  /** OLS R² of Δmid on signed volume in [0, 1] */
+  kylesLambdaR2?: number | null;
   tradeCount: number;
   buyVolume: number;
   sellVolume: number;
@@ -42,6 +46,7 @@ export type OrderFlowFeatures = {
 const TRADE_WINDOW_MS = 5 * 60_000;
 const MAX_TRADE_SAMPLES = 500;
 const VPIN_BUCKETS = 10;
+const LAMBDA_MIN_OBS = 5;
 
 let _slug: string | null = null;
 let _prevUp: OrderFlowBook | null = null;
@@ -56,6 +61,8 @@ let _depthImbalance = 0;
 let _topImbalance = 0;
 let _tradeImbalance = 0;
 let _vpin = 0;
+let _kylesLambda: number | null = null;
+let _kylesLambdaR2: number | null = null;
 let _buyVolume = 0;
 let _sellVolume = 0;
 let _tradeCount = 0;
@@ -82,6 +89,8 @@ export function resetOrderFlow(): void {
   _topImbalance = 0;
   _tradeImbalance = 0;
   _vpin = 0;
+  _kylesLambda = null;
+  _kylesLambdaR2 = null;
   _buyVolume = 0;
   _sellVolume = 0;
   _tradeCount = 0;
@@ -171,6 +180,51 @@ export function recordOrderFlowTrades(trades: OrderFlowTrade[], slug: string | n
     if (buckets >= VPIN_BUCKETS) break;
   }
   if (buckets > 0) _vpin = Math.max(0, Math.min(1, vpinSum / buckets));
+
+  // Kyle's Lambda (ΔP_up = λ · SignedVolume): OLS over consecutive UP-equivalent trade prints.
+  // Reported in cents per 1,000 signed shares (positive = normal price impact; higher = thinner liquidity / informed flow).
+  const xs: number[] = [];
+  const ys: number[] = [];
+  let prevUpPx: number | null = null;
+  for (const t of recent) {
+    const size = Math.max(0, Number(t.size) || 0);
+    const px = finite(t.price);
+    if (size <= 0 || !t.side || px == null || px <= 0 || px >= 1) continue;
+    const upPx = t.token === 'up' ? px : (1 - px);
+    const bullish = (t.token === 'up' && t.side === 'BUY') || (t.token === 'down' && t.side === 'SELL');
+    const signedVol = bullish ? size : -size;
+    if (prevUpPx != null) {
+      xs.push(signedVol);
+      ys.push((upPx - prevUpPx) * 100); // cents
+    }
+    prevUpPx = upPx;
+  }
+  if (xs.length >= LAMBDA_MIN_OBS) {
+    const n = xs.length;
+    let sumX = 0, sumY = 0;
+    for (let i = 0; i < n; i++) { sumX += xs[i]; sumY += ys[i]; }
+    const meanX = sumX / n;
+    const meanY = sumY / n;
+    let sxx = 0, sxy = 0, syy = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = xs[i] - meanX;
+      const dy = ys[i] - meanY;
+      sxx += dx * dx;
+      sxy += dx * dy;
+      syy += dy * dy;
+    }
+    if (sxx > 1e-6) {
+      const slopePerShare = sxy / sxx;
+      _kylesLambda = +(slopePerShare * 1000).toFixed(4);
+      _kylesLambdaR2 = syy > 1e-9 ? +Math.max(0, Math.min(1, (sxy * sxy) / (sxx * syy))).toFixed(3) : 0;
+    } else {
+      _kylesLambda = null;
+      _kylesLambdaR2 = null;
+    }
+  } else {
+    _kylesLambda = null;
+    _kylesLambdaR2 = null;
+  }
 }
 
 export function getOrderFlowFeatures(): OrderFlowFeatures {
@@ -187,6 +241,8 @@ export function getOrderFlowFeatures(): OrderFlowFeatures {
     topImbalance: _topImbalance,
     tradeImbalance: _tradeImbalance,
     vpin: _vpin,
+    kylesLambda: _kylesLambda,
+    kylesLambdaR2: _kylesLambdaR2,
     tradeCount: _tradeCount,
     buyVolume: _buyVolume,
     sellVolume: _sellVolume,

@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-23 — Quant Telemetry UI (HMM, Online Platt, Meta-Labeler, Kalman, Kyle's λ), Shadow Audit CLI & Shadow Quant Engines
+
+- **Stage 1 — Dashboard Observability & Shadow Promotion Audit:**
+  - **Bot Broadcast & Dashboard UI (`bot/src/loop.ts`, `src/App.tsx`, `src/components/MlPanel.tsx`):** Exposed `kalman`, `onlineCalibration`, and `metaLabeler` in the poll broadcast alongside `regimeInfo.hmm` and `orderFlow`. Added a compact **Quant Telemetry** block in `MlPanel.tsx` displaying live `HMM Regime (T/C/MR + Entropy)`, `Online Platt (ACTIVE/SHADOW + Brier)`, `Meta-Labeler (AUC + P(W))`, `Kalman v/Basis`, and `Kyle λ / VPIN`.
+  - **One-Command Shadow Promotion Audit (`bot/scripts/shadowAudit.mts`):** Added CLI readiness audit reporting all 3 scheduled promotion gates (`Online ML Calibration`, `JEV v5 Veto`, `Stage-2 Meta-Labeler`) from `jev_log.jsonl`, `jev_outcomes.json`, and `trade_journal.jsonl`.
+- **Stage 2 — Shadow Quant Engines (Read-Only Telemetry, Zero Entry-Logic Risk):**
+  - **2-State Kinematic Kalman Filter + Adaptive Basis Kalman (`bot/src/engines/settlePrice.ts`):** Added `KinematicKalmanTracker` tracking filtered `[price, velocity ($/sec)]`, normalized `innovationZ`, and adaptive 1D `Binance − Chainlink` basis with NIS-based process noise inflation.
+  - **Kyle's Lambda (`bot/src/engines/orderFlowFeatures.ts`):** Added rolling OLS price-impact slope `kylesLambda` (`¢` per `1,000` signed shares) and `kylesLambdaR2` over consecutive UP-equivalent CLOB trade prints.
+
 ## 2026-11-23 — Compound Anomaly Guards (Gates 20h, 20i, 20j) + Stage-1 Online ML Calibration Activation (`ML_ONLINE_CALIBRATION_MODE=active`)
 
 - **Post-Mortem on Trade `#67L` (`btc-updown-15m-1795416300`, `13:45–14:00 WIB`, `DOWN @ 63c`, `-$3.15`) & `#66L`:** Identified 3 converging entry anomalies at the `EARLY -> MID` transition (`timeLeftMin = 9.99m`):
