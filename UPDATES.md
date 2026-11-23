@@ -10,6 +10,8 @@
 
 - **Causal Forward-Only 3-State Gaussian HMM (`src/indicators/hmmRegime.ts`):** Added zero-dependency `computeHmmRegime(closes)` (`<0.05 ms/poll`, strictly causal forward filter over `(absReturnZ, efficiency3)` with high self-transition persistence `0.84–0.85`) producing continuous posteriors `pTrending`, `pChoppy`, `pMeanReverting`, `dominantState`, normalized Shannon `entropy`, and `transitionRisk`.
 - **Regime, JEV v5 & Meta-Labeler Integration (`src/engines/regime.ts`, `bot/src/ai/jevAdvisor.ts`, `bot/src/loop.ts`):** Attached `hmm` onto `detectRegime()` (`RegimeInfo.hmm`), forwarded `hmm_regime` into `JEV v5` `state.context`, and logged HMM posteriors alongside `[MetaLabeler] shadow` scores without altering primary rule/filter regime labels.
+- **Future Quant Roadmap (Post `2026-11-28..30` Shadow Audits):**
+  - **2-State Kinematic Kalman Filter `(price, velocity)` + Adaptive Basis Kalman Gain (`bot/src/engines/settlePrice.ts`):** Replace fixed `alpha = 0.15` EWMA in `BasisTracker` with adaptive Kalman Gain `K_t` (tracks rapid `Binance − Chainlink` basis widening while rejecting single-tick spikes) and expose zero-lag instantaneous drift velocity `v_t` (`$/sec`) + innovation z-score for momentum-break detection.
 
 ## 2026-11-22 — Online Recency ML Calibration + Stage-2 Meta-Labeler (Shadow-First)
 
