@@ -331,6 +331,10 @@ export function applyTradeFilters({
   rsiNow = null,             // current 14-period RSI (0-100) for anti-chase oversold/overbought guard
   stochK = null,             // current StochRSI K (0-100) for anti-chase oversold/overbought guard
   ruleSideProb = null,       // rule-engine directional probability for signalSide in [0, 1]
+  recentFlips = null,        // signal direction flip count within current 15m window
+  bbSqueeze = null,          // Bollinger Band squeeze active flag (boolean)
+  hybridDeltaProb = null,    // hybrid residual probability delta (probUp - baseMlProbUp)
+  jevConflict = null,        // JEV v5 direction conflicts with signalSide (boolean)
 }: Record<string, any>) {
   const reasons = [];
 
@@ -934,6 +938,60 @@ export function applyTradeFilters({
     } else if (signalSide === 'UP' && rsiNow > T.rsiOverbought && (!stochKnown || stochK > 75)) {
       reasons.push(
         `Anti-chase overbought: UP @ ${(marketPrice * 100).toFixed(0)}c ≥ ${(T.rsiExtremeMaxPrice * 100).toFixed(0)}c while RSI ${rsiNow.toFixed(1)} > ${T.rsiOverbought}${stochKnown ? ` & StochK ${stochK.toFixed(0)}` : ''} (pullback risk)`,
+      );
+    }
+  }
+
+  // 20h. Squeeze + Signal Flip Whipsaw guard (blocks post-early direction flips inside a Bollinger squeeze)
+  // Replay across 67 live trades: blocks #19L, #45L, #67L (3L/0W, +$9.63 saved, 0 false positives).
+  if (
+    bbSqueeze === true
+    && recentFlips != null && Number.isFinite(recentFlips) && recentFlips >= 1
+    && timeLeftMin != null && Number.isFinite(timeLeftMin) && timeLeftMin < 13.0
+  ) {
+    reasons.push(
+      `Squeeze flip whipsaw: ${recentFlips} flip(s) inside BB squeeze at ${timeLeftMin.toFixed(1)}m left`,
+    );
+  }
+
+  // 20i & 20j. Compound Cross-Feed Skew + Squeeze/Flip or JEV/Hybrid Opposition guard
+  // Note: binanceDistPct and oracleDistPct are passed in PERCENT units (e.g. 0.084 = 0.084%).
+  if (
+    T.crossFeedSkewPct > 0
+    && signalSide != null
+    && binanceDistPct != null && Number.isFinite(binanceDistPct)
+    && oracleDistPct != null && Number.isFinite(oracleDistPct)
+    && (mlConfidence == null || mlConfidence < 0.42)
+  ) {
+    const signedBinance = signalSide === 'UP' ? binanceDistPct : -binanceDistPct;
+    const signedOracle = signalSide === 'UP' ? oracleDistPct : -oracleDistPct;
+    const inflationPct = signedBinance - signedOracle;
+    const flipsCount = (recentFlips != null && Number.isFinite(recentFlips)) ? recentFlips : 0;
+
+    // 20i: Moderate cross-feed inflation (>= 0.050%) combined with BB squeeze or signal flip (#45L, #50L, #67L)
+    if (
+      signedBinance > 0
+      && inflationPct >= Math.max(0.050, T.crossFeedSkewPct * 1.4)
+      && (bbSqueeze === true || flipsCount >= 1)
+    ) {
+      reasons.push(
+        `Cross-feed skew + squeeze/flip: skew +${inflationPct.toFixed(3)}% with ${bbSqueeze ? 'BB squeeze' : ''}${bbSqueeze && flipsCount >= 1 ? ' & ' : ''}${flipsCount >= 1 ? `${flipsCount} flip(s)` : ''} (ML conf ${((mlConfidence ?? 0) * 100).toFixed(1)}% < 42%)`,
+      );
+    }
+
+    // 20j: Cross-feed inflation (>= 0.070%) combined with JEV directional conflict and opposing hybrid residual (#50L, #66L, #67L)
+    const hybridOpposes = (hybridDeltaProb != null && Number.isFinite(hybridDeltaProb))
+      ? ((signalSide === 'UP' && hybridDeltaProb < 0) || (signalSide === 'DOWN' && hybridDeltaProb > 0))
+      : false;
+    const hybridOppMag = hybridOpposes ? Math.abs(hybridDeltaProb) : 0;
+    if (
+      signedBinance > 0
+      && inflationPct >= T.crossFeedSkewPct * 2
+      && jevConflict === true
+      && hybridOppMag >= 0.08
+    ) {
+      reasons.push(
+        `Compound JEV + hybrid + skew conflict: JEV opposes ${signalSide}, hybrid opposes by ${(hybridOppMag * 100).toFixed(1)}pp, skew +${inflationPct.toFixed(3)}% (ML conf ${((mlConfidence ?? 0) * 100).toFixed(1)}% < 42%)`,
       );
     }
   }

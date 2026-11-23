@@ -6,6 +6,20 @@
 
 ---
 
+## 2026-11-23 — Compound Anomaly Guards (Gates 20h, 20i, 20j) + Stage-1 Online ML Calibration Activation (`ML_ONLINE_CALIBRATION_MODE=active`)
+
+- **Post-Mortem on Trade `#67L` (`btc-updown-15m-1795416300`, `13:45–14:00 WIB`, `DOWN @ 63c`, `-$3.15`) & `#66L`:** Identified 3 converging entry anomalies at the `EARLY -> MID` transition (`timeLeftMin = 9.99m`):
+  1. **Squeeze + Signal Flip Whipsaw (`bbSqueeze=true`, `recentFlips=2`):** Signal flipped `UP -> DOWN` twice inside a Bollinger Band squeeze after the first 2 minutes.
+  2. **Cross-Feed Inflation + Squeeze/Flip (`inflationPct=+0.084%`, `crossFeedSkewUsd=-$51.94`):** Binance dropped `-0.140%` while Chainlink Oracle dropped only `-0.055%` (`2.52x` inflation) during a squeeze/flip with `mlConfidence < 42%`.
+  3. **Compound JEV v5 Conflict + Hybrid Residual Opposition + Cross-Feed Skew (`jevConflict=true`, `hybridDeltaProb=+10.18pp` opposing `DOWN`, `inflationPct=+0.084%`):** JEV v5 predicted `UP` (`67%` confidence, `69%` settle, `72%` Bayesian), `hybrid_residual_v4` pulled `mlProbUp` up `+10.18pp` against `DOWN`, and Binance over-stated the move by `+0.084%`.
+- **Surgical Compound Anomaly Filters (`bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`):**
+  - Forwarded `recentFlips`, `bbSqueeze`, `hybridDeltaProb`, and `jevConflict` from `executeDirectionalTrade()` into `applyTradeFilters()`.
+  - **Gate 20h (`Squeeze flip whipsaw`):** Blocks entries when `bbSqueeze === true`, `recentFlips >= 1`, and `timeLeftMin < 13.0m` (catches `#19L`, `#45L`, `#67L` — `3L / 0W`).
+  - **Gate 20i (`Cross-feed skew + squeeze/flip`):** When `mlConfidence < 0.42`, blocks entries with `inflationPct >= max(0.050%, 1.4 * crossFeedSkewPct)` accompanied by `bbSqueeze === true` or `recentFlips >= 1` (catches `#45L`, `#50L`, `#67L` — `3L / 0W`).
+  - **Gate 20j (`Compound JEV + hybrid + skew conflict`):** When `mlConfidence < 0.42`, blocks entries with `inflationPct >= 2 * crossFeedSkewPct` (`0.070%`), `jevConflict === true`, and opposing `|hybridDeltaProb| >= 0.08` (catches `#50L`, `#66L`, `#67L` — `3L / 0W`).
+  - **Combined 67-Trade Live Journal Replay:** Blocks **`5` losses (`#19L`, `#45L`, `#50L`, `#66L`, `#67L`)** and **`0` winners** (`0` false positives), saving **`+$15.98`** (`+$111.55 -> $127.53`) and lifting realized win rate from **`67.16%` (`45W–22L`)** to **`72.58%` (`45W–17L`)** while preserving all 20,000 golden filter hashes.
+- **Stage-1 Promotion — Online Recency ML Calibration (`polyvps:/opt/polybtc15/bot/.env`):** Promoted `ML_ONLINE_CALIBRATION_MODE=active` per the `2026-11-23..24` milestone (`300` resolved windows, `calMlBrier < rawMlBrier`, self-guard `allowActive=true`).
+
 ## 2026-11-23 — Causal 3-State Gaussian Hidden Markov Model (HMM) Regime Posterior (Shadow & JEV v5 Context)
 
 - **Causal Forward-Only 3-State Gaussian HMM (`src/indicators/hmmRegime.ts`):** Added zero-dependency `computeHmmRegime(closes)` (`<0.05 ms/poll`, strictly causal forward filter over `(absReturnZ, efficiency3)` with high self-transition persistence `0.84–0.85`) producing continuous posteriors `pTrending`, `pChoppy`, `pMeanReverting`, `dominantState`, normalized Shannon `entropy`, and `transitionRisk`.

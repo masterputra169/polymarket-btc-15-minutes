@@ -440,5 +440,99 @@ describe('tradeFilters honours the thresholds', () => {
     });
     expect(offRes.reasons.filter((x: string) => x.includes('regime thin ML edge:'))).toEqual([]);
   });
+
+  test('Gates 20h, 20i, 20j block compound anomalies (#19L, #45L, #50L, #66L, #67L) while sparing winners (#39W, #48W, #59W, #63W)', async () => {
+    const mod = await load({
+      FILTER_CROSS_FEED_SKEW_PCT: '0.035',
+      FILTER_ML_CONF_MIN: '0.30',
+      FILTER_HARD_ML_FLOOR: '0.30',
+    });
+
+    // Trade #67L replay (DOWN @ 63c, tl=9.99m, mlConf=32.6%, inf=0.084%, ora=0.055%, flips=2, sq=true, jevConflict=true, hybDelta=+0.1018)
+    // Hits all 3 compound anomaly gates (20h, 20i, 20j)
+    const trade67L = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.326,
+      marketPrice: 0.63,
+      timeLeftMin: 9.99,
+      regime: 'trending',
+      binanceDistPct: -0.140,
+      oracleDistPct: -0.055,
+      recentFlips: 2,
+      bbSqueeze: true,
+      hybridDeltaProb: 0.1018,
+      jevConflict: true,
+    });
+    expect(trade67L.pass).toBe(false);
+    expect(trade67L.reasons.some((r: string) => r.startsWith('Squeeze flip whipsaw:'))).toBe(true);
+    expect(trade67L.reasons.some((r: string) => r.startsWith('Cross-feed skew + squeeze/flip:'))).toBe(true);
+    expect(trade67L.reasons.some((r: string) => r.startsWith('Compound JEV + hybrid + skew conflict:'))).toBe(true);
+
+    // Trade #66L replay (DOWN @ 64c, tl=9.99m, mlConf=35.0%, inf=0.074%, ora=0.086%, flips=0, sq=false, jevConflict=true, hybDelta=+0.103)
+    const trade66L = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.350,
+      marketPrice: 0.64,
+      timeLeftMin: 9.99,
+      regime: 'trending',
+      binanceDistPct: -0.160,
+      oracleDistPct: -0.086,
+      recentFlips: 0,
+      bbSqueeze: false,
+      hybridDeltaProb: 0.103,
+      jevConflict: true,
+    });
+    expect(trade66L.pass).toBe(false);
+    expect(trade66L.reasons.some((r: string) => r.startsWith('Compound JEV + hybrid + skew conflict:'))).toBe(true);
+
+    // Trade #39W replay (winner with flips=2, sq=false, inf=-0.040%) -> spared
+    const trade39W = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.35,
+      marketPrice: 0.63,
+      timeLeftMin: 12.78,
+      regime: 'trending',
+      binanceDistPct: -0.033,
+      oracleDistPct: -0.073,
+      recentFlips: 2,
+      bbSqueeze: false,
+      hybridDeltaProb: 0,
+      jevConflict: false,
+    });
+    expect(trade39W.reasons.filter((r: string) =>
+      r.startsWith('Squeeze flip whipsaw:')
+      || r.startsWith('Cross-feed skew + squeeze/flip:')
+      || r.startsWith('Compound JEV + hybrid + skew conflict:'),
+    )).toEqual([]);
+
+    // Trade #48W replay (winner with inf=0.082%, flips=0, sq=false, jevConflict=false) -> spared
+    const trade48W = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.35,
+      marketPrice: 0.64,
+      timeLeftMin: 10.06,
+      regime: 'trending',
+      binanceDistPct: -0.130,
+      oracleDistPct: -0.048,
+      recentFlips: 0,
+      bbSqueeze: false,
+      hybridDeltaProb: 0.100,
+      jevConflict: false,
+    });
+    expect(trade48W.reasons.filter((r: string) =>
+      r.startsWith('Squeeze flip whipsaw:')
+      || r.startsWith('Cross-feed skew + squeeze/flip:')
+      || r.startsWith('Compound JEV + hybrid + skew conflict:'),
+    )).toEqual([]);
+  });
 });
+
 

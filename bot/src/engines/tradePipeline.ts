@@ -726,6 +726,14 @@ export async function executeDirectionalTrade({
   const etHour = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
   const sideBook = betSide === 'UP' ? orderbookUp : orderbookDown;
   const sideSpread = sideBook ? (sideBook.spread ?? null) : (orderbookUp?.spread ?? null);
+  const jevForFilter = (() => {
+    const d = getJevLatestForTape();
+    return d && d.slug === marketSlug ? d : null;
+  })();
+  const jevConflictForFilter =
+    jevForFilter && jevForFilter.direction !== 'NO_EDGE' && rec.side
+      ? jevForFilter.direction !== rec.side
+      : null;
 
   const filterResult = deps.applyTradeFilters({
     mlConfidence: effectiveMlConf,
@@ -763,6 +771,10 @@ export async function executeDirectionalTrade({
       timeAware?.adjustedUp != null && Number.isFinite(timeAware.adjustedUp)
         ? (rec.side === 'UP' ? timeAware.adjustedUp : rec.side === 'DOWN' ? (1 - timeAware.adjustedUp) : null)
         : null,
+    recentFlips: recentFlipCount ?? null,
+    bbSqueeze: bb?.squeeze ?? null,
+    hybridDeltaProb: mlResult?.hybridDeltaProb ?? null,
+    jevConflict: jevConflictForFilter,
   });
   // Market tape decision trail: every reason, including the ones after the first.
   noteTapeFilters(filterResult.pass, filterResult.reasons);
