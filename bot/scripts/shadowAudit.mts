@@ -34,20 +34,26 @@ function readJsonl(p: string): any[] {
     .filter(Boolean);
 }
 
-const outcomes: Record<string, { outcome?: string }> = existsSync(jevOutcomesPath)
+const outcomes: Record<string, string | { outcome?: string }> = existsSync(jevOutcomesPath)
   ? JSON.parse(readFileSync(jevOutcomesPath, 'utf8'))
   : {};
 const jevRows = readJsonl(jevLogPath);
 const journalRows = readJsonl(journalPath);
 
+function getOutcome(slug: string): 'UP' | 'DOWN' | null {
+  const raw = outcomes[slug];
+  const val = typeof raw === 'string' ? raw : raw?.outcome;
+  return val === 'UP' || val === 'DOWN' ? val : null;
+}
+
 // ── 1. Online ML Calibration Audit ──
 const mlBySlug = new Map<string, { rawMl: number; mkt: number; y: 0 | 1; ts: number }>();
 for (const r of jevRows) {
   const slug = r.slug;
-  const o = outcomes[slug]?.outcome;
-  if (o !== 'UP' && o !== 'DOWN') continue;
-  const rawMl = Number(r.state?.ml?.prob_up ?? r.rawMlProbUp);
-  const mkt = Number(r.state?.market_odds?.up ?? r.marketUp);
+  const o = getOutcome(slug);
+  if (!o) continue;
+  const rawMl = Number(r.ml?.probUp ?? r.state?.ml?.prob_up ?? r.rawMlProbUp);
+  const mkt = Number(r.market?.up ?? r.state?.market_odds?.up ?? r.marketUp);
   if (!(rawMl > 0.005 && rawMl < 0.995) || !(mkt > 0.01 && mkt < 0.99)) continue;
   mlBySlug.set(slug, { rawMl, mkt, y: o === 'UP' ? 1 : 0, ts: Number(r.ts) || 0 });
 }
@@ -73,17 +79,17 @@ const stage1Pass = Boolean(mlPlatt && nMl >= 50 && calMlBrier != null && rawMlBr
 const v5BySlug = new Map<string, any>();
 for (const r of jevRows) {
   const slug = r.slug;
-  const o = outcomes[slug]?.outcome;
-  if (o !== 'UP' && o !== 'DOWN') continue;
-  const ver = String(r.calibrationVersion ?? r.variant ?? '');
+  const o = getOutcome(slug);
+  if (!o) continue;
+  const ver = String(r.stateVariant ?? r.calibrationVersion ?? r.variant ?? '');
   if (!ver.includes('v5') && !ver.includes('online-platt-v5')) continue;
   v5BySlug.set(slug, { ...r, y: o === 'UP' ? 1 : 0, outcome: o });
 }
 const v5List = [...v5BySlug.values()];
 let v5BayesB = 0, v5MktB = 0, v5DirTotal = 0, v5DirHit = 0;
 for (const r of v5List) {
-  const bp = Number(r.bayesianUpProbability ?? r.settleUpProbability ?? 0.5);
-  const mp = Number(r.state?.market_odds?.up ?? 0.5);
+  const bp = Number(r.bayesianProbUp ?? r.bayesianUpProbability ?? r.settleUpCalibrated ?? r.settleUpProbability ?? 0.5);
+  const mp = Number(r.market?.up ?? r.state?.market_odds?.up ?? 0.5);
   v5BayesB += (bp - r.y) ** 2;
   v5MktB += (mp - r.y) ** 2;
   if (r.direction === 'UP' || r.direction === 'DOWN') {
