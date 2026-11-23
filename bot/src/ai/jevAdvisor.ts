@@ -59,6 +59,7 @@ import {
   type RiskDeskScores,
 } from './jevBayesian.ts';
 import type { OrderFlowFeatures } from '../engines/orderFlowFeatures.ts';
+import type { HmmRegimeOutput } from '../../../src/indicators/hmmRegime.ts';
 import { maybeRecordPolicyCandidate } from './jevPolicyShadow.ts';
 import type { TypesafeAnswer, TypesafeQuestion, TypesafeScoreAnswer } from './typesafeClient.ts';
 
@@ -120,6 +121,7 @@ export interface JevSnapshot {
   bestEdge: number | null;
   regime: string | null;
   regimeConfidence: number | null;
+  hmm?: HmmRegimeOutput | null;
   smartFlowSignal: string | null;
   signalConfirmCount: number | null;
   recentFlips: number | null;
@@ -357,6 +359,17 @@ export function buildJevState(
     context: {
       regime: s.regime,
       regime_confidence: s.regimeConfidence,
+      ...(s.hmm
+        ? {
+            hmm_regime: {
+              dominant: s.hmm.dominantState,
+              p_trending: s.hmm.pTrending,
+              p_choppy: s.hmm.pChoppy,
+              p_mean_reverting: s.hmm.pMeanReverting,
+              entropy: s.hmm.entropy,
+            },
+          }
+        : {}),
       consecutive_losses: s.consecutiveLosses,
       bankroll_usd: s.bankroll,
     },

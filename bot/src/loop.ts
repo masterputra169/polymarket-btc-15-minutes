@@ -2170,6 +2170,7 @@ export async function pollOnce() {
         ensembleUp,
         edgeUp: edge.edgeUp, edgeDown: edge.edgeDown, bestEdge: edge.bestEdge,
         regime: regimeInfo?.regime ?? null, regimeConfidence: regimeInfo?.confidence ?? null,
+        hmm: regimeInfo?.hmm ?? null,
         smartFlowSignal: smartFlowSignal?.direction ?? null, signalConfirmCount: getConfirmCount(),
         recentFlips: recentFlipCount, consecutiveLosses: getConsecutiveLosses(),
         bankroll: getBankroll(),
@@ -2208,7 +2209,10 @@ export async function pollOnce() {
               jevNetConvAligned: jevAligned,
             }, { slug: marketSlug });
             if (ms.winProb != null) {
-              log.info(`[MetaLabeler] shadow ${marketSlug} ${rec.side} @ ${(mPrice * 100).toFixed(1)}c: P(WIN)=${(ms.winProb * 100).toFixed(1)}% (AUC=${ms.holdoutAuc ?? 'n/a'}, n=${ms.samples})`);
+              const hmmTag = regimeInfo?.hmm
+                ? `, HMM=${regimeInfo.hmm.dominantState}(T:${Math.round(regimeInfo.hmm.pTrending * 100)}%/C:${Math.round(regimeInfo.hmm.pChoppy * 100)}%/H:${regimeInfo.hmm.entropy.toFixed(2)})`
+                : '';
+              log.info(`[MetaLabeler] shadow ${marketSlug} ${rec.side} @ ${(mPrice * 100).toFixed(1)}c: P(WIN)=${(ms.winProb * 100).toFixed(1)}% (AUC=${ms.holdoutAuc ?? 'n/a'}, n=${ms.samples}${hmmTag})`);
             }
           }
         }
