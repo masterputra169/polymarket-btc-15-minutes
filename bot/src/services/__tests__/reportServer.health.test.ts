@@ -44,8 +44,10 @@ describe('report API /health', () => {
     expect(body.service).toBe('report-api');
   });
 
-  test('/reports still requires the token', async () => {
+  test('/reports still requires the token and rejects query-string ?token=', async () => {
     const res = await fetch(`http://127.0.0.1:${PORT}/reports`);
     expect(res.status).toBe(401);
+    const queryRes = await fetch(`http://127.0.0.1:${PORT}/reports?token=test-secret-token`);
+    expect(queryRes.status).toBe(401);
   });
 });

@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-24 — Security Hardening (Auth Gateway Crash Fix, Session `jti`, `SameSite=Strict` & Bearer-Only Report API)
+
+- **Dashboard Auth Gateway (`scripts/dashboard-auth-server.mjs`, `src/__tests__/dashboardAuth.test.ts`):**
+  - Fixed `[HIGH]` unauthenticated remote crash (DoS): wrapped `decodeURIComponent()` in `cookies(req)` with `try/catch` using `Object.create(null)` and added a top-level `try/catch` around the `http.createServer` async request handler so malformed `Cookie` headers (`%E0%A4%A`) return `401` instead of crashing `:3102`.
+  - Fixed `[MEDIUM]` deterministic session tokens & cookie scope: added 16-byte random `jti` nonce to `sign({ exp, v: 1, jti })` and tightened `Set-Cookie` from `SameSite=Lax` to `SameSite=Strict`.
+- **Report API (`bot/src/services/reportServer.ts`, `bot/src/services/__tests__/reportServer.health.test.ts`):**
+  - Fixed `[LOW]` query-string token exposure: removed `?token=` query auth on `/reports` and `/reports/summary` so `REPORT_AUTH_TOKEN` is accepted only via `Authorization: Bearer`.
+
 ## 2026-11-24 — Stage-2 Promotion (`JEV_MODE=veto`) & Maker/Early Flow Tuning on `polyvps`
 
 - **Audit Trigger (`bot/scripts/shadowAudit.mts`):** Live JEV v5 crossed the promotion gate at **`153/150` resolved v5 windows** (`bayesBrier = 0.22297` vs `mktBrier = 0.22325`, skill **`+0.13%`**, directional accuracy **`102/152 = 67.1%`**).

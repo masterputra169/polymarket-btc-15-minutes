@@ -92,4 +92,17 @@ describe('dashboard auth gateway', () => {
     const me = await fetch(base + '/me', { headers: { Cookie: tampered } });
     expect(me.status).toBe(401);
   });
+
+  test('survives malformed percent-encoded Cookie without crashing and sets SameSite=Strict + unique jti', async () => {
+    const bad = await fetch(base + '/me', { headers: { Cookie: 'btc15_session=%E0%A4%A' } });
+    expect(bad.status).toBe(401);
+    const health = await fetch(base + '/health');
+    expect(health.status).toBe(200);
+
+    const [r1, r2] = await Promise.all([login(PASSWORD), login(PASSWORD)]);
+    const sc1 = r1.headers.get('set-cookie') || '';
+    const sc2 = r2.headers.get('set-cookie') || '';
+    expect(sc1).toContain('SameSite=Strict');
+    expect(sc1.split(';')[0]).not.toBe(sc2.split(';')[0]);
+  });
 });

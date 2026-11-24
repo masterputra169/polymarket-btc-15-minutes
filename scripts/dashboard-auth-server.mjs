@@ -91,11 +91,17 @@ function verifyToken(token) {
   } catch { return null; }
 }
 function cookies(req) {
-  const out = {};
+  const out = Object.create(null);
   for (const part of String(req.headers.cookie || '').split(';')) {
     const i = part.indexOf('=');
     if (i < 0) continue;
-    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    const key = part.slice(0, i).trim();
+    if (!key) continue;
+    try {
+      out[key] = decodeURIComponent(part.slice(i + 1).trim());
+    } catch {
+      // Malformed percent-encoding in untrusted Cookie header must never crash the gateway.
+    }
   }
   return out;
 }
@@ -126,38 +132,44 @@ function readJson(req) {
 }
 function setCookie(res, token, maxAge) {
   const secure = SECURE_COOKIE ? '; Secure' : '';
-  res.setHeader('Set-Cookie', COOKIE + '=' + encodeURIComponent(token) + '; HttpOnly; SameSite=Lax; Path=/; Max-Age=' + maxAge + secure);
+  res.setHeader('Set-Cookie', COOKIE + '=' + encodeURIComponent(token) + '; HttpOnly; SameSite=Strict; Path=/; Max-Age=' + maxAge + secure);
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url || '/', 'http://127.0.0.1');
-  const ip = clientIp(req);
-  if (url.pathname === '/health') return json(res, 200, { ok: true });
-  if (url.pathname === '/me' && req.method === 'GET') {
-    const token = cookies(req)[COOKIE];
-    const payload = verifyToken(token);
-    if (!payload || !sessions.has(token)) return json(res, 401, { ok: false, error: 'unauthorized' });
-    return json(res, 200, { ok: true, expiresAt: payload.exp });
+  try {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    const ip = clientIp(req);
+    if (url.pathname === '/health') return json(res, 200, { ok: true });
+    if (url.pathname === '/me' && req.method === 'GET') {
+      const token = cookies(req)[COOKIE];
+      const payload = verifyToken(token);
+      if (!payload || !sessions.has(token)) return json(res, 401, { ok: false, error: 'unauthorized' });
+      return json(res, 200, { ok: true, expiresAt: payload.exp });
+    }
+    if (url.pathname === '/login' && req.method === 'POST') {
+      if (rateLimited(ip)) return json(res, 429, { ok: false, error: 'too many attempts' });
+      let body;
+      try { body = await readJson(req); } catch { return json(res, 400, { ok: false, error: 'invalid request' }); }
+      if (!verifyPassword(body.password)) return json(res, 401, { ok: false, error: 'invalid password' });
+      attempts.delete(ip);
+      const exp = Date.now() + TTL * 1000;
+      const jti = crypto.randomBytes(16).toString('base64url');
+      const token = sign({ exp, v: 1, jti });
+      boundedSet(sessions, token, exp);
+      setCookie(res, token, TTL);
+      return json(res, 200, { ok: true, expiresAt: exp });
+    }
+    if (url.pathname === '/logout' && req.method === 'POST') {
+      const token = cookies(req)[COOKIE];
+      if (token) sessions.delete(token);
+      setCookie(res, '', 0);
+      return json(res, 200, { ok: true });
+    }
+    return json(res, 404, { ok: false, error: 'not found' });
+  } catch (err) {
+    console.error('dashboard-auth request error:', err?.message || err);
+    if (!res.headersSent) return json(res, 500, { ok: false, error: 'internal error' });
   }
-  if (url.pathname === '/login' && req.method === 'POST') {
-    if (rateLimited(ip)) return json(res, 429, { ok: false, error: 'too many attempts' });
-    let body;
-    try { body = await readJson(req); } catch { return json(res, 400, { ok: false, error: 'invalid request' }); }
-    if (!verifyPassword(body.password)) return json(res, 401, { ok: false, error: 'invalid password' });
-    attempts.delete(ip);
-    const exp = Date.now() + TTL * 1000;
-    const token = sign({ exp, v: 1 });
-    boundedSet(sessions, token, exp);
-    setCookie(res, token, TTL);
-    return json(res, 200, { ok: true, expiresAt: exp });
-  }
-  if (url.pathname === '/logout' && req.method === 'POST') {
-    const token = cookies(req)[COOKIE];
-    if (token) sessions.delete(token);
-    setCookie(res, '', 0);
-    return json(res, 200, { ok: true });
-  }
-  return json(res, 404, { ok: false, error: 'not found' });
 });
 
 server.listen(PORT, BIND, () => console.log('dashboard-auth listening on ' + BIND + ':' + PORT));

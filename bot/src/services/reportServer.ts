@@ -38,13 +38,13 @@ function tokenMatches(candidate: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-function isAuthorized(req: IncomingMessage, url: URL) {
+function isAuthorized(req: IncomingMessage) {
   const token = (process.env.REPORT_AUTH_TOKEN || '').trim();
   if (!token) return true;
 
   const header = String(req.headers.authorization || '');
   const bearer = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
-  return tokenMatches(bearer) || tokenMatches(url.searchParams.get('token') || '');
+  return tokenMatches(bearer);
 }
 
 function parseOptions(url: URL) {
@@ -114,7 +114,7 @@ export function startReportServer() {
         return;
       }
 
-      if (!isAuthorized(req, url)) {
+      if (!isAuthorized(req)) {
         writeJson(res, 401, { ok: false, error: 'unauthorized' });
         return;
       }
