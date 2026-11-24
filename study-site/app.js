@@ -351,8 +351,8 @@ function renderOverviewMcCard() {
       s.p50 >= summary.currentBankroll ? 'c-pos' : 'c-neg',
     ]);
     cards.push([
-      `${hz.toLocaleString()}t Profit / P95 DD`,
-      `${s.probProfitPct}% Profit · ${s.p95MaxDdPct}% P95 DD`,
+      `${hz.toLocaleString()}t Profit / Tail DD`,
+      `${s.probProfitPct}% Profit · P95 ${s.p95MaxDdPct}% / CVaR95 ${s.cvar95MaxDdPct ?? s.p95MaxDdPct}%`,
       s.probProfitPct >= 90 ? 'c-pos' : 'c-warn',
     ]);
   }
@@ -1302,7 +1302,7 @@ function renderMonteCarloTab() {
       k: 'P5 – P95 Range',
       v: `${fmtUsd(hData.p5)} – ${fmtUsd(hData.p95)}`,
       cls: 'c-cyan',
-      hint: `IQR P25–P75: ${fmtUsd(hData.p25)} – ${fmtUsd(hData.p75)}`,
+      hint: `IQR P25–P75: ${fmtUsd(hData.p25)} – ${fmtUsd(hData.p75)} · ES/CVaR95: ${hData.cvar95Final != null ? fmtUsd(hData.cvar95Final) : '—'}`,
     },
     {
       k: 'Prob. Profit / ≥2×',
@@ -1314,7 +1314,7 @@ function renderMonteCarloTab() {
       k: 'Max Drawdown Risk',
       v: `Med ${hData.medianMaxDdPct}% · P95 ${hData.p95MaxDdPct}%`,
       cls: hData.p95MaxDdPct < 35 ? 'c-pos' : hData.p95MaxDdPct < 55 ? 'c-warn' : 'c-neg',
-      hint: `P99 DD ${hData.p99MaxDdPct}% · P(DD≥25%) ${hData.probDdOver25Pct}%`,
+      hint: `CVaR95 (ES) ${hData.cvar95MaxDdPct ?? '—'}% · P99 ${hData.p99MaxDdPct}% · P(DD≥25%) ${hData.probDdOver25Pct}%`,
     },
     {
       k: 'Ruin Risk (<50% / Blowup)',
@@ -1358,10 +1358,10 @@ function renderMonteCarloTab() {
 
   // Horizon scaling table (clickable rows)
   const hTable = makeTable(
-    ['Trades', 'Est. Waktu', 'P5', 'Median P50', 'P95', 'Profit %', 'P95 DD %', 'Ruin <50%'],
+    ['Trades', 'Est. Waktu', 'P5', 'Median P50', 'P95', 'Profit %', 'P95 DD %', 'CVaR95 DD %', 'Ruin <50%'],
     (mc.horizons || []).map((hz) => {
       const r = activeScenario.horizons?.[hz];
-      if (!r) return [`${hz}`, '—', '—', '—', '—', '—', '—', '—'];
+      if (!r) return [`${hz}`, '—', '—', '—', '—', '—', '—', '—', '—'];
       const estDays = st.tradesPerDay && st.tradesPerDay > 0
         ? `~${Math.max(1, Math.round(hz / st.tradesPerDay))} hari`
         : '—';
@@ -1373,6 +1373,7 @@ function renderMonteCarloTab() {
         fmtUsd(r.p95),
         { text: `${r.probProfitPct}%`, cls: r.probProfitPct >= 85 ? 'c-pos' : 'c-warn' },
         `${r.p95MaxDdPct}%`,
+        r.cvar95MaxDdPct != null ? `${r.cvar95MaxDdPct}%` : '—',
         `${r.probRuinHalfPct}%`,
       ];
     }),
@@ -1391,10 +1392,10 @@ function renderMonteCarloTab() {
 
   // Scenarios comparison table (clickable rows)
   const sTable = makeTable(
-    ['Scenario', 'WR %', 'Median P50', 'P5 – P95', 'Profit %', 'P95 DD %', 'Ruin <50%'],
+    ['Scenario', 'WR %', 'Median P50', 'P5 – P95', 'Profit %', 'P95 DD %', 'CVaR95 DD %', 'Ruin <50%'],
     allScenarios.map((sc) => {
       const r = sc.horizons?.[state.mcHorizon];
-      if (!r) return [sc.label, '—', '—', '—', '—', '—', '—'];
+      if (!r) return [sc.label, '—', '—', '—', '—', '—', '—', '—'];
       return [
         sc.label,
         `${sc.assumedWrPct}%`,
@@ -1402,6 +1403,7 @@ function renderMonteCarloTab() {
         `${fmtUsd(r.p5)} – ${fmtUsd(r.p95)}`,
         { text: `${r.probProfitPct}%`, cls: r.probProfitPct >= 85 ? 'c-pos' : 'c-warn' },
         `${r.p95MaxDdPct}%`,
+        r.cvar95MaxDdPct != null ? `${r.cvar95MaxDdPct}%` : '—',
         `${r.probRuinHalfPct}%`,
       ];
     }),

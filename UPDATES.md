@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-24 — Monte Carlo Web Portal: Expected Shortfall (`CVaR 95%`) Analytics
+
+- **Monte Carlo Engine (`study-site/mc-engine.js`):** Added Expected Shortfall (`CVaR 95%`) metrics to `summarizeFinals()` (`cvar95Final`: mean of worst 5% final bankrolls) and `summarizeDrawdowns()` (`cvar95MaxDdPct`: mean of worst 5% max drawdowns). Analytics-only; zero changes to live bot trading or filter logic.
+- **Static Builder & UI (`scripts/build-study-site.mjs`, `study-site/app.js`):** Exported `cvar95Final` and `cvar95MaxDdPct` into `data/site.json` (`monteCarloSummary.snapshots`) and rendered `CVaR95` in the Overview Monte Carlo card, Monte Carlo tab `P5 – P95 Range` / `Max Drawdown Risk` KPI hints, and `Horizon Scaling` / `Scenario Comparison` tables on `poly15-study.dollarkilat.xyz`.
+
 ## 2026-11-24 — Fix `polybot-watchdog.service` `203/EXEC` Permission Denied (`+x` in Git)
 
 - **Root Cause:** `scripts/watchdog.sh` and `scripts/daily-maintenance.sh` were tracked in Git with mode `100644` instead of `100755`, so `git reset --hard origin/main` on `polyvps` stripped their executable bit and caused `polybot-watchdog.service` to fail every 5 minutes with `status=203/EXEC` (`Permission denied`).

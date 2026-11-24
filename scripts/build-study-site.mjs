@@ -1026,12 +1026,14 @@ export function buildStudySite(options = {}) {
     if (!row) return null;
     return {
       p5: row.p5,
+      cvar95Final: row.cvar95Final,
       p50: row.p50,
       p95: row.p95,
       mean: row.mean,
       probProfitPct: row.probProfitPct,
       probDoublePct: row.probDoublePct,
       p95MaxDdPct: row.p95MaxDdPct,
+      cvar95MaxDdPct: row.cvar95MaxDdPct,
       probRuinHalfPct: row.probRuinHalfPct,
     };
   };

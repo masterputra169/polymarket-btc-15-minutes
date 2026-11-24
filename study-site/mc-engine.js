@@ -295,9 +295,14 @@ function summarizeArray(arr, startBankroll, nPaths) {
   const p50 = r2(q(50));
   const mean = r2(sum / nPaths);
   const base = startBankroll > 0 ? startBankroll : 1;
+  const tailCount = Math.max(1, Math.ceil(0.05 * nPaths));
+  let tailSum = 0;
+  for (let i = 0; i < tailCount; i++) tailSum += sorted[i];
+  const cvar95Final = r2(tailSum / tailCount);
 
   return {
     p5: r2(q(5)),
+    cvar95Final,
     p10: r2(q(10)),
     p25: r2(q(25)),
     p50,
@@ -340,9 +345,15 @@ function summarizeDrawdowns(ddArr, nPaths) {
     ddHistCounts[bin]++;
   }
 
+  const tailStart = Math.max(0, Math.min(nPaths - 1, Math.floor(0.95 * nPaths)));
+  let tailDdSum = 0;
+  for (let i = tailStart; i < nPaths; i++) tailDdSum += sorted[i];
+  const cvar95MaxDdPct = r2((tailDdSum / Math.max(1, nPaths - tailStart)) * 100);
+
   return {
     medianMaxDdPct: r2(q(50) * 100),
     p95MaxDdPct: r2(q(95) * 100),
+    cvar95MaxDdPct,
     p99MaxDdPct: r2(q(99) * 100),
     probDdOver25Pct: r2((cntOver25 / nPaths) * 100),
     probDdOver50Pct: r2((cntOver50 / nPaths) * 100),
