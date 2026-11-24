@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-24 — Infrastructure & DevSecOps Hardening (SSH Key-Only, UFW, Systemd Sandbox, CI SCA Gate)
+
+- **DevSecOps CI Pipeline (`.github/workflows/ci.yml`):** Added automated SCA dependency gate (`npm audit --omit=dev --audit-level=high` for both root and `bot/` production dependencies).
+- **VPS OS & Network Hardening (`polyvps`):**
+  - Disabled SSH password & root login via `/etc/ssh/sshd_config.d/99-hardening.conf` (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`, validated with `sshd -t`).
+  - Enabled host firewall `ufw` (`default deny incoming`, `default allow outgoing`, `allow 22/tcp`), blocking unsolicited public access (including `*:3000`) while keeping outbound Cloudflare Tunnel (`cloudflared`) unaffected.
+  - Added systemd sandboxing drop-in `/etc/systemd/system/polybtc15-bot.service.d/hardening.conf` (`NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`, `ProtectHome=read-only`, `ReadWritePaths=/opt/polybtc15/bot /opt/polybtc15/public/ml`).
+  - Removed 3 stale `/etc/nginx/backups/polybtc15.*` backup files containing duplicate WS control tokens.
+
 ## 2026-11-24 — Security Hardening (Auth Gateway Crash Fix, Session `jti`, `SameSite=Strict` & Bearer-Only Report API)
 
 - **Dashboard Auth Gateway (`scripts/dashboard-auth-server.mjs`, `src/__tests__/dashboardAuth.test.ts`):**

@@ -32,6 +32,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Security audit (SCA — prod deps)
+        run: |
+          npm audit --omit=dev --audit-level=high
+          npm --prefix bot audit --omit=dev --audit-level=high
 
   python-ml:
     name: ML pipeline (lint, format, tests)
