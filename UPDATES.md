@@ -6,6 +6,14 @@
 
 ---
 
+## 2026-11-24 — Stage-2 Promotion (`JEV_MODE=veto`) & Maker/Early Flow Tuning on `polyvps`
+
+- **Audit Trigger (`bot/scripts/shadowAudit.mts`):** Live JEV v5 crossed the promotion gate at **`153/150` resolved v5 windows** (`bayesBrier = 0.22297` vs `mktBrier = 0.22325`, skill **`+0.13%`**, directional accuracy **`102/152 = 67.1%`**).
+- **Stage-2 Promotion (`polyvps:/opt/polybtc15/bot/.env`):** Switched `JEV_MODE=veto` and `JEV_SHADOW=false` (protected by `JEV_BRIER_GATE=true` rolling 100-window self-guard so it automatically passes through whenever recent Brier trails the market).
+- **Restoring Normal Trade Cadence (`polyvps:/opt/polybtc15/bot/.env` & `bot/data/model_profiles.json` for `20261116-p2-ef8dfd`):**
+  - Diagnosed 18h dry spell (`0` fills despite `2` full filter passes at `22:33 WIB` — a missed `DOWN` winner — and `07:32 WIB`): `EARLY anti-pucuk` at `61c` (`earlyPhaseMaxPrice: 0.61`) was responsible for `22/39` solo blocks, while `limitOrder.maxUnfilledSec=25s` and `LIMIT_FOK_FALLBACK_MIN_EDGE=0.05` caused both `MAKER RESTING` bids (`queueAhead = 395..907` shares) to time out and skip FOK fallback (`fok_after_maker_miss` is **`72.7%` WR, `8W–3L`** in journal history).
+  - Updated active profile `20261116-p2-ef8dfd` (`earlyPhaseMaxPrice: 0.61 -> 0.65`, `limitOrder.maxUnfilledSec: 25 -> 35`) and `.env` (`LIMIT_FOK_FALLBACK_MIN_EDGE=0.025`), keeping **`moderateMinMlEdge=0.035`** (verified on 67 live trades: **`44` trades, `33W–11L (75.0% WR)`, `+$25.00` PnL** vs `35` trades / `+$23.92` at `61c`) and **`Gate 20h/20i/20j`** intact. Backups saved (`bot/.env.bak-20261124`, `model_profiles.json.bak-20261124-veto`).
+
 ## 2026-11-23 — Terminal Desk Navigation & Sharp Institutional UI Polish (Fincept-Inspired)
 
 - **Role-Based Terminal Desks + Hotkeys (`src/components/dashboard/DashboardShell.tsx`):** Upgraded workspace presets into 5 focused terminal desks with active tab underline and instant keyboard shortcuts (`1` Terminal, `2` Execution, `3` Quant Lab, `4` Risk & Audit, `5` Clean — guarded against typing in inputs).
