@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-24 — Fix `polybot-watchdog.service` `203/EXEC` Permission Denied (`+x` in Git)
+
+- **Root Cause:** `scripts/watchdog.sh` and `scripts/daily-maintenance.sh` were tracked in Git with mode `100644` instead of `100755`, so `git reset --hard origin/main` on `polyvps` stripped their executable bit and caused `polybot-watchdog.service` to fail every 5 minutes with `status=203/EXEC` (`Permission denied`).
+- **Fix:** Restored executable bit `100755` in Git (`git update-index --chmod=+x scripts/watchdog.sh scripts/daily-maintenance.sh`), deployed to `polyvps`, and verified `sudo systemctl start polybot-watchdog.service` completes cleanly (`0` exit code).
+
 ## 2026-11-24 — Study Portal Upgrade (`poly15-study.dollarkilat.xyz`: Quant Stack, Shadow Promotion & Commit Breakdown)
 
 - **Static Study Builder (`scripts/build-study-site.mjs`):** Added `jev_log.jsonl` & `jev_outcomes.json` to watched inputs and implemented `buildQuantStackSummary()` exporting live `quantStack` metrics into `data/site.json` (Online ML Calibration windows/Brier, JEV v5 windows/skill/direction accuracy, Stage-2 Meta-Labeler progress, active/shadow Quant Stack modules, and Commit-Stamped Journal Breakdown).
