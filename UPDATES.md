@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-24 — Study Portal Upgrade (`poly15-study.dollarkilat.xyz`: Quant Stack, Shadow Promotion & Commit Breakdown)
+
+- **Static Study Builder (`scripts/build-study-site.mjs`):** Added `jev_log.jsonl` & `jev_outcomes.json` to watched inputs and implemented `buildQuantStackSummary()` exporting live `quantStack` metrics into `data/site.json` (Online ML Calibration windows/Brier, JEV v5 windows/skill/direction accuracy, Stage-2 Meta-Labeler progress, active/shadow Quant Stack modules, and Commit-Stamped Journal Breakdown).
+- **Study Portal UI (`study-site/index.html`, `study-site/app.js`):** Added two new cards on `Overview & Eval` — **Quant Stack & Shadow Promotion Readiness** and **Commit-Stamped Performance Breakdown** — auto-synced every 60s via `poly15-study-refresh.service`.
+
 ## 2026-11-24 — Infrastructure & DevSecOps Hardening (SSH Key-Only, UFW, Systemd Sandbox, CI SCA Gate)
 
 - **DevSecOps CI Pipeline (`.github/workflows/ci.yml`):** Added automated SCA dependency gate (`npm audit --omit=dev --audit-level=high` for both root and `bot/` production dependencies).

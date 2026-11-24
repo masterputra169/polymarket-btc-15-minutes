@@ -840,6 +840,130 @@ export function buildStage2Bundle(repoRoot, dataDir, activeModelId = null) {
   };
 }
 
+function buildQuantStackSummary(dataDir) {
+  const outcomesRaw = readJsonSafe(path.join(dataDir, 'jev_outcomes.json')) || {};
+  const jevRows = readJsonLinesSafe(path.join(dataDir, 'jev_log.jsonl'));
+  const journalRows = readJsonLinesSafe(path.join(dataDir, 'trade_journal.jsonl'));
+
+  const getOutcome = (slug) => {
+    const v = outcomesRaw[slug];
+    const s = typeof v === 'string' ? v : v?.outcome;
+    return s === 'UP' || s === 'DOWN' ? s : null;
+  };
+
+  const mlBySlug = new Map();
+  const v5BySlug = new Map();
+  for (const r of jevRows) {
+    const slug = r?.slug;
+    const o = getOutcome(slug);
+    if (!o) continue;
+    const y = o === 'UP' ? 1 : 0;
+    const rawMl = Number(r.ml?.probUp ?? r.rawMlProbUp);
+    const mkt = Number(r.market?.marketUp ?? r.market?.up ?? r.marketUp);
+    if (rawMl > 0.005 && rawMl < 0.995 && mkt > 0.01 && mkt < 0.99) {
+      mlBySlug.set(slug, { rawMl, mkt, y, ts: Number(r.ts) || 0 });
+    }
+    const ver = String(r.stateVariant ?? r.calibrationVersion ?? r.variant ?? '');
+    if (ver.includes('v5') || ver.includes('online-platt-v5')) {
+      v5BySlug.set(slug, { r, y, outcome: o });
+    }
+  }
+
+  const mlHist = [...mlBySlug.values()].sort((a, b) => a.ts - b.ts).slice(-300);
+  const mlEval = mlHist.slice(-100);
+  const nMl = mlEval.length;
+  const rawMlBrier = nMl > 0 ? +(mlEval.reduce((s, x) => s + (x.rawMl - x.y) ** 2, 0) / nMl).toFixed(5) : null;
+  const mktMlBrier = nMl > 0 ? +(mlEval.reduce((s, x) => s + (x.mkt - x.y) ** 2, 0) / nMl).toFixed(5) : null;
+
+  const v5List = [...v5BySlug.values()];
+  const nV5 = v5List.length;
+  let v5BayesSum = 0;
+  let v5MktSum = 0;
+  let v5DirTotal = 0;
+  let v5DirHits = 0;
+  for (const { r, y, outcome } of v5List) {
+    const bp = Number(r.bayesianProbUp ?? r.settleUpCalibrated ?? r.settleUpProbability ?? 0.5);
+    const mp = Number(r.market?.marketUp ?? r.market?.up ?? 0.5);
+    v5BayesSum += (bp - y) ** 2;
+    v5MktSum += (mp - y) ** 2;
+    if (r.direction === 'UP' || r.direction === 'DOWN') {
+      v5DirTotal++;
+      if (r.direction === outcome) v5DirHits++;
+    }
+  }
+  const v5BayesBrier = nV5 > 0 ? +(v5BayesSum / nV5).toFixed(5) : null;
+  const v5MktBrier = nV5 > 0 ? +(v5MktSum / nV5).toFixed(5) : null;
+  const v5SkillPct = v5BayesBrier != null && v5MktBrier != null && v5MktBrier > 0
+    ? +(((v5MktBrier - v5BayesBrier) / v5MktBrier) * 100).toFixed(2)
+    : null;
+  const v5DirAccPct = v5DirTotal > 0 ? +((v5DirHits / v5DirTotal) * 100).toFixed(1) : null;
+
+  const byCommit = new Map();
+  let totalSettled = 0;
+  let totalWins = 0;
+  for (const r of journalRows) {
+    const e = r?.entry;
+    const x = r?.exit;
+    if (!e || !x) continue;
+    const out = x.verifiedOutcome ?? x.outcome;
+    if (out !== 'UP' && out !== 'DOWN') continue;
+    const won = out === e.side;
+    totalSettled++;
+    if (won) totalWins++;
+    const commit = String(e.gitCommit || 'legacy');
+    const cur = byCommit.get(commit) || { commit, trades: 0, wins: 0, losses: 0, pnlUsd: 0 };
+    cur.trades++;
+    if (won) cur.wins++; else cur.losses++;
+    cur.pnlUsd += Number(r.analysis?.pnl ?? 0);
+    byCommit.set(commit, cur);
+  }
+
+  const commitBreakdown = [...byCommit.values()].map((c) => ({
+    ...c,
+    winRatePct: c.trades > 0 ? +((c.wins / c.trades) * 100).toFixed(1) : 0,
+    pnlUsd: +c.pnlUsd.toFixed(2),
+  }));
+
+  return {
+    onlineCalibration: {
+      mode: 'ACTIVE',
+      windows: mlHist.length,
+      evalSamples: nMl,
+      rawMlBrier,
+      mktBrier: mktMlBrier,
+      ready: mlHist.length >= 50,
+    },
+    jevV5: {
+      mode: 'ACTIVE (VETO)',
+      windows: nV5,
+      target: 150,
+      bayesBrier: v5BayesBrier,
+      mktBrier: v5MktBrier,
+      skillPct: v5SkillPct,
+      dirHits: v5DirHits,
+      dirTotal: v5DirTotal,
+      dirAccPct: v5DirAccPct,
+      ready: nV5 >= 150 && (v5SkillPct ?? -1) > 0,
+    },
+    metaLabeler: {
+      mode: 'SHADOW',
+      trades: totalSettled,
+      target: 100,
+      baseWrPct: totalSettled > 0 ? +((totalWins / totalSettled) * 100).toFixed(1) : null,
+      ready: totalSettled >= 100,
+    },
+    engines: [
+      { name: 'Online Recency Platt Calibration', status: 'ACTIVE', detail: '300-window recency Platt + Rolling Brier Self-Guard' },
+      { name: 'JEV v5 Bayesian + Debate Veto', status: 'ACTIVE', detail: '8-question TypeSafe System One + Rolling 100-win Brier Guard' },
+      { name: 'Compound Anomaly Guards (11c, 20h–20j)', status: 'ACTIVE', detail: 'Moderate thin ML edge + Squeeze-Flip + Skew-JEV-Hybrid (0 FP)' },
+      { name: 'Step-Compounding + Drawdown Guard', status: 'ACTIVE', detail: 'Tiered caps + peak-drawdown step-down + MAX_DAILY_LOSS 15%' },
+      { name: 'Stage-2 Meta-Labeler (L2 Logistic)', status: 'SHADOW', detail: `Chronological holdout P(WIN|ENTER) — ${totalSettled}/100 trades` },
+      { name: 'HMM · Kalman · GARCH(1,1) · Kyle λ', status: 'SHADOW', detail: 'Causal 3-state HMM, 2-state Kinematic Kalman, vol clustering & impact' },
+    ],
+    commitBreakdown,
+  };
+}
+
 export function buildStudySite(options = {}) {
   const root = path.resolve(options.root || DEFAULT_ROOT);
   const dataDir = path.resolve(options.dataDir || path.join(root, 'bot', 'data'));
@@ -858,6 +982,8 @@ export function buildStudySite(options = {}) {
     path.join(dataDir, 'model_profiles.json'),
     path.join(dataDir, 'state.json'),
     path.join(dataDir, 'trade_journal.jsonl'),
+    path.join(dataDir, 'jev_log.jsonl'),
+    path.join(dataDir, 'jev_outcomes.json'),
     path.join(dataDir, 'ptb_health.jsonl'),
     path.join(dataDir, 'calibration_study.json'),
     path.join(dataDir, 'shadow_decision_study.json'),
@@ -888,6 +1014,7 @@ export function buildStudySite(options = {}) {
   delete evalBundle._settledTrades;
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
   const stage2Bundle = buildStage2Bundle(root, dataDir, activeModel?.id ?? null);
+  const quantStack = buildQuantStackSummary(dataDir);
   const mcBundle = buildMonteCarloBundle(settledTrades, {
     startBankroll: evalBundle.bankroll,
     nPaths: options.monteCarloPaths ?? MC_DEFAULT_PATHS,
@@ -956,6 +1083,7 @@ export function buildStudySite(options = {}) {
       rows: updates.statusRows,
     },
     eval: evalBundle,
+    quantStack,
     monteCarloSummary,
     stage2Available: stage2Bundle.available,
     counts: {

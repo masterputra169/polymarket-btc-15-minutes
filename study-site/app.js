@@ -276,6 +276,45 @@ function renderOverview() {
   cst.appendChild(makeTable(['Area', 'Current State'], sRows));
 
   renderOverviewMcCard();
+  renderQuantStackSection();
+}
+
+function renderQuantStackSection() {
+  const qs = state.site?.quantStack;
+  const qTable = document.getElementById('quant-stack-table');
+  const cTable = document.getElementById('commit-breakdown-table');
+  const sub = document.getElementById('quant-stack-sub');
+  if (!qTable || !cTable || !qs) return;
+  qTable.replaceChildren();
+  cTable.replaceChildren();
+
+  const j = qs.jevV5 || {};
+  const oc = qs.onlineCalibration || {};
+  const ml = qs.metaLabeler || {};
+  if (sub) {
+    sub.textContent =
+      `JEV v5: ${j.windows ?? 0}/${j.target ?? 150} win (skill ${j.skillPct != null ? (j.skillPct >= 0 ? '+' : '') + j.skillPct + '%' : '—'}, dir ${j.dirAccPct != null ? j.dirAccPct + '%' : '—'}) · ` +
+      `OnlineCal: ${oc.windows ?? 0}w · Meta-Labeler: ${ml.trades ?? 0}/${ml.target ?? 100}t`;
+  }
+
+  const engineRows = (qs.engines || []).map((e) => {
+    const badge = h('span', `badge ${e.status === 'ACTIVE' ? 'badge--emerald' : 'badge--amber'}`, e.status);
+    return [e.name, badge, e.detail];
+  });
+  qTable.appendChild(makeTable(['Quant Module', 'Mode', 'Live Telemetry / Coverage'], engineRows));
+
+  const cRows = (qs.commitBreakdown || []).map((c) => [
+    { text: c.commit, cls: 'mono' },
+    c.trades,
+    `${c.wins}W–${c.losses}L`,
+    { text: `${c.winRatePct}%`, cls: c.winRatePct >= 65 ? 'c-pos' : 'c-neg' },
+    { text: fmtUsd(c.pnlUsd, true), cls: c.pnlUsd >= 0 ? 'c-pos' : 'c-neg' },
+  ]);
+  if (cRows.length > 0) {
+    cTable.appendChild(makeTable(['Git Commit', 'Trades', 'Record', 'Win Rate', 'Net PnL'], cRows));
+  } else {
+    cTable.appendChild(h('div', 'empty-state', 'No settled trades recorded yet.'));
+  }
 }
 
 function renderOverviewMcCard() {
