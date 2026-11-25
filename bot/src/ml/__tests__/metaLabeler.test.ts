@@ -76,4 +76,31 @@ describe('Stage-2 Meta-Labeler', () => {
     expect(checkMetaLabelerAdvisory(badFeatures, 'btc-updown-15m-bad')).toMatchObject({ action: 'block' });
     expect(checkMetaLabelerAdvisory(goodFeatures, 'btc-updown-15m-good')).toBeNull();
   });
+
+  it('auto mode stays SHADOW below promoteMinSamples and auto-promotes to VETO once threshold & AUC pass', () => {
+    const savedPromoteMin = BOT_CONFIG.metaLabeler.promoteMinSamples;
+    const savedPromoteAuc = BOT_CONFIG.metaLabeler.promoteMinAuc;
+    try {
+      BOT_CONFIG.metaLabeler.mode = 'auto';
+      BOT_CONFIG.metaLabeler.promoteMinSamples = 60;
+      BOT_CONFIG.metaLabeler.promoteMinAuc = 0.58;
+
+      const samples = makeSeparableSamples(60);
+      // At 50 samples (< 60), stays SHADOW passthrough
+      for (const s of samples.slice(0, 50)) recordMetaLabelerOutcome(s.features, s.won === 1);
+      expect(getMetaLabelerStatus().effectiveMode).toBe('shadow');
+      expect(getMetaLabelerStatus().autoPromoted).toBe(false);
+      expect(checkMetaLabelerAdvisory(samples[1].features, 'pre-promote')).toBeNull();
+
+      // Reaching 60 samples with high holdout AUC auto-promotes to VETO immediately
+      for (const s of samples.slice(50)) recordMetaLabelerOutcome(s.features, s.won === 1);
+      expect(getMetaLabelerStatus().effectiveMode).toBe('veto');
+      expect(getMetaLabelerStatus().autoPromoted).toBe(true);
+      expect(checkMetaLabelerAdvisory(samples[1].features, 'post-promote')).toMatchObject({ action: 'block' });
+      expect(checkMetaLabelerAdvisory(samples[0].features, 'post-promote-good')).toBeNull();
+    } finally {
+      BOT_CONFIG.metaLabeler.promoteMinSamples = savedPromoteMin;
+      BOT_CONFIG.metaLabeler.promoteMinAuc = savedPromoteAuc;
+    }
+  });
 });

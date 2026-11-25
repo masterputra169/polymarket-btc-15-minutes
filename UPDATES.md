@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-25 — Automated Milestone Telegram Alerts & Stage-2 Meta-Labeler Auto-Promotion (`ML_META_LABELER_MODE=auto`)
+
+- **Auto-Promotion with Self-Guard (`bot/src/config.ts`, `bot/src/ml/metaLabeler.ts`, `bot/src/ml/onlineCalibration.ts`, `bot/src/engines/tradePipeline.ts`):**
+  - Added `'auto'` mode to `ML_META_LABELER_MODE` (and `ML_ONLINE_CALIBRATION_MODE`): `Meta-Labeler` stays in `SHADOW` while `samples < 100` or `holdoutAUC < 0.58`, automatically promotes to `VETO` once both pass, and auto-demotes back to `SHADOW` if `holdoutAUC < 0.56` (hysteresis self-guard). Wired `checkMetaLabelerAdvisory()` into `tradePipeline.ts` and added `syncMetaLabelerFromJournal()` so newly settled trades trigger promotion live without restart.
+- **Automated Milestone Monitor & Deduplicated Telegram Alerts (`bot/src/monitoring/milestoneMonitor.ts`, `bot/src/monitoring/perfMonitor.ts`, `bot/src/monitoring/__tests__/milestoneMonitor.test.ts`):**
+  - Runs automatically on every `perfMonitor` cycle (`+5s` on startup, then every `15 min`), persisting state atomically to `bot/data/milestone_state.json`.
+  - Evaluates and alerts Telegram on transitions (`WAIT -> READY/AUTO-ACTIVE` or `ACTIVE -> DEMOTED`) for `online_ml_calibration`, `jev_v5_veto`, `meta_labeler_veto`, `maker_markout_audit` (`>= 15` post-`48cf9f3` fills), `tape_v4_retrain` (`>= 75` tape days), and `live_money_readiness` (strictly advisory — never auto-enables `DRY_RUN=false`).
+  - Enabled `ML_META_LABELER_MODE=auto` on `polyvps:/opt/polybtc15/bot/.env`.
+
 ## 2026-11-25 — Maker Cancel-on-Toxicity Guard & `Current status` Sync
 
 - **Maker Adverse Selection Guard (`bot/src/engines/makerFillGate.ts`, `bot/src/engines/limitOrderManager.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/engines/__tests__/makerFillGate.test.ts`):**
@@ -441,7 +450,8 @@ _Last updated: 2026-11-25 08:55 WIB_
 | Bot | active, **DRY RUN (`DRY_RUN=true`)** on `polyvps` (`systemd` sandboxed); evaluating `20261116-p2-ef8dfd` + Hybrid Residual v4 (`$100` fresh test) |
 | JEV / TypeSafe layer | **v5 ACTIVE in VETO** (`typesafe/jev-1.14` via OpenRouter, `JEV_MODE=veto`, `JEV_SHADOW=false`, `online-platt-v5` recency-weighted, multi-signal Bull/Bear debate fusion, `JEV_BRIER_GATE=true` rolling-100 self-guard; `253` v5 windows, `64.7%` dirAcc) |
 | Online ML Calibration | **ACTIVE** (`ML_ONLINE_CALIBRATION_MODE=active`, `300` windows, `calBrier < rawBrier`, rolling Brier self-guard) |
-| Stage-2 Meta-Labeler | **SHADOW** (`ML_META_LABELER_MODE=shadow`, `75/100` trades, `holdoutAUC = 0.8036`, `holdoutBrier = 0.1864`; target promotion at `n >= 100`) |
+| Stage-2 Meta-Labeler | **AUTO (`ML_META_LABELER_MODE=auto`, currently `SHADOW`)** (`75/100` trades, `holdoutAUC = 0.8036`, `holdoutBrier = 0.1864`; auto-promotes to `VETO` + Telegram alert at `n >= 100 & AUC >= 0.58`, self-guard demote `< 0.56`) |
+| Milestone Alerts | **ACTIVE (`milestoneMonitor.ts`, every 15 min)** — deduplicated Telegram alerts persisted in `bot/data/milestone_state.json` for Meta-Labeler, Maker markout (`15` post-patch fills), Pipeline v4 tape (`75d`), and live-money readiness (advisory only) |
 | ML model | **`20261116-p2-ef8dfd` + `v4-hybrid-20261116` Overlay LIVE** (`83f` v2 base + `412` depth-2 Chainlink/TWAP/L2 residual trees; `ML_HYBRID_RESIDUAL_ENABLED=true`) · Val Acc `73.68% → 74.93%`, AUC `0.8252 → 0.8355`, Brier `0.1723 → 0.1653`, ECE `0.0411 → 0.0141` (parity `3.16e-07`) |
 | Pipeline v4 / Stage 2 | **Hybrid Residual v4 LIVE + 54d Tape Lab** (`4,587,177` 1 Hz snapshots / `5,076` resolved mkts `2026-09-24 → 2026-11-16`) · Normal window OOS `75.97%` Acc / `0.1597` Brier; Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |

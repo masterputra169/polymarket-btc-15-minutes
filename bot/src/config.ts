@@ -60,19 +60,29 @@ const BOT_CONFIG = {
     enabled: process.env.ML_HYBRID_RESIDUAL_ENABLED !== 'false',
     path: resolve(__dirname, '..', '..', 'public', 'ml', 'hybrid_residual_v4.json'),
   },
-  // Online recency Platt calibration for live ML probUp (SHADOW by default; ACTIVE self-guards on rolling Brier)
+  // Online recency Platt calibration for live ML probUp (SHADOW by default; ACTIVE/AUTO self-guards on rolling Brier)
   mlOnlineCalibration: {
-    mode: ((process.env.ML_ONLINE_CALIBRATION_MODE || 'shadow').trim().toLowerCase() === 'active' ? 'active' : 'shadow') as 'shadow' | 'active',
+    mode: (() => {
+      const m = (process.env.ML_ONLINE_CALIBRATION_MODE || 'shadow').trim().toLowerCase();
+      return (m === 'active' || m === 'auto' ? m : 'shadow') as 'shadow' | 'active' | 'auto';
+    })(),
     minSamples: envInt(process.env.ML_ONLINE_CALIB_MIN_SAMPLES, 50, 20, 300),
+    promoteMinWindows: envInt(process.env.ML_ONLINE_CALIB_PROMOTE_WINDOWS, 100, 50, 300),
     recencyHalfLife: envInt(process.env.ML_ONLINE_CALIB_HALF_LIFE, 50, 10, 200),
   },
-  // Stage-2 Meta-Labeler predicting P(WIN | ENTER candidate) from trade_journal.jsonl (SHADOW by default)
+  // Stage-2 Meta-Labeler predicting P(WIN | ENTER candidate) from trade_journal.jsonl (SHADOW | VETO | AUTO)
   metaLabeler: {
-    mode: ((process.env.ML_META_LABELER_MODE || 'shadow').trim().toLowerCase() === 'veto' ? 'veto' : 'shadow') as 'shadow' | 'veto',
+    mode: (() => {
+      const m = (process.env.ML_META_LABELER_MODE || 'shadow').trim().toLowerCase();
+      return (m === 'veto' || m === 'auto' ? m : 'shadow') as 'shadow' | 'veto' | 'auto';
+    })(),
     minSamples: envInt(process.env.ML_META_LABELER_MIN_SAMPLES, 35, 20, 300),
+    promoteMinSamples: envInt(process.env.ML_META_LABELER_PROMOTE_SAMPLES, 100, 50, 500),
+    promoteMinAuc: envNum(process.env.ML_META_LABELER_PROMOTE_AUC, 0.58, 0.52, 0.90),
     minWinProb: envNum(process.env.ML_META_LABELER_MIN_WIN_PROB, 0.55, 0.35, 0.85),
     minAuc: envNum(process.env.ML_META_LABELER_MIN_AUC, 0.56, 0.50, 0.90),
   },
+  milestoneStateFile: resolve(__dirname, '..', 'data', 'milestone_state.json'),
 
   // Position management
   positionsFile: resolve(__dirname, '..', 'data', 'positions.json'),

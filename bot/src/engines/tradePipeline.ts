@@ -16,6 +16,7 @@ import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
 import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
+import { checkMetaLabelerAdvisory } from '../ml/metaLabeler.ts';
 import { escapeHtml, formatEntryBtcLine, entryAnomalyAlert, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
 import {
@@ -852,6 +853,24 @@ export async function executeDirectionalTrade({
 
   if (!filterResult.pass) {
     return false;
+  }
+
+  // Stage-2 Meta-Labeler veto gate (no-op in SHADOW or pre-promotion AUTO mode; blocks low P(WIN) once promoted to VETO)
+  if (mlResult.available && (betSide === 'UP' || betSide === 'DOWN') && betMarketPrice != null && Number.isFinite(betMarketPrice)) {
+    const mlSideProb = betSide === 'UP' ? mlResult.mlProbUp : (1 - mlResult.mlProbUp);
+    const metaBlock = checkMetaLabelerAdvisory({
+      entryPrice: betMarketPrice,
+      mlConfidence: mlResult.mlConfidence,
+      rawMlEdge: Number.isFinite(mlSideProb) ? (mlSideProb - betMarketPrice) : 0,
+      timeLeftMin: timeLeftMin ?? 7.5,
+      regime: regimeInfo?.regime ?? null,
+      jevNetConvAligned: 0,
+    }, marketSlug);
+    if (metaBlock?.action === 'block') {
+      log.info(`[MetaLabeler] VETO blocked ${betSide} @ ${(betMarketPrice * 100).toFixed(1)}c: ${metaBlock.reason}`);
+      noteTapeStage('pre', ['meta_labeler_veto']);
+      return false;
+    }
   }
 
   // ── MetEngine smart money gate (F1: consensus, F2: insider, F3: conviction wallet) ──

@@ -40,7 +40,8 @@ export interface MlCalibrationEvaluation {
 }
 
 export interface MlCalibrationStatus extends MlCalibrationEvaluation {
-  mode: 'shadow' | 'active';
+  mode: 'shadow' | 'active' | 'auto';
+  effectiveMode: 'shadow' | 'active';
   historySize: number;
   platt: PlattParams | null;
 }
@@ -195,8 +196,10 @@ export function calibrateMlProbUp(rawMlProbUp: number): {
   }
   const calibratedProbUp = _platt ? calibrateWithPlatt(rawMlProbUp, _platt) : rawMlProbUp;
   const evalRes = evaluateMlCalibration(_history, _platt);
-  const mode = BOT_CONFIG.mlOnlineCalibration?.mode ?? 'shadow';
-  const applied = mode === 'active' && evalRes.allowActive;
+  const cfg = BOT_CONFIG.mlOnlineCalibration;
+  const mode = cfg?.mode ?? 'shadow';
+  const promoteMin = cfg?.promoteMinWindows ?? 100;
+  const applied = evalRes.allowActive && (mode === 'active' || (mode === 'auto' && _history.length >= promoteMin));
   return {
     rawProbUp: rawMlProbUp,
     calibratedProbUp: +calibratedProbUp.toFixed(4),
@@ -207,8 +210,16 @@ export function calibrateMlProbUp(rawMlProbUp: number): {
 
 export function getMlOnlineCalibrationStatus(): MlCalibrationStatus {
   const evalRes = evaluateMlCalibration(_history, _platt);
+  const cfg = BOT_CONFIG.mlOnlineCalibration;
+  const mode = cfg?.mode ?? 'shadow';
+  const promoteMin = cfg?.promoteMinWindows ?? 100;
+  const effectiveMode: 'shadow' | 'active' =
+    evalRes.allowActive && (mode === 'active' || (mode === 'auto' && _history.length >= promoteMin))
+      ? 'active'
+      : 'shadow';
   return {
-    mode: BOT_CONFIG.mlOnlineCalibration?.mode ?? 'shadow',
+    mode,
+    effectiveMode,
     historySize: _history.length,
     platt: _platt,
     ...evalRes,

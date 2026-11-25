@@ -222,6 +222,39 @@ let _samples: MetaLabelSample[] = [];
 let _model: MetaLabelerModel | null = null;
 let _lastScore: (MetaLabelScore & { slug: string | null; ts: number }) | null = null;
 let _sinceFit = 0;
+let _autoPromoted = false;
+let _lastJournalSize = -1;
+
+function updateAutoPromotionState(model: MetaLabelerModel | null): void {
+  const cfg = BOT_CONFIG.metaLabeler;
+  if (cfg?.mode !== 'auto') {
+    _autoPromoted = false;
+    return;
+  }
+  const promoteMinSamples = cfg.promoteMinSamples ?? 100;
+  const promoteMinAuc = cfg.promoteMinAuc ?? 0.58;
+  const minAuc = cfg.minAuc ?? 0.56;
+  const auc = model?.holdoutAuc ?? null;
+  if (!_autoPromoted) {
+    if (model && model.samples >= promoteMinSamples && auc != null && auc >= promoteMinAuc) {
+      _autoPromoted = true;
+      log.info(`[MetaLabeler] AUTO-PROMOTED SHADOW -> VETO (samples=${model.samples}/${promoteMinSamples}, holdoutAUC=${auc.toFixed(4)} >= ${promoteMinAuc})`);
+    }
+  } else if (!model || auc == null || auc < minAuc) {
+    _autoPromoted = false;
+    log.warn(`[MetaLabeler] AUTO-DEMOTED VETO -> SHADOW (holdoutAUC=${auc ?? 'null'} < ${minAuc})`);
+  }
+}
+
+function resolveEffectiveMode(model: MetaLabelerModel | null): 'shadow' | 'veto' {
+  const cfg = BOT_CONFIG.metaLabeler;
+  const mode = cfg?.mode ?? 'shadow';
+  const minAuc = cfg?.minAuc ?? 0.56;
+  const aucPass = model?.holdoutAuc != null && model.holdoutAuc >= minAuc;
+  if (mode === 'veto') return aucPass ? 'veto' : 'shadow';
+  if (mode === 'auto') return _autoPromoted && aucPass ? 'veto' : 'shadow';
+  return 'shadow';
+}
 
 function parseJournalRowToSample(row: any): MetaLabelSample | null {
   const side = row?.entry?.side ?? row?.side;
@@ -253,7 +286,9 @@ export function initMetaLabeler(journalPath = DEFAULT_JOURNAL_PATH): MetaLabeler
   _samples = [];
   if (existsSync(journalPath)) {
     try {
-      const lines = readFileSync(journalPath, 'utf8').split('\n').filter(Boolean);
+      const raw = readFileSync(journalPath, 'utf8');
+      _lastJournalSize = raw.length;
+      const lines = raw.split('\n').filter(Boolean);
       for (const line of lines) {
         let row: any = null;
         try { row = JSON.parse(line); } catch { row = null; }
@@ -266,13 +301,41 @@ export function initMetaLabeler(journalPath = DEFAULT_JOURNAL_PATH): MetaLabeler
       _model = null;
     }
   }
+  updateAutoPromotionState(_model);
   const mode = BOT_CONFIG.metaLabeler?.mode ?? 'shadow';
+  const eff = resolveEffectiveMode(_model);
   log.info(
-    `Stage-2 Meta-Labeler [${mode.toUpperCase()}]: samples=${_samples.length}` +
+    `Stage-2 Meta-Labeler [${mode.toUpperCase()}→${eff.toUpperCase()}]: samples=${_samples.length}` +
     (_model
       ? ` baseWR=${(_model.baseWinRate * 100).toFixed(1)}% holdoutAUC=${_model.holdoutAuc ?? 'n/a'} holdoutBrier=${_model.holdoutBrier ?? 'n/a'}`
       : ' (warmup)'),
   );
+  return _model;
+}
+
+/** Reload from journal only when new settled trades were appended (no restart needed). */
+export function syncMetaLabelerFromJournal(journalPath = DEFAULT_JOURNAL_PATH): MetaLabelerModel | null {
+  if (!existsSync(journalPath)) return _model;
+  try {
+    const raw = readFileSync(journalPath, 'utf8');
+    if (raw.length === _lastJournalSize) {
+      updateAutoPromotionState(_model);
+      return _model;
+    }
+    _lastJournalSize = raw.length;
+    const next: MetaLabelSample[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const s = parseJournalRowToSample(JSON.parse(line));
+        if (s) next.push(s);
+      } catch { /* skip malformed line */ }
+    }
+    _samples = next;
+    const minSamples = BOT_CONFIG.metaLabeler?.minSamples ?? 35;
+    _model = fitMetaLabelerModel(_samples, { minSamples });
+    updateAutoPromotionState(_model);
+  } catch { /* non-critical sync */ }
   return _model;
 }
 
@@ -281,10 +344,11 @@ export function recordMetaLabelerOutcome(features: MetaLabelFeatures, won: boole
   if (_samples.length > 500) _samples.shift();
   _sinceFit++;
   const minSamples = BOT_CONFIG.metaLabeler?.minSamples ?? 35;
-  if (_samples.length >= minSamples && (_model == null || _sinceFit >= 10)) {
+  if (_samples.length >= minSamples && (_model == null || _sinceFit >= 10 || _samples.length === (BOT_CONFIG.metaLabeler?.promoteMinSamples ?? 100))) {
     _model = fitMetaLabelerModel(_samples, { minSamples });
     _sinceFit = 0;
   }
+  updateAutoPromotionState(_model);
 }
 
 export function scoreMetaLabeler(
@@ -295,14 +359,13 @@ export function scoreMetaLabeler(
   if (!model) {
     return { winProb: null, action: 'passthrough', holdoutAuc: null, samples: _samples.length };
   }
+  if (opts.modelOverride === undefined) updateAutoPromotionState(model);
   const winProb = +predictStandardized(extractMetaVector(features), model).toFixed(4);
   const cfg = BOT_CONFIG.metaLabeler;
-  const mode = cfg?.mode ?? 'shadow';
   const minWinProb = cfg?.minWinProb ?? 0.55;
-  const minAuc = cfg?.minAuc ?? 0.56;
-  const aucPass = model.holdoutAuc != null && model.holdoutAuc >= minAuc;
+  const vetoActive = resolveEffectiveMode(model) === 'veto';
   const action: 'take' | 'skip' | 'passthrough' =
-    mode !== 'veto' || !aucPass
+    !vetoActive
       ? 'passthrough'
       : winProb < minWinProb ? 'skip' : 'take';
 
@@ -333,8 +396,13 @@ export function checkMetaLabelerAdvisory(
 }
 
 export function getMetaLabelerStatus() {
+  const cfg = BOT_CONFIG.metaLabeler;
   return {
-    mode: BOT_CONFIG.metaLabeler?.mode ?? 'shadow',
+    mode: cfg?.mode ?? 'shadow',
+    effectiveMode: resolveEffectiveMode(_model),
+    autoPromoted: _autoPromoted,
+    promoteMinSamples: cfg?.promoteMinSamples ?? 100,
+    promoteMinAuc: cfg?.promoteMinAuc ?? 0.58,
     samples: _samples.length,
     baseWinRate: _model?.baseWinRate ?? null,
     holdoutAuc: _model?.holdoutAuc ?? null,
@@ -348,4 +416,6 @@ export function resetMetaLabelerForTests(): void {
   _model = null;
   _lastScore = null;
   _sinceFit = 0;
+  _autoPromoted = false;
+  _lastJournalSize = -1;
 }

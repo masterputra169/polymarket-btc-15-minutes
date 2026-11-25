@@ -17,6 +17,7 @@ import { pauseBot } from '../loop.ts';
 import { notify } from './notifier.ts';
 import { checkRollback } from './rollbackMonitor.ts';
 import { checkDrift } from './driftDetector.ts';
+import { checkMilestones } from './milestoneMonitor.ts';
 
 const log = createLogger('Monitor');
 
@@ -79,6 +80,10 @@ function monitorCycle() {
   } catch (err) {
     log.warn(`Daily summary check failed: ${err.message}`);
   }
+
+  checkMilestones().catch((err) => {
+    log.warn(`Milestone check failed: ${err?.message ?? err}`);
+  });
 }
 
 // ── Win rate alert ──
