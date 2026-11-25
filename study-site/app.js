@@ -276,7 +276,64 @@ function renderOverview() {
   cst.appendChild(makeTable(['Area', 'Current State'], sRows));
 
   renderOverviewMcCard();
+  renderEdgeProofCard();
   renderQuantStackSection();
+}
+
+function renderEdgeProofCard() {
+  const body = document.getElementById('edge-proof-body');
+  const sub = document.getElementById('edge-proof-sub');
+  const badge = document.getElementById('edge-proof-badge');
+  if (!body) return;
+  body.replaceChildren();
+
+  const ep = state.site?.edgeProof;
+  if (!ep?.available) {
+    if (badge) { badge.textContent = 'COLLECTING'; badge.className = 'badge badge--amber'; }
+    body.appendChild(h('div', 'empty-state', '6-Check Edge Proof populates automatically once ≥6 settled trades are recorded.'));
+    return;
+  }
+
+  if (badge) {
+    badge.textContent = `${ep.checksPassed}/${ep.checksTotal} PASS`;
+    badge.className = `badge ${ep.checksPassed >= 5 ? 'badge--emerald' : ep.checksPassed >= 3 ? 'badge--cyan' : 'badge--amber'}`;
+  }
+  if (sub) {
+    sub.textContent =
+      `Live audit on ${ep.nTrades} trades (${ep.wrPct}% WR · Net ${fmtUsd(ep.netPnlUsd, true)}) — separates real statistical edge from luck & overfitting`;
+  }
+
+  const grid = h('div', 'stat-pair-grid');
+  const sh = ep.shuffle || {};
+  const hs = ep.halfSplit || {};
+  const br = ep.breakIt || {};
+  const pills = [
+    ['t-stat (Signal / Noise)', `t = ${ep.tStat} (p=${ep.oneSidedPVal})`, ep.tStat >= 2 ? 'c-pos' : ep.tStat >= 1.25 ? 'c-cyan' : 'c-warn'],
+    ['Market-Null Shuffle', `p = ${sh.pVal} (${sh.beatCount}/${sh.trials})`, sh.pVal < 0.05 ? 'c-pos' : 'c-warn'],
+    ['Half-Split (H1 vs H2)', `${fmtUsd(hs.first?.netPnl, true)} / ${fmtUsd(hs.second?.netPnl, true)}`, hs.bothPositive ? 'c-pos' : 'c-warn'],
+    ['Break-It (Drop Top 3 / 5%)', `${fmtUsd(br.drop3?.netPnl, true)} / ${fmtUsd(br.drop5Pct?.netPnl, true)}`, (br.drop5Pct?.netPnl ?? -1) > 0 ? 'c-pos' : 'c-warn'],
+  ];
+  for (const [k, v, cls] of pills) {
+    const m = h('div', 'stat-mini');
+    m.appendChild(h('div', 'stat-mini__k', k));
+    m.appendChild(h('div', `stat-mini__v ${cls}`, v));
+    grid.appendChild(m);
+  }
+  body.appendChild(grid);
+
+  const tableWrap = h('div', 'table-wrap');
+  tableWrap.style.marginTop = '12px';
+  const rows = (ep.checks || []).map((c) => {
+    const cls = c.status === 'PASS' ? 'badge--emerald' : c.status === 'WARN' ? 'badge--amber' : 'badge--rose';
+    return [
+      c.name,
+      h('span', `badge ${cls}`, c.status),
+      { text: c.metric, cls: 'mono' },
+      c.detail,
+    ];
+  });
+  tableWrap.appendChild(makeTable(['Edge Check', 'Status', 'Key Metric', 'Audit Evidence'], rows));
+  body.appendChild(tableWrap);
 }
 
 function renderQuantStackSection() {

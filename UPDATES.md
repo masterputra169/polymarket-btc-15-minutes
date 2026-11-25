@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-25 — 6-Check Statistical Edge Proof Panel on Study Portal (`scripts/study/edgeProof.mjs`)
+
+- **Anti-Overfit Live Audit (`scripts/study/edgeProof.mjs`, `scripts/build-study-site.mjs`, `study-site/index.html`, `study-site/app.js`, `bot/src/__tests__/studySiteBuilder.test.ts`):** Added a zero-dependency **6-Check Statistical Edge Proof** card to `poly15-study.dollarkilat.xyz` (`site.json -> edgeProof`) automatically computed on live settled trades: (1) `t-stat` & required `n` for `t >= 2/3`, (2) `2,000×` market-implied fair-null shuffle `p-value` (`P(WIN_i) = entryPrice_i` with CLOB V2 taker/maker fee), (3) chronological half-split (`H1` vs `H2`), (4) side/phase/session profit attribution, (5) documented structural edge & kill-switch failure modes, and (6) outlier removal ("Break It": drop top 3 / 5% / 10% winning trades + rolling 30-trade `t-stat`). Zero changes to live trading logic or entry gates.
+
 ## 2026-11-25 — Quant Architecture Decision Note (CAPM, Black-Scholes TWAP, GARCH & CatBoost)
 
 - **CAPM / Markowitz (Skipped):** Not applicable to single-asset 15-minute binary options (long-horizon multi-asset equity framework; only correlation-adjusted Kelly would matter if expanded to concurrent multi-asset markets).

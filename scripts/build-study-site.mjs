@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
 import { buildFeatureCatalog, extractExperimentSummary } from './study/models.mjs';
 import { buildMonteCarloBundleNative } from './study/mc-native.mjs';
+import { computeEdgeProof } from './study/edgeProof.mjs';
 import { buildMonteCarloBundle, MC_DEFAULT_PATHS } from '../study-site/mc-engine.js';
 
 const MC_CACHE_VERSION = 'v2-1m-cvar';
@@ -1033,6 +1034,7 @@ export function buildStudySite(options = {}) {
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
   const stage2Bundle = buildStage2Bundle(root, dataDir, activeModel?.id ?? null);
   const quantStack = buildQuantStackSummary(dataDir);
+  const edgeProof = computeEdgeProof(settledTrades);
   const targetMcPaths = Math.max(10, Math.min(1_000_000, Math.round(Number(options.monteCarloPaths ?? MC_DEFAULT_PATHS))));
   const mcCacheKey = crypto.createHash('sha256').update(JSON.stringify({
     v: MC_CACHE_VERSION,
@@ -1134,6 +1136,7 @@ export function buildStudySite(options = {}) {
     },
     eval: evalBundle,
     quantStack,
+    edgeProof,
     monteCarloSummary,
     stage2Available: stage2Bundle.available,
     counts: {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { redactSecretText, sanitizeTradeEntry } from '../../../scripts/study/redact.mjs';
 import { parseUpdatesMd, buildStudySite } from '../../../scripts/build-study-site.mjs';
 import { buildMonteCarloBundleNative } from '../../../scripts/study/mc-native.mjs';
+import { computeEdgeProof } from '../../../scripts/study/edgeProof.mjs';
 import { buildMonteCarloBundle, MC_DEFAULT_PATHS } from '../../../study-site/mc-engine.js';
 
 describe('study portal redaction & sanitization', () => {
@@ -322,5 +323,36 @@ describe('parseUpdatesMd & buildStudySite', () => {
       fs.rmSync(tmpData, { recursive: true, force: true });
       fs.rmSync(tmpOut, { recursive: true, force: true });
     }
+  });
+
+  test('computeEdgeProof validates 6-check statistical edge (t-stat, market-null shuffle, half-split, break-it)', () => {
+    const small = computeEdgeProof([{ pnl: 1.8, cost: 3.15, tokenPrice: 0.63 }]);
+    expect(small.available).toBe(false);
+
+    // 80 trades @ 75% WR on 63c entry (+1.85 win / -3.15 loss) spread across both halves, sides, phases
+    const startTs = 1794800000000;
+    const trades = Array.from({ length: 80 }, (_, i) => {
+      const isWin = (i % 10) < 7 || (i % 40 === 7) || (i % 40 === 17);
+      return {
+        pnl: isWin ? 1.85 : -3.15,
+        cost: 3.15,
+        tokenPrice: 0.63,
+        outcome: isWin ? 'WIN' : 'LOSS',
+        side: i % 2 === 0 ? 'UP' : 'DOWN',
+        phase: i % 3 === 0 ? 'EARLY' : i % 3 === 1 ? 'MID' : 'LATE',
+        isMaker: true,
+        exitedAt: startTs + i * 3_600_000,
+      };
+    });
+
+    const proof = computeEdgeProof(trades, { shuffles: 1000 });
+    expect(proof.available).toBe(true);
+    expect(proof.nTrades).toBe(80);
+    expect(proof.checks).toHaveLength(6);
+    expect(proof.tStat).toBeGreaterThan(1.5);
+    expect(proof.shuffle.pVal).toBeLessThan(0.1);
+    expect(proof.halfSplit.bothPositive).toBe(true);
+    expect(proof.breakIt.drop3.netPnl).toBeGreaterThan(0);
+    expect(proof.checksPassed).toBeGreaterThanOrEqual(4);
   });
 });
