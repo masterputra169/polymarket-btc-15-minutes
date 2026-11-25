@@ -533,6 +533,60 @@ describe('tradeFilters honours the thresholds', () => {
       || r.startsWith('Compound JEV + hybrid + skew conflict:'),
     )).toEqual([]);
   });
+
+  test('Gate 1e blocks entries where hybrid residual flipped baseMlProbUp to opposite side', async () => {
+    const mod = await load({});
+
+    // Replay btc-updown-15m-1795525200 (UP LOSS -$3.20): baseMlProbUp=0.465 (<0.5 -> DOWN), hybrid flipped to 68.3% UP
+    const flippedUp = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'UP',
+      mlSide: 'UP',
+      mlConfidence: 0.367,
+      baseMlProbUp: 0.465,
+      hybridDeltaProb: 0.218,
+    });
+    expect(flippedUp.pass).toBe(false);
+    expect(flippedUp.reasons.some((r: string) => r.startsWith('Base-ML direction conflict:'))).toBe(true);
+
+    // Replay btc-updown-15m-1795205700 (DOWN LOSS -$2.95): baseMlProbUp=0.578 (>0.5 -> UP), hybrid flipped to 34.4% DOWN
+    const flippedDown = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.312,
+      baseMlProbUp: 0.578,
+      hybridDeltaProb: -0.234,
+    });
+    expect(flippedDown.pass).toBe(false);
+    expect(flippedDown.reasons.some((r: string) => r.startsWith('Base-ML direction conflict:'))).toBe(true);
+
+    // Aligned base ML passes Gate 1e cleanly
+    const alignedUp = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'UP',
+      mlSide: 'UP',
+      baseMlProbUp: 0.62,
+    });
+    expect(alignedUp.reasons.filter((r: string) => r.startsWith('Base-ML direction conflict:'))).toEqual([]);
+
+    const alignedDown = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      baseMlProbUp: 0.38,
+    });
+    expect(alignedDown.reasons.filter((r: string) => r.startsWith('Base-ML direction conflict:'))).toEqual([]);
+
+    // Null baseMlProbUp (legacy/golden callers) is a strict no-op
+    const nullBase = mod.applyTradeFilters({
+      ...input,
+      signalSide: 'UP',
+      mlSide: 'UP',
+      baseMlProbUp: null,
+    });
+    expect(nullBase.reasons.filter((r: string) => r.startsWith('Base-ML direction conflict:'))).toEqual([]);
+  });
 });
 
 

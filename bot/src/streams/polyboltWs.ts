@@ -526,7 +526,9 @@ export function createPolyBoltFeed(opts: PolyBoltFeedOptions): PolyBoltFeed {
       authState = 'pending';
       lastFrameRecvMs = now();
       backoffAttempt = 0;
-      stallStreak = 0;
+      // Do NOT reset stallStreak on TCP open: a server that accepts open/auth/subscribe
+      // without delivering ticks would otherwise reconnect every 30s forever. stallStreak
+      // is reset in onFrame() once an actual tick arrives.
       sendAuth();
       startSupervision(socket);
     });
@@ -548,6 +550,7 @@ export function createPolyBoltFeed(opts: PolyBoltFeedOptions): PolyBoltFeed {
     start() {
       if (running) return;
       running = true;
+      stallStreak = 0;
       log.info(expected.channel + ': connecting to ' + url + ' (filter ' + JSON.stringify(opts.filter) + ')');
       open();
     },

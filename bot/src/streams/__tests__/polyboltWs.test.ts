@@ -363,6 +363,49 @@ describe('feed lifecycle', () => {
     expect(h.feed.health().reconnects).toBe(1);
     h.feed.stop();
   });
+
+  test('repeated silent subscribes preserve stallStreak across open() and back off instead of looping every 30s', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.feed.start();
+    const openAndSubscribeSilent = (idx: number) => {
+      const s = h.sockets[idx];
+      s.emit('open');
+      send(s, { op: 'authed', rid: 'a1' });
+      send(s, { op: 'subscribed', rid: 's1', provider: 'chainlink' });
+    };
+
+    // Stall #1 (immediate reconnect once supervision tick fires)
+    openAndSubscribeSilent(0);
+    h.advance(31_000);
+    vi.advanceTimersByTime(5_000);
+    expect(h.sockets).toHaveLength(2);
+
+    // Stall #2 (immediate reconnect)
+    openAndSubscribeSilent(1);
+    h.advance(31_000);
+    vi.advanceTimersByTime(5_000);
+    expect(h.sockets).toHaveLength(3);
+
+    // Stall #3 hits STALL_BACKOFF_AFTER=3 -> schedules 30s backoff instead of immediate reconnect
+    openAndSubscribeSilent(2);
+    h.advance(31_000);
+    vi.advanceTimersByTime(5_000);
+    expect(h.sockets).toHaveLength(3); // backed off, NOT immediate reconnect
+    h.advance(29_999);
+    vi.advanceTimersByTime(29_999);
+    expect(h.sockets).toHaveLength(3);
+    h.advance(1);
+    vi.advanceTimersByTime(1);
+    expect(h.sockets).toHaveLength(4);
+
+    // Once a real tick arrives, stallStreak resets so a future single stall reconnects immediately again
+    bringUp(h, h.sockets[3]);
+    h.advance(31_000);
+    vi.advanceTimersByTime(5_000);
+    expect(h.sockets).toHaveLength(5);
+    h.feed.stop();
+  });
 });
 
 describe('chainlinkTwap seam', () => {

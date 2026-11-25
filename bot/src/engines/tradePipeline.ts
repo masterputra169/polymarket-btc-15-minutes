@@ -786,6 +786,7 @@ export async function executeDirectionalTrade({
     recentFlips: recentFlipCount ?? null,
     bbSqueeze: bb?.squeeze ?? null,
     hybridDeltaProb: mlResult?.hybridDeltaProb ?? null,
+    baseMlProbUp: mlResult?.baseMlProbUp ?? null,
     jevConflict: jevConflictForFilter,
   });
   // Market tape decision trail: every reason, including the ones after the first.

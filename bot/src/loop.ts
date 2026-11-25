@@ -2343,6 +2343,7 @@ export async function pollOnce() {
           ptbSource: priceToBeat?.source ?? null,
           binanceDistPct: crossFeed?.binanceDistPct ?? null,
           oracleDistPct: crossFeed?.oracleDistPct ?? null,
+          baseMlProbUp: mlResult.available ? (mlResult.baseMlProbUp ?? null) : null,
         });
 
         if (!limFilterResult.pass) {

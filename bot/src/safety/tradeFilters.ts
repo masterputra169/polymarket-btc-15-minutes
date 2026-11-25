@@ -334,6 +334,7 @@ export function applyTradeFilters({
   recentFlips = null,        // signal direction flip count within current 15m window
   bbSqueeze = null,          // Bollinger Band squeeze active flag (boolean)
   hybridDeltaProb = null,    // hybrid residual probability delta (probUp - baseMlProbUp)
+  baseMlProbUp = null,       // pre-hybrid base ML P(UP) in [0, 1] for hybrid-flip consensus guard
   jevConflict = null,        // JEV v5 direction conflicts with signalSide (boolean)
 }: Record<string, any>) {
   const reasons = [];
@@ -403,6 +404,19 @@ export function applyTradeFilters({
   // 1d. ML direction consensus gate — never enter in opposition to ML prediction
   if (mlAvailable && mlSide && signalSide && mlSide !== signalSide) {
     reasons.push(`ML direction conflict: signal ${signalSide} vs ML ${mlSide}`);
+  }
+
+  // 1e. Base-ML direction consensus gate — hybrid residual must not flip the base ML
+  // model's side into an entry (replay across 75 live trades: 0W-2L, -$6.15, 0 false positives).
+  if (mlAvailable && signalSide && baseMlProbUp != null && Number.isFinite(baseMlProbUp)) {
+    const baseMlOpposes = (signalSide === 'UP' && baseMlProbUp < 0.5)
+      || (signalSide === 'DOWN' && baseMlProbUp > 0.5);
+    if (baseMlOpposes) {
+      const baseSide = baseMlProbUp >= 0.5 ? 'UP' : 'DOWN';
+      reasons.push(
+        `Base-ML direction conflict: signal ${signalSide} vs base ML ${baseSide} (${(baseMlProbUp * 100).toFixed(1)}% UP, flipped by hybrid)`,
+      );
+    }
   }
 
   // 1a. Asia session ML minimum — Asia WR 77% vs US 85%. Low liquidity + manipulation risk.

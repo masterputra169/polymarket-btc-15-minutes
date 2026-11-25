@@ -6,6 +6,15 @@
 
 ---
 
+## 2026-11-25 — Fix Hybrid Base-ML Direction Flip (`Gate 1e`) & PolyBolt Stall-Backoff Reset Bug
+
+- **Base-ML Direction Consensus Guard (`bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`):**
+  - Root cause (2026-11-24 `20:05 WIB`, `btc-updown-15m-1795525200` UP LOSS `-$3.20`): base ML (`baseMlProbUp = 46.5%`) predicted `DOWN`, but v4 hybrid residual (`+21.8pp`) flipped post-hybrid `mlProbUp` to `68.3% UP`, bypassing Gate `1d` (`mlSide !== signalSide`). Across all 75 live trades, hybrid-flipped base ML occurred twice (`1795205700`, `1795525200`) with `0W–2L` (`-$6.15`, `0` false positives).
+  - Added Gate `1e` (`Base-ML direction conflict`) blocking entries when `baseMlProbUp` opposes `signalSide` (`UP` with `<0.50`, `DOWN` with `>0.50`), forwarded `baseMlProbUp` from both `tradePipeline.ts` and `loop.ts` (limit pre-filter). Strict no-op when `baseMlProbUp == null` (all 20,000 golden hashes intact).
+- **PolyBolt Stall-Backoff Bug (`bot/src/streams/polyboltWs.ts`, `bot/src/streams/__tests__/polyboltWs.test.ts`):**
+  - Root cause (2026-11-24 `23:10`–`00:20 WIB`, 261 reconnect warnings): `socket.on('open')` unconditionally reset `stallStreak = 0`, defeating `STALL_BACKOFF_AFTER = 3` whenever PolyBolt accepted `open`/`authed`/`subscribed` without delivering ticks, causing 30s reconnect/re-auth loops for 70 minutes.
+  - Removed `stallStreak = 0` from `socket.on('open')` (now resets only on `start()` and in `onFrame()` when `data.ticks.length > 0`) and added fake-timer regression test verifying 30s exponential backoff and recovery on tick receipt.
+
 ## 2026-11-24 — Monte Carlo Web Portal: Expected Shortfall (`CVaR 95%`) Analytics
 
 - **Monte Carlo Engine (`study-site/mc-engine.js`):** Added Expected Shortfall (`CVaR 95%`) metrics to `summarizeFinals()` (`cvar95Final`: mean of worst 5% final bankrolls) and `summarizeDrawdowns()` (`cvar95MaxDdPct`: mean of worst 5% max drawdowns). Analytics-only; zero changes to live bot trading or filter logic.
