@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-25 — Clearer Provisional `twap_close` Settlement Alert (`settlement.ts`)
+
+- **Settlement Alert Clarity (`bot/src/engines/settlement.ts`, `bot/src/engines/__tests__/settlement.fallback.test.ts`):** Replaced outdated `"Oracle CLOB + Gamma gagal setelah ~2 menit"` / `"~30 menit"` warning copy on tight-gap (`< 0.05%`) `twap_close` rollovers with an `info`-level provisional alert stating exact `$` diff, Chainlink 60s TWAP source, and `fallbackVerifier` `~5 menit` auto-verification (keeping `warn` level for non-TWAP spot fallbacks, and keeping `twap_close` rollover instant so `EARLY` entries are never blocked).
+
 ## 2026-11-25 — Clearer Telegram Entry Alerts (Decision-Time ML, Maker Wait Time & JEV Guard/Age)
 
 - **Telegram Entry Clarity (`bot/src/monitoring/alertTemplates.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/ai/jevAdvisor.ts`, `bot/src/monitoring/__tests__/alertTemplates.test.ts`):**

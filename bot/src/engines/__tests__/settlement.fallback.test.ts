@@ -22,6 +22,7 @@ vi.mock('../../config.ts', () => ({
 vi.mock('../../monitoring/notifier.ts', () => ({ notify: vi.fn(() => Promise.resolve()) }));
 
 import { handleExpiry, handleStalePosition, settleViaOracle } from '../settlement.ts';
+import { notify } from '../../monitoring/notifier.ts';
 
 const SLUG = 'btc-updown-15m-1788768900';
 const COND = '0xc0nd';
@@ -67,6 +68,22 @@ describe('price_fallback settlement', () => {
       exitData: expect.objectContaining({ outcome: 'DOWN', source: 'price_fallback' }),
     }));
     expect(actions.onFallbackSettled).toHaveBeenCalledWith({ marketSlug: SLUG, conditionId: COND });
+  });
+
+  test('tight-gap twap_close sends clear info provisional alert (not scary 2-min oracle failure)', async () => {
+    const ac = new AbortController(); ac.abort();
+    const actions = makeActions();
+    await handleExpiry(
+      { pos: POS, currentMarketSlug: SLUG, currentConditionId: COND, priceToBeat: PTB, now: Date.now() },
+      deps, actions,
+      { signal: ac.signal, getCloseTwap: () => 79465.00 }, // +$11.74 (~0.015% < 0.05%)
+    );
+    expect(notify).toHaveBeenCalledTimes(1);
+    const [level, msg] = (notify as any).mock.calls[0];
+    expect(level).toBe('info');
+    expect(msg).toContain('twap_close');
+    expect(msg).toContain('fallbackVerifier');
+    expect(msg).not.toContain('gagal setelah ~2 menit');
   });
 
   test('control: an oracle-resolved settlement does not involve the verifier', async () => {
