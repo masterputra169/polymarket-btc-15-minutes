@@ -2509,6 +2509,7 @@ export async function pollOnce() {
           const limSideForMon = getLimitOrderStatus().side;
           const limSideProb = limSideForMon === 'UP' ? ensembleUp
             : limSideForMon === 'DOWN' ? ensembleDown : null;
+          const flowForMon = getOrderFlowFeatures();
           const monResult = await monitorLimitOrder({
             mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
             mlSide: mlResult.available ? mlResult.mlSide : null,
@@ -2516,6 +2517,12 @@ export async function pollOnce() {
             sideProb: limSideProb,
             twapProbUp: physNowcast?.pFatTail ?? physNowcast?.p ?? null,
             secsLeft: timeLeftMin != null ? timeLeftMin * 60 : null,
+            leadLagDirection: leadLagImpulse?.active ? leadLagImpulse.direction : null,
+            kalmanVelocityUsdPerSec: kalmanSnapshot?.velocityUsdPerSec ?? null,
+            vpin: flowForMon.vpin,
+            kylesLambda: flowForMon.kylesLambda,
+            kylesLambdaR2: flowForMon.kylesLambdaR2,
+            tradeImbalance: flowForMon.tradeImbalance,
             btcPrice: settlePrice,
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,
@@ -2709,6 +2716,7 @@ export async function pollOnce() {
     }
 
     if (BOT_CONFIG.dryRun && process.env.DRY_RUN_QUEUE_SIM === 'true' && !settlementPending && hasActiveDryRunMaker()) {
+      const flowForMaker = getOrderFlowFeatures();
       const qStep = stepDryRunMaker({
         marketSlug,
         timeLeftMin,
@@ -2724,6 +2732,12 @@ export async function pollOnce() {
         mlResult,
         regimeInfo,
         twapProbUp: physNowcast?.pFatTail ?? physNowcast?.p ?? null,
+        leadLagDirection: leadLagImpulse?.active ? leadLagImpulse.direction : null,
+        kalmanVelocityUsdPerSec: kalmanSnapshot?.velocityUsdPerSec ?? null,
+        vpin: flowForMaker.vpin,
+        kylesLambda: flowForMaker.kylesLambda,
+        kylesLambdaR2: flowForMaker.kylesLambdaR2,
+        tradeImbalance: flowForMaker.tradeImbalance,
         recentTrades: getClobRecentTrades(),
         lastBookQuoteMs: getLastBookQuoteMs(),
       });

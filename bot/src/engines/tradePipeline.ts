@@ -23,6 +23,7 @@ import {
   makerJoinPrice,
   shouldAllowFokFallback,
   shouldCancelTwapAdverse,
+  shouldCancelToxicFlow,
   feeAdjustedEdge,
 } from './makerFillGate.ts';
 import { routeOrder } from './orderRouter.ts';
@@ -292,6 +293,12 @@ export function stepDryRunMaker(params: {
   mlResult: any;
   regimeInfo: any;
   twapProbUp: number | null | undefined;
+  leadLagDirection?: 'UP' | 'DOWN' | string | null;
+  kalmanVelocityUsdPerSec?: number | null;
+  vpin?: number | null;
+  kylesLambda?: number | null;
+  kylesLambdaR2?: number | null;
+  tradeImbalance?: number | null;
   recentTrades: readonly QueueTradeTick[];
   lastBookQuoteMs: number;
   nowMs?: number;
@@ -319,16 +326,27 @@ export function stepDryRunMaker(params: {
     limitPrice: order.targetPrice,
     secsLeft,
   });
+  const toxicPull = shouldCancelToxicFlow({
+    side: order.side,
+    leadLagDirection: params.leadLagDirection ?? null,
+    kalmanVelocityUsdPerSec: params.kalmanVelocityUsdPerSec ?? null,
+    vpin: params.vpin ?? null,
+    kylesLambda: params.kylesLambda ?? null,
+    kylesLambdaR2: params.kylesLambdaR2 ?? null,
+    tradeImbalance: params.tradeImbalance ?? null,
+  });
   const mlFlip = Boolean(
     params.mlResult?.available &&
     params.mlResult.mlSide &&
     params.mlResult.mlSide !== order.side &&
     (params.mlResult.mlConfidence ?? 0) >= 0.85
   );
-  if (adversePull.cancel || mlFlip) {
+  if (adversePull.cancel || toxicPull.cancel || mlFlip) {
     const reason = adversePull.cancel
       ? adversePull.reason
-      : `ml_flip_${params.mlResult.mlSide}_${((params.mlResult.mlConfidence ?? 0) * 100).toFixed(0)}%`;
+      : toxicPull.cancel
+        ? toxicPull.reason
+        : `ml_flip_${params.mlResult.mlSide}_${((params.mlResult.mlConfidence ?? 0) * 100).toFixed(0)}%`;
     log.info(`[DRY RUN] MAKER pulled (${reason}) — no FOK chase`);
     clearPending();
     return { active: false, entered: false, deniedFokForSlug: pending.marketSlug };

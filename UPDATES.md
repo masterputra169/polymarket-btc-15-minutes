@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-11-25 — Maker Cancel-on-Toxicity Guard & `Current status` Sync
+
+- **Maker Adverse Selection Guard (`bot/src/engines/makerFillGate.ts`, `bot/src/engines/limitOrderManager.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/engines/__tests__/makerFillGate.test.ts`):**
+  - Motivation: 75-trade markout audit on `polyvps` showed `maker_join` (`55` fills, `69.1% WR`, `+$15.20`) carried negative post-fill markout (`m15 = -1.70c`, `m60 = -1.71c`, `n=35`), indicating adverse selection on resting bids.
+  - Added shared `shouldCancelToxicFlow()` in `makerFillGate.ts` pulling resting bids (no FOK chase) on: (1) opposing 3s Binance lead-lag impulse, (2) sharp opposing Kinematic Kalman velocity (`|v| >= $5.0/s`), or (3) opposing CLOB `tradeImbalance >= 0.35` combined with `VPIN >= 0.78` or `kylesLambda >= 1.5c/1k` (`R2 >= 0.15`). Wired into both `monitorLimitOrder()` (live GTD) and `stepDryRunMaker()` (dry-run queueSim) using telemetry already computed in `loop.ts`.
+- **`UPDATES.md` (`## Current status`):** Synced status table from `2026-11-19` to `2026-11-25` (`51W–24L` / `68.0% WR` / `$116.10`, `JEV_MODE=veto`, `ML_ONLINE_CALIBRATION_MODE=active`, `Meta-Labeler` `75/100` `AUC 0.8036`, `Gates 1e/20h–20j`, `Cancel-on-Toxicity`, `CVaR 95%`, security/infra hardening).
+
 ## 2026-11-25 — Fix Hybrid Base-ML Direction Flip (`Gate 1e`) & PolyBolt Stall-Backoff Reset Bug
 
 - **Base-ML Direction Consensus Guard (`bot/src/safety/tradeFilters.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`):**
@@ -427,52 +434,34 @@
 
 ## Current status
 
-_Last updated: 2026-11-19 14:40 WIB_
+_Last updated: 2026-11-25 08:55 WIB_
 
 | Area | State |
 |---|---|
-| Bot | active, **DRY RUN (DRY_RUN=true)**; evaluating All-Time Quant + Live Hybrid Residual v4 ($100 fresh test) |
-| JEV / TypeSafe layer | **v3 LIVE in SHADOW** (`typesafe/jev-1.14` via OpenRouter, `JEV_MODE=shadow`, `independent_v3` state w/ order flow + Chainlink TWAP distance + Risk Desk 3× `score`, `2026-11-17-laplace10-lerp` cal + Bayesian prior anchor + Rolling Brier Skill Guard) |
+| Bot | active, **DRY RUN (`DRY_RUN=true`)** on `polyvps` (`systemd` sandboxed); evaluating `20261116-p2-ef8dfd` + Hybrid Residual v4 (`$100` fresh test) |
+| JEV / TypeSafe layer | **v5 ACTIVE in VETO** (`typesafe/jev-1.14` via OpenRouter, `JEV_MODE=veto`, `JEV_SHADOW=false`, `online-platt-v5` recency-weighted, multi-signal Bull/Bear debate fusion, `JEV_BRIER_GATE=true` rolling-100 self-guard; `253` v5 windows, `64.7%` dirAcc) |
+| Online ML Calibration | **ACTIVE** (`ML_ONLINE_CALIBRATION_MODE=active`, `300` windows, `calBrier < rawBrier`, rolling Brier self-guard) |
+| Stage-2 Meta-Labeler | **SHADOW** (`ML_META_LABELER_MODE=shadow`, `75/100` trades, `holdoutAUC = 0.8036`, `holdoutBrier = 0.1864`; target promotion at `n >= 100`) |
 | ML model | **`20261116-p2-ef8dfd` + `v4-hybrid-20261116` Overlay LIVE** (`83f` v2 base + `412` depth-2 Chainlink/TWAP/L2 residual trees; `ML_HYBRID_RESIDUAL_ENABLED=true`) · Val Acc `73.68% → 74.93%`, AUC `0.8252 → 0.8355`, Brier `0.1723 → 0.1653`, ECE `0.0411 → 0.0141` (parity `3.16e-07`) |
 | Pipeline v4 / Stage 2 | **Hybrid Residual v4 LIVE + 54d Tape Lab** (`4,587,177` 1 Hz snapshots / `5,076` resolved mkts `2026-09-24 → 2026-11-16`) · Normal window OOS `75.97%` Acc / `0.1597` Brier; Final 15–45s `87.33%` Acc (`v4 Standalone`) & `0.0874` Brier (`v4 Stack`) |
 | ML previous (395d / 365d / 180d) | **`20261115-p2-c3e0fd` (`395d` 83f)**, **`20261115-p2-5de02d` (`365d` 79f)** & **`20261114-p2-9384fe` (`180d` 79f)** — all available for 1-click hot-swap |
-| Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 + WR optimization (`mlConfMin=0.30`, `mlConfRelaxed=0.30`, `hardMlFloor=0.30`, `lateMlMin=0.35`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`, `midPhaseMaxPrice=0.63`, `limitMlThreshold=0.30`, `fokFallbackMinMlConf=0.32`) |
+| Model switcher | **Live in dashboard (`ML Engine` panel)** · `20261116-p2-ef8dfd` profile tuned for Hybrid v4 (`mlConfMin=0.30`, `hardMlFloor=0.30`, `earlyPhaseMaxPrice=0.65`, `moderateMinMlEdge=0.035`, `limitOrder.maxUnfilledSec=35`, `fokFallbackMinEdge=0.025`, `fokFallbackMinMlConf=0.32`) |
 | Live bankroll | $13.15 (pUSD) · 11 trades total (4W / 7L, 36.4% WR) |
-| Paper bankroll | **$107.18 (`+$7.18` net, `27W / 13L` = `67.5% WR`, peak `$113.53` on `$100` fresh test)** · prior 926-trade history (`589W / 337L`, end `$17.53`) preserved in `bot/data/archive_20261116_pre_alltime_100/` + viewable in dashboard |
-| Next update backlog | **Phase-2 Quant Roadmap (gated at `n >= 80–300`):** (1) Anti-reversal V-shaped guards (Gate 21 `abs(twapPhysicsZ) >= 0.35` + `<= 60c` on `bbSqueeze && mlConf < 0.40`), (2) regime-aware `ML` vs `Rule` ensemble alpha in `bbSqueeze`, (3) `markoutTracker` `+5s..+60s` toxicity mining (`100+` fills), (4) Pipeline v4 retrain at `75–90d+` R2 tape, (5) `5`-share `LIVE` GTD `postOnly` + `/ws/user` fill check at `+3–5pp` BE margin; keep `BLOCKED_SESSIONS=Europe` until solo `n >= 30` & `WR >= BE + 3pp` |
-| Entry price cap | **68c reversible profile override (`50c–68c` band)** on `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.68`, `baseHardCap=0.68`, `trendingHardCap=0.68`, `ultraMlCap=0.70`, `midPhaseMaxPrice=0.65`, `limit maxEntry=0.67`; `.env` stays `65c` baseline; backup `model_profiles.json.bak-20261119-65c`) |
-| Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5` pre-validation bug fixed)** — resolved `Bet too small < $0.50` & `0 shares` deadlock when Kelly output < `$0.50` (`tradePipeline.ts`) |
-| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`, enables cheap 50-65c early & trending entry discovery) |
-| Order router | **Limit JOIN 25s + Instant TWAP Pull + 2-Attempt Limit + 2c Haircut + Fill-Clip Guard + GhostGuard** (`LIMIT_ORDER_ENABLED=true`, `ORDER_ROUTER_ENABLED=true`, `route=WAIT` sets `limitOrderBlocksFOK`, `choppy` `<40%` → `WAIT`, `shouldCancelTwapAdverse` via `nowcast` `1.4×` fat-tail TWAP, `EXECUTION_MAX_RUNAWAY=0.02`, `isFillSizeWithinClip`, `maxAttemptsPerMarket=2`, `maxUnfilledSec=25`, `fokFallbackMinMlConf=0.32`, `GhostGuard` + `90s` outage latch) |
-| Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`, eliminated historical -$38.72 leak) |
-| Hard ML floor | **30% Hybrid floor (profile + `.env`)** (`hardMlFloor=0.30`, `mlConfRelaxed=0.30`, `lateMlRelaxed=0.32`, `choppyMlMin=0.40`; `mlConfMin=0.30`) |
-| Mid-phase guard | **65c mid-phase ceiling** (`midPhaseMaxPrice=0.65` profile override vs `0.63` `.env` + `midHardCeil >= midPhaseMaxPrice` in 5–11m MID window) |
-| Trending protection| **50c–68c band** (`trendingMinToken=0.50`, `trendingMaxPrice=0.68` profile override vs `0.65` `.env`) |
-| Microstructure gates | **Gate 20a–20e + Gate 21 (`FILTER_MIN_TWAP_Z`)** (`minTwapZ=0` ready + `twapPhysicsZ` logged in journal) |
-| Quant signals | **300s/60s Taker Ratio + Deribit DVOL + 3s Lead-Lag + `1.4×` Fat-Tail TWAP** (`pFatTail` over `max(σ_120s, σ_900s)`, `15/180` fast confirm on 3s BTC impulse, `60/180` on R4 5m taker surge) |
-| High-edge fast-entry | **90/180 polls** (`Math.ceil(SIGNAL_CONFIRM_POLLS / 2)`, fixed legacy `SIGNAL_CONFIRM_POLLS - 1` = `179/180` bug) |
-| Circuit breaker | tightened: max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr + **Edge Tripwire** (`EVAL_TRIPWIRE_MIN_TRADES=100`, `below_breakeven` auto-pause via `EVAL_TRIPWIRE_PAUSE`) |
-| Dashboard | https://poly15.dollarkilat.xyz/ · 17 widgets (incl. 60fps **`BTC 15m Chart`** `priceChart`) · **Quant Terminal v5** UI + **Tahap 2 Chainlink-Native Telemetry** drawer + **Journal Archive Viewer** |
-| Study portal | https://poly15-study.dollarkilat.xyz/ · **Tahap 2 · v4 Lab** (54d Tape + Gate 20f replay + 88f gain rank) + **ML Model Lab** + content-hashed assets + Cloudflare Insights CSP + Studies + Changelog + `$100` eval |
-| Cross-feed guard | **Gate 20f + Chainlink `Nowcast` + `[b-62s, b-2s)` TWAP Offset** (`ChainlinkNowcastTracker`, `windowOffsetMs=2000`, `FILTER_CROSS_FEED_SKEW_PCT=0.035%`, 21-sample median `BasisTracker`, `chainlinkWss` fallback) |
-| Auth | session login; daily password rotation at 07:00 WIB via Telegram |
-| Live/dry switch | available; **live active** |
-| Drift | no drift ($0.00) verified on-chain |
-| Tests | **1,132 vitest PASS** (`124` files; frontend, bot & scripts typecheck/build/study:build PASS; Python ML CI PASS) |
-| Disk | 18 GB used / 39 GB (47%); 20 GB free; journal `116 MB` (capped at 150 MB) |
-| Swap | 6.1 GiB (`2G` `/swap.img` + `4.2G` `/swap-extra.img`, `1.6 GiB` active alongside `openbot`) |
-| Health monitor | `poly15-health-alert.timer` every 5 min (Telegram on failed unit/disk/endpoint/auto-deploy) |
-| Password sync | Windows task `Poly15 Sync Dashboard Password`, daily 07:05 WIB |
-| Kelly shrink | **0.60** (`KELLY_PROB_SHRINK=0.60`, `MIN_BET_PCT=0.005`; resolved `Adjusted Kelly < min 2.0%` deadlock) |
-| Eval window | **Since `2026-11-16T01:35:00Z`** (`EVAL_WINDOW_START`, `$100` fresh capital, hot-upgraded to `20261116-p2-ef8dfd`); old 926-row & 923-row journals archived & viewable in UI |
-| Win rate alerts | throttled: alerts once per trade count change (6h cooldown) |
-| Health state | clean; failed units cleared; `systemctl --failed` empty |
-| Global risk | pilot live: RSS + macro + sentiment; snapshot JSONL; relevance filter added |
-| Secrets backup | AES-256 encrypted local archive; key copied locally |
-| Data backup | AES-256 encrypted archive; local offsite copy |
-| Encrypted backup release | deployed via auto-deploy at 14:38 WIB |
-| Auto-deploy | active; **worktree dirty throttled via block_deploy**; unit auto-sync enabled; source at `main` |
-| Scheduled jobs | maintenance 04:30 WIB · secrets backup 06:35 WIB · password rotation 07:00 WIB · bot backup 07:15 WIB |
+| Paper bankroll | **$116.10 (`+$16.10` net, `51W / 24L` = `68.0% WR` across `75` trades on `$100` fresh test)** · commit-stamped journal (`entry.gitCommit`) · prior 926-trade history archived in `bot/data/archive_20261116_pre_alltime_100/` |
+| Next update backlog | **Active Quant Milestones:** (1) Promote `Stage-2 Meta-Labeler` (`ML_META_LABELER_MODE=veto`) at `n = 100` (`75/100`, `AUC 0.8036`), (2) Audit post-patch `maker_join` markout (`m15`/`m60`) after `Cancel-on-Toxicity` deployment, (3) Pipeline v4 retrain at `75–90d+` R2 tape, (4) `5`-share `LIVE` (`DRY_RUN=false`) once Meta-Labeler & positive maker markout verified |
+| Entry price cap | **68c reversible profile override (`50c–68c` band)** on `20261116-p2-ef8dfd` + Hybrid v4 (`softEntryCap=0.68`, `baseHardCap=0.68`, `trendingHardCap=0.68`, `ultraMlCap=0.70`, `midPhaseMaxPrice=0.65`, `earlyPhaseMaxPrice=0.65`) |
+| Trade sizing | **5 shares min fixed (`FIXED_SHARE_SIZE=5`) + Step-Compounding** (`STEP_COMPOUNDING_ENABLED=true`, peak-drawdown step-down guard) |
+| Early window | **13.5m ceiling** (`FILTER_DRY_RUN_MAX_TIME_LEFT=13.5`, `FILTER_TRENDING_MAX_TIME_LEFT=13.5`) |
+| Order router & Maker | **Limit JOIN 35s + Instant TWAP Pull + Cancel-on-Toxicity + 1-Attempt Limit + GhostGuard** (`LIMIT_ORDER_ENABLED=true`, `DRY_RUN_QUEUE_SIM=true`, `LIMIT_MAX_ATTEMPTS_PER_MARKET=1`, `maxUnfilledSec=35`, `LIMIT_FOK_FALLBACK_MIN_EDGE=0.025`, `shouldCancelTwapAdverse`, `shouldCancelToxicFlow` via 3s lead-lag / Kalman vel / VPIN+Kyle's λ) |
+| Blocked sessions | **Europe blocked** (`BLOCKED_SESSIONS=Europe`) |
+| Safety & Anomaly Gates | **Gate `1e`** (Base-ML consensus — blocks hybrid-flipped base ML), **Gates `20a–20j`** (L2 imbalance, 300s taker, 3s lead-lag, cross-feed skew, anti-chase RSI, squeeze+flip whipsaw, compound JEV+hybrid+skew), **Gate `21`** (`twapPhysicsZ`) |
+| Quant Telemetry (Shadow) | **Causal 3-State Gaussian HMM**, **2-State Kinematic Kalman + Adaptive Basis**, **Kyle's λ / VPIN**, **Causal GARCH(1,1) σ15m** — broadcast in `MlPanel.tsx` & audited via `bot/scripts/shadowAudit.mts` |
+| TWAP / Oracle Feed | **PolyBolt primary (`price.crypto.twap` + `price.crypto`, stall-backoff bug fixed)** + RTDS shadow fallback (`100%` exact PTB, `0` mismatch) |
+| Circuit breaker | max daily loss 15%, max drawdown 25%, max 3 consec losses, cooldown 2hr + **Edge Tripwire** (`EVAL_TRIPWIRE_MIN_TRADES=100`) |
+| Dashboard | https://poly15.dollarkilat.xyz/ · **5 Fincept-inspired Terminal Desks** (`1–5` hotkeys, sharp `8px` framing, `tabular-nums`), Quant Telemetry drawer, 17 widgets |
+| Study portal | https://poly15-study.dollarkilat.xyz/ · **Monte Carlo 10k + Expected Shortfall (`CVaR 95%`)**, **Quant Stack & Shadow Promotion Readiness**, **Commit-Stamped Breakdown**, auto-synced 60s (`poly15-study-refresh.timer`) |
+| Security & Infra | **SSH key-only** (`01-hardening.conf`), **UFW** (`deny incoming`, allow `22/tcp`), **systemd sandbox** (`hardening.conf`), `dashboard-auth` DoS-hardened + `jti` + `SameSite=Strict`, Bearer-only `/reports`, CI production SCA gate (`npm audit --omit=dev --audit-level=high`), daily password rotation 07:00 WIB |
+| Services & Timers | `polybtc15-bot`, `polybot-dashboard-auth`, `cloudflared-named`, `nginx`, `polybot-watchdog.timer` (`+x` fixed), `poly15-study-refresh.timer` — all `active` |
 
 > This status block is the only section edited in place. Everything below is append-only.
 

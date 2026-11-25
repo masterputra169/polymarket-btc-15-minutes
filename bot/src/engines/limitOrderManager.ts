@@ -26,6 +26,7 @@ import {
   shouldCancelUnfilled,
   shouldCancelEdgeErosion,
   shouldCancelTwapAdverse,
+  shouldCancelToxicFlow,
 } from './makerFillGate.ts';
 
 const log = createLogger('LimitOrder');
@@ -500,6 +501,12 @@ export async function monitorLimitOrder({
   sideProb = null,
   twapProbUp = null,
   secsLeft = null,
+  leadLagDirection = null,
+  kalmanVelocityUsdPerSec = null,
+  vpin = null,
+  kylesLambda = null,
+  kylesLambdaR2 = null,
+  tradeImbalance = null,
 }, deps): Promise<MonitorLimitOrderResult> {
   const cfg = getEffectiveLimitOrderConfig();
 
@@ -554,6 +561,23 @@ export async function monitorLimitOrder({
       `LIMIT ORDER TWAP adverse pull: ${twapPull.reason} @ limit=${((state.targetPrice ?? 0) * 100).toFixed(1)}c`
     );
     return { action: 'CANCEL_EDGE_EROSION', detail: twapPull.reason ?? 'twap_adverse' };
+  }
+
+  // Cancel-on-Toxicity: pull resting bid before opposing lead-lag / Kalman velocity / informed VPIN-lambda flow fills it
+  const toxicPull = shouldCancelToxicFlow({
+    side: state.side,
+    leadLagDirection,
+    kalmanVelocityUsdPerSec,
+    vpin,
+    kylesLambda,
+    kylesLambdaR2,
+    tradeImbalance,
+  });
+  if (toxicPull.cancel) {
+    log.info(
+      `LIMIT ORDER toxic flow pull: ${toxicPull.reason} @ limit=${((state.targetPrice ?? 0) * 100).toFixed(1)}c`
+    );
+    return { action: 'CANCEL_TOXIC_FLOW', detail: toxicPull.reason ?? 'toxic_flow' };
   }
 
   // Maker fill gate: resting too long without a fill (tape: most fills arrive in ~15–45 s).

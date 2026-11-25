@@ -5,6 +5,7 @@ import {
   shouldCancelUnfilled,
   shouldCancelEdgeErosion,
   shouldCancelTwapAdverse,
+  shouldCancelToxicFlow,
   shouldAllowFokFallback,
   makerJoinPrice,
   dryRunMakerWouldFill,
@@ -167,8 +168,56 @@ describe('dryRunMakerWouldFill', () => {
 describe('classifyCancelReason', () => {
   test('maps monitor actions', () => {
     expect(classifyCancelReason('CANCEL_UNFILLED_TIMEOUT unfilled_timeout')).toBe('unfilled_timeout');
+    expect(classifyCancelReason('CANCEL_TOXIC_FLOW toxic_lead_lag_DOWN')).toBe('toxic_flow');
     expect(classifyCancelReason('CANCEL_EDGE_EROSION edge_erosion')).toBe('edge_erosion');
     expect(classifyCancelReason('CANCEL_SIGNAL_FLIP ml_flip_UP_90%')).toBe('signal_flip');
     expect(classifyCancelReason('CANCEL_TIME_CUTOFF elapsed_9.1m')).toBe('time_cutoff');
+  });
+});
+
+describe('shouldCancelToxicFlow', () => {
+  test('pulls on opposing 3s lead-lag impulse and spares aligned impulse', () => {
+    const opp = shouldCancelToxicFlow({ side: 'UP', leadLagDirection: 'DOWN' });
+    expect(opp.cancel).toBe(true);
+    expect(opp.reason).toBe('toxic_lead_lag_DOWN');
+
+    expect(shouldCancelToxicFlow({ side: 'UP', leadLagDirection: 'UP' }).cancel).toBe(false);
+    expect(shouldCancelToxicFlow({ side: 'DOWN', leadLagDirection: 'DOWN' }).cancel).toBe(false);
+  });
+
+  test('pulls on sharp opposing Kalman velocity and ignores calm or favorable drift', () => {
+    const oppUp = shouldCancelToxicFlow({ side: 'UP', kalmanVelocityUsdPerSec: -5.5 });
+    expect(oppUp.cancel).toBe(true);
+    expect(oppUp.reason).toContain('toxic_kalman_vel_-5.5');
+
+    const oppDown = shouldCancelToxicFlow({ side: 'DOWN', kalmanVelocityUsdPerSec: 6.2 });
+    expect(oppDown.cancel).toBe(true);
+    expect(oppDown.reason).toContain('toxic_kalman_vel_+6.2');
+
+    expect(shouldCancelToxicFlow({ side: 'UP', kalmanVelocityUsdPerSec: -2.0 }).cancel).toBe(false);
+    expect(shouldCancelToxicFlow({ side: 'UP', kalmanVelocityUsdPerSec: 8.0 }).cancel).toBe(false);
+  });
+
+  test('pulls on opposing flow + elevated VPIN or Kyle lambda (R2 guarded), no-op on favorable/null', () => {
+    const vpinPull = shouldCancelToxicFlow({ side: 'UP', tradeImbalance: -0.45, vpin: 0.82 });
+    expect(vpinPull.cancel).toBe(true);
+    expect(vpinPull.reason).toContain('toxic_vpin_0.82');
+
+    // Favorable imbalance with high VPIN must NOT cancel
+    expect(shouldCancelToxicFlow({ side: 'UP', tradeImbalance: 0.60, vpin: 0.90 }).cancel).toBe(false);
+
+    // Kyle's lambda with sufficient R2 + opposing flow pulls; noisy low-R2 does not
+    const lamPull = shouldCancelToxicFlow({ side: 'DOWN', tradeImbalance: 0.40, kylesLambda: 2.1, kylesLambdaR2: 0.25 });
+    expect(lamPull.cancel).toBe(true);
+    expect(lamPull.reason).toContain('toxic_lambda_2.10c');
+    expect(shouldCancelToxicFlow({ side: 'DOWN', tradeImbalance: 0.40, kylesLambda: 2.1, kylesLambdaR2: 0.05 }).cancel).toBe(false);
+
+    // Null/default inputs are a strict no-op
+    expect(shouldCancelToxicFlow({ side: 'UP' }).cancel).toBe(false);
+
+    // FOK fallback is blocked after toxic_flow cancel
+    const fok = shouldAllowFokFallback({ cancelReason: 'toxic_flow', sideProb: 0.80, ask: 0.55, minEdge: 0.03 });
+    expect(fok.allow).toBe(false);
+    expect(fok.reason).toBe('no_fok_after_toxic_flow');
   });
 });
