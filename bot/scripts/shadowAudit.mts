@@ -13,6 +13,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { fitOnlinePlatt, calibrateWithPlatt } from '../src/ai/jevSettleCalibration.ts';
 import { fitMetaLabelerModel, type MetaLabelSample } from '../src/ml/metaLabeler.ts';
+import { computeConformalQHat, evaluateConformalSet } from '../src/ml/onlineCalibration.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const argIdx = process.argv.indexOf('--data-dir');
@@ -74,6 +75,28 @@ const rawMlBrier = nMl > 0 ? rawB / nMl : null;
 const calMlBrier = nMl > 0 ? calB / nMl : null;
 const mktMlBrier = nMl > 0 ? mktB / nMl : null;
 const stage1Pass = Boolean(mlPlatt && nMl >= 50 && calMlBrier != null && rawMlBrier != null && calMlBrier < rawMlBrier);
+
+// Split-conformal uncertainty audit (ML4T Ch.12): calibrate qHat on first half, score second half
+let conformalTag = 'n/a';
+if (mlHist.length >= 40) {
+  const half = Math.floor(mlHist.length / 2);
+  const calScores = mlHist.slice(0, half).map(h => {
+    const cp = mlPlatt ? calibrateWithPlatt(h.rawMl, mlPlatt) : h.rawMl;
+    return 1 - (h.y === 1 ? cp : 1 - cp);
+  });
+  const qHat = computeConformalQHat(calScores, 0.15);
+  if (qHat != null) {
+    let sN = 0, sHit = 0, aN = 0, aHit = 0;
+    for (const h of mlHist.slice(half)) {
+      const cp = mlPlatt ? calibrateWithPlatt(h.rawMl, mlPlatt) : h.rawMl;
+      const cs = evaluateConformalSet(cp, qHat);
+      const predOk = (cp >= 0.5 ? 1 : 0) === h.y;
+      if (cs.singleton) { sN++; if (predOk) sHit++; }
+      else if (cs.ambiguous) { aN++; if (predOk) aHit++; }
+    }
+    conformalTag = `qHat=${qHat.toFixed(3)} | singleton=${sN > 0 ? `${sHit}/${sN} (${((sHit / sN) * 100).toFixed(1)}%)` : '0'} | ambig=${aN > 0 ? `${aHit}/${aN} (${((aHit / aN) * 100).toFixed(1)}%)` : '0'}`;
+  }
+}
 
 // ── 2. JEV v5 Veto Readiness Audit ──
 const v5BySlug = new Map<string, any>();
@@ -139,6 +162,7 @@ console.log(`Data dir: ${dataDir}`);
 console.log('');
 console.log(`[1] Online ML Calibration (ML_ONLINE_CALIBRATION_MODE=active): ${stage1Pass ? 'READY' : 'WAIT'}`);
 console.log(`    windows=${mlHist.length} (eval=${nMl}) | rawBrier=${rawMlBrier?.toFixed(5) ?? '-'} -> calBrier=${calMlBrier?.toFixed(5) ?? '-'} | mktBrier=${mktMlBrier?.toFixed(5) ?? '-'}`);
+console.log(`    conformal(85%): ${conformalTag}`);
 console.log('');
 console.log(`[2] JEV v5 Veto (JEV_MODE=veto, target >=150 v5 windows & skill >0%): ${stage2Pass ? 'READY' : 'WAIT'}`);
 console.log(`    v5_windows=${nV5}/150 | bayesBrier=${v5BayesBrier?.toFixed(5) ?? '-'} vs mktBrier=${v5MktBrier?.toFixed(5) ?? '-'} | skill=${v5SkillPct != null ? `${v5SkillPct >= 0 ? '+' : ''}${v5SkillPct.toFixed(2)}%` : '-'} | dirAcc=${v5DirTotal > 0 ? `${v5DirHit}/${v5DirTotal} (${((v5DirHit / v5DirTotal) * 100).toFixed(1)}%)` : '-'}`);
@@ -167,5 +191,44 @@ if (byCommit.size > 0) {
     const n = s.w + s.l;
     const wr = n > 0 ? ((s.w / n) * 100).toFixed(1) : '0.0';
     console.log(`    ${c.padEnd(10)} n=${String(n).padStart(3)} | ${s.w}W-${s.l}L (${wr}% WR) | PnL=${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}`);
+  }
+}
+
+// ── 5. MAE / MFE Excursion & Fill-Model Markout Audit (ML4T Ch.7) ──
+const pctile = (arr: number[], q: number) => {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(s.length - 1, Math.max(0, Math.floor(q * (s.length - 1))))];
+};
+const winMae: number[] = [], winMfe: number[] = [], lossMae: number[] = [], lossMfe: number[] = [];
+const byFill = new Map<string, { n: number; w: number; pnl: number; m15: number[]; m60: number[] }>();
+for (const r of journalRows) {
+  const e = r.entry, a = r.analysis;
+  if (!e || !a || (a.outcome !== 'WIN' && a.outcome !== 'LOSS')) continue;
+  const fm = String(e.fillModel ?? 'unknown');
+  const d = byFill.get(fm) ?? { n: 0, w: 0, pnl: 0, m15: [], m60: [] };
+  d.n++;
+  if (a.outcome === 'WIN') d.w++;
+  d.pnl += Number(a.pnl ?? 0);
+  const mk = a.markout;
+  if (mk) {
+    if (typeof mk.m15s === 'number') d.m15.push(mk.m15s);
+    if (typeof mk.m60s === 'number') d.m60.push(mk.m60s);
+    if (typeof mk.adversePeak === 'number') (a.outcome === 'WIN' ? winMae : lossMae).push(mk.adversePeak * 100);
+    if (typeof mk.favorablePeak === 'number') (a.outcome === 'WIN' ? winMfe : lossMfe).push(mk.favorablePeak * 100);
+  }
+  byFill.set(fm, d);
+}
+if (winMae.length + lossMae.length > 0) {
+  const fmtP = (arr: number[]) => arr.length > 0 ? `med=${pctile(arr, 0.5)!.toFixed(1)}c p75=${pctile(arr, 0.75)!.toFixed(1)}c (n=${arr.length})` : 'n=0';
+  console.log('');
+  console.log('[5] MAE / MFE Excursion & Fill-Model Markout:');
+  console.log(`    WIN  MAE (adverse): ${fmtP(winMae)} | MFE (favorable): ${fmtP(winMfe)}`);
+  console.log(`    LOSS MAE (adverse): ${fmtP(lossMae)} | MFE (favorable): ${fmtP(lossMfe)}`);
+  for (const [fm, d] of byFill.entries()) {
+    const wr = ((d.w / d.n) * 100).toFixed(1);
+    const m15 = d.m15.length ? `${(d.m15.reduce((s, v) => s + v, 0) / d.m15.length * 100).toFixed(2)}c` : '-';
+    const m60 = d.m60.length ? `${(d.m60.reduce((s, v) => s + v, 0) / d.m60.length * 100).toFixed(2)}c` : '-';
+    console.log(`    ${fm.padEnd(20)} n=${String(d.n).padStart(3)} | ${wr}% WR | PnL=${d.pnl >= 0 ? '+' : ''}$${d.pnl.toFixed(2)} | m15=${m15} m60=${m60}`);
   }
 }

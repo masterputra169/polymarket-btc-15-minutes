@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-25 — ML4T 3rd-Ed Quant Upgrades: Split-Conformal ML Telemetry, MAE/MFE Audit & Multiple-Testing Metrics (`DSR` / `BH-FDR`)
+
+- **Split-Conformal Uncertainty Telemetry (`bot/src/ml/onlineCalibration.ts`, `bot/src/ml/__tests__/onlineCalibration.test.ts`):** Added zero-dependency finite-sample split-conformal quantile (`computeConformalQHat`, `evaluateConformalSet`, `alpha=0.15`) to `evaluateMlCalibration()` (`conformalQHat`, `conformalAlpha`) — read-only telemetry, zero live entry impact.
+- **MAE / MFE & Conformal Audit (`bot/scripts/shadowAudit.mts`):** Added conformal singleton vs ambiguous-band accuracy to Section `[1]` and Section `[5] MAE / MFE Excursion & Fill-Model Markout` reporting WIN vs LOSS `adversePeak` (MAE) / `favorablePeak` (MFE) medians/P75 and fill-model markout.
+- **Offline ML Validation Helpers (`backtest/ml_training/mltrain/metrics.py`, `backtest/ml_training/tests/test_metrics.py`):** Added `deflated_sharpe_ratio()` (Bailey & López de Prado 2014), `benjamini_hochberg()` FDR control, and `conformal_binary_summary()` for future Pipeline v4 retrain & rule-sweep validation (full pytest coverage preserved).
+
 ## 2026-11-25 — Automated Milestone Telegram Alerts & Stage-2 Meta-Labeler Auto-Promotion (`ML_META_LABELER_MODE=auto`)
 
 - **Auto-Promotion with Self-Guard (`bot/src/config.ts`, `bot/src/ml/metaLabeler.ts`, `bot/src/ml/onlineCalibration.ts`, `bot/src/engines/tradePipeline.ts`):**

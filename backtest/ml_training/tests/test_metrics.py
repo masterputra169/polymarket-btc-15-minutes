@@ -148,3 +148,42 @@ class TestMarketSkill:
         s = market_skill(np.array([]), np.array([]), np.array([]))
         assert s["n"] == 0
         assert s["brier_skill_vs_market"] is None
+
+
+class TestMultipleTestingAndConformal:
+    def test_deflated_sharpe_penalizes_many_trials_and_handles_degenerate(self) -> None:
+        from mltrain.metrics import deflated_sharpe_ratio
+
+        rng = np.random.default_rng(7)
+        r = rng.normal(0.08, 0.5, size=200)
+        d1 = deflated_sharpe_ratio(r, n_trials=1)
+        d200 = deflated_sharpe_ratio(r, n_trials=200)
+        assert d1["dsr"] is not None and d200["dsr"] is not None
+        assert d200["sr_benchmark"] > d1["sr_benchmark"]
+        assert d200["dsr"] < d1["dsr"]
+
+        assert deflated_sharpe_ratio(np.array([0.1, 0.2]))["dsr"] is None
+        assert deflated_sharpe_ratio(np.array([0.5, 0.5, 0.5, 0.5]))["dsr"] is None
+
+    def test_benjamini_hochberg_fdr(self) -> None:
+        from mltrain.metrics import benjamini_hochberg
+
+        res = benjamini_hochberg([0.001, 0.02, 0.40, 0.90], alpha=0.05)
+        assert res["rejected"] == [True, True, False, False]
+        assert res["q_values"][0] <= res["q_values"][1] <= res["q_values"][2]
+        assert benjamini_hochberg([]) == {"q_values": [], "rejected": []}
+
+    def test_conformal_binary_summary_coverage_and_singleton_separation(self) -> None:
+        from mltrain.metrics import conformal_binary_summary
+
+        # Clean separable + uncertain middle cases
+        y = np.array([1, 0, 1, 0, 1, 0] * 10)
+        p = np.array([0.88, 0.12, 0.85, 0.15, 0.52, 0.48] * 10)
+        c = conformal_binary_summary(y, p, alpha=0.15)
+        assert c["n_cal"] == 30 and c["n_eval"] == 30
+        assert c["q_hat"] is not None
+        assert c["empirical_coverage"] >= 0.80
+        assert c["singleton_rate"] > 0.0 and c["singleton_accuracy"] == 1.0
+
+        small = conformal_binary_summary(np.array([1, 0, 1]), np.array([0.7, 0.3, 0.6]))
+        assert small["q_hat"] is None

@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   calibrateMlProbUp,
+  computeConformalQHat,
+  evaluateConformalSet,
   evaluateMlCalibration,
   getMlOnlineCalibrationStatus,
   noteMlWindowPrediction,
@@ -62,5 +64,27 @@ describe('Online Recency ML Calibration', () => {
     expect(ev.samples).toBe(0);
     expect(ev.allowActive).toBe(false);
     expect(ev.rawMlBrier).toBeNull();
+    expect(ev.conformalQHat).toBeNull();
+  });
+
+  it('computes split-conformal qHat and separates singleton vs ambiguous prediction sets', () => {
+    // 20 low residuals (0.10..0.48) -> qHat at alpha=0.15 is 18th smallest (index 17)
+    const scores = Array.from({ length: 20 }, (_, i) => +(0.10 + i * 0.02).toFixed(2));
+    const qHat = computeConformalQHat(scores, 0.15);
+    expect(qHat).toBe(0.44);
+    expect(computeConformalQHat([0.1, 0.2], 0.15)).toBeNull(); // < 10 samples
+
+    // With qHat = 0.62: confident UP (0.80) -> singleton ['UP']; uncertain (0.52) -> ambiguous ['UP','DOWN']
+    const sharpUp = evaluateConformalSet(0.80, 0.62);
+    expect(sharpUp.singleton).toBe(true);
+    expect(sharpUp.set).toEqual(['UP']);
+
+    const sharpDown = evaluateConformalSet(0.20, 0.62);
+    expect(sharpDown.singleton).toBe(true);
+    expect(sharpDown.set).toEqual(['DOWN']);
+
+    const ambig = evaluateConformalSet(0.52, 0.62);
+    expect(ambig.ambiguous).toBe(true);
+    expect(ambig.set).toEqual(['UP', 'DOWN']);
   });
 });

@@ -37,6 +37,36 @@ export interface MlCalibrationEvaluation {
   marketBrier: number | null;
   improvementBrier: number | null;
   allowActive: boolean;
+  /** Split-conformal quantile qHat at alpha=0.15 over nonconformity scores (1 - p_true). */
+  conformalQHat: number | null;
+  /** Marginal miscoverage target (0.15 = 85% coverage guarantee). */
+  conformalAlpha: number;
+}
+
+export interface ConformalPredictionSet {
+  set: ('UP' | 'DOWN')[];
+  singleton: boolean;
+  ambiguous: boolean;
+  qHat: number;
+}
+
+const CONFORMAL_ALPHA = 0.15;
+
+/** Finite-sample split-conformal quantile ceil((n + 1)(1 - alpha)) / n. */
+export function computeConformalQHat(scores: readonly number[], alpha = CONFORMAL_ALPHA): number | null {
+  const clean = scores.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  const n = clean.length;
+  if (n < 10) return null;
+  const idx = Math.min(n - 1, Math.max(0, Math.ceil((n + 1) * (1 - alpha)) - 1));
+  return +clean[idx].toFixed(4);
+}
+
+/** Build binary conformal prediction set for P(UP) given calibrated threshold qHat. */
+export function evaluateConformalSet(probUp: number, qHat: number): ConformalPredictionSet {
+  const set: ('UP' | 'DOWN')[] = [];
+  if (1 - probUp <= qHat) set.push('UP');
+  if (probUp <= qHat) set.push('DOWN');
+  return { set, singleton: set.length === 1, ambiguous: set.length === 2, qHat };
 }
 
 export interface MlCalibrationStatus extends MlCalibrationEvaluation {
@@ -72,11 +102,15 @@ export function evaluateMlCalibration(
   const recent = history.slice(-Math.max(10, windowSize));
   const n = recent.length;
   if (n === 0) {
-    return { samples: 0, rawMlBrier: null, calMlBrier: null, marketBrier: null, improvementBrier: null, allowActive: false };
+    return {
+      samples: 0, rawMlBrier: null, calMlBrier: null, marketBrier: null, improvementBrier: null,
+      allowActive: false, conformalQHat: null, conformalAlpha: CONFORMAL_ALPHA,
+    };
   }
   let rawSum = 0;
   let calSum = 0;
   let mktSum = 0;
+  const ncScores: number[] = [];
   for (const o of recent) {
     const rErr = o.rawMlProbUp - o.outcomeUp;
     const cProb = platt ? calibrateWithPlatt(o.rawMlProbUp, platt) : o.rawMlProbUp;
@@ -85,6 +119,8 @@ export function evaluateMlCalibration(
     rawSum += rErr * rErr;
     calSum += cErr * cErr;
     mktSum += mErr * mErr;
+    const pTrue = o.outcomeUp === 1 ? cProb : (1 - cProb);
+    ncScores.push(1 - pTrue);
   }
   const rawMlBrier = +(rawSum / n).toFixed(5);
   const calMlBrier = +(calSum / n).toFixed(5);
@@ -92,7 +128,11 @@ export function evaluateMlCalibration(
   const improvementBrier = +(rawMlBrier - calMlBrier).toFixed(5);
   const minSamples = BOT_CONFIG.mlOnlineCalibration?.minSamples ?? 50;
   const allowActive = Boolean(platt && n >= minSamples && calMlBrier < rawMlBrier);
-  return { samples: n, rawMlBrier, calMlBrier, marketBrier, improvementBrier, allowActive };
+  const conformalQHat = computeConformalQHat(ncScores, CONFORMAL_ALPHA);
+  return {
+    samples: n, rawMlBrier, calMlBrier, marketBrier, improvementBrier,
+    allowActive, conformalQHat, conformalAlpha: CONFORMAL_ALPHA,
+  };
 }
 
 function refitPlatt(): void {
