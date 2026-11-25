@@ -52,10 +52,11 @@ export function resolveNativeMcBinary() {
   for (const binPath of candidates) {
     try {
       fs.mkdirSync(path.dirname(binPath), { recursive: true });
-      execFileSync('gcc', ['-O3', '-pthread', '-Wall', '-Wextra', SRC_PATH, '-o', binPath, '-lm'], {
-        stdio: 'pipe',
-        timeout: 30_000,
-      });
+      execFileSync(
+        'gcc',
+        ['-O3', '-march=native', '-fno-math-errno', '-fno-trapping-math', '-pthread', '-Wall', '-Wextra', SRC_PATH, '-o', binPath, '-lm'],
+        { stdio: 'pipe', timeout: 30_000 },
+      );
       if (isUpToDate(binPath, srcMtimeMs)) return binPath;
     } catch {
       // Try next writable location (e.g. ProtectSystem=strict makes repo read-only)
@@ -253,9 +254,10 @@ export function buildMonteCarloBundleNative(trades, opts = {}) {
       input: stdinPayload,
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
-      timeout: 300_000,
+      timeout: 600_000,
     });
-  } catch {
+  } catch (err) {
+    process.stderr.write(`[mc-native] native execution failed, falling back to JS: ${err?.message || err}\n`);
     return null;
   }
 

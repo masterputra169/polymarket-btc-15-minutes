@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-25 — 16-Lane SIMD Branchless Vectorization (`xoshiro128++`) for 1M Monte Carlo Accelerator
+
+- **SIMD Vectorization (`scripts/study/mc_accel.c`, `scripts/study/mc-native.mjs`):** Replaced scalar branchy per-path loop with a 16-lane Struct-of-Arrays branchless `xoshiro128++` loop (`-O3 -march=native -fno-math-errno -fno-trapping-math`) exploiting `polyvps` AMD EPYC 9754 AVX-512/AVX2 units with rare-record drawdown division fast path and visible stderr fallback logging (`timeout: 600_000`).
+
 ## 2026-11-25 — Study Portal Monte Carlo Upgraded to 1,000,000 Simulations (`poly15-study.dollarkilat.xyz`)
 
 - **Native C11 Multi-Threaded Accelerator (`scripts/study/mc_accel.c`, `scripts/study/mc-native.mjs`):** Added zero-dependency C11 pthread engine (`gcc -O3 -pthread -lm`) using per-path `SplitMix64` + 64-bit `xorshift64*` (period $2^{64}-1$, thread-count invariant determinism, eliminating 32-bit xorshift wrap-around over 50B steps), `Float32` + 16-bit radix sort for bankrolls, and `uint16` counting sort for drawdowns (`~105 MB` peak RSS at `1,000,000` paths × 22 fan steps × 7 horizons × 5 scenarios, including exact `CVaR95`). Automatically falls back to pure-JS `mc-engine.js` if `gcc` is unavailable.

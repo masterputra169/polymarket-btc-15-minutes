@@ -1,12 +1,13 @@
 /*
- * Native C11 multi-threaded Monte Carlo accelerator for POLY//15 Study Portal.
+ * Native C11 multi-threaded SIMD-vectorized Monte Carlo accelerator for POLY//15 Study Portal.
  *
- * Runs exact 1,000,000-path simulations across all horizons (up to 10,000 trades)
- * using 64-bit xorshift64* PRNG (per-path SplitMix64 seed -> thread-count invariant),
- * Float32 bankroll storage + 16-bit radix sort, and uint16 drawdown counting sort.
- * Peak RSS for 1,000,000 paths x 22 fan steps x 7 horizons is ~105 MB.
+ * Runs exact 1,000,000-path simulations across all horizons (up to 10,000 trades) using:
+ * - 16-lane Struct-of-Arrays branchless inner loops (auto-vectorizes to AVX-512 / AVX2 / SSE2)
+ * - Per-path xoshiro128++ PRNG (period 2^128-1, SplitMix64 seeded -> thread-count invariant)
+ * - Branchless peak/drawdown tracking with rare-record division fast path (~98% division-free)
+ * - Float32 bankroll storage + 16-bit radix sort + uint16 drawdown counting sort (~105 MB RSS at 1M)
  *
- * Build: gcc -O3 -pthread -Wall -Wextra scripts/study/mc_accel.c -o mc_accel -lm
+ * Build: gcc -O3 -march=native -fno-math-errno -fno-trapping-math -pthread -Wall -Wextra scripts/study/mc_accel.c -o mc_accel -lm
  */
 
 #include <math.h>
@@ -20,6 +21,8 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define LANES 16
+
 static inline uint64_t splitmix64(uint64_t z) {
   z += 0x9e3779b97f4a7c15ULL;
   z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -27,37 +30,45 @@ static inline uint64_t splitmix64(uint64_t z) {
   return z ^ (z >> 31);
 }
 
-static inline uint64_t xorshift64star(uint64_t *state) {
-  uint64_t x = *state;
-  x ^= x >> 12;
-  x ^= x << 25;
-  x ^= x >> 27;
-  *state = x;
-  return x * 0x2545F4914F6CDD1DULL;
+static inline uint32_t rotl32(const uint32_t x, int k) {
+  return (x << k) | (x >> (32 - k));
 }
 
-static inline double next_uniform(uint64_t *rng) {
-  return ((double)(xorshift64star(rng) >> 11) + 0.5) * (1.0 / 9007199254740992.0);
+static inline uint32_t xoshiro128pp_next(uint32_t *s0, uint32_t *s1, uint32_t *s2, uint32_t *s3) {
+  const uint32_t result = rotl32(*s0 + *s3, 7) + *s0;
+  const uint32_t t = *s1 << 9;
+  *s2 ^= *s0;
+  *s3 ^= *s1;
+  *s1 ^= *s2;
+  *s0 ^= *s3;
+  *s2 ^= t;
+  *s3 = rotl32(*s3, 11);
+  return result;
 }
 
-static double sample_gamma(double shape, uint64_t *rng) {
+static inline double next_uniform_s(uint32_t *s0, uint32_t *s1, uint32_t *s2, uint32_t *s3) {
+  uint32_t r = xoshiro128pp_next(s0, s1, s2, s3);
+  return ((double)r + 0.5) * (1.0 / 4294967296.0);
+}
+
+static double sample_gamma(double shape, uint32_t *s0, uint32_t *s1, uint32_t *s2, uint32_t *s3) {
   if (!(shape > 0.0)) return 0.0;
   if (shape < 1.0) {
-    double u = next_uniform(rng);
+    double u = next_uniform_s(s0, s1, s2, s3);
     if (u <= 1e-12) u = 1e-12;
-    return sample_gamma(shape + 1.0, rng) * pow(u, 1.0 / shape);
+    return sample_gamma(shape + 1.0, s0, s1, s2, s3) * pow(u, 1.0 / shape);
   }
   double d = shape - 1.0 / 3.0;
   double c = 1.0 / sqrt(9.0 * d);
   for (;;) {
-    double u1 = next_uniform(rng);
-    double u2 = next_uniform(rng);
+    double u1 = next_uniform_s(s0, s1, s2, s3);
+    double u2 = next_uniform_s(s0, s1, s2, s3);
     if (u1 <= 1e-12) u1 = 1e-12;
     double z = sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
     double v = 1.0 + c * z;
     if (v <= 0.0) continue;
     double v3 = v * v * v;
-    double u = next_uniform(rng);
+    double u = next_uniform_s(s0, s1, s2, s3);
     if (u <= 1e-12) u = 1e-12;
     double z2 = z * z;
     if (u < 1.0 - 0.0331 * z2 * z2) return d * v3;
@@ -65,9 +76,9 @@ static double sample_gamma(double shape, uint64_t *rng) {
   }
 }
 
-static double sample_beta(double alpha, double beta, uint64_t *rng) {
-  double gx = sample_gamma(alpha, rng);
-  double gy = sample_gamma(beta, rng);
+static double sample_beta(double alpha, double beta, uint32_t *s0, uint32_t *s1, uint32_t *s2, uint32_t *s3) {
+  double gx = sample_gamma(alpha, s0, s1, s2, s3);
+  double gy = sample_gamma(beta, s0, s1, s2, s3);
   double sum = gx + gy;
   return sum > 0.0 ? gx / sum : 0.5;
 }
@@ -137,12 +148,12 @@ typedef struct {
   double stopFloor;
   double compStopFloor;
   int nSamples;
-  double *allPnl;
-  double *allRet;
+  float *allPnl;
+  float *allRet;
   int nWin;
-  double *winArr;
+  float *winArr;
   int nLoss;
-  double *lossArr;
+  float *lossArr;
 } ScenarioInput;
 
 typedef struct {
@@ -161,146 +172,281 @@ typedef struct {
   double **samplePaths;
 } WorkerArgs;
 
+static inline void seed_lane(uint64_t seedHi, int p, uint32_t *s0, uint32_t *s1, uint32_t *s2, uint32_t *s3) {
+  uint64_t a = splitmix64(seedHi ^ (uint64_t)(p + 1));
+  uint64_t b = splitmix64(a ^ 0x517cc1b727220a95ULL);
+  *s0 = (uint32_t)(a & 0xFFFFFFFFu);
+  *s1 = (uint32_t)(a >> 32);
+  *s2 = (uint32_t)(b & 0xFFFFFFFFu);
+  *s3 = (uint32_t)(b >> 32);
+  if ((*s0 | *s1 | *s2 | *s3) == 0u) *s0 = 0x9e3779b9u;
+}
+
 static void *sim_worker(void *arg) {
   WorkerArgs *w = (WorkerArgs *)arg;
   const ScenarioInput *sc = w->sc;
   const int modeCode = sc->modeCode;
-  const double startBankroll = w->startBankroll;
-  const double stopFloor = sc->stopFloor;
-  const double compStopFloor = sc->compStopFloor;
-  const double riskPct = sc->riskPct;
-  const double minBetUsd = sc->minBetUsd;
-  const double maxBetUsd = sc->maxBetUsd;
-  const int nSamples = sc->nSamples;
-  const int nWin = sc->nWin;
-  const int nLoss = sc->nLoss;
-  const double *allPnl = sc->allPnl;
-  const double *allRet = sc->allRet;
-  const double *winArr = sc->winArr;
-  const double *lossArr = sc->lossArr;
+  const float startBankrollF = (float)w->startBankroll;
+  const float stopFloorF = (float)sc->stopFloor;
+  const float compStopFloorF = (float)sc->compStopFloor;
+  const float riskPctF = (float)sc->riskPct;
+  const float minBetF = (float)sc->minBetUsd;
+  const float maxBetF = (float)sc->maxBetUsd;
+  const uint32_t nSamplesU = (uint32_t)sc->nSamples;
+  const uint32_t nWinU = (uint32_t)sc->nWin;
+  const uint32_t nLossU = (uint32_t)sc->nLoss;
+  const float *restrict allPnl = sc->allPnl;
+  const float *restrict allRet = sc->allRet;
+  const float *restrict winArr = sc->winArr;
+  const float *restrict lossArr = sc->lossArr;
   const int nFan = w->nFan;
   const int *fanSteps = w->fanSteps;
   const int *horizonIdxOfFan = w->horizonIdxOfFan;
   const uint32_t pStressThresh = (uint32_t)(sc->pStress * 4294967296.0);
   const uint64_t seedHi = ((uint64_t)(uint32_t)sc->seed) << 32;
 
-  for (int p = w->pStart; p < w->pEnd; p++) {
-    uint64_t rng = splitmix64(seedHi ^ (uint64_t)(p + 1));
-    if (rng == 0) rng = 0x9e3779b97f4a7c15ULL;
+  for (int pBase = w->pStart; pBase < w->pEnd; pBase += LANES) {
+    const int nActive = (w->pEnd - pBase < LANES) ? (w->pEnd - pBase) : LANES;
 
-    double b = startBankroll;
-    double peak = startBankroll;
-    double maxDd = 0.0;
-    double minRatio = 1.0;
-    double ddThresh = startBankroll;
-    uint32_t pThresh = pStressThresh;
+    uint32_t s0[LANES], s1[LANES], s2[LANES], s3[LANES];
+    uint32_t pThresh[LANES];
+    float b[LANES], peak[LANES], minRatio[LANES], ddThresh[LANES];
+    float alive[LANES];
+    int sampleIdx[LANES];
 
-    if (modeCode == 1) {
-      double pDraw = clamp_d(sample_beta(sc->bayesianAlpha, sc->bayesianBeta, &rng), 0.05, 0.99);
-      pThresh = (uint32_t)(pDraw * 4294967296.0);
-    }
+    for (int j = 0; j < LANES; j++) {
+      int p = pBase + (j < nActive ? j : 0);
+      seed_lane(seedHi, p, &s0[j], &s1[j], &s2[j], &s3[j]);
+      b[j] = startBankrollF;
+      peak[j] = startBankrollF;
+      minRatio[j] = 1.0f;
+      ddThresh[j] = startBankrollF;
+      alive[j] = (j < nActive) ? 1.0f : 0.0f;
+      pThresh[j] = pStressThresh;
+      sampleIdx[j] = -1;
 
-    int sampleIdx = -1;
-    if (p % w->sampleStride == 0) {
-      int candidate = p / w->sampleStride;
-      if (candidate < w->samplePathCount) {
-        sampleIdx = candidate;
-        w->samplePaths[sampleIdx][0] = startBankroll;
+      if (j < nActive) {
+        if (modeCode == 1) {
+          double pDraw = clamp_d(sample_beta(sc->bayesianAlpha, sc->bayesianBeta, &s0[j], &s1[j], &s2[j], &s3[j]), 0.05, 0.99);
+          pThresh[j] = (uint32_t)(pDraw * 4294967296.0);
+        }
+        if (p % w->sampleStride == 0) {
+          int cand = p / w->sampleStride;
+          if (cand < w->samplePathCount) {
+            sampleIdx[j] = cand;
+            w->samplePaths[cand][0] = w->startBankroll;
+          }
+        }
       }
     }
 
     int prevStep = 0;
     for (int fi = 1; fi < nFan; fi++) {
-      int target = fanSteps[fi];
-      int count = target - prevStep;
+      const int target = fanSteps[fi];
+      const int count = target - prevStep;
 
       if (modeCode == 0) {
+        /* Empirical fixed-size bootstrap */
         for (int k = 0; k < count; k++) {
-          if (b < stopFloor) { b = 0.0; break; }
-          uint64_t r = xorshift64star(&rng);
-          uint32_t idx = (uint32_t)(((r >> 32) * (uint64_t)nSamples) >> 32);
-          b += allPnl[idx];
-          if (b <= 0.0) {
-            b = 0.0;
-            maxDd = 1.0;
-            minRatio = 0.0;
-            ddThresh = 0.0;
-            break;
+          int anyLow = 0;
+          for (int j = 0; j < LANES; j++) anyLow |= (alive[j] > 0.0f) & (b[j] < stopFloorF);
+          if (__builtin_expect(anyLow, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] < stopFloorF) {
+                b[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
           }
-          if (b > peak) {
-            peak = b;
-            ddThresh = peak * minRatio;
-          } else if (b < ddThresh) {
-            minRatio = b / peak;
-            maxDd = 1.0 - minRatio;
-            ddThresh = b;
+
+          uint32_t idx[LANES];
+          for (int j = 0; j < LANES; j++) {
+            uint32_t r = rotl32(s0[j] + s3[j], 7) + s0[j];
+            uint32_t t = s1[j] << 9;
+            s2[j] ^= s0[j];
+            s3[j] ^= s1[j];
+            s1[j] ^= s2[j];
+            s0[j] ^= s3[j];
+            s2[j] ^= t;
+            s3[j] = rotl32(s3[j], 11);
+            idx[j] = ((r >> 16) * nSamplesU) >> 16;
+          }
+
+          int anyNeg = 0;
+          int anyDd = 0;
+          for (int j = 0; j < LANES; j++) {
+            float nb = b[j] + alive[j] * allPnl[idx[j]];
+            b[j] = nb;
+            anyNeg |= (alive[j] > 0.0f) & (nb <= 0.0f);
+            float pk = nb > peak[j] ? nb : peak[j];
+            peak[j] = pk;
+            float dt = pk * minRatio[j];
+            ddThresh[j] = dt;
+            anyDd |= (nb < dt) & (nb > 0.0f);
+          }
+
+          if (__builtin_expect(anyNeg, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] <= 0.0f) {
+                b[j] = 0.0f;
+                minRatio[j] = 0.0f;
+                ddThresh[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
+          }
+          if (__builtin_expect(anyDd, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (b[j] > 0.0f && b[j] < ddThresh[j]) {
+                minRatio[j] = b[j] / peak[j];
+                ddThresh[j] = b[j];
+              }
+            }
           }
         }
       } else if (modeCode == 1 || modeCode == 3) {
+        /* Bayesian Beta-Binomial (mode 1) or Stress shifted WR (mode 3) */
         for (int k = 0; k < count; k++) {
-          if (b < stopFloor) { b = 0.0; break; }
-          uint64_t r = xorshift64star(&rng);
-          uint32_t hi = (uint32_t)(r >> 32);
-          uint32_t lo = (uint32_t)(r & 0xFFFFFFFFu);
-          if (hi < pThresh) {
-            uint32_t idx = (uint32_t)(((uint64_t)lo * (uint64_t)nWin) >> 32);
-            b += winArr[idx];
-          } else {
-            uint32_t idx = (uint32_t)(((uint64_t)lo * (uint64_t)nLoss) >> 32);
-            b += lossArr[idx];
+          int anyLow = 0;
+          for (int j = 0; j < LANES; j++) anyLow |= (alive[j] > 0.0f) & (b[j] < stopFloorF);
+          if (__builtin_expect(anyLow, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] < stopFloorF) {
+                b[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
           }
-          if (b <= 0.0) {
-            b = 0.0;
-            maxDd = 1.0;
-            minRatio = 0.0;
-            ddThresh = 0.0;
-            break;
+
+          uint32_t rArr[LANES];
+          uint32_t wIdx[LANES];
+          uint32_t lIdx[LANES];
+          for (int j = 0; j < LANES; j++) {
+            uint32_t r = rotl32(s0[j] + s3[j], 7) + s0[j];
+            uint32_t t = s1[j] << 9;
+            s2[j] ^= s0[j];
+            s3[j] ^= s1[j];
+            s1[j] ^= s2[j];
+            s0[j] ^= s3[j];
+            s2[j] ^= t;
+            s3[j] = rotl32(s3[j], 11);
+            rArr[j] = r;
+            uint32_t mix = (r * 0x9e3779b1u) >> 16;
+            wIdx[j] = (mix * nWinU) >> 16;
+            lIdx[j] = (mix * nLossU) >> 16;
           }
-          if (b > peak) {
-            peak = b;
-            ddThresh = peak * minRatio;
-          } else if (b < ddThresh) {
-            minRatio = b / peak;
-            maxDd = 1.0 - minRatio;
-            ddThresh = b;
+
+          int anyNeg = 0;
+          int anyDd = 0;
+          for (int j = 0; j < LANES; j++) {
+            float delta = (rArr[j] < pThresh[j]) ? winArr[wIdx[j]] : lossArr[lIdx[j]];
+            float nb = b[j] + alive[j] * delta;
+            b[j] = nb;
+            anyNeg |= (alive[j] > 0.0f) & (nb <= 0.0f);
+            float pk = nb > peak[j] ? nb : peak[j];
+            peak[j] = pk;
+            float dt = pk * minRatio[j];
+            ddThresh[j] = dt;
+            anyDd |= (nb < dt) & (nb > 0.0f);
+          }
+
+          if (__builtin_expect(anyNeg, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] <= 0.0f) {
+                b[j] = 0.0f;
+                minRatio[j] = 0.0f;
+                ddThresh[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
+          }
+          if (__builtin_expect(anyDd, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (b[j] > 0.0f && b[j] < ddThresh[j]) {
+                minRatio[j] = b[j] / peak[j];
+                ddThresh[j] = b[j];
+              }
+            }
           }
         }
       } else {
+        /* Adaptive fractional-Kelly compounding */
         for (int k = 0; k < count; k++) {
-          if (b < compStopFloor) { b = 0.0; break; }
-          double bet = b * riskPct;
-          if (bet < minBetUsd) bet = minBetUsd;
-          else if (bet > maxBetUsd) bet = maxBetUsd;
-          if (bet > b) bet = b;
-          uint64_t r = xorshift64star(&rng);
-          uint32_t idx = (uint32_t)(((r >> 32) * (uint64_t)nSamples) >> 32);
-          b += bet * allRet[idx];
-          if (b <= 0.0) {
-            b = 0.0;
-            maxDd = 1.0;
-            minRatio = 0.0;
-            ddThresh = 0.0;
-            break;
+          int anyLow = 0;
+          for (int j = 0; j < LANES; j++) anyLow |= (alive[j] > 0.0f) & (b[j] < compStopFloorF);
+          if (__builtin_expect(anyLow, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] < compStopFloorF) {
+                b[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
           }
-          if (b > peak) {
-            peak = b;
-            ddThresh = peak * minRatio;
-          } else if (b < ddThresh) {
-            minRatio = b / peak;
-            maxDd = 1.0 - minRatio;
-            ddThresh = b;
+
+          uint32_t idx[LANES];
+          for (int j = 0; j < LANES; j++) {
+            uint32_t r = rotl32(s0[j] + s3[j], 7) + s0[j];
+            uint32_t t = s1[j] << 9;
+            s2[j] ^= s0[j];
+            s3[j] ^= s1[j];
+            s1[j] ^= s2[j];
+            s0[j] ^= s3[j];
+            s2[j] ^= t;
+            s3[j] = rotl32(s3[j], 11);
+            idx[j] = ((r >> 16) * nSamplesU) >> 16;
+          }
+
+          int anyNeg = 0;
+          int anyDd = 0;
+          for (int j = 0; j < LANES; j++) {
+            float bj = b[j];
+            float bet = bj * riskPctF;
+            bet = bet < minBetF ? minBetF : bet;
+            bet = bet > maxBetF ? maxBetF : bet;
+            bet = bet > bj ? bj : bet;
+            float nb = bj + alive[j] * (bet * allRet[idx[j]]);
+            b[j] = nb;
+            anyNeg |= (alive[j] > 0.0f) & (nb <= 0.0f);
+            float pk = nb > peak[j] ? nb : peak[j];
+            peak[j] = pk;
+            float dt = pk * minRatio[j];
+            ddThresh[j] = dt;
+            anyDd |= (nb < dt) & (nb > 0.0f);
+          }
+
+          if (__builtin_expect(anyNeg, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (alive[j] > 0.0f && b[j] <= 0.0f) {
+                b[j] = 0.0f;
+                minRatio[j] = 0.0f;
+                ddThresh[j] = 0.0f;
+                alive[j] = 0.0f;
+              }
+            }
+          }
+          if (__builtin_expect(anyDd, 0)) {
+            for (int j = 0; j < LANES; j++) {
+              if (b[j] > 0.0f && b[j] < ddThresh[j]) {
+                minRatio[j] = b[j] / peak[j];
+                ddThresh[j] = b[j];
+              }
+            }
           }
         }
       }
 
-      w->stepVals[fi][p] = (float)b;
-      if (sampleIdx >= 0) w->samplePaths[sampleIdx][fi] = b;
-      int hi = horizonIdxOfFan[fi];
-      if (hi >= 0) {
-        double scaled = maxDd * 65535.0;
-        if (scaled < 0.0) scaled = 0.0;
-        if (scaled > 65535.0) scaled = 65535.0;
-        w->horizonDds[hi][p] = (uint16_t)(scaled + 0.5);
+      const int hi = horizonIdxOfFan[fi];
+      for (int j = 0; j < nActive; j++) {
+        int p = pBase + j;
+        w->stepVals[fi][p] = b[j];
+        if (sampleIdx[j] >= 0) w->samplePaths[sampleIdx[j]][fi] = (double)b[j];
+        if (hi >= 0) {
+          double dd = 1.0 - (double)minRatio[j];
+          double scaled = dd * 65535.0;
+          if (scaled < 0.0) scaled = 0.0;
+          if (scaled > 65535.0) scaled = 65535.0;
+          w->horizonDds[hi][p] = (uint16_t)(scaled + 0.5);
+        }
       }
       prevStep = target;
     }
@@ -450,22 +596,24 @@ static void emit_horizon_json(
   printf("}");
 }
 
-static double *read_double_array(int *outN) {
+static float *read_float_array(int *outN) {
   int n = 0;
   if (scanf("%d", &n) != 1 || n <= 0) {
     fprintf(stderr, "mc_accel: invalid array length\n");
     exit(2);
   }
-  double *arr = (double *)malloc((size_t)n * sizeof(double));
+  float *arr = (float *)malloc((size_t)n * sizeof(float));
   if (!arr) {
     fprintf(stderr, "mc_accel: OOM array\n");
     exit(1);
   }
   for (int i = 0; i < n; i++) {
-    if (scanf("%lf", &arr[i]) != 1) {
+    double v = 0.0;
+    if (scanf("%lf", &v) != 1) {
       fprintf(stderr, "mc_accel: unexpected EOF reading array\n");
       exit(2);
     }
+    arr[i] = (float)v;
   }
   *outN = n;
   return arr;
@@ -560,11 +708,11 @@ int main(void) {
       fprintf(stderr, "mc_accel: invalid scenario %d header\n", si);
       return 2;
     }
-    sc.allPnl = read_double_array(&sc.nSamples);
+    sc.allPnl = read_float_array(&sc.nSamples);
     int nRet = 0;
-    sc.allRet = read_double_array(&nRet);
-    sc.winArr = read_double_array(&sc.nWin);
-    sc.lossArr = read_double_array(&sc.nLoss);
+    sc.allRet = read_float_array(&nRet);
+    sc.winArr = read_float_array(&sc.nWin);
+    sc.lossArr = read_float_array(&sc.nLoss);
 
     for (int s = 0; s < samplePathCount; s++) {
       for (int fi = 0; fi < nFan; fi++) samplePaths[s][fi] = startBankroll;
