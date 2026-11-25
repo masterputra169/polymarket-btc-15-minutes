@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-25 — Quant Architecture Decision Note (CAPM, Black-Scholes TWAP, GARCH & CatBoost)
+
+- **CAPM / Markowitz (Skipped):** Not applicable to single-asset 15-minute binary options (long-horizon multi-asset equity framework; only correlation-adjusted Kelly would matter if expanded to concurrent multi-asset markets).
+- **Black-Scholes Binary / TWAP Physics & GARCH(1,1) (Already Integrated):** Binary Black-Scholes adjusted for 60s TWAP variance is already implemented in `bot/src/engines/twapPhysics.ts` (`twap_physics_z`) as a Pipeline v4 ML feature / fair-value benchmark (not a standalone entry signal, since CLOB market makers already price $\Phi(d_2)$ in the 2–12m window); GARCH(1,1) shadow + `fit_garch11_mle()` are ready for the 75–90d Pipeline v4 retrain.
+- **CatBoost (Deferred to Optional Offline Benchmark):** Not added to live TS inference (`XGBoost` + `LightGBM` already cover depth-wise + leaf-wise GBDT on our ~100% numeric feature set, and adding a 3rd oblivious-tree TS evaluator has low ROI vs data/execution gains). Marked as an optional offline 3-way OOS benchmark during the 75–90d Pipeline v4 retrain — promote only if strict OOS Brier skill improves by `>= +0.5%` over `XGB + LGB` under `DSR / BH-FDR` validation.
+
 ## 2026-11-25 — Fix False-Positive `session-*.scope` Health Alerts (`scripts/health-alert.sh`)
 
 - **Health Alert Filter (`scripts/health-alert.sh`):** Ignored ephemeral SSH login scopes (`session-*.scope`) and `poly15-health-alert.service` itself in the `systemctl --failed` check so dropped SSH sessions no longer trigger repeated false-positive `POLY//15 health alert` Telegram messages or self-perpetuate after exiting non-zero. Ran `sudo systemctl reset-failed` on `polyvps` to clear the 4 stale SSH scopes (`session-30708/30710/30724/30726.scope`).
