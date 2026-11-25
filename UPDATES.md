@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-25 — Fix False-Positive `session-*.scope` Health Alerts (`scripts/health-alert.sh`)
+
+- **Health Alert Filter (`scripts/health-alert.sh`):** Ignored ephemeral SSH login scopes (`session-*.scope`) and `poly15-health-alert.service` itself in the `systemctl --failed` check so dropped SSH sessions no longer trigger repeated false-positive `POLY//15 health alert` Telegram messages or self-perpetuate after exiting non-zero. Ran `sudo systemctl reset-failed` on `polyvps` to clear the 4 stale SSH scopes (`session-30708/30710/30724/30726.scope`).
+
 ## 2026-11-25 — Fresh JEV Entry Alerts & Brier-Guard Status Sync (`jevAdvisor.ts`, `tradePipeline.ts`, `milestoneMonitor.ts`, `build-study-site.mjs`)
 
 - **No More Stale JEV on Telegram Entry Alerts (`bot/src/ai/jevAdvisor.ts`, `bot/src/engines/tradePipeline.ts`):** Added `shouldAwaitEntryJevRefresh()` and `waitForJevRefresh(2500)` so when a fill triggers `maybeJevAnalyze(..., { force: true })` and the cached JEV snapshot is `>= 15s` old (e.g. a 240s-old opening `UP` snapshot on a `DOWN` fill), the Telegram entry alert waits non-blockingly (`~0.8s`, capped `2.5s`, zero impact on execution or poll loop) and prints the fresh entry-time JEV direction instead of the stale window-open opinion.

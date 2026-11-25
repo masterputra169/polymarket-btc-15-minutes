@@ -19,6 +19,9 @@ ISSUES=""
 add_issue() { ISSUES="$ISSUES$1"$'\n'; }
 
 for unit in $(systemctl --failed --no-legend --plain 2>/dev/null | awk '{print $1}'); do
+  case "$unit" in
+    session-*.scope|poly15-health-alert.service) continue ;;
+  esac
   add_issue "unit failed: $unit"
 done
 
