@@ -99,3 +99,5 @@ monte carlo/
 auth.env
 auth.env*
 dashboard-password.hash
+scripts/study/.mc-accel
+scripts/study/mc_accel.exe

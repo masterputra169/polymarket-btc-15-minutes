@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-25 — Study Portal Monte Carlo Upgraded to 1,000,000 Simulations (`poly15-study.dollarkilat.xyz`)
+
+- **Native C11 Multi-Threaded Accelerator (`scripts/study/mc_accel.c`, `scripts/study/mc-native.mjs`):** Added zero-dependency C11 pthread engine (`gcc -O3 -pthread -lm`) using per-path `SplitMix64` + 64-bit `xorshift64*` (period $2^{64}-1$, thread-count invariant determinism, eliminating 32-bit xorshift wrap-around over 50B steps), `Float32` + 16-bit radix sort for bankrolls, and `uint16` counting sort for drawdowns (`~105 MB` peak RSS at `1,000,000` paths × 22 fan steps × 7 horizons × 5 scenarios, including exact `CVaR95`). Automatically falls back to pure-JS `mc-engine.js` if `gcc` is unavailable.
+- **Trade-Pool Cache & Low-RAM JS Engine (`scripts/build-study-site.mjs`, `study-site/mc-engine.js`):** Raised `MC_DEFAULT_PATHS` / `MC_MAX_PATHS` to `1,000,000`, removed duplicate `horizonVals` storage (`Float32Array` + in-place sort cuts JS RAM ~65%), and added SHA-256 `cacheKey` caching on `data/montecarlo.json` keyed on `(nPaths, startBankroll, settledTrades)` so the 2-minute `poly15-study-refresh.timer` reuses the 1M output in `< 5ms` whenever non-trade telemetry changes and only recomputes when a new trade settles.
+- **Dynamic Portal UI (`study-site/index.html`, `study-site/app.js`, `bot/src/__tests__/studySiteBuilder.test.ts`):** Updated tab, overview card, headers, chart titles, and methodology copy to reflect `1,000,000` (`1M`) pre-computed trials while keeping the interactive browser What-If runner fast at `10,000` trials (`7/7` `studySiteBuilder.test.ts` pass + full `npm run typecheck` pass).
+
 ## 2026-11-25 — 5 GitHub-Referenced Quant & Execution Upgrades (`hftbacktest`, `poly-market-maker`, `river`, `MAPIE`, `arch`)
 
 - **Order-Entry Wire Latency (`nkaz001/hftbacktest` → `bot/src/engines/queueSim.ts`, `bot/src/engines/tradePipeline.ts`, `queueSim.test.ts`):** Added `entryLatencyMs` (`effectivePlacedAtMs = placedAtMs + entryLatencyMs`, default `120ms` via `DRY_RUN_QUEUE_LATENCY_MS`, `0` default in pure API) so paper FIFO queue simulation ignores trades occurring while the order is still in flight.

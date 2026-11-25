@@ -320,13 +320,24 @@ function renderQuantStackSection() {
 function renderOverviewMcCard() {
   const body = document.getElementById('overview-mc-body');
   const sub = document.getElementById('overview-mc-sub');
+  const titleEl = document.getElementById('overview-mc-title');
+  const openBtn = document.getElementById('btn-open-mc');
+  const tabBtn = document.getElementById('tab-btn-mc');
   if (!body) return;
   body.replaceChildren();
 
   const summary = state.site?.monteCarloSummary;
+  const nPaths = summary?.nPaths || 1_000_000;
+  const shortLabel = nPaths >= 1_000_000
+    ? `${(nPaths / 1_000_000).toFixed(nPaths % 1_000_000 === 0 ? 0 : 1)}M`
+    : `${Math.round(nPaths / 1000)}k`;
+  if (titleEl) titleEl.textContent = `Adaptive Monte Carlo (${nPaths.toLocaleString()} Trials · Live Sync)`;
+  if (openBtn) openBtn.textContent = `Open Monte Carlo ${shortLabel} Lab →`;
+  if (tabBtn) tabBtn.textContent = `Monte Carlo ${shortLabel}`;
+
   if (!summary?.available) {
-    if (sub) sub.textContent = 'Awaiting settled live bot trades before running 10,000-trial adaptive projection.';
-    body.appendChild(h('div', 'empty-state', 'Adaptive Monte Carlo 10,000 trials populates automatically as soon as settled trades are recorded.'));
+    if (sub) sub.textContent = `Awaiting settled live bot trades before running ${nPaths.toLocaleString()}-trial adaptive projection.`;
+    body.appendChild(h('div', 'empty-state', `Adaptive Monte Carlo ${nPaths.toLocaleString()} trials populates automatically as soon as settled trades are recorded.`));
     return;
   }
 
@@ -1234,7 +1245,8 @@ function renderMonteCarloTab() {
   methBox?.replaceChildren();
 
   if (!mc || !mc.available || !Array.isArray(mc.scenarios) || mc.scenarios.length === 0) {
-    if (hdrSub) hdrSub.textContent = 'Awaiting settled bot trades before generating 10,000-trial simulations.';
+    const nPaths = mc?.nPaths || 1_000_000;
+    if (hdrSub) hdrSub.textContent = `Awaiting settled bot trades before generating ${nPaths.toLocaleString()}-trial simulations.`;
     if (liveBadge) liveBadge.textContent = 'WAITING TRADES';
     fanBox?.replaceChildren(h('div', 'empty-state', 'Adaptive Monte Carlo populates automatically once settled trades are available.'));
     finalHistBox?.replaceChildren();
@@ -1268,13 +1280,22 @@ function renderMonteCarloTab() {
   }
 
   const st = mc.stats || {};
+  const trialStr = activeScenario.nPaths.toLocaleString();
+  const hdrTitle = document.getElementById('mc-hdr-title');
+  if (hdrTitle) hdrTitle.textContent = `Adaptive Monte Carlo ${(mc.nPaths || activeScenario.nPaths).toLocaleString()}-Trial Simulator`;
   if (hdrSub) {
     hdrSub.textContent =
       `Live data: ${st.nTrades} trades (${st.wins}W–${st.losses}L · WR ${st.empiricalWrPct}% · Post. ${st.bayesianWrPct}% · Avg $${st.avgCostUsd}/tr) · Updated ${fmtTime(mc.generatedAt)}`;
   }
   if (liveBadge) {
-    liveBadge.textContent = `${activeScenario.nPaths.toLocaleString()} TRIALS · ${st.nTrades} TR`;
+    liveBadge.textContent = `${trialStr} TRIALS · ${st.nTrades} TR`;
   }
+  const fanTitle = document.getElementById('mc-fan-title');
+  if (fanTitle) fanTitle.textContent = `Equity Fan Projection (P5 / P25 / Median / P75 / P95 across ${trialStr} Trials)`;
+  const finalHistTitle = document.getElementById('mc-final-hist-title');
+  if (finalHistTitle) finalHistTitle.textContent = `Final Bankroll Distribution (${trialStr} Trials)`;
+  const ddHistTitle = document.getElementById('mc-dd-hist-title');
+  if (ddHistTitle) ddHistTitle.textContent = `Maximum Drawdown Distribution (${trialStr} Trials)`;
 
   const hData = activeScenario.horizons?.[state.mcHorizon]
     || activeScenario.horizons?.[mc.defaultHorizon]
@@ -1440,10 +1461,11 @@ function renderMonteCarloTab() {
       grid.appendChild(m);
     }
     methBox.appendChild(grid);
+    const engNote = mc.engine === 'native-c11' ? ' (C11 native multi-thread · xorshift64* · cached per trade settle)' : '';
     const p = h(
       'p',
       'card__sub',
-      'Adaptif otomatis: setiap trade baru yang settled memperbarui bot/data/trade_journal.jsonl -> systemd timer merebuild montecarlo.json (10.000 percobaan × hingga 10.000 trade) setiap <=2 menit saat data berubah, dan halaman ini melakukan auto-sync tiap 60 detik.',
+      `Adaptif otomatis: setiap trade baru yang settled memperbarui bot/data/trade_journal.jsonl -> systemd timer merebuild montecarlo.json (${(mc.nPaths || 1_000_000).toLocaleString()} percobaan × hingga 10.000 trade${engNote}) saat trade baru masuk, dan halaman ini melakukan auto-sync tiap 60 detik. Form Custom What-If di atas menjalankan 10.000 percobaan cepat langsung di browser.`,
     );
     p.style.marginTop = '12px';
     methBox.appendChild(p);
@@ -1495,7 +1517,7 @@ function runCustomMonteCarlo() {
     } finally {
       if (btn) {
         btn.disabled = false;
-        btn.textContent = 'Run Live 10,000 Trials';
+        btn.textContent = 'Run Custom 10,000 Trials (Browser)';
       }
     }
   }, 20);

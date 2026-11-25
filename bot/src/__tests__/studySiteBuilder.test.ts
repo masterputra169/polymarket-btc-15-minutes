@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { redactSecretText, sanitizeTradeEntry } from '../../../scripts/study/redact.mjs';
 import { parseUpdatesMd, buildStudySite } from '../../../scripts/build-study-site.mjs';
-import { buildMonteCarloBundle } from '../../../study-site/mc-engine.js';
+import { buildMonteCarloBundleNative } from '../../../scripts/study/mc-native.mjs';
+import { buildMonteCarloBundle, MC_DEFAULT_PATHS } from '../../../study-site/mc-engine.js';
 
 describe('study portal redaction & sanitization', () => {
   test('redactSecretText scrubs tokens, keys, bearer headers, and query params', () => {
@@ -261,5 +262,65 @@ describe('parseUpdatesMd & buildStudySite', () => {
     // Stress test (-3pp WR & -$0.05 slippage) must produce strictly lower median than fixed empirical bootstrap
     expect(byId.live_stress_test.horizons[5000].p50).toBeLessThan(byId.live_bootstrap_fixed.horizons[5000].p50);
     expect(byId.live_compounding_kelly.horizons[5000].p50).toBeGreaterThan(byId.live_bootstrap_fixed.horizons[5000].p50);
+
+    // Default study-portal path count is 1,000,000
+    expect(MC_DEFAULT_PATHS).toBe(1_000_000);
+
+    // When a C compiler is available (e.g. Linux CI / VPS), verify native C11 engine parity
+    const nativeBundle = buildMonteCarloBundleNative(trades, { startBankroll: 110.65, nPaths: 2000, threads: 2 });
+    if (nativeBundle) {
+      expect(nativeBundle.engine).toBe('native-c11');
+      expect(nativeBundle.nPaths).toBe(2000);
+      expect(nativeBundle.scenarios).toHaveLength(5);
+      const nById = Object.fromEntries(nativeBundle.scenarios.map((s: any) => [s.id, s]));
+      for (const sc of nativeBundle.scenarios) {
+        const h5k = sc.horizons[5000];
+        expect(h5k.finalHist.counts.reduce((a: number, b: number) => a + b, 0)).toBe(2000);
+        expect(h5k.ddHist.counts.reduce((a: number, b: number) => a + b, 0)).toBe(2000);
+        expect(h5k.cvar95Final).toBeLessThanOrEqual(h5k.p5);
+        expect(h5k.cvar95MaxDdPct).toBeGreaterThanOrEqual(h5k.p95MaxDdPct);
+      }
+      // Median should closely agree with JS engine on the same trade pool (within sampling variance)
+      const jsMed = byId.live_bootstrap_fixed.horizons[5000].p50;
+      const cMed = nById.live_bootstrap_fixed.horizons[5000].p50;
+      expect(Math.abs(cMed - jsMed) / Math.max(1, jsMed)).toBeLessThan(0.05);
+    }
+  });
+
+  test('buildStudySite reuses cached montecarlo.json when non-trade telemetry changes', { timeout: 20_000 }, () => {
+    const repoRoot = path.resolve(process.cwd());
+    const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'poly15-study-cache-'));
+    const tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'poly15-study-cache-data-'));
+    try {
+      fs.writeFileSync(path.join(tmpData, 'state.json'), JSON.stringify({
+        bankroll: 101.85,
+        startOfDayBankroll: 100,
+        peakBankroll: 101.85,
+        totalTrades: 1,
+        wins: 1,
+        losses: 0,
+        currentPosition: null,
+      }));
+      fs.writeFileSync(path.join(tmpData, 'trade_journal.jsonl'), JSON.stringify({
+        _ts: 1794801601402,
+        entry: { side: 'UP', marketSlug: 'btc-updown-15m-1794800700', tokenPrice: 0.63 },
+        exit: { outcome: 'UP', exitedAt: 1794801601401 },
+        analysis: { outcome: 'WIN', pnl: 1.85 },
+      }) + '\n');
+
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, monteCarloPaths: 200 });
+      const firstMc = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'montecarlo.json'), 'utf8'));
+      expect(typeof firstMc.cacheKey).toBe('string');
+
+      // Mutate non-trade file (jev_log.jsonl) -> build runs, but montecarlo.json reuses cached generatedAt
+      fs.writeFileSync(path.join(tmpData, 'jev_log.jsonl'), '{"ts":1794801700000,"probUp":0.6}\n');
+      buildStudySite({ root: repoRoot, dataDir: tmpData, outDir: tmpOut, monteCarloPaths: 200 });
+      const secondMc = JSON.parse(fs.readFileSync(path.join(tmpOut, 'data', 'montecarlo.json'), 'utf8'));
+      expect(secondMc.cacheKey).toBe(firstMc.cacheKey);
+      expect(secondMc.generatedAt).toBe(firstMc.generatedAt);
+    } finally {
+      fs.rmSync(tmpData, { recursive: true, force: true });
+      fs.rmSync(tmpOut, { recursive: true, force: true });
+    }
   });
 });

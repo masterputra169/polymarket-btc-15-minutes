@@ -5,7 +5,9 @@
  * (`scripts/build-study-site.mjs`) and the browser portal (`study-site/app.js`).
  */
 
-export const MC_DEFAULT_PATHS = 10000;
+export const MC_DEFAULT_PATHS = 1000000;
+export const MC_MAX_PATHS = 1000000;
+export const MC_BROWSER_DEFAULT_PATHS = 10000;
 export const MC_HORIZONS = [100, 250, 500, 1000, 2000, 5000, 10000];
 export const MC_FAN_STEPS = [
   0, 25, 50, 75, 100, 150, 200, 250, 350, 500, 750,
@@ -254,9 +256,7 @@ export function computeAdaptiveStats(trades) {
   };
 }
 
-function summarizeArray(arr, startBankroll, nPaths) {
-  const sorted = Float64Array.from(arr);
-  sorted.sort();
+function summarizeSortedArray(sorted, startBankroll, nPaths) {
   const q = (pct) => sorted[Math.min(nPaths - 1, Math.max(0, Math.floor((pct / 100) * (nPaths - 1))))];
 
   let sum = 0;
@@ -323,10 +323,9 @@ function summarizeArray(arr, startBankroll, nPaths) {
   };
 }
 
-function summarizeDrawdowns(ddArr, nPaths) {
-  const sorted = Float64Array.from(ddArr);
-  sorted.sort();
-  const q = (pct) => sorted[Math.min(nPaths - 1, Math.max(0, Math.floor((pct / 100) * (nPaths - 1))))];
+function summarizeDrawdownsInPlace(ddArr, nPaths) {
+  ddArr.sort();
+  const q = (pct) => ddArr[Math.min(nPaths - 1, Math.max(0, Math.floor((pct / 100) * (nPaths - 1))))];
 
   let cntOver25 = 0;
   let cntOver50 = 0;
@@ -336,7 +335,7 @@ function summarizeDrawdowns(ddArr, nPaths) {
   for (let b = 0; b <= nBins; b++) ddHistEdges[b] = b * 5;
 
   for (let i = 0; i < nPaths; i++) {
-    const ddPct = sorted[i] * 100;
+    const ddPct = ddArr[i] * 100;
     if (ddPct >= 25) cntOver25++;
     if (ddPct >= 50) cntOver50++;
     let bin = Math.floor(ddPct / 5);
@@ -347,7 +346,7 @@ function summarizeDrawdowns(ddArr, nPaths) {
 
   const tailStart = Math.max(0, Math.min(nPaths - 1, Math.floor(0.95 * nPaths)));
   let tailDdSum = 0;
-  for (let i = tailStart; i < nPaths; i++) tailDdSum += sorted[i];
+  for (let i = tailStart; i < nPaths; i++) tailDdSum += ddArr[i];
   const cvar95MaxDdPct = r2((tailDdSum / Math.max(1, nPaths - tailStart)) * 100);
 
   return {
@@ -362,7 +361,7 @@ function summarizeDrawdowns(ddArr, nPaths) {
 }
 
 /**
- * Run a 10,000-trial (configurable) Monte Carlo simulation across multi-trade horizons.
+ * Run a configurable (up to 1,000,000-trial) Monte Carlo simulation across multi-trade horizons.
  */
 export function runMonteCarloScenario(config) {
   const pool = normalizePool(config?.tradePool);
@@ -372,13 +371,13 @@ export function runMonteCarloScenario(config) {
 
   const mode = config.mode || 'bootstrap';
   const startBankroll = Math.max(1, Number(config.startBankroll) || 100);
-  const nPaths = Math.max(10, Math.min(50000, Math.round(Number(config.nPaths) || MC_DEFAULT_PATHS)));
+  const nPaths = Math.max(10, Math.min(MC_MAX_PATHS, Math.round(Number(config.nPaths) || MC_DEFAULT_PATHS)));
   const horizons = [...new Set((config.horizons || MC_HORIZONS).map((h) => Math.max(1, Math.round(h))))].sort((a, b) => a - b);
   const fanSteps = [...new Set([0, ...(config.fanSteps || MC_FAN_STEPS).map((s) => Math.max(0, Math.round(s))), ...horizons])].sort((a, b) => a - b);
 
-  // Build union checkpoints covering every fan step and every horizon
-  const checkpoints = [...new Set([...fanSteps.filter((s) => s > 0), ...horizons])].sort((a, b) => a - b);
-  const fanIdxOfCheckpoint = checkpoints.map((c) => fanSteps.indexOf(c));
+  // Every horizon is in fanSteps, so fanSteps[1..] covers all checkpoints with zero duplicate storage
+  const checkpoints = fanSteps.slice(1);
+  const fanIdxOfHorizon = new Map(horizons.map((h) => [h, fanSteps.indexOf(h)]));
   const horizonSet = new Set(horizons);
 
   const nSamples = pool.length;
@@ -429,12 +428,11 @@ export function runMonteCarloScenario(config) {
   const stopFloor = startBankroll >= minBetUsd ? Math.min(minBetUsd * 0.9, avgCost * 0.65) : 0.5;
   const compStopFloor = minBetUsd;
 
-  const stepVals = fanSteps.map(() => new Float64Array(nPaths));
-  const horizonVals = {};
+  // Compact Float32Array storage + step 0 omitted (constant startBankroll) + zero horizonVals duplication
+  const stepVals = fanSteps.map((_, idx) => (idx === 0 ? null : new Float32Array(nPaths)));
   const horizonDds = {};
   for (const h of horizons) {
-    horizonVals[h] = new Float64Array(nPaths);
-    horizonDds[h] = new Float64Array(nPaths);
+    horizonDds[h] = new Float32Array(nPaths);
   }
 
   const samplePathCount = 6;
@@ -465,7 +463,6 @@ export function runMonteCarloScenario(config) {
       pThresh = Math.floor(pDraw * 4294967296);
     }
 
-    stepVals[0][p] = b;
     const isSample = p % sampleStepStride === 0 && (p / sampleStepStride) < samplePathCount;
     const sampleIdx = isSample ? (p / sampleStepStride) | 0 : -1;
 
@@ -473,6 +470,7 @@ export function runMonteCarloScenario(config) {
     for (let ci = 0; ci < checkpoints.length; ci++) {
       const target = checkpoints[ci];
       const count = target - prevStep;
+      const fIdx = ci + 1;
 
       if (modeCode === 0) {
         // Empirical fixed-size bootstrap with replacement
@@ -554,23 +552,20 @@ export function runMonteCarloScenario(config) {
         }
       }
 
-      const fIdx = fanIdxOfCheckpoint[ci];
-      if (fIdx >= 0) {
-        stepVals[fIdx][p] = b;
-        if (sampleIdx >= 0) samplePaths[sampleIdx][fIdx] = r2(b);
-      }
+      stepVals[fIdx][p] = b;
+      if (sampleIdx >= 0) samplePaths[sampleIdx][fIdx] = r2(b);
       if (horizonSet.has(target)) {
-        horizonVals[target][p] = b;
         horizonDds[target][p] = maxDd;
       }
       prevStep = target;
     }
   }
 
-  // Compute percentile envelope across fanSteps
-  const fan = { p5: [], p10: [], p25: [], p50: [], p75: [], p90: [], p95: [] };
-  for (let si = 0; si < fanSteps.length; si++) {
-    const col = Float64Array.from(stepVals[si]);
+  // Sort each fan column in-place (zero copy) and extract percentile envelope
+  const sbR2 = r2(startBankroll);
+  const fan = { p5: [sbR2], p10: [sbR2], p25: [sbR2], p50: [sbR2], p75: [sbR2], p90: [sbR2], p95: [sbR2] };
+  for (let si = 1; si < fanSteps.length; si++) {
+    const col = stepVals[si];
     col.sort();
     const pick = (pct) => r2(col[Math.min(nPaths - 1, Math.max(0, Math.floor((pct / 100) * (nPaths - 1))))]);
     fan.p5.push(pick(5));
@@ -584,8 +579,9 @@ export function runMonteCarloScenario(config) {
 
   const horizonsOut = {};
   for (const h of horizons) {
-    const valSummary = summarizeArray(horizonVals[h], startBankroll, nPaths);
-    const ddSummary = summarizeDrawdowns(horizonDds[h], nPaths);
+    const fIdx = fanIdxOfHorizon.get(h);
+    const valSummary = summarizeSortedArray(stepVals[fIdx], startBankroll, nPaths);
+    const ddSummary = summarizeDrawdownsInPlace(horizonDds[h], nPaths);
     horizonsOut[h] = { ...valSummary, ...ddSummary };
   }
 
@@ -620,7 +616,7 @@ export function runMonteCarloScenario(config) {
  */
 export function buildMonteCarloBundle(trades, opts = {}) {
   const generatedAt = opts.generatedAt || new Date().toISOString();
-  const nPaths = Math.max(10, Math.min(50000, Math.round(Number(opts.nPaths) || MC_DEFAULT_PATHS)));
+  const nPaths = Math.max(10, Math.min(MC_MAX_PATHS, Math.round(Number(opts.nPaths) || MC_DEFAULT_PATHS)));
   const validTrades = (Array.isArray(trades) ? trades : []).filter(
     (t) => t && typeof t.pnl === 'number' && Number.isFinite(t.pnl),
   );

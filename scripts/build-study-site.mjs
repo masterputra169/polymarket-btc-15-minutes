@@ -14,7 +14,10 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactSecretText, sanitizeTradeEntry } from './study/redact.mjs';
 import { buildFeatureCatalog, extractExperimentSummary } from './study/models.mjs';
+import { buildMonteCarloBundleNative } from './study/mc-native.mjs';
 import { buildMonteCarloBundle, MC_DEFAULT_PATHS } from '../study-site/mc-engine.js';
+
+const MC_CACHE_VERSION = 'v2-1m-cvar';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(HERE, '..');
@@ -1015,11 +1018,41 @@ export function buildStudySite(options = {}) {
   const activeModel = modelsBundle.models.find((m) => m.id === modelsBundle.activeModelId) || modelsBundle.models[0] || null;
   const stage2Bundle = buildStage2Bundle(root, dataDir, activeModel?.id ?? null);
   const quantStack = buildQuantStackSummary(dataDir);
-  const mcBundle = buildMonteCarloBundle(settledTrades, {
+  const targetMcPaths = Math.max(10, Math.min(1_000_000, Math.round(Number(options.monteCarloPaths ?? MC_DEFAULT_PATHS))));
+  const mcCacheKey = crypto.createHash('sha256').update(JSON.stringify({
+    v: MC_CACHE_VERSION,
+    nPaths: targetMcPaths,
     startBankroll: evalBundle.bankroll,
-    nPaths: options.monteCarloPaths ?? MC_DEFAULT_PATHS,
-    generatedAt,
-  });
+    trades: settledTrades.map((t) => [t.pnl, t.cost, t.tokenPrice, t.outcome, t.isMaker, t.exitedAt]),
+  })).digest('hex').slice(0, 24);
+
+  const existingMcPath = path.join(outDir, 'data', 'montecarlo.json');
+  const cachedMc = readJsonSafe(existingMcPath);
+  let mcBundle = null;
+  if (
+    cachedMc
+    && cachedMc.cacheKey === mcCacheKey
+    && cachedMc.nPaths === targetMcPaths
+    && cachedMc.available === (settledTrades.length > 0)
+  ) {
+    mcBundle = cachedMc;
+  } else {
+    if (targetMcPaths > 25_000 && options.preferNative !== false) {
+      mcBundle = buildMonteCarloBundleNative(settledTrades, {
+        startBankroll: evalBundle.bankroll,
+        nPaths: targetMcPaths,
+        generatedAt,
+      });
+    }
+    if (!mcBundle) {
+      mcBundle = buildMonteCarloBundle(settledTrades, {
+        startBankroll: evalBundle.bankroll,
+        nPaths: targetMcPaths,
+        generatedAt,
+      });
+    }
+    mcBundle.cacheKey = mcCacheKey;
+  }
 
   const pickSnap = (scen, h) => {
     const row = scen?.horizons?.[h];
