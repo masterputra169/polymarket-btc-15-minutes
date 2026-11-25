@@ -6,6 +6,12 @@
 
 ---
 
+## 2026-11-25 — Clearer Telegram Entry Alerts (Decision-Time ML, Maker Wait Time & JEV Guard/Age)
+
+- **Telegram Entry Clarity (`bot/src/monitoring/alertTemplates.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/ai/jevAdvisor.ts`, `bot/src/monitoring/__tests__/alertTemplates.test.ts`):**
+  - Fixed confusing maker fill alerts where `stepDryRunMaker()` displayed post-fill `ML` (`18%`) instead of decision-time `ML` (`32%`): entry alerts now always display decision-time `ML` (matching filter & journal), appending `(fill XX%)` only if ML drifted `>= 5pp` during queue wait, plus fill type/latency (`· maker 6.4s` / `· fok`).
+  - Added `{ includeGuard: true }` option to `getJevSummary()` so entry alerts explicitly append `[veto off: brierGuard]` when JEV self-guard demoted veto and `(Xs ago)` when the JEV snapshot is `>= 20s` old.
+
 ## 2026-11-25 — Add `conformal_gate_audit` & MAE/MFE Telegram Alert to `milestoneMonitor.ts`
 
 - **Milestone Monitor (`bot/src/monitoring/milestoneMonitor.ts`, `bot/src/monitoring/__tests__/milestoneMonitor.test.ts`):** Added Milestone #7 `conformal_gate_audit` (`trades >= 120` + Meta-Labeler active/ready + `conformalQHat != null`) and embedded live `winMAE` / `lossMFE` medians directly inside `maker_markout_audit` Telegram alerts, plus updated `tape_v4_retrain` label to reference `DSR/BH-FDR` validation.

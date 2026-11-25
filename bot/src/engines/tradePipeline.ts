@@ -158,6 +158,8 @@ interface DryRunCommitContext {
   priceToBeat: { value: number | null; source?: string | null };
   regimeInfo: any;
   mlResult: any;
+  fillMlConfidence?: number | null;
+  timeToFillMs?: number | null;
   timeLeftMin: number | null;
   smartFlowSignal: any;
   entryData: Record<string, any>;
@@ -169,7 +171,8 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
     betSide, tokenId, currentConditionId, marketSlug, shares,
     dryFillPrice, quotePrice, fillModel, isMakerFill, edge, rec,
     flowTag, smartFlowTag, betSizing, betEnsembleProb, lastPrice,
-    settlePrice = null, priceToBeat, regimeInfo, mlResult, timeLeftMin, smartFlowSignal,
+    settlePrice = null, priceToBeat, regimeInfo, mlResult,
+    fillMlConfidence = null, timeToFillMs = null, timeLeftMin, smartFlowSignal,
     entryData, deps,
   } = ctx;
   const dryFillCost = Math.round(shares * dryFillPrice * 100) / 100;
@@ -216,7 +219,7 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
     });
   } catch (feedbackErr: any) { log.debug(`Feedback error: ${feedbackErr.message}`); }
   if (deps.notifyTrade) {
-    const jevTag = getJevSummary(marketSlug);
+    const jevTag = getJevSummary(marketSlug, { includeGuard: true });
     deps.notifyTrade(tradeEntryAlert({
       dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
       btcPrice: settlePrice ?? lastPrice,
@@ -224,6 +227,9 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
       edge: edge?.bestEdge ?? null,
       mlConfidence: mlResult?.available ? mlResult.mlConfidence : null,
       mlSide: mlResult?.available ? mlResult.mlSide : null,
+      fillMlConfidence,
+      fillModel,
+      timeToFillMs,
       jevSummary: jevTag, bankroll: deps.getBankroll(),
       phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
       smartFlow: smartFlowSignal?.direction ?? null, marketSlug,
@@ -384,7 +390,9 @@ export function stepDryRunMaker(params: {
       settlePrice: params.settlePrice ?? pending.settlePrice ?? null,
       priceToBeat: params.priceToBeat ?? pending.priceToBeat,
       regimeInfo: params.regimeInfo ?? pending.regimeInfo,
-      mlResult: params.mlResult ?? pending.mlResult,
+      mlResult: pending.mlResult ?? params.mlResult,
+      fillMlConfidence: params.mlResult?.available ? params.mlResult.mlConfidence : null,
+      timeToFillMs: Math.max(0, (order.filledAtMs ?? now) - order.placedAtMs),
       timeLeftMin: params.timeLeftMin,
     });
     return { active: false, entered: true, deniedFokForSlug: null, filledSide: order.side };
@@ -1466,7 +1474,7 @@ export async function executeDirectionalTrade({
         ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(e => log.debug(`Notify ME align: ${e.message}`));
       } else {
         const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
-        const jevTag = getJevSummary(marketSlug);
+        const jevTag = getJevSummary(marketSlug, { includeGuard: true });
         deps.notifyTrade(tradeEntryAlert({
           dryRun: false, side: betSide, price: actualPrice, shares: actualSize, cost,
           btcPrice: settlePrice ?? lastPrice,
@@ -1474,6 +1482,7 @@ export async function executeDirectionalTrade({
           edge: edge.bestEdge ?? null,
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,
+          fillModel: 'fok',
           jevSummary: jevTag, bankroll: deps.getBankroll(),
           phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
           smartFlow: smartFlowSignal?.direction ?? null, marketSlug,

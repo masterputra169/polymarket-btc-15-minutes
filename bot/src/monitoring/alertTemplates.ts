@@ -67,6 +67,9 @@ export interface TradeEntryAlert {
   edge: number | null;
   mlConfidence: number | null;
   mlSide: string | null;
+  fillMlConfidence?: number | null;
+  fillModel?: string | null;
+  timeToFillMs?: number | null;
   jevSummary: string | null;
   bankroll: number | null;
   phase?: string | null;
@@ -76,19 +79,36 @@ export interface TradeEntryAlert {
   marketSlug?: string | null;
 }
 
+function formatFillTag(fillModel?: string | null, timeToFillMs?: number | null): string {
+  if (!fillModel) return '';
+  const waitSec = timeToFillMs != null && Number.isFinite(timeToFillMs) && timeToFillMs > 0
+    ? ' ' + (timeToFillMs / 1000).toFixed(1) + 's'
+    : '';
+  if (fillModel === 'maker_join') return ' · maker' + waitSec;
+  if (fillModel === 'fok_after_maker_miss') return ' · fok (maker miss)';
+  if (fillModel === 'fok_limit' || fillModel === 'fok') return ' · fok';
+  return ' · ' + escapeHtml(fillModel);
+}
+
 /** Entry alert: one block the operator can scan in two seconds. */
 export function tradeEntryAlert(p: TradeEntryAlert): string {
   const arrow = p.side === 'UP' ? '↑' : p.side === 'DOWN' ? '↓' : '↔';
   const title = p.dryRun ? '🧪 <b>DRY ENTRY</b>' : '⚡ <b>ENTRY</b>';
   const btcLine = formatEntryBtcLine(p.btcPrice, p.priceToBeat);
+  const fillTag = formatFillTag(p.fillModel, p.timeToFillMs);
+  const fillMlDrift = p.mlConfidence != null && p.fillMlConfidence != null
+    && Number.isFinite(p.fillMlConfidence)
+    && Math.abs(p.fillMlConfidence - p.mlConfidence) >= 0.05
+    ? ' (fill ' + fmtPct(p.fillMlConfidence) + ')'
+    : '';
   const lines = [
     title + '  ' + arrow + ' <b>' + escapeHtml(p.side) + '</b>  @ <code>' + (p.price * 100).toFixed(1) + 'c</code>',
     '',
-    '💵 <b>' + Number(p.shares).toFixed(0) + ' shares</b> · ' + fmtUsd(p.cost),
+    '💵 <b>' + Number(p.shares).toFixed(0) + ' shares</b> · ' + fmtUsd(p.cost) + fillTag,
     btcLine,
     p.edge != null ? '📐 Edge <b>' + (p.edge * 100).toFixed(1) + '%</b>' : null,
     p.mlConfidence != null
-      ? '🤖 ML <b>' + fmtPct(p.mlConfidence) + '</b>' + (p.mlSide ? ' (' + escapeHtml(p.mlSide) + ')' : '')
+      ? '🤖 ML <b>' + fmtPct(p.mlConfidence) + '</b>' + (p.mlSide ? ' (' + escapeHtml(p.mlSide) + ')' : '') + fillMlDrift
       : '🤖 ML off',
     p.jevSummary ? '🧠 ' + escapeHtml(p.jevSummary) : null,
     p.phase || p.timeLeftMin != null

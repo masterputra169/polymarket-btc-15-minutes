@@ -89,4 +89,25 @@ describe('alert templates', () => {
     expect(msg).toContain('₿ BTC <b>$63,873.00</b> (PTB $63,672.88, +$200.12)');
     expect(msg).toContain('View Market');
   });
+
+  it('shows maker fill wait, decision-time ML, and fill-time ML drift only when >= 5pp', () => {
+    const drifted = tradeEntryAlert({
+      dryRun: true, side: 'UP', price: 0.64, shares: 5, cost: 3.20,
+      edge: 0.141, mlConfidence: 0.32, mlSide: 'UP', fillMlConfidence: 0.18,
+      fillModel: 'maker_join', timeToFillMs: 6400,
+      jevSummary: 'JEV: DOWN 82% | settle 42% | mean_reverting | risk 68% [veto off: brierGuard] (61s ago)',
+      bankroll: 112.90, phase: 'EARLY', timeLeftMin: 13.2, regime: 'trending',
+    });
+    expect(drifted).toContain('5 shares</b> · $3.20 · maker 6.4s');
+    expect(drifted).toContain('🤖 ML <b>32%</b> (UP) (fill 18%)');
+    expect(drifted).toContain('[veto off: brierGuard] (61s ago)');
+
+    const steady = tradeEntryAlert({
+      dryRun: true, side: 'UP', price: 0.64, shares: 5, cost: 3.20,
+      edge: 0.14, mlConfidence: 0.32, mlSide: 'UP', fillMlConfidence: 0.30,
+      fillModel: 'maker_join', timeToFillMs: 2500, jevSummary: null, bankroll: 112.90,
+    });
+    expect(steady).toContain('maker 2.5s');
+    expect(steady).not.toContain('(fill ');
+  });
 });

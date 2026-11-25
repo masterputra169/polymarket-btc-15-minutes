@@ -1000,11 +1000,20 @@ export function getJevSizingMultiplier(side: string, slug?: string | null): numb
 }
 
 /** Compact one-line summary for Telegram alerts / logs. */
-export function getJevSummary(slug?: string | null): string | null {
+export function getJevSummary(slug?: string | null, opts?: { includeGuard?: boolean }): string | null {
   const d = freshDecision(slug);
   if (!d) return null;
   const base = 'JEV: ' + d.direction + ' ' + Math.round(d.directionConfidence * 100) + '% | settle ' + Math.round((d.settleUpCalibrated ?? d.settleUpProbability) * 100) + '% | ' + d.regime;
-  return d.compositeRisk != null ? base + ' | risk ' + Math.round(d.compositeRisk * 100) + '%' : base;
+  let line = d.compositeRisk != null ? base + ' | risk ' + Math.round(d.compositeRisk * 100) + '%' : base;
+  if (opts?.includeGuard) {
+    const cfg = BOT_CONFIG.jev;
+    if (cfg?.mode === 'veto' && (cfg.brierGateEnabled ?? true) && !getJevBrierSkill().allowActiveVeto) {
+      line += ' [veto off: brierGuard]';
+    }
+    const ageSec = d.ts ? Math.round((Date.now() - d.ts) / 1000) : 0;
+    if (ageSec >= 20) line += ` (${ageSec}s ago)`;
+  }
+  return line;
 }
 
 export function getJevStatus() {
