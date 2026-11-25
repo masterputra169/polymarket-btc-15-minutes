@@ -171,4 +171,19 @@ describe('milestoneMonitor', () => {
     expect(liveRes.autoManaged).toBe(false);
     expect(liveRes.detail).toContain('konfirmasi manual');
   });
+
+  it('marks jev_v5_veto as wait with brierGuard detail when allowActiveVeto is false', () => {
+    const res = evaluateMilestones(baseInputs({
+      jevV5: {
+        mode: 'veto',
+        allowActiveVeto: false,
+        v5Windows: 276,
+        skillPct: -0.13,
+        dirAccPct: 64.0,
+      },
+    }));
+    const jev = res.find(m => m.id === 'jev_v5_veto')!;
+    expect(jev.status).toBe('wait');
+    expect(jev.detail).toContain('brierGuard demoted');
+  });
 });

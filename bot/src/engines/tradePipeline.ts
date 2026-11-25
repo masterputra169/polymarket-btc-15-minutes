@@ -15,7 +15,23 @@ import { SIGNAL_CONFIRM_POLLS } from './signalStability.ts';
 import { noteTapeStage, noteTapeFilters } from '../tape/marketTape.ts';
 import { parseClobAmount } from '../utils/clobAmount.ts';
 import { envInt } from '../utils/env.ts';
-import { getJevSummary, getJevLatestForTape } from '../ai/jevAdvisor.ts';
+import { getJevSummary, getJevLatestForTape, shouldAwaitEntryJevRefresh, waitForJevRefresh } from '../ai/jevAdvisor.ts';
+
+function dispatchEntryTradeAlert(
+  marketSlug: string,
+  notifyTrade: (msg: string) => void,
+  buildMsg: (jevSummary: string | null) => string,
+): void {
+  if (!shouldAwaitEntryJevRefresh(marketSlug)) {
+    notifyTrade(buildMsg(getJevSummary(marketSlug, { includeGuard: true })));
+    return;
+  }
+  void waitForJevRefresh(2500)
+    .catch(() => {})
+    .then(() => {
+      notifyTrade(buildMsg(getJevSummary(marketSlug, { includeGuard: true })));
+    });
+}
 import { checkMetaLabelerAdvisory } from '../ml/metaLabeler.ts';
 import { escapeHtml, formatEntryBtcLine, entryAnomalyAlert, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
@@ -219,8 +235,8 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
     });
   } catch (feedbackErr: any) { log.debug(`Feedback error: ${feedbackErr.message}`); }
   if (deps.notifyTrade) {
-    const jevTag = getJevSummary(marketSlug, { includeGuard: true });
-    deps.notifyTrade(tradeEntryAlert({
+    const bankrollNow = deps.getBankroll();
+    dispatchEntryTradeAlert(marketSlug, deps.notifyTrade, (jevTag) => tradeEntryAlert({
       dryRun: true, side: betSide, price: dryFillPrice, shares, cost: dryFillCost,
       btcPrice: settlePrice ?? lastPrice,
       priceToBeat: priceToBeat?.value ?? null,
@@ -230,7 +246,7 @@ function commitDryRunFill(ctx: DryRunCommitContext): true {
       fillMlConfidence,
       fillModel,
       timeToFillMs,
-      jevSummary: jevTag, bankroll: deps.getBankroll(),
+      jevSummary: jevTag, bankroll: bankrollNow,
       phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
       smartFlow: smartFlowSignal?.direction ?? null, marketSlug,
     }));
@@ -1474,9 +1490,8 @@ export async function executeDirectionalTrade({
           `<a href="${marketUrl}">View Market</a>`,
         ].join('\n'), { key: `me:align:${currentConditionId}` }).catch(e => log.debug(`Notify ME align: ${e.message}`));
       } else {
-        const marketUrl = `https://polymarket.com/event/${encodeURIComponent(marketSlug)}`;
-        const jevTag = getJevSummary(marketSlug, { includeGuard: true });
-        deps.notifyTrade(tradeEntryAlert({
+        const bankrollNow = deps.getBankroll();
+        dispatchEntryTradeAlert(marketSlug, deps.notifyTrade, (jevTag) => tradeEntryAlert({
           dryRun: false, side: betSide, price: actualPrice, shares: actualSize, cost,
           btcPrice: settlePrice ?? lastPrice,
           priceToBeat: priceToBeat?.value ?? null,
@@ -1484,7 +1499,7 @@ export async function executeDirectionalTrade({
           mlConfidence: mlResult.available ? mlResult.mlConfidence : null,
           mlSide: mlResult.available ? mlResult.mlSide : null,
           fillModel: 'fok',
-          jevSummary: jevTag, bankroll: deps.getBankroll(),
+          jevSummary: jevTag, bankroll: bankrollNow,
           phase: rec?.phase, timeLeftMin, regime: regimeInfo?.regime ?? null,
           smartFlow: smartFlowSignal?.direction ?? null, marketSlug,
         }));

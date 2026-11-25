@@ -198,6 +198,7 @@ let _lastSlug: string | null = null;
 let _decisionSlug: string | null = null;
 let _lastCallMs = 0;
 let _inFlight = false;
+let _inFlightPromise: Promise<void> | null = null;
 let _pendingRefresh: JevSnapshot | null = null;
 let _warnedNoKey = false;
 let _pausedUntil = 0;
@@ -895,7 +896,7 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
   if (!force && snapshot.slug && snapshot.slug === _lastSlug && cfg.intervalMs === 0) return;
   if (!force && cfg.intervalMs > 0 && now - _lastCallMs < cfg.intervalMs) return;
   _inFlight = true;
-  void runAnalysis(snapshot)
+  const runP = runAnalysis(snapshot)
     .catch((err: unknown) => {
       _stats.errors++;
       _stats.lastError = err instanceof Error ? err.message : String(err);
@@ -911,10 +912,12 @@ export function maybeJevAnalyze(snapshot: JevSnapshot, opts: { force?: boolean }
     })
     .finally(() => {
       _inFlight = false;
+      if (_inFlightPromise === runP) _inFlightPromise = null;
       const pending = _pendingRefresh;
       _pendingRefresh = null;
       if (pending) maybeJevAnalyze(pending, { force: true });
     });
+  _inFlightPromise = runP;
 }
 
 /** Entry-time decision shadow: one call at the actual ENTER candidate. Record-only. */
@@ -931,7 +934,7 @@ export function maybeJevDecisionShadow(snapshot: JevSnapshot): void {
   if (_inFlight) return;
   _decisionSlug = snapshot.slug;
   _inFlight = true;
-  void runAnalysis(snapshot, 'decision')
+  const runP = runAnalysis(snapshot, 'decision')
     .catch((err: unknown) => {
       _stats.errors++;
       _stats.lastError = err instanceof Error ? err.message : String(err);
@@ -943,10 +946,42 @@ export function maybeJevDecisionShadow(snapshot: JevSnapshot): void {
     })
     .finally(() => {
       _inFlight = false;
+      if (_inFlightPromise === runP) _inFlightPromise = null;
       const pending = _pendingRefresh;
       _pendingRefresh = null;
       if (pending) maybeJevAnalyze(pending, { force: true });
     });
+  _inFlightPromise = runP;
+}
+
+/** True when Telegram entry alert should briefly wait for post-fill `entryRefresh` JEV call. */
+export function shouldAwaitEntryJevRefresh(slug?: string | null, staleThresholdMs = 15_000): boolean {
+  const cfg = BOT_CONFIG.jev;
+  if (!cfg || !cfg.enabled || !isTypesafeConfigured()) return false;
+  if (Date.now() < _pausedUntil) return false;
+  if (_inFlight) return true;
+  if (!_current || (slug && _current.slug && _current.slug !== slug)) return true;
+  return Date.now() - _current.ts >= staleThresholdMs;
+}
+
+/** Wait up to `maxWaitMs` for an in-flight post-fill JEV refresh so entry alerts reflect current price. */
+export async function waitForJevRefresh(maxWaitMs = 2500): Promise<void> {
+  // Yield one microtask so the caller's immediate `maybeJevAnalyze(..., { force: true })` starts first.
+  await Promise.resolve();
+  const pending = _inFlightPromise;
+  if (!pending) return;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    await Promise.race([
+      pending,
+      new Promise<void>((res) => {
+        timer = setTimeout(res, maxWaitMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /** Age check for the cached decision (one call per market; stale after 20 min). */
@@ -1107,6 +1142,7 @@ export function resetJevAdvisorForTests(): void {
   _decisionSlug = null;
   _lastCallMs = 0;
   _inFlight = false;
+  _inFlightPromise = null;
   _pendingRefresh = null;
   _warnedNoKey = false;
   _pausedUntil = 0;

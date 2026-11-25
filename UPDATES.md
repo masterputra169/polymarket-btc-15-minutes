@@ -6,6 +6,11 @@
 
 ---
 
+## 2026-11-25 — Fresh JEV Entry Alerts & Brier-Guard Status Sync (`jevAdvisor.ts`, `tradePipeline.ts`, `milestoneMonitor.ts`, `build-study-site.mjs`)
+
+- **No More Stale JEV on Telegram Entry Alerts (`bot/src/ai/jevAdvisor.ts`, `bot/src/engines/tradePipeline.ts`):** Added `shouldAwaitEntryJevRefresh()` and `waitForJevRefresh(2500)` so when a fill triggers `maybeJevAnalyze(..., { force: true })` and the cached JEV snapshot is `>= 15s` old (e.g. a 240s-old opening `UP` snapshot on a `DOWN` fill), the Telegram entry alert waits non-blockingly (`~0.8s`, capped `2.5s`, zero impact on execution or poll loop) and prints the fresh entry-time JEV direction instead of the stale window-open opinion.
+- **Brier Self-Guard Status Sync (`bot/src/monitoring/milestoneMonitor.ts`, `scripts/build-study-site.mjs`):** Wired `getJevStatus().brierSkill.allowActiveVeto` into `evaluateMilestones()` (`mode=veto→shadow (brierGuard demoted)`) and updated Study Portal `Quant Stack` (`buildQuantStackSummary`) so `JEV v5` and `Online Recency Platt Calibration` accurately display `DEMOTED` / `DEMOTED (BRIER GUARD)` whenever their rolling 100-window Brier self-guard pauses active veto/calibration instead of hardcoded `ACTIVE`.
+
 ## 2026-11-25 — 16-Lane SIMD Branchless Vectorization (`xoshiro128++`) for 1M Monte Carlo Accelerator
 
 - **SIMD Vectorization (`scripts/study/mc_accel.c`, `scripts/study/mc-native.mjs`):** Replaced scalar branchy per-path loop with a 16-lane Struct-of-Arrays branchless `xoshiro128++` loop (`-O3 -march=native -fno-math-errno -fno-trapping-math`) exploiting `polyvps` AMD EPYC 9754 AVX-512/AVX2 units with rare-record drawdown division fast path and visible stderr fallback logging (`timeout: 600_000`).

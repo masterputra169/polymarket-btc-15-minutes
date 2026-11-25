@@ -23,6 +23,7 @@ import { BOT_CONFIG } from '../config.ts';
 import { createLogger } from '../logger.ts';
 import { getMlOnlineCalibrationStatus } from '../ml/onlineCalibration.ts';
 import { getMetaLabelerStatus, syncMetaLabelerFromJournal } from '../ml/metaLabeler.ts';
+import { getJevStatus } from '../ai/jevAdvisor.ts';
 import { notify } from './notifier.ts';
 
 const log = createLogger('Milestones');
@@ -76,6 +77,7 @@ export interface MilestoneInputs {
   };
   jevV5: {
     mode: string;
+    allowActiveVeto?: boolean;
     v5Windows: number;
     skillPct: number | null;
     dirAccPct: number | null;
@@ -127,10 +129,11 @@ export function evaluateMilestones(input: MilestoneInputs): MilestoneResult[] {
     detail: `mode=${input.onlineCalib.mode}→${input.onlineCalib.effectiveMode}`,
   });
 
-  // 2. JEV v5 Veto
+  // 2. JEV v5 Veto (respect rolling 100-window Brier self-guard demotion)
+  const jevAllowed = input.jevV5.allowActiveVeto ?? true;
   const jevReady = input.jevV5.v5Windows >= 150 && input.jevV5.skillPct != null && input.jevV5.skillPct > 0;
   const jevStatus: MilestoneStatus = input.jevV5.mode === 'veto'
-    ? 'active'
+    ? (jevAllowed ? 'active' : 'wait')
     : (jevReady ? 'ready' : 'wait');
   results.push({
     id: 'jev_v5_veto',
@@ -138,7 +141,9 @@ export function evaluateMilestones(input: MilestoneInputs): MilestoneResult[] {
     status: jevStatus,
     autoManaged: input.jevV5.mode === 'veto',
     summary: `v5=${input.jevV5.v5Windows}/150 skill=${input.jevV5.skillPct != null ? `${input.jevV5.skillPct >= 0 ? '+' : ''}${input.jevV5.skillPct.toFixed(2)}%` : '-'} dirAcc=${input.jevV5.dirAccPct != null ? `${input.jevV5.dirAccPct.toFixed(1)}%` : '-'}`,
-    detail: `mode=${input.jevV5.mode}`,
+    detail: input.jevV5.mode === 'veto' && !jevAllowed
+      ? 'mode=veto→shadow (brierGuard demoted)'
+      : `mode=${input.jevV5.mode}`,
   });
 
   // 3. Stage-2 Meta-Labeler (auto-promotes SHADOW -> VETO in mode=auto)
@@ -455,6 +460,7 @@ export async function checkMilestones(): Promise<MilestoneResult[]> {
   const metaLabeler = getMetaLabelerStatus();
   const jevV5 = {
     mode: BOT_CONFIG.jev?.mode ?? 'shadow',
+    allowActiveVeto: getJevStatus().brierSkill.allowActiveVeto,
     ...readJevV5Stats(BOT_CONFIG.jev?.logFile),
   };
   const { paperPerformance, makerAudit } = readJournalStats(BOT_CONFIG.journalFile);

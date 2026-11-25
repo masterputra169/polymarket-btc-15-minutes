@@ -927,17 +927,20 @@ function buildQuantStackSummary(dataDir) {
     pnlUsd: +c.pnlUsd.toFixed(2),
   }));
 
+  const mlCalActive = nMl < 100 || (rawMlBrier != null && mktMlBrier != null && rawMlBrier <= mktMlBrier);
+  const jevVetoActive = nV5 < 100 || (v5SkillPct != null && v5SkillPct > 0);
+
   return {
     onlineCalibration: {
-      mode: 'ACTIVE',
+      mode: mlCalActive ? 'ACTIVE' : 'DEMOTED (BRIER GUARD)',
       windows: mlHist.length,
       evalSamples: nMl,
       rawMlBrier,
       mktBrier: mktMlBrier,
-      ready: mlHist.length >= 50,
+      ready: mlHist.length >= 50 && mlCalActive,
     },
     jevV5: {
-      mode: 'ACTIVE (VETO)',
+      mode: jevVetoActive ? 'ACTIVE (VETO)' : 'DEMOTED (BRIER GUARD)',
       windows: nV5,
       target: 150,
       bayesBrier: v5BayesBrier,
@@ -956,8 +959,20 @@ function buildQuantStackSummary(dataDir) {
       ready: totalSettled >= 100,
     },
     engines: [
-      { name: 'Online Recency Platt Calibration', status: 'ACTIVE', detail: '300-window recency Platt + Rolling Brier Self-Guard' },
-      { name: 'JEV v5 Bayesian + Debate Veto', status: 'ACTIVE', detail: '8-question TypeSafe System One + Rolling 100-win Brier Guard' },
+      {
+        name: 'Online Recency Platt Calibration',
+        status: mlCalActive ? 'ACTIVE' : 'DEMOTED',
+        detail: mlCalActive
+          ? '300-window recency Platt + Rolling Brier Self-Guard'
+          : `Auto-paused by Brier Guard (ML ${rawMlBrier} > Mkt ${mktMlBrier} over last ${nMl}w)`,
+      },
+      {
+        name: 'JEV v5 Bayesian + Debate Veto',
+        status: jevVetoActive ? 'ACTIVE' : 'DEMOTED',
+        detail: jevVetoActive
+          ? '8-question TypeSafe System One + Rolling 100-win Brier Guard'
+          : `Veto auto-paused by Brier Guard (skill ${v5SkillPct}% <= 0% over ${nV5}w)`,
+      },
       { name: 'Compound Anomaly Guards (11c, 20h–20j)', status: 'ACTIVE', detail: 'Moderate thin ML edge + Squeeze-Flip + Skew-JEV-Hybrid (0 FP)' },
       { name: 'Step-Compounding + Drawdown Guard', status: 'ACTIVE', detail: 'Tiered caps + peak-drawdown step-down + MAX_DAILY_LOSS 15%' },
       { name: 'Stage-2 Meta-Labeler (L2 Logistic)', status: 'SHADOW', detail: `Chronological holdout P(WIN|ENTER) — ${totalSettled}/100 trades` },
