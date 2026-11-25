@@ -6,6 +6,13 @@
 
 ---
 
+## 2026-11-25 — 5 GitHub-Referenced Quant & Execution Upgrades (`hftbacktest`, `poly-market-maker`, `river`, `MAPIE`, `arch`)
+
+- **Order-Entry Wire Latency (`nkaz001/hftbacktest` → `bot/src/engines/queueSim.ts`, `bot/src/engines/tradePipeline.ts`, `queueSim.test.ts`):** Added `entryLatencyMs` (`effectivePlacedAtMs = placedAtMs + entryLatencyMs`, default `120ms` via `DRY_RUN_QUEUE_LATENCY_MS`, `0` default in pure API) so paper FIFO queue simulation ignores trades occurring while the order is still in flight.
+- **CLOB-Down Resting-Bid Pull Guard (`Polymarket/poly-market-maker` → `bot/src/engines/limitOrderManager.ts`, `bot/src/engines/makerFillGate.ts`, `bot/src/loop.ts`):** Added `clobDown` check (`CANCEL_CLOB_DOWN` / `clob_feed_down`, blocking FOK chase) pulling resting live GTD limit bids immediately when `clobFeed.usable === false`.
+- **Streaming ADWIN Drift Detector (`online-ml/river` → `bot/src/monitoring/driftDetector.ts`, `driftDetector.test.ts`):** Added pure zero-dependency `detectAdwinDrift(outcomes, delta, minSubWindow)` (Hoeffding bound across chronological splits) for faster regime-drop detection (advisory-only).
+- **Conformal Risk Control & Quasi-MLE GARCH(1,1) Fitter (`MAPIE` + `bashtage/arch` → `backtest/ml_training/mltrain/metrics.py`, `test_metrics.py`):** Added `conformal_risk_control()` (finite-sample loss-rate threshold `lambda_hat`) and `fit_garch11_mle()` (variance-targeted stationary GARCH(1,1) parameter fitter) ready for the 75–90d Pipeline v4 retrain. Zero new runtime dependencies; zero changes to live directional entry gates.
+
 ## 2026-11-25 — Clearer Provisional `twap_close` Settlement Alert (`settlement.ts`)
 
 - **Settlement Alert Clarity (`bot/src/engines/settlement.ts`, `bot/src/engines/__tests__/settlement.fallback.test.ts`):** Replaced outdated `"Oracle CLOB + Gamma gagal setelah ~2 menit"` / `"~30 menit"` warning copy on tight-gap (`< 0.05%`) `twap_close` rollovers with an `info`-level provisional alert stating exact `$` diff, Chainlink 60s TWAP source, and `fallbackVerifier` `~5 menit` auto-verification (keeping `warn` level for non-TWAP spot fallbacks, and keeping `twap_close` rollover instant so `EARLY` entries are never blocked).

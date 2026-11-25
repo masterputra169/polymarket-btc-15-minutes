@@ -168,6 +168,7 @@ describe('dryRunMakerWouldFill', () => {
 describe('classifyCancelReason', () => {
   test('maps monitor actions', () => {
     expect(classifyCancelReason('CANCEL_UNFILLED_TIMEOUT unfilled_timeout')).toBe('unfilled_timeout');
+    expect(classifyCancelReason('CANCEL_CLOB_DOWN clob_feed_down')).toBe('clob_down');
     expect(classifyCancelReason('CANCEL_TOXIC_FLOW toxic_lead_lag_DOWN')).toBe('toxic_flow');
     expect(classifyCancelReason('CANCEL_EDGE_EROSION edge_erosion')).toBe('edge_erosion');
     expect(classifyCancelReason('CANCEL_SIGNAL_FLIP ml_flip_UP_90%')).toBe('signal_flip');

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { assessDrift } from '../driftDetector.ts';
+import { assessDrift, detectAdwinDrift } from '../driftDetector.ts';
 import type { DriftThresholds, MlDriftTrade } from '../driftDetector.ts';
 
 const CFG: DriftThresholds = { wrDropPp: 15, cusumThreshold: 5, confDrop: 0.08 };
@@ -60,5 +60,24 @@ describe('drift detector gates', () => {
     const r = assessDrift(trades(50, 32), 0.65, 0.45, 5.17, CFG);
     expect(r.cusumFire).toBe(true);
     expect(r.driftDetected).toBe(true);
+  });
+
+  test('ADWIN detects sudden regime drop without firing on stable stream or short history', () => {
+    expect(detectAdwinDrift([true, false, true]).drift).toBe(false);
+
+    // Stable 70% stream (50 trades) -> no drift
+    const stable = Array.from({ length: 50 }, (_, i) => i % 10 < 7);
+    expect(detectAdwinDrift(stable).drift).toBe(false);
+
+    // Regime collapse: 30 trades at 83% WR followed by 25 trades at 28% WR -> ADWIN fires
+    const collapsed = [
+      ...Array.from({ length: 30 }, (_, i) => i % 6 !== 0),
+      ...Array.from({ length: 25 }, (_, i) => i % 4 === 0),
+    ];
+    const res = detectAdwinDrift(collapsed);
+    expect(res.drift).toBe(true);
+    expect(res.olderRate!).toBeGreaterThan(0.75);
+    expect(res.recentRate!).toBeLessThan(0.35);
+    expect(res.drop).toBeGreaterThan(res.epsilon!);
   });
 });

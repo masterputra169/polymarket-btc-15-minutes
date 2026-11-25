@@ -150,4 +150,33 @@ describe('queueSim pessimistic FIFO maker queue', () => {
     expect(order.queueAhead).toBe(0);
     expect(order.remainingShares).toBe(0);
   });
+
+  it('ignores trades arriving during order-entry wire latency (hftbacktest pattern)', () => {
+    const order = createQueueSimOrder({
+      marketSlug: 'btc-updown-15m-lat',
+      side: 'UP',
+      targetPrice: 0.60,
+      shares: 5,
+      initialBookSizeAtBid: 0,
+      nowMs: 1_000,
+      entryLatencyMs: 120,
+    });
+    expect(order.effectivePlacedAtMs).toBe(1_120);
+
+    stepQueueOrder({
+      order,
+      trades: [{ t: 1_080, seq: 1, token: 'up', side: 'SELL', price: 0.60, size: 10 }],
+      lastBookQuoteMs: 1_100,
+      nowMs: 1_110,
+    });
+    expect(order.status).toBe('RESTING');
+
+    stepQueueOrder({
+      order,
+      trades: [{ t: 1_150, seq: 2, token: 'up', side: 'SELL', price: 0.60, size: 10 }],
+      lastBookQuoteMs: 1_160,
+      nowMs: 1_180,
+    });
+    expect(order.status).toBe('FILLED');
+  });
 });

@@ -2523,6 +2523,7 @@ export async function pollOnce() {
             kylesLambda: flowForMon.kylesLambda,
             kylesLambdaR2: flowForMon.kylesLambdaR2,
             tradeImbalance: flowForMon.tradeImbalance,
+            clobDown: !clobFeed.usable,
             btcPrice: settlePrice,
             priceToBeat: priceToBeat.value,
             elapsedMin: elapsedMinForMonitor,

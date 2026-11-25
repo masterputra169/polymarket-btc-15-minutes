@@ -16,6 +16,7 @@ export type MakerCancelReason =
   | 'unfilled_timeout'
   | 'edge_erosion'
   | 'toxic_flow'
+  | 'clob_down'
   | 'signal_flip'
   | 'time_cutoff'
   | 'market_switch'
@@ -221,6 +222,8 @@ export function shouldAllowFokFallback({
     reason.startsWith('ml_flip') ||
     reason === 'toxic_flow' ||
     reason.startsWith('toxic_') ||
+    reason === 'clob_down' ||
+    reason === 'clob_feed_down' ||
     reason === 'market_switch' ||
     reason.startsWith('market_switched') ||
     reason === 'partial_reject'
@@ -296,6 +299,7 @@ export function dryRunMakerWouldFill(marketSlug: string, fillRate: number): bool
 export function classifyCancelReason(actionOrDetail: string): MakerCancelReason {
   const s = String(actionOrDetail || '');
   if (s.includes('UNFILLED') || s.includes('unfilled_timeout')) return 'unfilled_timeout';
+  if (s.includes('CLOB_DOWN') || s.includes('clob_feed_down')) return 'clob_down';
   if (s.includes('TOXIC_FLOW') || s.includes('toxic_')) return 'toxic_flow';
   if (s.includes('EDGE_EROSION') || s.includes('edge_erosion')) return 'edge_erosion';
   if (s.includes('SIGNAL_FLIP') || s.includes('ml_flip')) return 'signal_flip';

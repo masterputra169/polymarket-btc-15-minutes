@@ -73,6 +73,57 @@ const CFG = {
   maxTradeAgeDays: envNum('DRIFT_MAX_TRADE_AGE_DAYS', 21, 1, 365),
 };
 
+export interface AdwinDriftResult {
+  drift: boolean;
+  olderRate: number | null;
+  recentRate: number | null;
+  drop: number;
+  splitIndex: number | null;
+  epsilon: number | null;
+}
+
+/**
+ * Adaptive Windowing (ADWIN, online-ml/river pattern) binary drift detector.
+ * Scans all chronological splits [0..k) vs [k..n) with >= minSubWindow samples
+ * and flags a statistically significant downward accuracy shift using the Hoeffding bound.
+ */
+export function detectAdwinDrift(
+  outcomes: readonly boolean[],
+  delta = 0.05,
+  minSubWindow = 10,
+): AdwinDriftResult {
+  const n = outcomes.length;
+  if (n < minSubWindow * 2) {
+    return { drift: false, olderRate: null, recentRate: null, drop: 0, splitIndex: null, epsilon: null };
+  }
+  const prefix = new Array<number>(n + 1).fill(0);
+  for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + (outcomes[i] ? 1 : 0);
+  const totalWins = prefix[n];
+
+  let best: AdwinDriftResult = { drift: false, olderRate: null, recentRate: null, drop: 0, splitIndex: null, epsilon: null };
+  const logTerm = Math.log(4 / Math.max(1e-6, Math.min(0.5, delta)));
+  for (let k = minSubWindow; k <= n - minSubWindow; k++) {
+    const n0 = k;
+    const n1 = n - k;
+    const r0 = prefix[k] / n0;
+    const r1 = (totalWins - prefix[k]) / n1;
+    const drop = r0 - r1;
+    const m = 1 / (1 / n0 + 1 / n1);
+    const eps = Math.sqrt(logTerm / (2 * m));
+    if (drop > eps && drop > best.drop) {
+      best = {
+        drift: true,
+        olderRate: +r0.toFixed(4),
+        recentRate: +r1.toFixed(4),
+        drop: +drop.toFixed(4),
+        splitIndex: k,
+        epsilon: +eps.toFixed(4),
+      };
+    }
+  }
+  return best;
+}
+
 // ── CUSUM in-memory state (persisted across calls) ──
 let cusumState = {
   sum: 0,           // CUSUM accumulator (negative = model underperforming)

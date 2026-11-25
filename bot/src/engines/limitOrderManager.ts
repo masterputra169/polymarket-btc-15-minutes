@@ -507,6 +507,7 @@ export async function monitorLimitOrder({
   kylesLambda = null,
   kylesLambdaR2 = null,
   tradeImbalance = null,
+  clobDown = false,
 }, deps): Promise<MonitorLimitOrderResult> {
   const cfg = getEffectiveLimitOrderConfig();
 
@@ -517,6 +518,12 @@ export async function monitorLimitOrder({
   // Market switched while order active
   if (marketSlug !== state.marketSlug) {
     return { action: 'CANCEL_MARKET_SWITCH', detail: `market_switched_${state.marketSlug}_to_${marketSlug}` };
+  }
+
+  // CLOB feed down guard (poly-market-maker pattern): never leave a resting bid live while blind
+  if (clobDown) {
+    log.warn(`LIMIT ORDER CLOB feed down — cancelling resting ${state.side} @ ${((state.targetPrice ?? 0) * 100).toFixed(1)}c`);
+    return { action: 'CANCEL_CLOB_DOWN', detail: 'clob_feed_down' };
   }
 
   // Signal flip detection (check every poll — cancels are time-critical)

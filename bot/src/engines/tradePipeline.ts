@@ -1235,6 +1235,7 @@ export async function executeDirectionalTrade({
         shares,
         initialBookSizeAtBid: betBook?.bidSize ?? 0,
         nowMs: Date.now(),
+        entryLatencyMs: envInt(process.env.DRY_RUN_QUEUE_LATENCY_MS, 120, 0, 2000),
       });
       deps.setPendingCost(Math.round(shares * joinPx * 100) / 100);
       if (_dryRunMakerAttempts.slug !== marketSlug) {

@@ -26,6 +26,8 @@ export interface QueueSimOrder {
   queueAhead: number;
   initialQueueAhead: number;
   placedAtMs: number;
+  /** Timestamp when order reaches matching engine (placedAtMs + entryLatencyMs). */
+  effectivePlacedAtMs: number;
   lastTradeCursorMs: number;
   lastTradeSeq: number;
   status: QueueSimStatus;
@@ -55,8 +57,14 @@ export function createQueueSimOrder(params: {
   shares: number;
   initialBookSizeAtBid: number;
   nowMs?: number;
+  /** Simulated order-entry wire latency in ms (hftbacktest pattern; default 0). */
+  entryLatencyMs?: number;
 }): QueueSimOrder {
   const nowMs = params.nowMs ?? Date.now();
+  const lat = Number.isFinite(params.entryLatencyMs) && (params.entryLatencyMs as number) > 0
+    ? Math.round(params.entryLatencyMs as number)
+    : 0;
+  const effectivePlacedAtMs = nowMs + lat;
   const q = Number.isFinite(params.initialBookSizeAtBid) && params.initialBookSizeAtBid > 0
     ? params.initialBookSizeAtBid
     : 0;
@@ -71,7 +79,8 @@ export function createQueueSimOrder(params: {
     queueAhead: q,
     initialQueueAhead: q,
     placedAtMs: nowMs,
-    lastTradeCursorMs: nowMs,
+    effectivePlacedAtMs,
+    lastTradeCursorMs: effectivePlacedAtMs,
     lastTradeSeq: 0,
     status: 'RESTING',
     filledAtMs: null,
@@ -107,12 +116,13 @@ export function stepQueueOrder(params: {
 
   const expectedToken = order.side === 'UP' ? 'up' : 'down';
   const oppBuyThreshold = 1 - order.targetPrice;
+  const liveAtMs = order.effectivePlacedAtMs ?? order.placedAtMs;
   for (const tr of params.trades) {
     if (tr.seq != null) {
-      if (tr.seq <= order.lastTradeSeq || tr.t <= order.placedAtMs) continue;
+      if (tr.seq <= order.lastTradeSeq || tr.t <= liveAtMs) continue;
       order.lastTradeSeq = tr.seq;
     } else {
-      if (tr.t <= order.placedAtMs || tr.t < order.lastTradeCursorMs) continue;
+      if (tr.t <= liveAtMs || tr.t < order.lastTradeCursorMs) continue;
       order.lastTradeCursorMs = tr.t;
     }
     if (!Number.isFinite(tr.price)) continue;

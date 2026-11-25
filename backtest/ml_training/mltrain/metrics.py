@@ -328,3 +328,152 @@ def conformal_binary_summary(
             round(float(np.mean(pred_ok[ambiguous])), 4) if np.any(ambiguous) else None
         ),
     }
+
+
+def conformal_risk_control(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    target_loss_rate: float = 0.32,
+    cal_fraction: float = 0.5,
+) -> dict[str, float | int | None]:
+    """Conformal Risk Control (MAPIE / Angelopoulos et al. 2024) for trade selection.
+
+    Finds the lowest side-probability threshold `lambda_hat` on the chronological
+    calibration split whose finite-sample upper loss bound `(losses + 1) / (n + 1)`
+    is `<= target_loss_rate`, then evaluates coverage and win rate on the holdout split.
+    """
+    y = np.asarray(y_true, dtype=int)
+    p = np.asarray(y_prob, dtype=float)
+    ok = np.isfinite(p)
+    y, p = y[ok], p[ok]
+    n = len(y)
+    split = int(n * cal_fraction)
+    if split < 10 or (n - split) < 10:
+        return {
+            "lambda_hat": None,
+            "cal_selected": 0,
+            "eval_selected": 0,
+            "eval_coverage": None,
+            "eval_loss_rate": None,
+            "eval_win_rate": None,
+        }
+
+    side_prob = np.maximum(p, 1.0 - p)
+    pred_ok = ((p >= 0.5).astype(int) == y).astype(float)
+    sp_cal, ok_cal = side_prob[:split], pred_ok[:split]
+    sp_ev, ok_ev = side_prob[split:], pred_ok[split:]
+
+    lambda_hat: float | None = None
+    cal_selected = 0
+    for lam in np.linspace(0.50, 0.95, 46):
+        mask = sp_cal >= lam
+        k = int(mask.sum())
+        if k < 5:
+            continue
+        losses = float(np.sum(1.0 - ok_cal[mask]))
+        if (losses + 1.0) / (k + 1.0) <= target_loss_rate:
+            lambda_hat = round(float(lam), 4)
+            cal_selected = k
+            break
+
+    if lambda_hat is None:
+        return {
+            "lambda_hat": None,
+            "cal_selected": 0,
+            "eval_selected": 0,
+            "eval_coverage": 0.0,
+            "eval_loss_rate": None,
+            "eval_win_rate": None,
+        }
+
+    ev_mask = sp_ev >= lambda_hat
+    ev_n = int(ev_mask.sum())
+    ev_wr = float(np.mean(ok_ev[ev_mask])) if ev_n > 0 else None
+    return {
+        "lambda_hat": lambda_hat,
+        "cal_selected": cal_selected,
+        "eval_selected": ev_n,
+        "eval_coverage": round(ev_n / len(sp_ev), 4),
+        "eval_loss_rate": round(1.0 - ev_wr, 4) if ev_wr is not None else None,
+        "eval_win_rate": round(ev_wr, 4) if ev_wr is not None else None,
+    }
+
+
+def fit_garch11_mle(returns: np.ndarray) -> dict[str, float | int | None]:
+    """Variance-targeted Gaussian quasi-MLE GARCH(1,1) fitter (bashtage/arch pattern).
+
+    Fits `sigma_t^2 = omega + alpha * r_{t-1}^2 + beta * sigma_{t-1}^2` using
+    coarse grid + coordinate refinement under stationarity `alpha + beta <= 0.995`
+    with zero external solver dependencies.
+    """
+    r = np.asarray(returns, dtype=float)
+    r = r[np.isfinite(r)]
+    n = len(r)
+    if n < 30:
+        return {
+            "n": n,
+            "omega": None,
+            "alpha": None,
+            "beta": None,
+            "persistence": None,
+            "unconditional_vol": None,
+            "log_likelihood": None,
+        }
+    rc = r - float(np.mean(r))
+    var_r = float(np.var(rc))
+    if var_r <= 1e-18:
+        return {
+            "n": n,
+            "omega": None,
+            "alpha": None,
+            "beta": None,
+            "persistence": None,
+            "unconditional_vol": None,
+            "log_likelihood": None,
+        }
+    r2 = rc * rc
+
+    def neg_ll(alpha: float, beta: float) -> float:
+        if alpha <= 1e-4 or beta <= 1e-4 or (alpha + beta) >= 0.995:
+            return float("inf")
+        omega = var_r * (1.0 - alpha - beta)
+        h = var_r
+        ll = 0.0
+        for i in range(1, n):
+            h = omega + alpha * r2[i - 1] + beta * h
+            if h <= 1e-18:
+                return float("inf")
+            ll += math.log(h) + r2[i] / h
+        return 0.5 * ll
+
+    best_a, best_b = 0.08, 0.88
+    best_loss = neg_ll(best_a, best_b)
+    for a in (0.03, 0.06, 0.10, 0.15, 0.22):
+        for b in (0.70, 0.80, 0.86, 0.90, 0.94):
+            if a + b >= 0.995:
+                continue
+            loss = neg_ll(a, b)
+            if loss < best_loss:
+                best_loss, best_a, best_b = loss, a, b
+
+    for step in (0.02, 0.005, 0.001):
+        improved = True
+        while improved:
+            improved = False
+            for da, db in ((-step, 0.0), (step, 0.0), (0.0, -step), (0.0, step)):
+                ca, cb = best_a + da, best_b + db
+                loss = neg_ll(ca, cb)
+                if loss + 1e-9 < best_loss:
+                    best_loss, best_a, best_b = loss, ca, cb
+                    improved = True
+
+    omega = var_r * (1.0 - best_a - best_b)
+    return {
+        "n": n,
+        "omega": float(f"{omega:.6e}"),
+        "alpha": round(best_a, 4),
+        "beta": round(best_b, 4),
+        "persistence": round(best_a + best_b, 4),
+        "unconditional_vol": round(math.sqrt(var_r), 6),
+        "log_likelihood": round(-best_loss - 0.5 * (n - 1) * math.log(2.0 * math.pi), 2),
+    }

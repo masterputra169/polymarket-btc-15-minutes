@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 
@@ -187,3 +189,45 @@ class TestMultipleTestingAndConformal:
 
         small = conformal_binary_summary(np.array([1, 0, 1]), np.array([0.7, 0.3, 0.6]))
         assert small["q_hat"] is None
+
+    def test_conformal_risk_control_selects_valid_threshold_and_handles_edge_cases(self) -> None:
+        from mltrain.metrics import conformal_risk_control
+
+        # High confidence rows are 100% accurate; low confidence rows are wrong (33% overall loss > 25% target)
+        y = np.array([1, 0, 1, 0, 0, 1] * 10)
+        p = np.array([0.85, 0.15, 0.80, 0.20, 0.52, 0.48] * 10)
+        res = conformal_risk_control(y, p, target_loss_rate=0.25)
+        assert res["lambda_hat"] is not None
+        assert res["lambda_hat"] >= 0.53
+        assert res["eval_win_rate"] == 1.0
+        assert res["eval_loss_rate"] == 0.0
+
+        # Impossible target (0.01 on 100% wrong predictions) -> None
+        bad = conformal_risk_control(
+            np.zeros(40, dtype=int), np.full(40, 0.9), target_loss_rate=0.05
+        )
+        assert bad["lambda_hat"] is None
+
+        # Too few rows -> None
+        tiny = conformal_risk_control(np.array([1, 0]), np.array([0.7, 0.3]))
+        assert tiny["lambda_hat"] is None
+
+    def test_fit_garch11_mle_recovers_volatility_clustering_and_handles_degenerate(self) -> None:
+        from mltrain.metrics import fit_garch11_mle
+
+        rng = np.random.default_rng(42)
+        n = 400
+        r = np.zeros(n)
+        h = 1e-6
+        for t in range(1, n):
+            h = 1e-7 + 0.12 * (r[t - 1] ** 2) + 0.82 * h
+            r[t] = rng.normal(0.0, math.sqrt(h))
+        fit = fit_garch11_mle(r)
+        assert fit["alpha"] is not None and fit["beta"] is not None
+        assert 0.01 <= fit["alpha"] <= 0.40
+        assert 0.50 <= fit["beta"] <= 0.99
+        assert fit["persistence"] < 0.995
+        assert fit["unconditional_vol"] > 0
+
+        assert fit_garch11_mle(np.array([0.01, -0.01]))["alpha"] is None
+        assert fit_garch11_mle(np.zeros(50))["alpha"] is None
