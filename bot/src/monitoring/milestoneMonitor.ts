@@ -38,6 +38,7 @@ export type MilestoneId =
   | 'jev_v5_veto'
   | 'meta_labeler_veto'
   | 'maker_markout_audit'
+  | 'conformal_gate_audit'
   | 'tape_v4_retrain'
   | 'live_money_readiness';
 
@@ -70,6 +71,7 @@ export interface MilestoneInputs {
     allowActive: boolean;
     rawMlBrier: number | null;
     calMlBrier: number | null;
+    conformalQHat?: number | null;
     promoteMinWindows?: number;
   };
   jevV5: {
@@ -93,6 +95,8 @@ export interface MilestoneInputs {
     wins: number;
     m15Avg: number | null;
     m60Avg: number | null;
+    winMaeMed?: number | null;
+    lossMfeMed?: number | null;
     minFills?: number;
   };
   tapeDays: number;
@@ -164,27 +168,47 @@ export function evaluateMilestones(input: MilestoneInputs): MilestoneResult[] {
   const makerWr = input.makerAudit.postPatchFills > 0
     ? `${((input.makerAudit.wins / input.makerAudit.postPatchFills) * 100).toFixed(1)}%`
     : '-';
+  const maeMfeTag = input.makerAudit.winMaeMed != null || input.makerAudit.lossMfeMed != null
+    ? ` winMAE=${input.makerAudit.winMaeMed != null ? `${(input.makerAudit.winMaeMed * 100).toFixed(1)}c` : '-'} lossMFE=${input.makerAudit.lossMfeMed != null ? `${(input.makerAudit.lossMfeMed * 100).toFixed(1)}c` : '-'}`
+    : '';
   results.push({
     id: 'maker_markout_audit',
-    label: 'Maker Cancel-on-Toxicity Audit',
+    label: 'Maker Cancel-on-Toxicity & MAE/MFE Audit',
     status: makerReady ? 'ready' : 'wait',
     autoManaged: false,
-    summary: `fills=${input.makerAudit.postPatchFills}/${minMakerFills} WR=${makerWr} m15=${input.makerAudit.m15Avg != null ? `${(input.makerAudit.m15Avg * 100).toFixed(2)}c` : '-'} m60=${input.makerAudit.m60Avg != null ? `${(input.makerAudit.m60Avg * 100).toFixed(2)}c` : '-'}`,
+    summary: `fills=${input.makerAudit.postPatchFills}/${minMakerFills} WR=${makerWr} m15=${input.makerAudit.m15Avg != null ? `${(input.makerAudit.m15Avg * 100).toFixed(2)}c` : '-'} m60=${input.makerAudit.m60Avg != null ? `${(input.makerAudit.m60Avg * 100).toFixed(2)}c` : '-'}${maeMfeTag}`,
     detail: makerReady
       ? (makerPos ? 'Markout POSITIVE (adverse selection terkendali)' : 'Markout masih NEGATIF — review threshold Cancel-on-Toxicity')
       : 'Mengumpulkan sampel fill pasca-patch',
   });
 
-  // 5. Pipeline v4 R2 Tape Retrain (>= 75 days)
+  // 4b. Conformal Prediction Gate Audit (>= 120 total trades: ~20+ trades post-Meta-Labeler)
+  const conformalTargetTrades = 120;
+  const qHat = input.onlineCalib.conformalQHat ?? null;
+  const conformalReady = input.paperPerformance.totalTrades >= conformalTargetTrades
+    && (metaStatus === 'active' || metaStatus === 'ready')
+    && qHat != null;
+  results.push({
+    id: 'conformal_gate_audit',
+    label: 'Conformal Prediction Filter Audit',
+    status: conformalReady ? 'ready' : 'wait',
+    autoManaged: false,
+    summary: `trades=${input.paperPerformance.totalTrades}/${conformalTargetTrades} qHat=${qHat != null ? qHat.toFixed(3) : '-'} meta=${metaStatus}`,
+    detail: conformalReady
+      ? 'Siap audit apakah blokir Conformal {UP,DOWN} ambiguous menambah WR di atas Meta-Labeler'
+      : 'Menunggu ~20+ trade setelah Meta-Labeler aktif (n >= 120)',
+  });
+
+  // 5. Pipeline v4 R2 Tape Retrain (>= 75 days — uses DSR / BH-FDR validation)
   const tapeTarget = 75;
   results.push({
     id: 'tape_v4_retrain',
-    label: 'Pipeline v4 Tape Retrain',
+    label: 'Pipeline v4 Retrain (DSR/BH-FDR)',
     status: input.tapeDays >= tapeTarget ? 'ready' : 'wait',
     autoManaged: false,
     summary: `tape=${input.tapeDays}/${tapeTarget} hari`,
     detail: input.tapeDays >= tapeTarget
-      ? 'Siap jalankan retrain Pipeline v4 (tape >= 75 hari)'
+      ? 'Siap jalankan retrain Pipeline v4 + validasi DSR/BH-FDR (tape >= 75 hari)'
       : 'Menunggu akumulasi tape R2',
   });
 
@@ -267,6 +291,8 @@ function readJournalStats(journalFile: string, makerSinceMs = MAKER_TOXICITY_AUD
   let postFills = 0, postWins = 0;
   const m15: number[] = [];
   const m60: number[] = [];
+  const winMae: number[] = [];
+  const lossMfe: number[] = [];
   for (const r of rows) {
     const e = r?.entry;
     const a = r?.analysis;
@@ -279,9 +305,14 @@ function readJournalStats(journalFile: string, makerSinceMs = MAKER_TOXICITY_AUD
     const px = Number(e.actualPrice ?? e.tokenPrice);
     if (Number.isFinite(px) && px > 0 && px < 1) pxSum += px;
 
+    const mk = a.markout;
+    if (mk) {
+      if (isWin && typeof mk.adversePeak === 'number' && Number.isFinite(mk.adversePeak)) winMae.push(mk.adversePeak);
+      if (isLoss && typeof mk.favorablePeak === 'number' && Number.isFinite(mk.favorablePeak)) lossMfe.push(mk.favorablePeak);
+    }
+
     const enteredAt = Number(e.enteredAt ?? r._ts ?? 0);
     if (e.fillModel === 'maker_join' && enteredAt >= makerSinceMs) {
-      const mk = a.markout;
       if (mk && typeof mk.m15s === 'number' && Number.isFinite(mk.m15s)) {
         postFills++;
         if (isWin) postWins++;
@@ -290,6 +321,11 @@ function readJournalStats(journalFile: string, makerSinceMs = MAKER_TOXICITY_AUD
       }
     }
   }
+  const median = (arr: number[]) => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    return s[Math.floor((s.length - 1) / 2)];
+  };
   return {
     paperPerformance: {
       totalTrades: total,
@@ -301,6 +337,8 @@ function readJournalStats(journalFile: string, makerSinceMs = MAKER_TOXICITY_AUD
       wins: postWins,
       m15Avg: m15.length > 0 ? m15.reduce((s, v) => s + v, 0) / m15.length : null,
       m60Avg: m60.length > 0 ? m60.reduce((s, v) => s + v, 0) / m60.length : null,
+      winMaeMed: median(winMae),
+      lossMfeMed: median(lossMfe),
     },
   };
 }
@@ -430,6 +468,7 @@ export async function checkMilestones(): Promise<MilestoneResult[]> {
       allowActive: onlineCalib.allowActive,
       rawMlBrier: onlineCalib.rawMlBrier,
       calMlBrier: onlineCalib.calMlBrier,
+      conformalQHat: onlineCalib.conformalQHat,
       promoteMinWindows: BOT_CONFIG.mlOnlineCalibration?.promoteMinWindows ?? 100,
     },
     jevV5,

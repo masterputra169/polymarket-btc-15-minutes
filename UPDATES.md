@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-25 — Add `conformal_gate_audit` & MAE/MFE Telegram Alert to `milestoneMonitor.ts`
+
+- **Milestone Monitor (`bot/src/monitoring/milestoneMonitor.ts`, `bot/src/monitoring/__tests__/milestoneMonitor.test.ts`):** Added Milestone #7 `conformal_gate_audit` (`trades >= 120` + Meta-Labeler active/ready + `conformalQHat != null`) and embedded live `winMAE` / `lossMFE` medians directly inside `maker_markout_audit` Telegram alerts, plus updated `tape_v4_retrain` label to reference `DSR/BH-FDR` validation.
+
 ## 2026-11-25 — ML4T 3rd-Ed Quant Upgrades: Split-Conformal ML Telemetry, MAE/MFE Audit & Multiple-Testing Metrics (`DSR` / `BH-FDR`)
 
 - **Split-Conformal Uncertainty Telemetry (`bot/src/ml/onlineCalibration.ts`, `bot/src/ml/__tests__/onlineCalibration.test.ts`):** Added zero-dependency finite-sample split-conformal quantile (`computeConformalQHat`, `evaluateConformalSet`, `alpha=0.15`) to `evaluateMlCalibration()` (`conformalQHat`, `conformalAlpha`) — read-only telemetry, zero live entry impact.

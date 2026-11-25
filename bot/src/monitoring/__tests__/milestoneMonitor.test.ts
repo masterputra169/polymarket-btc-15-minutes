@@ -18,6 +18,7 @@ function baseInputs(overrides: Partial<MilestoneInputs> = {}): MilestoneInputs {
       allowActive: true,
       rawMlBrier: 0.2323,
       calMlBrier: 0.2319,
+      conformalQHat: 0.612,
       promoteMinWindows: 100,
     },
     jevV5: {
@@ -150,7 +151,7 @@ describe('milestoneMonitor', () => {
       },
       tapeDays: 75,
       paperPerformance: {
-        totalTrades: 102,
+        totalTrades: 120,
         winRate: 0.69,
         avgEntryPrice: 0.635,
       },
@@ -161,6 +162,7 @@ describe('milestoneMonitor', () => {
     expect(out.alerted).toEqual([
       'meta_labeler_veto',
       'maker_markout_audit',
+      'conformal_gate_audit',
       'tape_v4_retrain',
       'live_money_readiness',
     ]);
