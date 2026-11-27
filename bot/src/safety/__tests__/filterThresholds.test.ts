@@ -587,6 +587,28 @@ describe('tradeFilters honours the thresholds', () => {
     });
     expect(nullBase.reasons.filter((r: string) => r.startsWith('Base-ML direction conflict:'))).toEqual([]);
   });
+
+  test('Gate 1e baseMlConfMin blocks near-50/50 hybrid-carried entries when configured', async () => {
+    const mod = await load({ FILTER_BASE_ML_CONF_MIN: '0.16', FILTER_ML_CONF_MIN: '0.3' });
+    const base = {
+      ...input,
+      signalSide: 'DOWN',
+      mlSide: 'DOWN',
+      mlConfidence: 0.32,
+      bestEdge: 0.12,
+      marketPrice: 0.64,
+      timeLeftMin: 10.7,
+    };
+
+    // Replay 2026-11-26 23:45 (DOWN LOSS -$3.20): baseMlProbUp=0.47 -> baseMlConf=6% < 16%
+    const unsure = mod.applyTradeFilters({ ...base, baseMlProbUp: 0.47, hybridDeltaProb: -0.13 });
+    expect(unsure.pass).toBe(false);
+    expect(unsure.reasons.some((r: string) => r.startsWith('Base-ML unsure:'))).toBe(true);
+
+    // Confident aligned base ML (baseMlProbUp=0.38 -> baseMlConf=24% >= 16%) passes Gate 1e
+    const confident = mod.applyTradeFilters({ ...base, baseMlProbUp: 0.38, hybridDeltaProb: -0.04 });
+    expect(confident.reasons.filter((r: string) => r.startsWith('Base-ML unsure:'))).toEqual([]);
+  });
 });
 
 

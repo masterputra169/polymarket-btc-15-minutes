@@ -32,6 +32,7 @@ export const FILTER_THRESHOLD_SPECS: Record<string, ThresholdSpec> = {
   mlConfMin: { env: 'FILTER_ML_CONF_MIN', def: TRADE_FILTERS.MIN_ML_CONFIDENCE, min: 0, max: 1, doc: 'minimum ML confidence' },
   mlConfRelaxed: { env: 'FILTER_ML_CONF_RELAXED', def: 0.45, min: 0, max: 1, doc: 'ML confidence floor when edge ≥ highEdgeBypass or oracle-lag' },
   hardMlFloor: { env: 'FILTER_HARD_ML_FLOOR', def: 0, min: 0, max: 1, doc: 'absolute minimum ML confidence regardless of bypasses (0 disables)' },
+  baseMlConfMin: { env: 'FILTER_BASE_ML_CONF_MIN', def: 0, min: 0, max: 1, doc: 'minimum pre-hybrid base ML confidence |2*baseMlProbUp - 1| when baseMlProbUp is present (0 disables)' },
   highEdgeBypass: { env: 'FILTER_HIGH_EDGE_BYPASS', def: 0.15, min: 0, max: 1, doc: 'edge that relaxes the ML gate (and waives the Asia floor)' },
   bypassMinMlEdge: { env: 'FILTER_BYPASS_MIN_ML_EDGE', def: 0, min: 0, max: 0.5, doc: 'minimum raw ML edge (mlSideProb - marketPrice) required for edge bypasses to waive ML floors (0 disables)' },
   // Oracle-lag sniper (only with LATE_SNIPER_ENABLED=true)

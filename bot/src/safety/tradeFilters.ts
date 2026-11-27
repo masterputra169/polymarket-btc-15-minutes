@@ -406,8 +406,9 @@ export function applyTradeFilters({
     reasons.push(`ML direction conflict: signal ${signalSide} vs ML ${mlSide}`);
   }
 
-  // 1e. Base-ML direction consensus gate — hybrid residual must not flip the base ML
-  // model's side into an entry (replay across 75 live trades: 0W-2L, -$6.15, 0 false positives).
+  // 1e. Base-ML direction consensus & minimum conviction gate — hybrid residual must not flip
+  // the base ML model's side (0W-2L, -$6.15) or carry an unsure near-50/50 base ML into entry
+  // (86-trade audit: |2*baseMlProbUp - 1| < 0.16 was 5W-6L = 45.5% WR, -$9.62).
   if (mlAvailable && signalSide && baseMlProbUp != null && Number.isFinite(baseMlProbUp)) {
     const baseMlOpposes = (signalSide === 'UP' && baseMlProbUp < 0.5)
       || (signalSide === 'DOWN' && baseMlProbUp > 0.5);
@@ -416,6 +417,13 @@ export function applyTradeFilters({
       reasons.push(
         `Base-ML direction conflict: signal ${signalSide} vs base ML ${baseSide} (${(baseMlProbUp * 100).toFixed(1)}% UP, flipped by hybrid)`,
       );
+    } else if (T.baseMlConfMin > 0) {
+      const baseMlConf = Math.abs(baseMlProbUp - 0.5) * 2;
+      if (baseMlConf < T.baseMlConfMin) {
+        reasons.push(
+          `Base-ML unsure: conf ${(baseMlConf * 100).toFixed(1)}% < ${(T.baseMlConfMin * 100).toFixed(0)}% min (${(baseMlProbUp * 100).toFixed(1)}% UP, hybrid-carried)`,
+        );
+      }
     }
   }
 

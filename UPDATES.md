@@ -6,6 +6,16 @@
 
 ---
 
+## 2026-11-27 — Tighten MID Phase Cap & Add Pre-Hybrid `baseMlConfMin` Floor (`Gate 1e`, `model_profiles.json`)
+
+- **86-Trade Live Forensic Audit (`58W–28L`, `67.4% WR`, `+$16.10`):** Revealed two structural negative-EV leaks responsible for recent drawdown (`2W–4L`, `-$9.10`):
+  - `Phase MID` (`n=31`): `16W–15L` (`51.6% WR`, `-$18.25`; `@ >= 63c` was `12W–12L` = `50.0% WR`, `-$16.71`) vs `Phase EARLY + LATE` (`n=55`): `42W–13L` (`76.4% WR`, `+$34.35`). Active `model_profiles.json` (`20261116-p2-ef8dfd`) had `midPhaseMaxPrice: 0.65`, letting expensive `MID @ 64c` entries through.
+  - Unsure pre-hybrid base ML (`|2*baseMlProbUp - 1| < 0.16`, `n=11`): `5W–6L` (`45.5% WR`, `-$9.62`), where near-50/50 base ML was carried past `mlConfMin` only by the hybrid residual.
+- **Code & Config Fix (`bot/src/safety/filterThresholds.ts`, `bot/src/safety/tradeFilters.ts`, `bot/src/safety/__tests__/filterThresholds.test.ts`):**
+  - Added `baseMlConfMin` (`FILTER_BASE_ML_CONF_MIN`, default `0` to preserve golden tests) inside Gate `1e` blocking near-50/50 hybrid-carried entries (`Base-ML unsure: conf < min`).
+  - Updated live `polyvps` active profile (`20261116-p2-ef8dfd`) + `bot/.env`: `midPhaseMaxPrice: 0.65 -> 0.60`, `midPhaseMinEdge: 0.08 -> 0.10` (hard ceiling `62c`), and `baseMlConfMin: 0.16` (`42%–58%` base ML blocked).
+  - **86-trade counterfactual:** Blocks `16W–17L` (`48.5% WR`, saving `+$24.91`), raising kept record to `42W–11L` (`79.2% WR`, `+$41.01`, preserving `61.6%` of trade volume).
+
 ## 2026-11-25 — 6-Check Statistical Edge Proof Panel on Study Portal (`scripts/study/edgeProof.mjs`)
 
 - **Anti-Overfit Live Audit (`scripts/study/edgeProof.mjs`, `scripts/build-study-site.mjs`, `study-site/index.html`, `study-site/app.js`, `bot/src/__tests__/studySiteBuilder.test.ts`):** Added a zero-dependency **6-Check Statistical Edge Proof** card to `poly15-study.dollarkilat.xyz` (`site.json -> edgeProof`) automatically computed on live settled trades: (1) `t-stat` & required `n` for `t >= 2/3`, (2) `2,000×` market-implied fair-null shuffle `p-value` (`P(WIN_i) = entryPrice_i` with CLOB V2 taker/maker fee), (3) chronological half-split (`H1` vs `H2`), (4) side/phase/session profit attribution, (5) documented structural edge & kill-switch failure modes, and (6) outlier removal ("Break It": drop top 3 / 5% / 10% winning trades + rolling 30-trade `t-stat`). Zero changes to live trading logic or entry gates.
