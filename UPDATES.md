@@ -6,6 +6,10 @@
 
 ---
 
+## 2026-11-28 — Wire JEV Alignment Signal into Stage-2 Meta-Labeler Train & Serve (`metaLabeler.ts`, `tradePipeline.ts`, `loop.ts`)
+
+- **Fix Dead 8th Meta-Labeler Feature (`bot/src/ml/metaLabeler.ts`, `bot/src/engines/tradePipeline.ts`, `bot/src/loop.ts`, `bot/src/ml/__tests__/metaLabeler.test.ts`):** Added shared `computeJevAlignedSignal()` (uses signed `netConviction` when present, falls back to signed `jevDirection`/`jevConfidence` for existing journal rows, then `jevConflict`), replacing hardcoded `jevNetConvAligned: 0` in both `parseJournalRowToSample()` and `tradePipeline.ts` `checkMetaLabelerAdvisory()`, and persisted `entryData.jevNetConviction` on new journal entries so training and live inference stay 100% in parity.
+
 ## 2026-11-27 — Tighten MID Phase Cap & Add Pre-Hybrid `baseMlConfMin` Floor (`Gate 1e`, `model_profiles.json`)
 
 - **86-Trade Live Forensic Audit (`58W–28L`, `67.4% WR`, `+$16.10`):** Revealed two structural negative-EV leaks responsible for recent drawdown (`2W–4L`, `-$9.10`):

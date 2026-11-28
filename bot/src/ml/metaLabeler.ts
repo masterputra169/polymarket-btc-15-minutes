@@ -72,6 +72,37 @@ function sigmoid(x: number): number {
   return z / (1 + z);
 }
 
+/**
+ * Compute signed JEV alignment in [-1, 1] for a candidate `side` (`UP` | `DOWN`).
+ * Shared by both journal training and live inference so train/serve features match.
+ */
+export function computeJevAlignedSignal(
+  side: 'UP' | 'DOWN',
+  jev: {
+    netConviction?: number | null;
+    direction?: string | null;
+    confidence?: number | null;
+    conflict?: boolean | null;
+  } | null | undefined,
+): number {
+  if (!jev) return 0;
+  if (typeof jev.netConviction === 'number' && Number.isFinite(jev.netConviction)) {
+    const v = side === 'UP' ? jev.netConviction : -jev.netConviction;
+    return Math.max(-1, Math.min(1, v));
+  }
+  const dir = jev.direction;
+  const conf = typeof jev.confidence === 'number' && Number.isFinite(jev.confidence)
+    ? Math.max(0, Math.min(1, jev.confidence))
+    : null;
+  if ((dir === 'UP' || dir === 'DOWN') && conf != null) {
+    return dir === side ? conf : -conf;
+  }
+  if (typeof jev.conflict === 'boolean') {
+    return jev.conflict ? -0.5 : 0.5;
+  }
+  return 0;
+}
+
 export function extractMetaVector(f: MetaLabelFeatures): number[] {
   const reg = String(f.regime ?? '').toLowerCase();
   const entryPrice = Number.isFinite(f.entryPrice) ? f.entryPrice : 0.60;
@@ -269,6 +300,12 @@ function parseJournalRowToSample(row: any): MetaLabelSample | null {
   const rawMlEdge = mlSideProb != null && Number.isFinite(entryPrice) ? mlSideProb - entryPrice : 0;
   const timeLeftMin = Number(row?.entry?.timeLeftMin ?? row?.timeLeftMin ?? 7.5);
   const regime = row?.entry?.regime ?? row?.regime ?? null;
+  const jevNetConvAligned = computeJevAlignedSignal(side, {
+    netConviction: row?.entry?.jevNetConviction ?? row?.jevNetConviction ?? null,
+    direction: row?.entry?.jevDirection ?? row?.jevDirection ?? null,
+    confidence: row?.entry?.jevConfidence ?? row?.jevConfidence ?? null,
+    conflict: typeof row?.entry?.jevConflict === 'boolean' ? row.entry.jevConflict : null,
+  });
   return {
     features: {
       entryPrice: Number.isFinite(entryPrice) ? entryPrice : 0.60,
@@ -276,7 +313,7 @@ function parseJournalRowToSample(row: any): MetaLabelSample | null {
       rawMlEdge: Number.isFinite(rawMlEdge) ? rawMlEdge : 0,
       timeLeftMin: Number.isFinite(timeLeftMin) ? timeLeftMin : 7.5,
       regime,
-      jevNetConvAligned: 0,
+      jevNetConvAligned,
     },
     won: outcome === side ? 1 : 0,
   };

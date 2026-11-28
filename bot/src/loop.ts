@@ -233,7 +233,7 @@ import { maybeRecordOrderFlow } from './monitoring/orderFlowLogger.ts';
 import { setContextSnapshot as setLLMRegimeSnapshot } from './ai/regimeClassifier.ts';
 import { maybeJevAnalyze, maybeJevDecisionShadow, recordJevWindowOutcome, getJevStatus, getJevLatestForTape } from './ai/jevAdvisor.ts';
 import { noteMlWindowPrediction, recordMlWindowOutcome, getMlOnlineCalibrationStatus } from './ml/onlineCalibration.ts';
-import { scoreMetaLabeler, getMetaLabelerStatus } from './ml/metaLabeler.ts';
+import { scoreMetaLabeler, getMetaLabelerStatus, computeJevAlignedSignal } from './ml/metaLabeler.ts';
 import { checkFeedAlerts } from './monitoring/feedGuard.ts';
 
 // Execution timing optimizer
@@ -2205,8 +2205,12 @@ export async function pollOnce() {
             lastMetaShadowSlug = marketSlug;
             const mlSideProb = mlResult.available ? (rec.side === 'UP' ? mlResult.mlProbUp : 1 - mlResult.mlProbUp) : null;
             const rawMlEdge = mlSideProb != null ? mlSideProb - mPrice : 0;
-            const jevAligned = jevLatest?.netConviction != null
-              ? (rec.side === 'UP' ? jevLatest.netConviction : -jevLatest.netConviction)
+            const jevAligned = (rec.side === 'UP' || rec.side === 'DOWN')
+              ? computeJevAlignedSignal(rec.side, jevLatest ? {
+                netConviction: jevLatest.netConviction,
+                direction: jevLatest.direction,
+                confidence: jevLatest.directionConfidence,
+              } : null)
               : 0;
             const ms = scoreMetaLabeler({
               entryPrice: mPrice,

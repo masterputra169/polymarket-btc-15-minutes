@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   checkMetaLabelerAdvisory,
+  computeJevAlignedSignal,
   computeRocAuc,
   fitMetaLabelerModel,
   getMetaLabelerStatus,
+  initMetaLabeler,
   recordMetaLabelerOutcome,
   resetMetaLabelerForTests,
   scoreMetaLabeler,
@@ -101,6 +106,45 @@ describe('Stage-2 Meta-Labeler', () => {
     } finally {
       BOT_CONFIG.metaLabeler.promoteMinSamples = savedPromoteMin;
       BOT_CONFIG.metaLabeler.promoteMinAuc = savedPromoteAuc;
+    }
+  });
+
+  it('extracts signed JEV alignment consistently for netConviction and legacy journal jevDirection/jevConfidence', () => {
+    expect(computeJevAlignedSignal('UP', { netConviction: 0.6 })).toBe(0.6);
+    expect(computeJevAlignedSignal('DOWN', { netConviction: 0.6 })).toBe(-0.6);
+    expect(computeJevAlignedSignal('DOWN', { direction: 'DOWN', confidence: 0.82 })).toBe(0.82);
+    expect(computeJevAlignedSignal('DOWN', { direction: 'UP', confidence: 0.74 })).toBe(-0.74);
+    expect(computeJevAlignedSignal('UP', { conflict: true })).toBe(-0.5);
+    expect(computeJevAlignedSignal('UP', null)).toBe(0);
+
+    // Verify journal parsing activates the 8th feature (non-zero learned weight)
+    const dir = mkdtempSync(join(tmpdir(), 'poly-meta-jev-'));
+    try {
+      const jf = join(dir, 'journal.jsonl');
+      const lines: string[] = [];
+      for (let i = 0; i < 40; i++) {
+        const agrees = i % 2 === 0;
+        lines.push(JSON.stringify({
+          entry: {
+            side: 'DOWN',
+            tokenPrice: 0.63,
+            mlConfidence: 0.34,
+            mlProbUp: 0.33,
+            timeLeftMin: 11.5,
+            regime: 'trending',
+            jevDirection: agrees ? 'DOWN' : 'UP',
+            jevConfidence: 0.8,
+            jevConflict: !agrees,
+          },
+          exit: { outcome: agrees ? 'DOWN' : 'UP' },
+        }));
+      }
+      writeFileSync(jf, lines.join('\n') + '\n');
+      const m = initMetaLabeler(jf);
+      expect(m).not.toBeNull();
+      expect(m!.weights[7]).toBeGreaterThan(0.2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

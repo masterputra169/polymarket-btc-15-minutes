@@ -32,7 +32,7 @@ function dispatchEntryTradeAlert(
       notifyTrade(buildMsg(getJevSummary(marketSlug, { includeGuard: true })));
     });
 }
-import { checkMetaLabelerAdvisory } from '../ml/metaLabeler.ts';
+import { checkMetaLabelerAdvisory, computeJevAlignedSignal } from '../ml/metaLabeler.ts';
 import { escapeHtml, formatEntryBtcLine, entryAnomalyAlert, tradeEntryAlert } from '../monitoring/alertTemplates.ts';
 import { maxBetForRiskOfRuin, gammaSizingDampener } from '../../../src/indicators/quantMath.ts';
 import {
@@ -888,7 +888,12 @@ export async function executeDirectionalTrade({
       rawMlEdge: Number.isFinite(mlSideProb) ? (mlSideProb - betMarketPrice) : 0,
       timeLeftMin: timeLeftMin ?? 7.5,
       regime: regimeInfo?.regime ?? null,
-      jevNetConvAligned: 0,
+      jevNetConvAligned: computeJevAlignedSignal(betSide, jevForFilter ? {
+        netConviction: jevForFilter.netConviction,
+        direction: jevForFilter.direction,
+        confidence: jevForFilter.directionConfidence,
+        conflict: jevConflictForFilter,
+      } : null),
     }, marketSlug);
     if (metaBlock?.action === 'block') {
       log.info(`[MetaLabeler] VETO blocked ${betSide} @ ${(betMarketPrice * 100).toFixed(1)}c: ${metaBlock.reason}`);
@@ -1182,6 +1187,7 @@ export async function executeDirectionalTrade({
   })();
   entryData.jevDirection = jevForEntry?.direction ?? null;
   entryData.jevConfidence = jevForEntry?.directionConfidence ?? null;
+  entryData.jevNetConviction = jevForEntry?.netConviction ?? null;
   entryData.jevSettleUp = jevForEntry?.settleUpProbability ?? null;
   entryData.jevRegime = jevForEntry?.regime ?? null;
   entryData.jevCallTs = jevForEntry?.ts ?? null;
